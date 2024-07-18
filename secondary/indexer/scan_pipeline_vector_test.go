@@ -206,7 +206,7 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 		errCh := make(chan error, 1)
 		doneCh := make(chan struct{})
 
-		NewScanWorker(1, r, workCh, recvCh, stopCh, errCh, nil)
+		NewScanWorker(1, r, workCh, recvCh, stopCh, errCh, nil, 20, 1)
 
 		var j = ScanJob{
 			pid:      c.PartitionId(0),

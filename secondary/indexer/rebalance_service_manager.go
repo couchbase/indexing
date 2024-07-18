@@ -4534,6 +4534,7 @@ func (m *RebalanceServiceManager) cleanupTranferredData(ttid string, tt *c.Trans
 		transferTokenId: ttid,
 		respCh:          respCh,
 		syncCleanup:     false,
+		codebookPaths:   getCodebookPaths(tt),
 	}
 
 	m.supvMsgch <- msg

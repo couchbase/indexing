@@ -1171,7 +1171,7 @@ func Console(clusterAddr string, format string, v ...interface{}) error {
 	return err
 }
 
-func CopyFile(dest, source string) (err error) {
+func CopyFile(dest, source string) (written int64, err error) {
 	var sf, df *os.File
 
 	defer func() {
@@ -1184,20 +1184,20 @@ func CopyFile(dest, source string) (err error) {
 	}()
 
 	if sf, err = iowrap.Os_Open(source); err != nil {
-		return err
+		return 0, err
 	} else if IsPathExist(dest) {
-		return nil
+		return 0, nil
 	} else if df, err = iowrap.Os_Create(dest); err != nil {
-		return err
-	} else if _, err = iowrap.Io_Copy(df, sf); err != nil {
-		return err
+		return 0, err
+	} else if written, err = iowrap.Io_Copy(df, sf); err != nil {
+		return written, err
 	}
 
 	var info os.FileInfo
 	if info, err = iowrap.Os_Stat(source); err != nil {
-		return err
+		return written, err
 	} else if err = iowrap.Os_Chmod(dest, info.Mode()); err != nil {
-		return err
+		return written, err
 	}
 	return
 }
@@ -1240,7 +1240,7 @@ func CopyDir(dest, source string) error {
 				if err = CopyDir(d, s); err != nil {
 					return err
 				}
-			} else if err = CopyFile(d, s); err != nil {
+			} else if _, err = CopyFile(d, s); err != nil {
 				return err
 			}
 		}
@@ -1723,6 +1723,121 @@ func WriteFileWithSync(path string, data []byte, perm os.FileMode) error {
 		}
 	}
 	return err
+}
+
+func FileSync(path string, perm os.FileMode) error {
+	fd, err := iowrap.Os_OpenFile(path, os.O_WRONLY, perm)
+	if err != nil {
+		return err
+	}
+
+	err = iowrap.File_Sync(fd)
+	if err != nil {
+		return err
+	}
+
+	return iowrap.File_Close(fd)
+}
+
+// note :
+// a) assumes dirs are static for copy correctness
+// b) empty dirs, symbolic links are skipped (no known use case)
+func doMoveDir(srcDir, dstDir string) error {
+	err := filepath.Walk(srcDir, func(srcPath string, info os.FileInfo, err error) error {
+		if err == nil {
+			if info == nil {
+				return fmt.Errorf("unexpected fsInfo nil attribute during moveDir :%v",
+					srcDir)
+			}
+
+			relPath, err2 := filepath.Rel(srcDir, srcPath)
+			if err2 != nil {
+				return fmt.Errorf("path error during moveDir :%v (%v/%v)", err2,
+					srcDir, srcPath)
+			}
+
+			sz := info.Size()
+			mode := info.Mode()
+			dstPath := filepath.Join(dstDir, relPath)
+			// Copy only the relevant file after creating the parent dir
+			if mode.IsRegular() {
+				parentDir, _ := filepath.Split(dstPath)
+				// if no parentDir, directly copy the file
+				if len(parentDir) != 0 {
+					if err = iowrap.Os_MkdirAll(parentDir, mode.Perm()); err != nil {
+						return err
+					}
+				}
+
+				var written int64
+				if written, err = CopyFile(srcPath, dstPath); err != nil {
+					return err
+				}
+
+				if written != sz {
+					return fmt.Errorf("file copy size mismatch during moveDir "+
+						"file: %v, expected size :%v, written :%v", srcPath, sz, written)
+				}
+
+				if err = FileSync(dstPath, mode.Perm()); err != nil {
+					return err
+				}
+
+				err = iowrap.Os_Remove(srcPath)
+			}
+		}
+
+		return err
+	})
+
+	if err == nil {
+		err = iowrap.Os_RemoveAll(srcDir)
+	}
+	return err
+}
+
+func MoveDir(srcDir, dstDir string, canRename bool) error {
+	if srcDir == dstDir {
+		return nil
+	}
+
+	if _, err := iowrap.Os_Stat(dstDir); err == nil || !os.IsNotExist(err) {
+		return fmt.Errorf("destination move error, already present :%v",
+			dstDir)
+	}
+
+	if canRename {
+		return iowrap.Os_Rename(srcDir, dstDir)
+	} else {
+		return doMoveDir(srcDir, dstDir)
+	}
+}
+
+func CanRenameFile(srcPath, destPath, tmpName string) (bool, error) {
+
+	if len(tmpName) > 0 {
+		srcTmp := filepath.Join(srcPath, tmpName)
+		if err := iowrap.Os_MkdirAll(srcTmp, 0755); err != nil {
+			return false, err
+		}
+		defer iowrap.Os_RemoveAll(srcTmp)
+
+		dstTmp := filepath.Join(destPath, tmpName)
+		// remove any previous left instance
+		if err := iowrap.Os_RemoveAll(dstTmp); err != nil {
+			return false, err
+		}
+		defer iowrap.Os_RemoveAll(dstTmp)
+
+		err := iowrap.Os_Rename(srcTmp, dstTmp)
+		if err != nil {
+			return false, fmt.Errorf("filepath rename not supported on path, error :%v",
+				err)
+		}
+		return err == nil, err
+	}
+
+	return false, nil
 }
 
 // Mapping of major and minor versions to indexer's

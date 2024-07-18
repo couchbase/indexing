@@ -15,8 +15,12 @@ func GenDummyCentroidId() string {
 	return DUMMY_CENTROID
 }
 
+func GetCentroidIdStr(centroidId int64) string {
+	return fmt.Sprintf("%08x", centroidId)
+}
+
 func EncodedCentroidId(centroidId int64, encodeBuf []byte) ([]byte, error) {
-	centroidStr := fmt.Sprintf("%08x", centroidId)
+	centroidStr := GetCentroidIdStr(centroidId)
 	codec := collatejson.NewCodec(16)
 	encoded, err := codec.EncodeN1QLValue(qvalue.NewValue(centroidStr), encodeBuf)
 	return encoded, err

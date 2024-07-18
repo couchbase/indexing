@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +35,9 @@ var ErrRebalanceDone = errors.New("Shard rebalance done received")
 
 // TODO add the Prefix in Indexer settings
 const CODEBOOK_COPY_PREFIX = "codebook_v1"
+
+// TODO: after the plasma changes this config will flow from Indexer to plasma RPC
+const REBALANCE_STAGING_DIR = "staging2"
 
 // ShardRebalancer embeds Rebalancer struct to reduce code
 // duplication across common functions
@@ -1244,8 +1248,8 @@ loop:
 		case respMsg := <-respCh:
 
 			elapsed := time.Since(start).Seconds()
-			l.Infof("ShardRebalancer::startShardTransfer Received response for transfer of "+
-				"shards: %v, ttid: %v, elapsed(sec): %v", tt.ShardIds, ttid, elapsed)
+			l.Infof("ShardRebalancer::startShardTransfer Received response %s for transfer of "+
+				"shards: %v, ttid: %v, elapsed(sec): %v", respMsg.GetMsgType().String(), tt.ShardIds, ttid, elapsed)
 
 			// ShardRebalancer can only receive SHARD_TRANSFER_RESPONSE after successful transfer of Codebooks
 			// Receiving CODEBOOK_TRANSFER_RESPONSE then SHARD_TRANSFER_RESPONSE are sequential
@@ -1690,71 +1694,110 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 		case respMsg := <-respCh:
 
 			elapsed := time.Since(start).Seconds()
-			l.Infof("ShardRebalancer::startRestoreShard Received response for restore of "+
-				"shardIds: %v, ttid: %v, elapsed(sec): %v", tt.ShardIds, ttid, elapsed)
+			l.Infof("ShardRebalancer::startRestoreShard Received response %s for restore of "+
+				"shardIds: %v, ttid: %v, elapsed(sec): %v", respMsg.GetMsgType().String(), tt.ShardIds, ttid, elapsed)
 
-			cleanupAndSetErr := func(shardId common.ShardId, shardPaths map[common.ShardId]string, err error) {
+			// For Rebalance, the Shard Restore and Codebook Restore happen sequentially. Hence, the respCh will receive
+			// the SHARD_TRANSFER_RESPONSE first, then CODEBOOK_TRANSFER_RESPONSE
+			// CODEBOOK_TRANSFER_RESPONSE is only sent if all the Shard Transfers has been successful.
+			// If any shard transfer encounters any errors, the codebook restore is not triggered.
 
-				// If there are any errors during restore, the restored data on local file system
-				// is cleaned by the destination node. The data on S3 will be cleaned by the rebalance
-				// source node. Rebalance source node is the only writer (insert/delete) of data on S3
-				l.Errorf("ShardRebalancer::startRestoreShard Observed error during trasfer"+
-					" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
-					tt.Destination, tt.Region, shardId, shardPaths, err)
+			// Any shard restore err results in cleanup and setting the TT as errored out.
+			// Token is moved to the next state after receiving the CODEBOOK_TRANSFER_RESPONSE
+			switch respMsg.GetMsgType() {
+			case SHARD_TRANSFER_RESPONSE:
 
-				// Invoke clean-up for all shards even if error is observed for one shard transfer
-				sr.initiateLocalShardCleanup(ttid, shardPaths, tt)
-				sr.setTransferTokenError(ttid, tt, err.Error())
-				return
+				cleanupAndSetErr := func(shardId common.ShardId, shardPaths map[common.ShardId]string, err error) {
 
-			}
+					// If there are any errors during restore, the restored data on local file system
+					// is cleaned by the destination node. The data on S3 will be cleaned by the rebalance
+					// source node. Rebalance source node is the only writer (insert/delete) of data on S3
+					l.Errorf("ShardRebalancer::startRestoreShard Observed error during trasfer"+
+						" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
+						tt.Destination, tt.Region, shardId, shardPaths, err)
 
-			msg := respMsg.(*MsgShardTransferResp)
-			errMap := msg.GetErrorMap()
-			shardPaths := msg.GetShardPaths()
+					// Invoke clean-up for all shards and codebook even if error is observed for one shard transfer
+					// TODO: Cleanup of local codebook data
+					sr.initiateLocalShardCleanup(ttid, shardPaths, tt)
+					sr.setTransferTokenError(ttid, tt, err.Error())
+					return
 
-			hasErr := false
-			for shardId, err := range errMap {
-				if err != nil {
-					hasErr = true
-
-					// context canceled error can be a by-product of some other
-					// errors that happened during transfer/restore. Do not
-					// use "context canceled" errors as the first preference for setting
-					// transfer token errors. If there is no other error type, the
-					// use this error
-					if strings.Contains(err.Error(), "context canceled") {
-						continue
-					} else {
-						cleanupAndSetErr(shardId, shardPaths, err)
-						return
-					}
 				}
-			}
 
-			if hasErr {
-				// Coming here means that all errors are "context canceled" errors
-				// Use the same to update transfer token
+				msg := respMsg.(*MsgShardTransferResp)
+				errMap := msg.GetErrorMap()
+				shardPaths := msg.GetShardPaths()
+
+				hasErr := false
 				for shardId, err := range errMap {
-					if err != nil { // Use the first error
-						cleanupAndSetErr(shardId, shardPaths, err)
+					if err != nil {
+						hasErr = true
+
+						// context canceled error can be a by-product of some other
+						// errors that happened during transfer/restore. Do not
+						// use "context canceled" errors as the first preference for setting
+						// transfer token errors. If there is no other error type, the
+						// use this error
+						if strings.Contains(err.Error(), "context canceled") {
+							continue
+						} else {
+							cleanupAndSetErr(shardId, shardPaths, err)
+							return
+						}
+					}
+				}
+
+				if hasErr {
+					// Coming here means that all errors are "context canceled" errors
+					// Use the same to update transfer token
+					for shardId, err := range errMap {
+						if err != nil { // Use the first error
+							cleanupAndSetErr(shardId, shardPaths, err)
+							return
+						}
+					}
+				}
+
+				////////////// Testing code - Not used in production //////////////
+				testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_AFTER_RESTORE)
+				///////////////////////////////////////////////////////////////////
+
+			case CODEBOOK_TRANSFER_RESPONSE:
+
+				cleanupAndSetErr := func(codebookName string, codebookPaths []string, err error) {
+
+					l.Errorf("ShardRebalancer::startRestoreShard Observed error during codebook transfer"+
+						" for destination: %v, region: %v, codebookName: %v, codebookPaths: %v, err: %v. Initiating transfer clean-up",
+						tt.Destination, tt.Region, codebookName, codebookPaths, err)
+
+					/* Invoke clean-up for all shards and codebook even if error is observed for one codebook transfer
+					TODO: Cleanup of local codebook data
+					sr.initiateLocalShardCleanup(ttid, shardPaths, tt)
+					*/
+					sr.setTransferTokenError(ttid, tt, err.Error())
+					return
+				}
+
+				msg := respMsg.(*MsgCodebookTransferResp)
+				errMap := msg.GetErrorMap()
+				codebookPaths := msg.GetCodebookPaths()
+
+				for codebookPath, err := range errMap {
+					if err != nil {
+						cleanupAndSetErr(filepath.Base(codebookPath), codebookPaths, err)
 						return
 					}
 				}
+
+				// No errors are observed during shard transfer and codebook transfer. Change the state of
+				// the transfer token and update metaKV
+				sr.mu.Lock()
+				defer sr.mu.Unlock()
+
+				tt.ShardTransferTokenState = c.ShardTokenRecoverShard
+				setTransferTokenInMetakv(ttid, tt)
+				return
 			}
-
-			////////////// Testing code - Not used in production //////////////
-			testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_AFTER_RESTORE)
-			///////////////////////////////////////////////////////////////////
-
-			// No errors are observed during shard transfer. Change the state of
-			// the transfer token and update metaKV
-			sr.mu.Lock()
-			defer sr.mu.Unlock()
-
-			tt.ShardTransferTokenState = c.ShardTokenRecoverShard
-			setTransferTokenInMetakv(ttid, tt)
-			return
 
 		case stats := <-progressCh:
 			sr.updateTransferStatistics(ttid, stats)
