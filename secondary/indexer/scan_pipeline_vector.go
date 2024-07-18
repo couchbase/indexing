@@ -3,6 +3,7 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -651,8 +652,17 @@ func (fio *MergeOperator) Collector() {
 		fio.heap.PrintHeap()
 	}
 
+	// Read all elements from heap
+	rowList := fio.heap.List()
+	sortedRows := RowHeap{
+		rows:  make([]*Row, 0),
+		isMin: true,
+	}
+	sortedRows.rows = append(sortedRows.rows, rowList...)
+	sort.Sort(sortedRows)
+
 	// Read from Heap and get projected fields and send it down stream
-	for row = fio.heap.Pop(); row != nil; row = fio.heap.Pop() {
+	for _, row := range sortedRows.rows {
 		entry := row.key
 		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
 			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
