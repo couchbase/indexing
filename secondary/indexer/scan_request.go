@@ -2042,7 +2042,7 @@ func (r ScanRequest) String() string {
 		}
 
 		if len(r.Keys) == 0 {
-			if r.ScanType == StatsReq || r.ScanType == ScanReq || r.ScanType == CountReq {
+			if r.ScanType == StatsReq || r.ScanType == ScanReq || r.ScanType == CountReq || r.ScanType == VectorScanReq {
 				span = fmt.Sprintf("range (%s,%s %s)", r.Low, r.High, incl)
 			} else {
 				span = "all"

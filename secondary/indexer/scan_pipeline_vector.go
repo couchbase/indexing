@@ -3,13 +3,14 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	l "github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	n1qlval "github.com/couchbase/query/value"
@@ -30,11 +31,43 @@ type ScanJob struct {
 	bytesRead    uint64
 	rowsScanned  uint64
 	rowsReturned uint64
+
+	logPrefix string
+	startTime time.Time
+}
+
+func NewScanJob(r *ScanRequest, batch int, pid common.PartitionId, cid int64, scan Scan, snap SliceSnapshot,
+	ctx IndexReaderContext, cb codebook.Codebook) (job *ScanJob) {
+	j := &ScanJob{
+		batch:    batch,
+		pid:      pid,
+		cid:      cid,
+		scan:     scan,
+		snap:     snap,
+		ctx:      ctx,
+		codebook: cb,
+	}
+	j.logPrefix = fmt.Sprintf("%v[%v]ScanJob Batch(%v) Partn(%v) Centroid(%v) Scan[%s-%s]", r.LogPrefix, r.RequestId,
+		j.batch, j.pid, j.cid, logging.TagUD(j.scan.Low), logging.TagUD(j.scan.High))
+	j.doneCh = make(chan<- struct{})
+	return j
+}
+
+func (j *ScanJob) SetStartTime() {
+	if logging.IsEnabled(logging.Timing) {
+		j.startTime = time.Now()
+	}
 }
 
 func (j *ScanJob) PrintStats() {
-	logging.Infof("ScanJob-pid(%v)[%s-%s]::Stats rowsScanned: %v rowsReturned: %v",
-		j.pid, logging.TagUD(j.scan.Low), logging.TagUD(j.scan.High), j.rowsScanned, j.rowsReturned)
+	getDebugStr := func() string {
+		s := fmt.Sprintf("%v stats rowsScanned: %v rowsReturned: %v", j.logPrefix, j.rowsScanned, j.rowsReturned)
+		if logging.IsEnabled(logging.Timing) {
+			s += fmt.Sprintf(" timeTaken: %v", time.Since(j.startTime))
+		}
+		return s
+	}
+	logging.LazyVerbosef("%v", getDebugStr)
 }
 
 // -----------
@@ -84,6 +117,9 @@ type ScanWorker struct {
 	bytesRead    uint64
 	rowsScanned  uint64
 	rowsReturned uint64
+
+	logPrefix string
+	startTime time.Time
 }
 
 func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- *Row,
@@ -102,6 +138,8 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		senderBatchSize: senderBatchSize,
 	}
 
+	w.logPrefix = fmt.Sprintf("%v[%v]ScanWorker[%v]", r.LogPrefix, r.RequestId, id)
+	w.SetStartTime()
 	w.buf = r.getFromSecKeyBufPool() //Composite element filtering
 
 	go w.Scanner()
@@ -109,12 +147,26 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	return w
 }
 
+func (w *ScanWorker) SetStartTime() {
+	if logging.IsEnabled(logging.Timing) {
+		w.startTime = time.Now()
+	}
+}
+
 func (w *ScanWorker) PrintStats() {
-	logging.Infof("ScanWorker[%v]::Stats rowsScanned: %v rowsReturned: %v",
-		w.id, w.rowsScanned, w.rowsReturned)
+	getDebugStr := func() string {
+		s := fmt.Sprintf("%v Stats rowsScanned: %v rowsReturned: %v",
+			w.logPrefix, w.rowsScanned, w.rowsReturned)
+		if logging.IsEnabled(logging.Timing) {
+			s += fmt.Sprintf(" timeTaken: %v", time.Since(w.startTime))
+		}
+		return s
+	}
+	logging.LazyVerbosef("%v", getDebugStr)
 }
 
 func (w *ScanWorker) Scanner() {
+	defer w.PrintStats()
 	for {
 		var job *ScanJob
 		var ok bool
@@ -127,6 +179,9 @@ func (w *ScanWorker) Scanner() {
 				return
 			}
 			w.currJob = job
+			w.currJob.SetStartTime()
+			logging.Tracef("%v received job: %+v", w.logPrefix, job)
+			defer logging.Tracef("%v done with job: %+v", w.logPrefix, job)
 		}
 
 		w.senderCh = make(chan *Row, w.senderChSize)
@@ -194,15 +249,13 @@ func (w *ScanWorker) Scanner() {
 }
 
 func (w *ScanWorker) unblockJobSender(doneCh chan<- struct{}) {
-	if logging.IsEnabled(logging.Verbose) {
-		w.PrintStats()
-	}
 	if doneCh != nil {
 		close(doneCh) // Mark the job done
 	}
 	if w.jobsWg != nil {
 		w.jobsWg.Done()
 	}
+	w.currJob.PrintStats()
 	w.currJob = nil
 }
 
@@ -228,12 +281,14 @@ func (w *ScanWorker) Sender() {
 
 			rows[i].key, err = w.reverseCollate(rows[i].key)
 			if err != nil {
+				logging.Verbosef("%v Sender got error: %v from reverseCollate", w.logPrefix, err)
 				w.senderErrCh <- err
 				return
 			}
 
 			skipRow, err := w.skipRow(rows[i].key)
 			if err != nil {
+				logging.Verbosef("%v Sender got error: %v from skipRow", w.logPrefix, err)
 				w.senderErrCh <- err
 				return
 			}
@@ -258,6 +313,7 @@ func (w *ScanWorker) Sender() {
 			// VECTOR_TODO: Update to DecodeVectors
 			err = w.currJob.codebook.DecodeVector(codei, veci)
 			if err != nil {
+				logging.Verbosef("%v Sender got error: %v from DecodeVector", w.logPrefix, err)
 				w.senderErrCh <- err
 				return
 			}
@@ -270,6 +326,7 @@ func (w *ScanWorker) Sender() {
 		dists := make([]float32, vecCount)
 		err = w.currJob.codebook.ComputeDistance(qvec, fvecs, dists)
 		if err != nil {
+			logging.Verbosef("%v Sender got error: %v from ComputeDistance", w.logPrefix, err)
 			w.senderErrCh <- err
 			return
 		}
@@ -289,6 +346,7 @@ func (w *ScanWorker) Sender() {
 				distCode, err = encodeN1qlVal(distVal)
 			}
 			if err != nil {
+				logging.Verbosef("%v Sender got error: %v from EncodeN1qlvalue", w.logPrefix, err)
 				w.senderErrCh <- err
 				return
 			}
@@ -300,6 +358,7 @@ func (w *ScanWorker) Sender() {
 			newBuf := make([]byte, 0, len(rows[i].key)+(3*len(distCode)))
 			newEntry, err := codec.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
 			if err != nil {
+				logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray", w.logPrefix, err)
 				w.senderErrCh <- err
 				return
 			}
@@ -333,6 +392,7 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 	case <-w.stopCh:
 		return ErrScanWorkerStopped
 	case err := <-w.senderErrCh:
+		logging.Tracef("%v scanIteratorCallback got error: %v from Sender", w.logPrefix, err)
 		return err
 	case w.senderCh <- &r:
 	}
@@ -592,8 +652,17 @@ func (fio *MergeOperator) Collector() {
 		fio.heap.PrintHeap()
 	}
 
+	// Read all elements from heap
+	rowList := fio.heap.List()
+	sortedRows := RowHeap{
+		rows:  make([]*Row, 0),
+		isMin: true,
+	}
+	sortedRows.rows = append(sortedRows.rows, rowList...)
+	sort.Sort(sortedRows)
+
 	// Read from Heap and get projected fields and send it down stream
-	for row = fio.heap.Pop(); row != nil; row = fio.heap.Pop() {
+	for _, row := range sortedRows.rows {
 		entry := row.key
 		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
 			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
@@ -643,8 +712,8 @@ type IndexScanSource2 struct {
 func (s *IndexScanSource2) Routine() error {
 	defer func() {
 		if r := recover(); r != nil {
-			l.Fatalf("IndexScanSource2 - panic %v detected while processing %s", r, s.p.req)
-			l.Fatalf("%s", l.StackTraceAll())
+			logging.Fatalf("IndexScanSource2 - panic %v detected while processing %s", r, s.p.req)
+			logging.Fatalf("%s", logging.StackTraceAll())
 			panic(r)
 		}
 	}()
@@ -657,6 +726,7 @@ func (s *IndexScanSource2) Routine() error {
 	// As snap.Open() is done in NewSnapshotIterator ref counting is also taken care of
 	snaps, err := GetSliceSnapshotsMap(s.is, s.p.req.PartitionIds)
 	if err != nil {
+		s.CloseWithError(err)
 		return err
 	}
 
@@ -693,6 +763,7 @@ func (s *IndexScanSource2) Routine() error {
 	fanIn, err := NewMergeOperator(wpOutCh, s.p.req, writeItemAddStat)
 	if err != nil { // Stop worker pool and return
 		wp.Stop()
+		s.CloseWithError(err)
 		return err
 	}
 
@@ -727,15 +798,8 @@ func (s *IndexScanSource2) Routine() error {
 				if batchId > maxBatchId {
 					maxBatchId = batchId
 				}
-				job := &ScanJob{
-					batch:    batchId,
-					pid:      pid,
-					cid:      cid,
-					scan:     scan,
-					snap:     snaps[pid],
-					codebook: codebooks[pid],
-					ctx:      ctxs[pid][c%readersPerPartition],
-				}
+				ctx := ctxs[pid][c%readersPerPartition]
+				job := NewScanJob(s.p.req, batchId, pid, cid, scan, snaps[pid], ctx, codebooks[pid])
 				_, ok := jobMap[batchId]
 				if !ok {
 					jobMap[batchId] = make([]*ScanJob, 0)
@@ -776,11 +840,13 @@ func (s *IndexScanSource2) Routine() error {
 	fanInErr = fanIn.Wait()
 	if fanInErr != nil { // If there is an error in FanIn stop worker pool
 		wp.Stop()
+		s.CloseWithError(fanInErr)
 		return fanInErr
 	}
 
 	// If there was workerpool error causing early closure of Merger return error from worker pool
 	if wpErr != nil {
+		s.CloseWithError(wpErr)
 		return wpErr
 	}
 

@@ -11,6 +11,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	json "github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/logging"
+	log "github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport/client"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
@@ -181,6 +182,9 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 	logging.SetLogLevel(logging.Info)
 
 	var ssnap SliceSnapshot
+	var senderChSize = 20
+	var senderBatchSize = 1
+	var compDistDelay time.Duration
 
 	testFunc := func(testErr error, stop bool, injectCompDistErr error, injectCompDistErrOnCout int) {
 		vectorDim := 3
@@ -198,6 +202,7 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 			mcbImpl := mcb.(*codebook.MockCodebook)
 			mcbImpl.InjectedErr = injectCompDistErr
 			mcbImpl.CompDistErrOnCount = injectCompDistErrOnCout
+			mcbImpl.CompDistDelay = compDistDelay
 		}
 
 		workCh := make(chan *ScanJob)
@@ -206,7 +211,7 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 		errCh := make(chan error, 1)
 		doneCh := make(chan struct{})
 
-		NewScanWorker(1, r, workCh, recvCh, stopCh, errCh, nil, 20, 1)
+		NewScanWorker(1, r, workCh, recvCh, stopCh, errCh, nil, senderChSize, senderBatchSize)
 
 		var j = ScanJob{
 			pid:      c.PartitionId(0),
@@ -241,43 +246,68 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 			close(stopCh)
 		}
 
+		receivedCount := 0
 		for row := range recvCh {
-			logging.Infof("Row: %+v", row)
+			logging.Tracef("Row: %+v", row)
+			receivedCount++
 		}
+		log.Infof("Receive %v elements in output of test %v", receivedCount, t.Name())
 	}
-	t.Run("general", func(t *testing.T) {
-		gCount = 0
-		ssnap = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
-			false, 0, 0, false))
-		testFunc(nil, false, nil, 0)
-		logging.Infof("gCount: %v", gCount)
-	})
 
-	t.Run("storageerror", func(t *testing.T) {
-		gCount = 0
-		testErr := fmt.Errorf("test injected storage error")
-		ssnap = getSliceSnapshot1(getVectorDataFeeder(true, 70, testErr,
-			false, 0, 0, false))
-		testFunc(testErr, false, nil, 0)
-		logging.Infof("gCount: %v", gCount)
-	})
+	testCases := func(t *testing.T) {
+		t.Run("general", func(t *testing.T) {
+			gCount = 0
+			ssnap = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+				false, 0, 0, false))
+			testFunc(nil, false, nil, 0)
+			logging.Infof("gCount: %v", gCount)
+		})
 
-	t.Run("codebookerror", func(t *testing.T) {
-		gCount = 0
-		testErr := fmt.Errorf("test injected codebook error")
-		ssnap = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
-			false, 0, 0, false))
-		testFunc(testErr, false, testErr, 10)
-		logging.Infof("gCount: %v", gCount)
-	})
+		t.Run("storageerror", func(t *testing.T) {
+			gCount = 0
+			testErr := fmt.Errorf("test injected storage error")
+			ssnap = getSliceSnapshot1(getVectorDataFeeder(true, 70, testErr,
+				false, 0, 0, false))
+			testFunc(testErr, false, nil, 0)
+			logging.Infof("gCount: %v", gCount)
+		})
 
-	t.Run("stop", func(t *testing.T) {
-		gCount = 0
-		ssnap = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
-			true, 00, 2*time.Second, false))
-		testFunc(nil, true, nil, 0)
-		logging.Infof("gCount: %v", gCount)
-	})
+		t.Run("codebookerror", func(t *testing.T) {
+			gCount = 0
+			testErr := fmt.Errorf("test injected codebook error")
+			ssnap = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+				false, 0, 0, false))
+			testFunc(testErr, false, testErr, 10)
+			logging.Infof("gCount: %v", gCount)
+		})
+
+		t.Run("stop", func(t *testing.T) {
+			gCount = 0
+			ssnap = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+				true, 00, 2*time.Second, false))
+			testFunc(nil, true, nil, 0)
+			logging.Infof("gCount: %v", gCount)
+		})
+
+		t.Run("cberrBlockedSenderCh", func(t *testing.T) {
+			gCount = 0
+			senderChSize = 0
+			compDistDelay = 1 * time.Second
+			testErr := fmt.Errorf("test injected codebook error")
+			ssnap = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+				false, 0, 0, false))
+			testFunc(testErr, false, testErr, 1)
+			logging.Infof("gCount: %v", gCount)
+		})
+	}
+
+	batchSizes := []int{1, 2, 3, 5, 10}
+	for _, senderBatchSize = range batchSizes {
+		name := fmt.Sprintf("batchSize_%v", senderBatchSize)
+		t.Run(name, func(t *testing.T) {
+			testCases(t)
+		})
+	}
 }
 
 func TestVectorPipelineWorkerPool(t *testing.T) {
@@ -347,11 +377,13 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 		lastCh := make(chan struct{})
 		go func() {
 			defer close(lastCh)
+			receivedCount := 0
 			for row := range recvCh {
-				logging.Infof("Row: key:%s value:%s dist: %v len:%v",
+				logging.Tracef("Row: key:%s value:%s dist: %v len:%v",
 					row.key, row.value, row.dist, row.len)
+				receivedCount++
 			}
-			logging.Infof("Receive channel closed..")
+			logging.Infof("Receive channel closed after getting %v items", receivedCount)
 		}()
 
 		if stopPreWait {
