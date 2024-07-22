@@ -570,10 +570,8 @@ type MergeOperator struct {
 	buf   *[]byte
 	cktmp [][]byte
 
-	// VECTOR_TODO: handle stats
-	bytesRead    uint64
-	rowsScanned  uint64
-	rowsReturned uint64
+	rowsReceived    uint64
+	rowsOffsetCount uint64
 }
 
 func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
@@ -586,7 +584,12 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 	}
 
 	if r.useHeapForVectorIndex() {
-		fio.heap, err = NewTopKRowHeap(int(r.Limit), false)
+		heapSize := r.Limit
+		if r.Offset != 0 {
+			heapSize += r.Offset
+		}
+
+		fio.heap, err = NewTopKRowHeap(int(heapSize), false)
 		if err != nil {
 			return nil, err
 		}
@@ -619,8 +622,8 @@ func (fio *MergeOperator) Collector() {
 			return
 		}
 
-		// VECTOR_TODO: Add OFFSET too to the LIMIT, Check if LIMIT is adjusted at client side considering OFFSET
-		// If Limit is pushed down push it to heap
+		fio.rowsReceived++
+
 		if fio.req.useHeapForVectorIndex() {
 			fio.heap.Push(row)
 			continue
@@ -671,6 +674,11 @@ func (fio *MergeOperator) Collector() {
 				fio.errCh <- err
 				return
 			}
+		}
+
+		if fio.req.Offset != 0 && fio.rowsOffsetCount < uint64(fio.req.Offset) {
+			fio.rowsOffsetCount++
+			continue
 		}
 
 		err = fio.writeItem(entry)
