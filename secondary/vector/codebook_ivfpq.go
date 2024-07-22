@@ -21,30 +21,32 @@ import (
 const defaultOMPThreads = 1
 
 type codebookIVFPQ struct {
-	dim   int //vector dimension
-	nsub  int //number of subquantizers
-	nbits int //number of bits per subvector index
-	nlist int //number of centroids
+	dim      int //vector dimension
+	nsub     int //number of subquantizers
+	nbits    int //number of bits per subvector index
+	nlist    int //number of centroids
+	fastScan bool
 
 	codeSize int //size of the code
 
 	isTrained bool
 
-	metric 		MetricType //metric
-	useCosine 	bool	//use cosine similarity
+	metric    MetricType //metric
+	useCosine bool       //use cosine similarity
 
 	index *faiss.IndexImpl
 }
 
 type codebookIVFPQ_IO struct {
-	Dim   int `json:"dim,omitempty"`
-	Nsub  int `json:"nsub,omitempty"`
-	Nbits int `json:"nbits,omitempty"`
-	Nlist int `json:"nlist,omitempty"`
+	Dim      int  `json:"dim,omitempty"`
+	Nsub     int  `json:"nsub,omitempty"`
+	Nbits    int  `json:"nbits,omitempty"`
+	Nlist    int  `json:"nlist,omitempty"`
+	FastScan bool `json:"fastScan,omitempty"`
 
 	IsTrained bool       `json:"istrained,omitempty"`
 	Metric    MetricType `json:"metric,omitempty"`
-	UseCosine bool		 `json:"usecosine,omitempty"`
+	UseCosine bool       `json:"usecosine,omitempty"`
 
 	Checksum    uint32      `json:"checksum,omitempty"`
 	CodebookVer CodebookVer `json:"codebookver,omitempty"`
@@ -52,7 +54,7 @@ type codebookIVFPQ_IO struct {
 	Index []byte `json:"index,omitempty"`
 }
 
-func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType, useCosine bool) (c.Codebook, error) {
+func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType, useCosine, useFastScan bool) (c.Codebook, error) {
 
 	var err error
 
@@ -61,11 +63,12 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType, useCosine 
 	}
 
 	codebook := &codebookIVFPQ{
-		dim:    dim,
-		nsub:   nsub,
-		nbits:  nbits,
-		nlist:  nlist,
-		metric: metric,
+		dim:       dim,
+		nsub:      nsub,
+		nbits:     nbits,
+		nlist:     nlist,
+		fastScan:  useFastScan,
+		metric:    metric,
 		useCosine: useCosine,
 	}
 
@@ -73,7 +76,7 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType, useCosine 
 
 	faiss.SetOMPThreads(defaultOMPThreads)
 
-	codebook.index, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, faissMetric)
+	codebook.index, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, faissMetric, useFastScan)
 	if err != nil || codebook.index == nil {
 		errStr := fmt.Sprintf("Unable to create index. Err %v", err)
 		return nil, errors.New(errStr)

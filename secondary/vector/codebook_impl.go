@@ -84,14 +84,18 @@ func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (codebook codeboo
 	metric, useCosine := convertSimilarityToMetric(vectorMeta.Similarity)
 	switch vectorMeta.Quantizer.Type {
 	case common.PQ:
-		codebook, err = NewCodebookIVFPQ(vectorMeta.Dimension, vectorMeta.Quantizer.SubQuantizers,
-			vectorMeta.Quantizer.Nbits, nlist, metric, useCosine)
+		nsub :=  vectorMeta.Quantizer.SubQuantizers
+		if vectorMeta.Quantizer.FastScan {
+			nsub =  vectorMeta.Quantizer.BlockSize
+		}
+		codebook, err = NewCodebookIVFPQ(vectorMeta.Dimension, nsub, vectorMeta.Quantizer.Nbits,
+			nlist, metric, useCosine, vectorMeta.Quantizer.FastScan)
 		if err != nil {
 			return nil, err
 		}
 		logging.Infof("NewCodebookIVFPQ: Initialized codebook with dimension: %v, subquantizers: %v, "+
-			"nbits: %v, nlist: %v, metric: %v, useCosine: %v", vectorMeta.Dimension, vectorMeta.Quantizer.SubQuantizers,
-			vectorMeta.Quantizer.Nbits, nlist, metric, useCosine)
+			"nbits: %v, nlist: %v, fastScan: %v, metric: %v, useCosine: %v", vectorMeta.Dimension, nsub,
+			vectorMeta.Quantizer.Nbits, nlist, vectorMeta.Quantizer.FastScan, metric, useCosine)
 
 	case common.SQ:
 		codebook, err = NewCodebookIVFSQ(vectorMeta.Dimension, nlist, vectorMeta.Quantizer.SQRange, metric, useCosine)

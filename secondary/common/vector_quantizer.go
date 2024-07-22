@@ -59,6 +59,8 @@ func (vq *VectorQuantizer) Clone() *VectorQuantizer {
 		Nlist:         vq.Nlist,
 		SubQuantizers: vq.SubQuantizers,
 		Nbits:         vq.Nbits,
+		FastScan:      vq.FastScan,
+		BlockSize:     vq.BlockSize,
 		SQRange:       vq.SQRange,
 	}
 }
@@ -196,6 +198,8 @@ func (vq *VectorQuantizer) IsValid(dimension int) error {
 				return errors.New("BlockSize should be greater than zero for product quantization with fast scan")
 			} else if dimension%vq.BlockSize != 0 {
 				return errors.New("Dimension should be divisible by BlockSize for product quantization with fast scan")
+			} else if vq.Nbits != 4 {
+				return errors.New("Currently only nbits=4 is supported with fast scan")
 			}
 			return nil
 		} else {

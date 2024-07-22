@@ -13,15 +13,23 @@ func NewIndexFlat(dim, metric int) (*faiss.IndexImpl, error) {
 	return faiss.IndexFactory(dim, description, metric)
 }
 
-func NewIndexIVFPQ(dim, nlist, nsub, nbits, metric int) (*faiss.IndexImpl, error) {
+func NewIndexIVFPQ(dim, nlist, nsub, nbits, metric int, useFastScan bool) (*faiss.IndexImpl, error) {
+	fs := ""
+	if useFastScan {
+		fs = "fs"
+	}
 
-	description := fmt.Sprintf("IVF%v,PQ%vx%v", nlist, nsub, nbits)
+	description := fmt.Sprintf("IVF%v,PQ%vx%v%v", nlist, nsub, nbits, fs)
 	return faiss.IndexFactory(dim, description, metric)
 }
 
-func NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric int) (*faiss.IndexImpl, error) {
+func NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric int, useFastScan bool) (*faiss.IndexImpl, error) {
+	fs := ""
+	if useFastScan {
+		fs = "fs"
+	}
 
-	description := fmt.Sprintf("IVF%v_HNSW,PQ%vx%v", nlist, nsub, nbits)
+	description := fmt.Sprintf("IVF%v_HNSW,PQ%vx%v%v", nlist, nsub, nbits, fs)
 	return faiss.IndexFactory(dim, description, metric)
 
 }
@@ -38,4 +46,3 @@ func NewIndexIVFSQ_HNSW(dim, nlist, metric int, sqRange common.ScalarQuantizerRa
 	return faiss.IndexFactory(dim, description, metric)
 
 }
-

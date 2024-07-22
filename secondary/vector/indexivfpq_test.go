@@ -21,8 +21,9 @@ func TestIndexIVFPQ(t *testing.T) {
 	nlist := 128
 	nsub := 8
 	nbits := 8
+	useFastScan := false
 
-	indexPQ, err = NewIndexIVFPQ(dim, nlist, nsub, nbits, metric)
+	indexPQ, err = NewIndexIVFPQ(dim, nlist, nsub, nbits, metric, useFastScan)
 	if err != nil || indexPQ == nil {
 		t.Errorf("Unable to create index. Err %v", err)
 	}
@@ -93,8 +94,9 @@ func TestIndexIVFPQ_HNSW(t *testing.T) {
 	nlist := 128
 	nsub := 8
 	nbits := 8
+	useFastScan := false
 
-	indexPQ, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric)
+	indexPQ, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric, useFastScan)
 	if err != nil || indexPQ == nil {
 		t.Errorf("Unable to create index. Err %v", err)
 	}
@@ -213,8 +215,9 @@ func TestIndexIVFPQ_Timing(t *testing.T) {
 	nlist := 1024
 	nsub := 8
 	nbits := 8
+	useFastScan := false
 
-	indexPQ, err = NewIndexIVFPQ(dim, nlist, nsub, nbits, metric)
+	indexPQ, err = NewIndexIVFPQ(dim, nlist, nsub, nbits, metric, useFastScan)
 	if err != nil || indexPQ == nil {
 		t.Errorf("Unable to create index. Err %v", err)
 	}
@@ -270,8 +273,9 @@ func TestIndexIVFPQ_HNSW_Timing(t *testing.T) {
 	nlist := 1024
 	nsub := 8
 	nbits := 8
+	useFastScan := false
 
-	indexPQ, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric)
+	indexPQ, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric, useFastScan)
 	if err != nil || indexPQ == nil {
 		t.Errorf("Unable to create index. Err %v", err)
 	}

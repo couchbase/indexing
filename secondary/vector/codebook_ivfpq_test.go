@@ -19,6 +19,7 @@ type codebookIVFPQTestCase struct {
 	nlist int
 	nsub  int
 	nbits int
+	useFastScan bool
 
 	num_vecs  int
 	trainlist int
@@ -26,19 +27,19 @@ type codebookIVFPQTestCase struct {
 
 var codebookIVFPQTestCases = []codebookIVFPQTestCase{
 
-	{"PQ8x8 L2", 128, METRIC_L2, false, 1000, 8, 8, 10000, 10000},
-	{"PQ32x8 L2", 128, METRIC_L2, false, 1000, 32, 8, 10000, 10000},
-	{"PQ32x8 DOT", 128, METRIC_INNER_PRODUCT, false, 1000, 32, 8, 10000, 10000},
-	{"PQ32x8 COSINE", 128, METRIC_INNER_PRODUCT, true, 1000, 32, 8, 10000, 10000},
+	{"PQ8x8 L2", 128, METRIC_L2, false, 1000, 8, 8, false, 10000, 10000},
+	{"PQ32x8 L2", 128, METRIC_L2, false, 1000, 32, 8, false, 10000, 10000},
+	{"PQ32x8 DOT", 128, METRIC_INNER_PRODUCT, false, 1000, 32, 8, false, 10000, 10000},
+	{"PQ32x8 COSINE", 128, METRIC_INNER_PRODUCT, true, 1000, 32, 8, false, 10000, 10000},
+	{"PQ32x4FS L2", 128, METRIC_L2, false, 1000, 32, 4, true, 10000, 10000},
 	//{"PQ8x10 L2", 128, METRIC_L2, 1000, 8, 10, 10000, 10000},
 }
 
 func TestCodebookIVFPQ(t *testing.T) {
-
 	for _, tc := range codebookIVFPQTestCases {
 		t.Run(tc.name, func(t *testing.T) {
 
-			codebook, err := NewCodebookIVFPQ(tc.dim, tc.nsub, tc.nbits, tc.nlist, tc.metric, tc.useCosine)
+			codebook, err := NewCodebookIVFPQ(tc.dim, tc.nsub, tc.nbits, tc.nlist, tc.metric, tc.useCosine, tc.useFastScan)
 			if err != nil || codebook == nil {
 				t.Errorf("Unable to create index. Err %v", err)
 			}
@@ -269,6 +270,7 @@ type pqTimingTestCase struct {
 	nlist int
 	nsub  int
 	nbits int
+	useFastScan bool
 
 	num_vecs  int
 	trainlist int
@@ -280,20 +282,24 @@ type pqTimingTestCase struct {
 
 var pqTimingTestCases = []pqTimingTestCase{
 
-	{"PQ8x8 Batch 1 Concur 1", 128, METRIC_L2, false, 1000, 8, 8, 10000, 10000, 1, 1, 10000},
-	{"PQ8x8 Batch 1 Concur 10", 128, METRIC_L2, false, 1000, 8, 8, 10000, 10000, 1, 10, 10000},
-	{"PQ8x8 Batch 10 Concur 1", 128, METRIC_L2, false, 1000, 8, 8, 10000, 10000, 10, 1, 10000},
-	{"PQ8x8 Batch 10 Concur 10", 128, METRIC_L2, false, 1000, 8, 8, 10000, 10000, 10, 10, 10000},
-	{"PQ8x8 Batch 50 Concur 10", 128, METRIC_L2, false, 1000, 8, 8, 10000, 10000, 50, 10, 10000},
+	{"PQ8x8 Batch 1 Concur 1", 128, METRIC_L2, false, 1000, 8, 8, false, 10000, 10000, 1, 1, 10000},
+	{"PQ8x8 Batch 1 Concur 10", 128, METRIC_L2, false, 1000, 8, 8, false, 10000, 10000, 1, 10, 10000},
+	{"PQ8x8 Batch 10 Concur 1", 128, METRIC_L2, false, 1000, 8, 8, false, 10000, 10000, 10, 1, 10000},
+	{"PQ8x8 Batch 10 Concur 10", 128, METRIC_L2, false, 1000, 8, 8, false, 10000, 10000, 10, 10, 10000},
+	{"PQ8x8 Batch 50 Concur 10", 128, METRIC_L2, false, 1000, 8, 8, false, 10000, 10000, 50, 10, 10000},
+	{"PQ8x4FS Batch 1 Concur 1", 128, METRIC_L2, false, 1000, 8, 4, true, 10000, 10000, 1, 1, 10000},
+	{"PQ8x4FS Batch 1 Concur 10", 128, METRIC_L2, false, 1000, 8, 4, true, 10000, 10000, 1, 10, 10000},
+	{"PQ8x4FS Batch 10 Concur 1", 128, METRIC_L2, false, 1000, 8, 4, true, 10000, 10000, 10, 1, 10000},
+	{"PQ8x4FS Batch 10 Concur 10", 128, METRIC_L2, false, 1000, 8, 4, true, 10000, 10000, 10, 10, 10000},
+	{"PQ8x4FS Batch 50 Concur 10", 128, METRIC_L2, false, 1000, 8, 4, true, 10000, 10000, 50, 10, 10000},
 	//{"PQ32x8 Batch 50 Concur 10", 128, METRIC_L2, 1000, 32, 8, 10000, 10000, 50, 5, 10000},
 }
 
 func TestIVFPQTiming(t *testing.T) {
-
 	for _, tc := range pqTimingTestCases {
 		t.Run(tc.name, func(t *testing.T) {
 
-			codebook, err := NewCodebookIVFPQ(tc.dim, tc.nsub, tc.nbits, tc.nlist, tc.metric, tc.useCosine)
+			codebook, err := NewCodebookIVFPQ(tc.dim, tc.nsub, tc.nbits, tc.nlist, tc.metric, tc.useCosine, tc.useFastScan)
 			if err != nil || codebook == nil {
 				t.Errorf("Unable to create index. Err %v", err)
 			}
@@ -382,11 +388,10 @@ func TestIVFPQTiming(t *testing.T) {
 
 //concurrent encode/decode
 func TestIVFPQConcurrentTiming(t *testing.T) {
-
 	for _, tc := range pqTimingTestCases {
 		t.Run(tc.name, func(t *testing.T) {
 
-			codebook, err := NewCodebookIVFPQ(tc.dim, tc.nsub, tc.nbits, tc.nlist, tc.metric, tc.useCosine)
+			codebook, err := NewCodebookIVFPQ(tc.dim, tc.nsub, tc.nbits, tc.nlist, tc.metric, tc.useCosine, tc.useFastScan)
 			if err != nil || codebook == nil {
 				t.Errorf("Unable to create index. Err %v", err)
 			}
