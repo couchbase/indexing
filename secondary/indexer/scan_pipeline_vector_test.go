@@ -1,7 +1,10 @@
 package indexer
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,31 +30,45 @@ import (
 // -----
 var gCount uint64
 
+func encodeVector(vec []float32, code []byte) error {
+	if len(code) < len(vec)*4 {
+		return errors.New("code slice is too small to hold the encoded data")
+	}
+
+	for i, v := range vec {
+		start := i * 4
+		end := start + 4
+		binary.LittleEndian.PutUint32(code[start:end], math.Float32bits(v))
+	}
+
+	return ErrSecKeyNil
+}
+
 func getVectorDataFeeder(feedError bool, errDocId int, inputErr error,
 	injectDelay bool, delayDocId int, delay time.Duration, addHex bool) snapshotFeeder {
 
 	return func(datach chan Row, errch chan error) {
 		var colors = []struct {
 			id  string
-			v   []float64
+			v   []float32
 			vv  []int
 			hex string
 		}{
-			{"1", []float64{0.4, 1.0, 0.4}, []int{102, 255, 102}, "#66ff66"},
-			{"1", []float64{0.5, 1.0, 0.4}, []int{127, 255, 102}, "#7fff66"},
-			{"1", []float64{0.5, 1.0, 0.5}, []int{127, 255, 127}, "#7fff7f"},
-			{"1", []float64{0.4, 1.0, 0.5}, []int{102, 255, 127}, "#66ff7f"},
-			{"2", []float64{0.4, 0.5, 1.0}, []int{102, 127, 255}, "#667fff"},
-			{"2", []float64{0.5, 0.5, 1.0}, []int{127, 127, 255}, "#7f7fff"},
-			{"2", []float64{0.5, 0.4, 1.0}, []int{127, 102, 255}, "#7f66ff"},
-			{"2", []float64{0.4, 0.4, 1.0}, []int{102, 102, 255}, "#6666ff"},
-			{"3", []float64{1.0, 0.4, 0.4}, []int{255, 102, 102}, "#ff6666"},
-			{"3", []float64{1.0, 0.5, 0.4}, []int{255, 127, 102}, "#ff7f66"},
-			{"3", []float64{1.0, 0.5, 0.5}, []int{255, 127, 127}, "#ff7f7f"},
-			{"3", []float64{1.0, 0.4, 0.5}, []int{255, 102, 127}, "#ff667f"},
-			{"4", []float64{0.02, 0.6, 0.76}, []int{5, 153, 193}, "#599c1"},
-			{"4", []float64{0.02, 0.6, 0.76}, []int{5, 153, 193}, "#599c1"},
-			{"4", []float64{0.02, 0.6, 0.76}, []int{5, 153, 193}, "#599c1"},
+			{"1", []float32{0.4, 1.0, 0.4}, []int{102, 255, 102}, "#66ff66"},
+			{"1", []float32{0.5, 1.0, 0.4}, []int{127, 255, 102}, "#7fff66"},
+			{"1", []float32{0.5, 1.0, 0.5}, []int{127, 255, 127}, "#7fff7f"},
+			{"1", []float32{0.4, 1.0, 0.5}, []int{102, 255, 127}, "#66ff7f"},
+			{"2", []float32{0.4, 0.5, 1.0}, []int{102, 127, 255}, "#667fff"},
+			{"2", []float32{0.5, 0.5, 1.0}, []int{127, 127, 255}, "#7f7fff"},
+			{"2", []float32{0.5, 0.4, 1.0}, []int{127, 102, 255}, "#7f66ff"},
+			{"2", []float32{0.4, 0.4, 1.0}, []int{102, 102, 255}, "#6666ff"},
+			{"3", []float32{1.0, 0.4, 0.4}, []int{255, 102, 102}, "#ff6666"},
+			{"3", []float32{1.0, 0.5, 0.4}, []int{255, 127, 102}, "#ff7f66"},
+			{"3", []float32{1.0, 0.5, 0.5}, []int{255, 127, 127}, "#ff7f7f"},
+			{"3", []float32{1.0, 0.4, 0.5}, []int{255, 102, 127}, "#ff667f"},
+			{"4", []float32{0.02, 0.6, 0.76}, []int{5, 153, 193}, "#599c1"},
+			{"4", []float32{0.02, 0.6, 0.76}, []int{5, 153, 193}, "#599c1"},
+			{"4", []float32{0.02, 0.6, 0.76}, []int{5, 153, 193}, "#599c1"},
 		}
 
 		docid := 0
@@ -77,17 +94,8 @@ func getVectorDataFeeder(feedError bool, errDocId int, inputErr error,
 						break toploop
 					}
 
-					valArray := make([]interface{}, len(c.v))
-					for i, v := range c.v {
-						valArray[i] = v
-					}
-					valn1ql := n1ql.NewValue(valArray)
-					buf = make([]byte, 0, 1000)
-					valEntry, err := codec.EncodeN1QLValue(valn1ql, buf)
-					if err != nil {
-						errch <- err
-						break toploop
-					}
+					valEntry := make([]byte, len(c.v)*4)
+					encodeVector(c.v, valEntry)
 
 					cfg := common.SystemConfig.SectionConfig("indexer.", true)
 					szCfg := getKeySizeConfig(cfg)
@@ -291,6 +299,7 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 
 		t.Run("cberrBlockedSenderCh", func(t *testing.T) {
 			gCount = 0
+			oldSenderChSize := senderChSize
 			senderChSize = 0
 			compDistDelay = 1 * time.Second
 			testErr := fmt.Errorf("test injected codebook error")
@@ -298,6 +307,7 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 				false, 0, 0, false))
 			testFunc(testErr, false, testErr, 1)
 			logging.Infof("gCount: %v", gCount)
+			senderChSize = oldSenderChSize
 		})
 	}
 
@@ -461,7 +471,7 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 			false, 0, 0, false))
 		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
 			false, 0, 0, false))
-		testFunc(testErr, false, false, false, testErr, 70, nil, 0)
+		testFunc(testErr, false, false, false, testErr, 1, nil, 0)
 		logging.Infof("gCount: %v", gCount)
 	})
 
@@ -472,7 +482,7 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 			false, 0, 0, false))
 		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
 			false, 0, 0, false))
-		testFunc(testErr, false, false, false, testErr, 70, testErr, 70)
+		testFunc(testErr, false, false, false, testErr, 1, testErr, 1)
 		logging.Infof("gCount: %v", gCount)
 	})
 
@@ -532,7 +542,7 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 
 	getWriteItem := func() WriteItem {
 		return func(data ...[]byte) error {
-			logging.Infof("Data: %s", data)
+			logging.Verbosef("Data: %s", data)
 			return nil
 		}
 	}
