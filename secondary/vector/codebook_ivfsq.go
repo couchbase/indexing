@@ -14,17 +14,15 @@ import (
 	"fmt"
 	"hash/crc32"
 
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/vector/codebook"
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
-const defaultOMPThreads = 1
-
-type codebookIVFPQ struct {
+type codebookIVFSQ struct {
 	dim   int //vector dimension
-	nsub  int //number of subquantizers
-	nbits int //number of bits per subvector index
 	nlist int //number of centroids
+	sqRange common.ScalarQuantizerRange //scalar quantizer type
 
 	codeSize int //size of the code
 
@@ -35,10 +33,9 @@ type codebookIVFPQ struct {
 	index *faiss.IndexImpl
 }
 
-type codebookIVFPQ_IO struct {
+type codebookIVFSQ_IO struct {
 	Dim   int `json:"dim,omitempty"`
-	Nsub  int `json:"nsub,omitempty"`
-	Nbits int `json:"nbits,omitempty"`
+	SQRange common.ScalarQuantizerRange `json:"sqrange,omitempty"`
 	Nlist int `json:"nlist,omitempty"`
 
 	IsTrained bool       `json:"istrained,omitempty"`
@@ -50,7 +47,7 @@ type codebookIVFPQ_IO struct {
 	Index []byte `json:"index,omitempty"`
 }
 
-func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (c.Codebook, error) {
+func NewCodebookIVFSQ(dim, nlist int, sqRange common.ScalarQuantizerRange, metric MetricType) (c.Codebook, error) {
 
 	var err error
 
@@ -58,19 +55,18 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (c.Codeboo
 		return nil, c.ErrUnsupportedMetric
 	}
 
-	codebook := &codebookIVFPQ{
-		dim:    dim,
-		nsub:   nsub,
-		nbits:  nbits,
-		nlist:  nlist,
-		metric: metric,
+	codebook := &codebookIVFSQ{
+		dim:    	dim,
+		sqRange:	sqRange,
+		nlist:  	nlist,
+		metric: 	metric,
 	}
 
 	faissMetric := convertToFaissMetric(metric)
 
 	faiss.SetOMPThreads(defaultOMPThreads)
 
-	codebook.index, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, faissMetric)
+	codebook.index, err = NewIndexIVFSQ_HNSW(dim, nlist, faissMetric, sqRange)
 	if err != nil || codebook.index == nil {
 		errStr := fmt.Sprintf("Unable to create index. Err %v", err)
 		return nil, errors.New(errStr)
@@ -80,7 +76,7 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (c.Codeboo
 }
 
 // Train the codebook using input vectors.
-func (cb *codebookIVFPQ) Train(vecs []float32) error {
+func (cb *codebookIVFSQ) Train(vecs []float32) error {
 
 	if cb.index == nil {
 		return c.ErrCodebookClosed
@@ -94,7 +90,7 @@ func (cb *codebookIVFPQ) Train(vecs []float32) error {
 }
 
 // IsTrained returns true if codebook has been trained.
-func (cb *codebookIVFPQ) IsTrained() bool {
+func (cb *codebookIVFSQ) IsTrained() bool {
 
 	if cb.index == nil {
 		return false
@@ -108,7 +104,7 @@ func (cb *codebookIVFPQ) IsTrained() bool {
 }
 
 // CodeSize returns the size of produced code in bytes.
-func (cb *codebookIVFPQ) CodeSize() (int, error) {
+func (cb *codebookIVFSQ) CodeSize() (int, error) {
 
 	if !cb.IsTrained() {
 		return 0, c.ErrCodebookNotTrained
@@ -118,14 +114,14 @@ func (cb *codebookIVFPQ) CodeSize() (int, error) {
 
 // Compute the quantized code for a given input vector.
 // Must be run on a trained codebook.
-func (cb *codebookIVFPQ) EncodeVector(vec []float32, code []byte) error {
+func (cb *codebookIVFSQ) EncodeVector(vec []float32, code []byte) error {
 
 	return cb.EncodeVectors(vec, code)
 }
 
 // Compute the quantized code for a given input vector.
 // Must be run on a trained codebook.
-func (cb *codebookIVFPQ) EncodeVectors(vecs []float32, codes []byte) error {
+func (cb *codebookIVFSQ) EncodeVectors(vecs []float32, codes []byte) error {
 
 	if !cb.IsTrained() {
 		return c.ErrCodebookNotTrained
@@ -135,7 +131,7 @@ func (cb *codebookIVFPQ) EncodeVectors(vecs []float32, codes []byte) error {
 
 // Find the nearest k centroidIDs for a given vector.
 // Must be run on a trained codebook.
-func (cb *codebookIVFPQ) FindNearestCentroids(vec []float32, k int64) ([]int64, error) {
+func (cb *codebookIVFSQ) FindNearestCentroids(vec []float32, k int64) ([]int64, error) {
 
 	if !cb.IsTrained() {
 		return nil, c.ErrCodebookNotTrained
@@ -154,13 +150,13 @@ func (cb *codebookIVFPQ) FindNearestCentroids(vec []float32, k int64) ([]int64, 
 
 // Decode the quantized code and return float32 vector.
 // Must be run on a trained codebook.
-func (cb *codebookIVFPQ) DecodeVector(code []byte, vec []float32) error {
+func (cb *codebookIVFSQ) DecodeVector(code []byte, vec []float32) error {
 	return cb.DecodeVectors(1, code, vec)
 }
 
 // Decode the quantized codes and return float32 vectors.
 // Must be run on a trained codebook.
-func (cb *codebookIVFPQ) DecodeVectors(n int, codes []byte, vecs []float32) error {
+func (cb *codebookIVFSQ) DecodeVectors(n int, codes []byte, vecs []float32) error {
 
 	if !cb.IsTrained() {
 		return c.ErrCodebookNotTrained
@@ -169,25 +165,25 @@ func (cb *codebookIVFPQ) DecodeVectors(n int, codes []byte, vecs []float32) erro
 }
 
 // Compute the distance between a vector with another given set of vectors.
-func (cb *codebookIVFPQ) ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error {
+func (cb *codebookIVFSQ) ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error {
 	if cb.metric == METRIC_L2 {
 		return faiss.L2sqrNy(dist, qvec, fvecs, cb.dim)
 	}
 	return nil
 }
 
-func (cb *codebookIVFPQ) ComputeDistanceTable(vec []float32) ([][]float32, error) {
+func (cb *codebookIVFSQ) ComputeDistanceTable(vec []float32) ([][]float32, error) {
 	//Not yet implemented
 	return nil, nil
 }
 
-func (cb *codebookIVFPQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) float32 {
+func (cb *codebookIVFSQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) float32 {
 	//Not yet implemented
 	return 0
 }
 
 // Size returns the memory size in bytes.
-func (cb *codebookIVFPQ) Size() uint64 {
+func (cb *codebookIVFSQ) Size() uint64 {
 
 	var size uint64
 	if cb.index != nil {
@@ -198,7 +194,7 @@ func (cb *codebookIVFPQ) Size() uint64 {
 }
 
 // Close frees the memory used by codebook.
-func (cb *codebookIVFPQ) Close() error {
+func (cb *codebookIVFSQ) Close() error {
 
 	if cb.index == nil {
 		return c.ErrCodebookClosed
@@ -210,13 +206,12 @@ func (cb *codebookIVFPQ) Close() error {
 	}
 }
 
-func (cb *codebookIVFPQ) Marshal() ([]byte, error) {
+func (cb *codebookIVFSQ) Marshal() ([]byte, error) {
 
-	cbio := new(codebookIVFPQ_IO)
+	cbio := new(codebookIVFSQ_IO)
 
 	cbio.Dim = cb.dim
-	cbio.Nsub = cb.nsub
-	cbio.Nbits = cb.nbits
+	cbio.SQRange = cb.sqRange
 	cbio.Nlist = cb.nlist
 	cbio.IsTrained = cb.isTrained
 	cbio.Metric = cb.metric
@@ -234,9 +229,9 @@ func (cb *codebookIVFPQ) Marshal() ([]byte, error) {
 	return json.Marshal(cbio)
 }
 
-func recoverCodebookIVFPQ(data []byte) (c.Codebook, error) {
+func recoverCodebookIVFSQ(data []byte) (c.Codebook, error) {
 
-	cbio := new(codebookIVFPQ_IO)
+	cbio := new(codebookIVFSQ_IO)
 
 	if err := json.Unmarshal(data, cbio); err != nil {
 		return nil, err
@@ -252,10 +247,9 @@ func recoverCodebookIVFPQ(data []byte) (c.Codebook, error) {
 		return nil, c.ErrChecksumMismatch
 	}
 
-	cb := new(codebookIVFPQ)
+	cb := new(codebookIVFSQ)
 	cb.dim = cbio.Dim
-	cb.nsub = cbio.Nsub
-	cb.nbits = cbio.Nbits
+	cb.sqRange = cbio.SQRange
 	cb.nlist = cbio.Nlist
 	cb.isTrained = cbio.IsTrained
 	cb.metric = cbio.Metric

@@ -303,22 +303,21 @@ func (w *ScanWorker) Sender() {
 		}
 
 		// Make list of vectors to calculate distance
-		fvecs := make([]float32, 0)
+		// VECTOR_TODO: Allocate the codes buffer once per scan and reuse the same memory
+		codes := make([]byte, 0)
 		vecCount := 0
 		for ; vecCount < batchSize && !rows[vecCount].last; vecCount++ {
-
 			codei := rows[vecCount].value
+			codes = append(codes, codei...)
+		}
 
-			veci := make([]float32, w.r.getVectorDim())
-			// VECTOR_TODO: Update to DecodeVectors
-			err = w.currJob.codebook.DecodeVector(codei, veci)
-			if err != nil {
-				logging.Verbosef("%v Sender got error: %v from DecodeVector", w.logPrefix, err)
-				w.senderErrCh <- err
-				return
-			}
-
-			fvecs = append(fvecs, veci...)
+		// Decode vectors
+		fvecs := make([]float32, vecCount*w.r.getVectorDim())
+		err = w.currJob.codebook.DecodeVectors(vecCount, codes, fvecs)
+		if err != nil {
+			logging.Verbosef("%v Sender got error: %v from DecodeVectors", w.logPrefix, err)
+			w.senderErrCh <- err
+			return
 		}
 
 		// Compute distance from query vector using codebook
@@ -480,7 +479,7 @@ func (wp *WorkerPool) Init(r *ScanRequest) {
 	for i := 0; i < wp.numWorkers; i++ {
 		// VECTOR_TODO: Tune the sender channel and batch sizes as needed
 		wp.workers[i] = NewScanWorker(i, r, wp.jobs, wp.sendCh,
-			wp.stopCh, wp.errCh, &wp.jobsWg, 20, 1)
+			wp.stopCh, wp.errCh, &wp.jobsWg, 100, 50)
 	}
 }
 
@@ -570,10 +569,8 @@ type MergeOperator struct {
 	buf   *[]byte
 	cktmp [][]byte
 
-	// VECTOR_TODO: handle stats
-	bytesRead    uint64
-	rowsScanned  uint64
-	rowsReturned uint64
+	rowsReceived    uint64
+	rowsOffsetCount uint64
 }
 
 func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
@@ -583,10 +580,16 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 		recvCh:    recvCh,
 		writeItem: writeItem,
 		req:       r,
+		errCh:     make(chan error),
 	}
 
 	if r.useHeapForVectorIndex() {
-		fio.heap, err = NewTopKRowHeap(int(r.Limit), false)
+		heapSize := r.Limit
+		if r.Offset != 0 {
+			heapSize += r.Offset
+		}
+
+		fio.heap, err = NewTopKRowHeap(int(heapSize), false)
 		if err != nil {
 			return nil, err
 		}
@@ -619,8 +622,8 @@ func (fio *MergeOperator) Collector() {
 			return
 		}
 
-		// VECTOR_TODO: Add OFFSET too to the LIMIT, Check if LIMIT is adjusted at client side considering OFFSET
-		// If Limit is pushed down push it to heap
+		fio.rowsReceived++
+
 		if fio.req.useHeapForVectorIndex() {
 			fio.heap.Push(row)
 			continue
@@ -671,6 +674,11 @@ func (fio *MergeOperator) Collector() {
 				fio.errCh <- err
 				return
 			}
+		}
+
+		if fio.req.Offset != 0 && fio.rowsOffsetCount < uint64(fio.req.Offset) {
+			fio.rowsOffsetCount++
+			continue
 		}
 
 		err = fio.writeItem(entry)

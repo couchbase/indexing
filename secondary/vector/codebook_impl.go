@@ -48,7 +48,10 @@ func RecoverCodebook(data []byte, qType string) (codebook.Codebook, error) {
 	switch qType {
 	case "PQ":
 		return recoverCodebookIVFPQ(data)
+	case "SQ":
+		return recoverCodebookIVFSQ(data)
 	}
+
 	return nil, codebook.ErrUnknownType
 }
 
@@ -75,12 +78,11 @@ func convertSimilarityToMetric(similarity common.VectorSimilarity) MetricType {
 	return METRIC_L2 // Always default to L2
 }
 
-func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (codebook.Codebook, error) {
+func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (codebook codebook.Codebook, err error) {
 	metric := convertSimilarityToMetric(vectorMeta.Similarity)
 	switch vectorMeta.Quantizer.Type {
 	case common.PQ:
-
-		codebook, err := NewCodebookIVFPQ(vectorMeta.Dimension, vectorMeta.Quantizer.SubQuantizers,
+		codebook, err = NewCodebookIVFPQ(vectorMeta.Dimension, vectorMeta.Quantizer.SubQuantizers,
 			vectorMeta.Quantizer.Nbits, nlist, metric)
 		if err != nil {
 			return nil, err
@@ -88,9 +90,18 @@ func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (codebook.Codeboo
 		logging.Infof("NewCodebookIVFPQ: Initialized codebook with dimension: %v, subquantizers: %v, "+
 			"nbits: %v, nlist: %v, metric: %v", vectorMeta.Dimension, vectorMeta.Quantizer.SubQuantizers,
 			vectorMeta.Quantizer.Nbits, nlist, metric)
-		return codebook, nil
+
 	case common.SQ:
-		return nil, errors.New("SQ interface is not yet supported")
+		codebook, err = NewCodebookIVFSQ(vectorMeta.Dimension, nlist, vectorMeta.Quantizer.SQRange, metric)
+		if err != nil {
+			return nil, err
+		}
+		logging.Infof("NewCodebookIVFSQ: Initialized codebook with dimension: %v, range: %v, nlist: %v, metric: %v",
+			vectorMeta.Dimension, vectorMeta.Quantizer.SQRange, nlist, metric)
+
+	default:
+		return nil, errors.New("Unsupported quantisation type")
 	}
-	return nil, errors.New("Unsupported quantisation type")
+
+	return codebook, nil
 }

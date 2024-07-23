@@ -13095,6 +13095,7 @@ func (idx *indexer) filterNeedsTrainingInsts(instIdList []c.IndexInstId, errMap 
 
 func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c.VectorMetadata, keyspaceId string) error {
 
+	minCentroidsRequired := nlist
 	if vm.Quantizer.Type == c.PQ {
 
 		// For product quantization, atleast 1 << nbits vectors are required
@@ -13102,27 +13103,24 @@ func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c
 		// Hence, the minCentroidsRequired is derived based on max(1 << nbits, nlist)
 		// This value ensures that there is atleast one vector for every centroid
 		// in the keyspace at the time of build
-		minCentroidsRequired := max(1<<vm.Quantizer.Nbits, nlist)
-		if trainlistSize < uint64(minCentroidsRequired) {
-			var errStr string
-			if vm.TrainList == 0 {
-				errStr = c.ERR_TRAINING + fmt.Sprintf("The number of documents: %v in keyspace: %v are less than the "+
-					"minimum number of documents: %v required for training %v centroids", trainlistSize,
-					keyspaceId, minCentroidsRequired, minCentroidsRequired)
-			} else {
-				errStr = c.ERR_TRAINING + fmt.Sprintf("Trainlist %v is less than the number "+
-					"of documents %v required for training %v centroids", trainlistSize, minCentroidsRequired,
-					minCentroidsRequired)
-			}
-			logging.Errorf("Indexer::validateTrainListSize %v", errStr)
-			return errors.New(errStr)
-		}
-		return nil
-	} else {
-		// SQ is currently not supported
-		// [VECTOR_TODO]: Add support for SQ
-		return c.ErrUnsupportedQuantisationScheme
+		minCentroidsRequired = max(1<<vm.Quantizer.Nbits, nlist)
 	}
+	
+	if trainlistSize < uint64(minCentroidsRequired) {
+		var errStr string
+		if vm.TrainList == 0 {
+			errStr = c.ERR_TRAINING + fmt.Sprintf("The number of documents: %v in keyspace: %v are less than the "+
+				"minimum number of documents: %v required for training %v centroids", trainlistSize,
+				keyspaceId, minCentroidsRequired, minCentroidsRequired)
+		} else {
+			errStr = c.ERR_TRAINING + fmt.Sprintf("Trainlist %v is less than the number "+
+				"of documents %v required for training %v centroids", trainlistSize, minCentroidsRequired,
+				minCentroidsRequired)
+		}
+		logging.Errorf("Indexer::validateTrainListSize %v", errStr)
+		return errors.New(errStr)
+	}
+	return nil
 }
 
 func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,

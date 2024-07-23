@@ -65,7 +65,7 @@ func (idx *IndexImpl) CodeSize() (size int, err error) {
 //list_no is encoded as part of the code. The code returned
 //from the function can directly be decoded using Decode function.
 func (idx *IndexImpl) EncodeVectors(x []float32,
-	codes []byte, nsub int, nbits int, nlist int) (err error) {
+	codes []byte, nlist int) (err error) {
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()

@@ -1,13 +1,14 @@
 package codebook
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
 	"sort"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 )
 
@@ -89,30 +90,55 @@ func (mc *MockCodebook) ComputeDistance(qvec []float32, fvecs []float32, dist []
 }
 
 func (mc *MockCodebook) DecodeVector(code []byte, vec []float32) error {
-	codec := collatejson.NewCodec(16)
-	buf := make([]byte, 0, 1024)
-	valArr, err := codec.DecodeN1QLValue(code, buf)
-	if err != nil {
-		return err
+	return mc.DecodeVectors(1, code, vec)
+}
+
+func (mc *MockCodebook) EncodeVector(vec []float32, code []byte) error {
+	if len(code) < len(vec)*4 {
+		return errors.New("code slice is too small to hold the encoded data")
 	}
-	for i := 0; i < mc.VecMeta.Dimension; i++ {
-		val, ok := valArr.Index(i)
-		if !ok {
-			return fmt.Errorf("not val for index %v", i)
+
+	for i, v := range vec {
+		start := i * 4
+		end := start + 4
+		binary.LittleEndian.PutUint32(code[start:end], math.Float32bits(v))
+	}
+
+	return nil
+}
+
+func (mc *MockCodebook) DecodeVectors(n int, codes []byte, vecs []float32) error {
+	dim := mc.VecMeta.Dimension
+
+	// Each float32 is 4 bytes, so the length of codes should be exactly n * dim * 4
+	expectedCodeLength := n * dim * 4
+
+	// Ensure that the vecs slice has enough capacity
+	if cap(vecs) < n*dim {
+		return errors.New("vecs slice does not have enough capacity to hold the decoded data")
+	}
+
+	// Ensure that the codes length matches the expected size
+	if len(codes) != expectedCodeLength {
+		return errors.New("codes slice size does not match the expected size")
+	}
+
+	for i := 0; i < n; i++ {
+		for j := 0; j < dim; j++ {
+			start := (i*dim + j) * 4
+			end := start + 4
+			bits := binary.LittleEndian.Uint32(codes[start:end])
+			vecs[i*dim+j] = math.Float32frombits(bits)
 		}
-		vali := val.Actual()
-		valf := vali.(float64)
-		vec[i] = float32(valf)
 	}
+
 	return nil
 }
 
 func (mc *MockCodebook) CodeSize() (int, error)                                        { return 0, nil }
-func (mc *MockCodebook) EncodeVector(vec []float32, code []byte) error                 { return nil }
 func (mc *MockCodebook) EncodeVectors(vecs []float32, codes []byte) error              { return nil }
 func (mc *MockCodebook) ComputeDistanceTable(vec []float32) ([][]float32, error)       { return nil, nil }
 func (mc *MockCodebook) ComputeDistanceWithDT(code []byte, dtable [][]float32) float32 { return 0.0 }
-func (mc *MockCodebook) DecodeVectors(n int, codes []byte, vecs []float32) error       { return nil }
 func (mc *MockCodebook) Size() uint64                                                  { return 0 }
 func (mc *MockCodebook) Close() error                                                  { return nil }
 func (mc *MockCodebook) Marshal() ([]byte, error)                                      { return nil, nil }
