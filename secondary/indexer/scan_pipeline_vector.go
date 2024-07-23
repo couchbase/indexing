@@ -457,6 +457,7 @@ type WorkerPool struct {
 	stopOnce   sync.Once      // To execute stop only once upon external trigger or internal error
 	workers    []*ScanWorker  // Array of workers
 	sendCh     chan *Row      // Channel to send data out for downstream processing
+	logPrefix  string
 }
 
 // NewWorkerPool creates a new WorkerPool
@@ -475,6 +476,7 @@ func NewWorkerPool(numWorkers int) *WorkerPool {
 // Init starts the worker pool
 func (wp *WorkerPool) Init(r *ScanRequest) {
 	wp.sendCh = make(chan *Row, 20*wp.numWorkers)
+	wp.logPrefix = fmt.Sprintf("%v[%v]WorkerPool", r.LogPrefix, r.RequestId)
 
 	for i := 0; i < wp.numWorkers; i++ {
 		// VECTOR_TODO: Tune the sender channel and batch sizes as needed
@@ -491,6 +493,7 @@ func (wp *WorkerPool) Submit(job *ScanJob) error {
 	case wp.jobs <- job:
 		wp.jobsWg.Add(1)
 	case err := <-wp.errCh:
+		logging.Verbosef("%v Submit: got error: %v", wp.logPrefix, err)
 		wp.Stop()
 		return err
 	}
@@ -507,6 +510,7 @@ func (wp *WorkerPool) Wait() error {
 	select {
 	case err := <-wp.errCh: // If any worker errors out
 		if err != nil {
+			logging.Verbosef("%v Wait: got error: %v", wp.logPrefix, err)
 			wp.stopOnce.Do(func() {
 				close(wp.stopCh)
 			})
@@ -571,6 +575,9 @@ type MergeOperator struct {
 
 	rowsReceived    uint64
 	rowsOffsetCount uint64
+
+	logPrefix string
+	startTime time.Time
 }
 
 func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
@@ -582,6 +589,8 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 		req:       r,
 		errCh:     make(chan error),
 	}
+
+	fio.logPrefix = fmt.Sprintf("%v[%v]MergeOperator", r.LogPrefix, r.RequestId)
 
 	if r.useHeapForVectorIndex() {
 		heapSize := r.Limit
@@ -604,8 +613,28 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 	return fio, nil
 }
 
+func (fio *MergeOperator) SetStartTime() {
+	if logging.IsEnabled(logging.Timing) {
+		fio.startTime = time.Now()
+	}
+}
+
+func (fio *MergeOperator) PrintStats() {
+	getDebugStr := func() string {
+		s := fmt.Sprintf("%v stats rowsReceived: %v rowsOffsetCount: %v", fio.logPrefix,
+			fio.rowsReceived, fio.rowsOffsetCount)
+		if logging.IsEnabled(logging.Timing) {
+			s += fmt.Sprintf(" timeTaken: %v", time.Since(fio.startTime))
+		}
+		return s
+	}
+	logging.LazyVerbosef("%v", getDebugStr)
+}
+
 func (fio *MergeOperator) Collector() {
 	defer fio.mergerWg.Done()
+	fio.SetStartTime()
+	defer fio.PrintStats()
 
 	var row *Row
 	var ok bool
@@ -634,6 +663,7 @@ func (fio *MergeOperator) Collector() {
 		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
 			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
 			if err != nil {
+				logging.Verbosef("%v Collector got error: %v from projectKeys", fio.logPrefix, err)
 				fio.errCh <- err
 				return
 			}
@@ -641,6 +671,7 @@ func (fio *MergeOperator) Collector() {
 
 		err = fio.writeItem(entry)
 		if err != nil {
+			logging.Verbosef("%v Collector got error: %v from writeItem", fio.logPrefix, err)
 			fio.errCh <- err
 			return
 		}
@@ -670,6 +701,7 @@ func (fio *MergeOperator) Collector() {
 		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
 			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
 			if err != nil {
+				logging.Verbosef("%v Collector got error: %v from projectKeys from heap", fio.logPrefix, err)
 				fio.heap.Destroy()
 				fio.errCh <- err
 				return
@@ -683,6 +715,7 @@ func (fio *MergeOperator) Collector() {
 
 		err = fio.writeItem(entry)
 		if err != nil {
+			logging.Verbosef("%v Collector got error: %v from writeItem from heap", fio.logPrefix, err)
 			fio.heap.Destroy()
 			fio.errCh <- err
 			return
@@ -699,6 +732,7 @@ func (fio *MergeOperator) Wait() error {
 
 	select {
 	case err := <-fio.errCh:
+		logging.Verbosef("%v got error: %v while waiting for MergeOperator to finish", fio.logPrefix, err)
 		return err
 	case <-doneCh:
 		return nil
