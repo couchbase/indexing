@@ -272,6 +272,7 @@ func (w *ScanWorker) Sender() {
 
 	batchSize := w.senderBatchSize
 	rows := make([]*Row, batchSize)
+	logging.Verbosef("%v ChannelSize: %v BatchSize: %v", w.logPrefix, cap(w.senderCh), batchSize)
 
 	var err error
 	var ok bool
@@ -487,14 +488,13 @@ func NewWorkerPool(numWorkers int) *WorkerPool {
 }
 
 // Init starts the worker pool
-func (wp *WorkerPool) Init(r *ScanRequest) {
+func (wp *WorkerPool) Init(r *ScanRequest, scanWorkerSenderChSize, scanWorkerBatchSize int) {
 	wp.sendCh = make(chan *Row, 20*wp.numWorkers)
 	wp.logPrefix = fmt.Sprintf("%v[%v]WorkerPool", r.LogPrefix, r.RequestId)
 
 	for i := 0; i < wp.numWorkers; i++ {
-		// VECTOR_TODO: Tune the sender channel and batch sizes as needed
 		wp.workers[i] = NewScanWorker(i, r, wp.jobs, wp.sendCh,
-			wp.stopCh, wp.errCh, &wp.jobsWg, 100, 50)
+			wp.stopCh, wp.errCh, &wp.jobsWg, scanWorkerSenderChSize, scanWorkerBatchSize)
 	}
 }
 
@@ -804,9 +804,13 @@ func (s *IndexScanSource2) Routine() error {
 	scans := s.p.req.vectorScans
 	codebooks := s.p.req.codebookMap
 
+	// Get values from config
+	scanWorkerBatchSize := s.p.config["scan.vector.scanworker_batch_size"].Int()
+	scanWorkerSenderChSize := s.p.config["scan.vector.scanworker_senderch_size"].Int()
+
 	// Spawn Scan Workers
 	wp := NewWorkerPool(readersPerPartition * len(s.p.req.PartitionIds))
-	wp.Init(s.p.req)
+	wp.Init(s.p.req, scanWorkerSenderChSize, scanWorkerBatchSize)
 	wpOutCh := wp.GetOutCh() // Output of Workerpool is input of MergeOperator
 
 	writeItemAddStat := func(itm ...[]byte) error {

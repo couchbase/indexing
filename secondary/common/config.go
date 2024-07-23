@@ -3486,10 +3486,24 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.scan.parallel_centroid_scans": ConfigValue{
+	"indexer.scan.vector.parallel_centroid_scans": ConfigValue{
 		3,
 		"number of centroids to scan in parallel",
 		3,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.scan.vector.scanworker_batch_size": ConfigValue{
+		50, // Set to 50 as this is Value beyond which no further improvement is seen from faiss
+		"batchSize for processing docs in scan workers. This is used for decoding, distance calculation etc.",
+		50,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.scan.vector.scanworker_senderch_size": ConfigValue{
+		100,
+		"Channel size between the IO bound Worker(Scanner) and CPU bound Worker(Sender) in scanworker",
+		100,
 		false, // mutable
 		false, // case-insensitive
 	},

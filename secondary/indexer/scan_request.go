@@ -339,7 +339,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 
 	r.keySzCfg = getKeySizeConfig(cfg)
 
-	r.parallelCentroidScans = cfg["scan.parallel_centroid_scans"].Int()
+	r.parallelCentroidScans = cfg["scan.vector.parallel_centroid_scans"].Int()
 
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
