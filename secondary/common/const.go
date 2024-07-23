@@ -141,9 +141,7 @@ const INDEXER_71_VERSION = 6
 const INDEXER_72_VERSION = 7
 const INDEXER_75_VERSION = 8
 const INDEXER_76_VERSION = 9
-
-// [VECTOR_TODO] Replace this with a suitable release version
-const INDEXER_VEC_VERSION = 10
+const INDEXER_77_VERSION = 10
 
 // Since there is a possibility of 7.7 version at the time of this patch,
 // linear numbering scheme will not work for 8.0 version i.e. we cannot
@@ -156,9 +154,9 @@ const INDEXER_VEC_VERSION = 10
 // Note: 801 would mean 8.1 version and not 8.0.1. ns_server does not
 // capture sub-versions of minor version.
 const INDEXER_80_VERSION = 800
-const INDEXER_CUR_VERSION = INDEXER_80_VERSION
+const INDEXER_CUR_VERSION = INDEXER_77_VERSION
 
-const INDEXER_PRIORITY = ServerPriority("8.0.0")
+const INDEXER_PRIORITY = ServerPriority("7.7.0")
 
 // ##### IMPORTANT ##### When updating the above, also update util.go func GetVersion.
 

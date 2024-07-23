@@ -2477,7 +2477,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 	}
 
-	if (isBhive || isCompositeVectorIndex) && (version < c.INDEXER_VEC_VERSION || clusterVersion < c.INDEXER_VEC_VERSION) {
+	if (isBhive || isCompositeVectorIndex) && (version < c.INDEXER_77_VERSION || clusterVersion < c.INDEXER_77_VERSION) {
 		return nil,
 			errors.New("Fail to create vector index. This option is enabled after cluster is fully upgraded and there is no failed node."),
 			false
