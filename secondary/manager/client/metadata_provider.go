@@ -2543,36 +2543,38 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	var similarity c.VectorSimilarity
 	var dimension, nprobes, trainlist int
 	var quantizer *c.VectorQuantizer
-	if isBhive || isCompositeVectorIndex {
-		similarity, err = o.getVectorSimilarity(plan)
-		if err != nil || similarity == "" {
-			return nil, err, false
-		}
 
-		dimension, err = o.getVectorDimension(plan)
-		if err != nil || dimension == 0 {
-			return nil, err, false
-		}
+	similarity, err = o.getVectorSimilarity(plan, isCompositeVectorIndex || isBhive)
+	if err != nil {
+		return nil, err, false
+	}
 
-		quantizer, err = o.getVectorDescription(plan)
-		if err != nil || quantizer == nil {
-			return nil, err, false
-		}
+	dimension, err = o.getVectorDimension(plan, isCompositeVectorIndex || isBhive)
+	if err != nil {
+		return nil, err, false
+	}
 
+	quantizer, err = o.getVectorDescription(plan, isCompositeVectorIndex || isBhive)
+	if err != nil {
+		return nil, err, false
+	}
+
+	nprobes, err = o.getNprobesParam(plan, isCompositeVectorIndex || isBhive)
+	if err != nil {
+		return nil, err, false
+	}
+
+	trainlist, err = o.getTrainlistParam(plan, isCompositeVectorIndex || isBhive)
+	if err != nil {
+		return nil, err, false
+	}
+
+	// For a vector index, validate the quantizer. For non-vector indexes, quantizer would be 'nil'
+	if isCompositeVectorIndex || isBhive {
 		if err := quantizer.IsValid(dimension); err != nil {
 			return nil,
 				fmt.Errorf("Failure to create vector index. Invalid product quantization scheme. Err: %v", err),
 				false
-		}
-
-		nprobes, err = o.getNprobesParam(plan)
-		if err != nil {
-			return nil, err, false
-		}
-
-		trainlist, err = o.getTrainlistParam(plan)
-		if err != nil {
-			return nil, err, false
 		}
 	}
 
@@ -3376,25 +3378,33 @@ func (o *MetadataProvider) getReplicaIdParam(plan map[string]interface{}, versio
 	return replicaId, nil, false
 }
 
-func (o *MetadataProvider) getNprobesParam(plan map[string]interface{}) (int, error) {
+func (o *MetadataProvider) getNprobesParam(plan map[string]interface{}, isVectorIndex bool) (int, error) {
+	keyword := "scan_nprobes"
+
+	if !isVectorIndex {
+		if _, ok := plan[keyword]; ok {
+			return 0, fmt.Errorf("Fail to create index. '%v' parameter is expected only in vector indexes. Observed it for non-vector index", keyword)
+		}
+		return 0, nil // For non-vector indexes, no error is expected
+	}
 
 	nprobes := int(1) // Default value is always '1'
 
-	nprobes2, ok := plan["scan_nprobes"].(int64)
+	nprobes2, ok := plan[keyword].(int64)
 	if !ok {
-		nprobes2, ok := plan["scan_nprobes"].(float64)
+		nprobes2, ok := plan[keyword].(float64)
 		if !ok {
-			nprobes_str, ok := plan["scan_nprobes"].(string)
+			nprobes_str, ok := plan[keyword].(string)
 			if ok {
 				var err error
 				nprobes2, err := strconv.ParseInt(nprobes_str, 10, 64)
 				if err != nil {
-					return 0, errors.New("Parameter scan_nprobes must be a positive integer value.")
+					return 0, fmt.Errorf("Parameter '%v' must be a positive integer value.", keyword)
 				}
 				nprobes = int(nprobes2)
 
-			} else if v, ok := plan["scan_nprobes"]; ok {
-				return 0, fmt.Errorf("Parameter scan_nprobes must be a positive integer value (%v).", reflect.TypeOf(v))
+			} else if v, ok := plan[keyword]; ok {
+				return 0, fmt.Errorf("Parameter '%v' must be a positive integer value (%v).", keyword, reflect.TypeOf(v))
 			}
 		} else {
 			nprobes = int(nprobes2)
@@ -3404,31 +3414,40 @@ func (o *MetadataProvider) getNprobesParam(plan map[string]interface{}) (int, er
 	}
 
 	if nprobes <= 0 {
-		return 0, errors.New("Parameter scan_nprobes must be a positive integer value.")
+		return 0, fmt.Errorf("Parameter '%v' must be a positive integer value.", keyword)
 	}
 
 	return nprobes, nil
 }
 
-func (o *MetadataProvider) getTrainlistParam(plan map[string]interface{}) (int, error) {
+func (o *MetadataProvider) getTrainlistParam(plan map[string]interface{}, isVectorIndex bool) (int, error) {
+
+	keyword := "train_list"
+
+	if !isVectorIndex {
+		if _, ok := plan[keyword]; ok {
+			return 0, fmt.Errorf("Fail to create index. '%v' parameter is expected only in vector indexes. Observed it for non-vector index", keyword)
+		}
+		return 0, nil // For non-vector indexes, no error is expected
+	}
 
 	trainlist := int(0)
 
-	trainlist2, ok := plan["train_list"].(int64)
+	trainlist2, ok := plan[keyword].(int64)
 	if !ok {
-		trainlist2, ok := plan["train_list"].(float64)
+		trainlist2, ok := plan[keyword].(float64)
 		if !ok {
-			trainlist2_str, ok := plan["train_list"].(string)
+			trainlist2_str, ok := plan[keyword].(string)
 			if ok {
 				var err error
 				trainlist2, err := strconv.ParseInt(trainlist2_str, 10, 64)
 				if err != nil {
-					return 0, errors.New("Parameter train_list must be a positive value.")
+					return 0, fmt.Errorf("Parameter '%v' must be a positive value.", keyword)
 				}
 				trainlist = int(trainlist2)
 
-			} else if v, ok := plan["train_list"]; ok {
-				return 0, fmt.Errorf("Parameter train_list must be a positive value (%v).", reflect.TypeOf(v))
+			} else if v, ok := plan[keyword]; ok {
+				return 0, fmt.Errorf("Parameter '%v' must be a positive value (%v).", keyword, reflect.TypeOf(v))
 			}
 		} else {
 			trainlist = int(trainlist2)
@@ -3438,7 +3457,7 @@ func (o *MetadataProvider) getTrainlistParam(plan map[string]interface{}) (int, 
 	}
 
 	if trainlist < 0 {
-		return 0, errors.New("Parameter train_list must be a positive value.")
+		return 0, fmt.Errorf("Parameter '%v' must be a positive value.", keyword)
 	}
 
 	return trainlist, nil
@@ -3589,8 +3608,17 @@ func (o *MetadataProvider) getResidentRatioParam(plan map[string]interface{}) (f
 	return residentRatio, nil, false
 }
 
-func (o *MetadataProvider) getVectorSimilarity(plan map[string]interface{}) (c.VectorSimilarity, error) {
+func (o *MetadataProvider) getVectorSimilarity(plan map[string]interface{}, isVectorIndex bool) (c.VectorSimilarity, error) {
 	keyword := "similarity"
+
+	if !isVectorIndex {
+		if _, ok := plan[keyword]; ok {
+			// For a non-vector index, this keyword is not expected to be present
+			return "", fmt.Errorf("Fail to create index. '%v' parameter is expected only in vector indexes. Observed it for non-vector index", keyword)
+		}
+		return "", nil // !ok is valid case for non-vector index
+	}
+
 	similarity, ok := plan[keyword].(string)
 	if !ok {
 		return "", fmt.Errorf("Fail to create vector index. `%v` parameter not specified. It should be one of the following strings: 'EUCLIDEAN_SQUARED', 'EUCLIDEAN', 'DOT', 'COSINE', 'L2', 'L2_SQUARED'", keyword)
@@ -3604,8 +3632,16 @@ func (o *MetadataProvider) getVectorSimilarity(plan map[string]interface{}) (c.V
 	}
 }
 
-func (o *MetadataProvider) getVectorDimension(plan map[string]interface{}) (int, error) {
+func (o *MetadataProvider) getVectorDimension(plan map[string]interface{}, isVectorIndex bool) (int, error) {
 	keyword := "dimension"
+
+	if !isVectorIndex {
+		if _, ok := plan[keyword]; ok {
+			return 0, fmt.Errorf("Fail to create index. '%v' parameter is expected only in vector indexes. Observed it for non-vector index", keyword)
+		}
+		return 0, nil // For non-vector indexes, no error is expected
+	}
+
 	dimension_float64, ok1 := plan[keyword].(float64)
 	if !ok1 {
 		dimension_int, ok2 := plan[keyword].(int)
@@ -3706,8 +3742,17 @@ RETRY1:
 	return watchers, nil, false
 }
 
-func (o *MetadataProvider) getVectorDescription(plan map[string]interface{}) (*c.VectorQuantizer, error) {
+func (o *MetadataProvider) getVectorDescription(plan map[string]interface{}, isVectorIndex bool) (*c.VectorQuantizer, error) {
 	keyword := "description"
+
+	if !isVectorIndex {
+		if _, ok := plan[keyword]; ok {
+			// For a non-vector index, this keyword is not expected to be present
+			return nil, fmt.Errorf("Fail to create index. '%v' parameter is expected only in vector indexes. Observed it for non-vector index", keyword)
+		}
+		return nil, nil // !ok is valid case for non-vector index
+	}
+
 	if val, ok := plan[keyword].(string); !ok {
 		return nil, errors.New("Description is mandatory to create vector index")
 	} else {
