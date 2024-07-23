@@ -153,6 +153,81 @@ func stripCoarseSize(codes []byte, code_size, coarse_size int) []byte {
 	return codes
 }
 
+//EncodeAndAssignPQ computes the quantized code for a given
+//list of vectors. list_no is encoded as part of the code.
+//Additionally, it decodes the list_no from the quantized
+//code and returns it as labels. The list_no is the nearest
+//centroid in the coarse index to the given input vector.
+//This list_no is the same as returned from assign function and
+//allows this function to be used for both encode and assign
+//functionality within a single function call.
+func (idx *IndexImpl) EncodeAndAssignPQ(x []float32, codes []byte,
+	labels []int64, nsub int, nbits int, nlist int) (err error) {
+
+	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
+	if ivfPtr == nil {
+		return fmt.Errorf("index is not of ivf type")
+	}
+
+	//compute coarse code size based on nlist
+	coarse_size := func(nlist int) int {
+		nl := nlist - 1
+		nbyte := 0
+		for nl > 0 {
+			nbyte++
+			nl >>= 8
+		}
+		return nbyte
+	}(nlist)
+
+	n := len(x) / idx.D()
+	//code size is dependent on nbits and nsub
+	code_size := (nbits*nsub + 7) / 8
+	if c := C.faiss_Index_sa_encode(
+		ivfPtr,
+		C.idx_t(n),
+		(*C.float)(&x[0]),
+		(*C.uint8_t)(&codes[0]),
+	); c != 0 {
+		err = getLastError()
+	}
+
+	extractLabels(codes, labels, code_size, coarse_size)
+
+	return
+}
+
+//extract the label(decoded listno) from the code
+func extractLabels(codes []byte, labels []int64, code_size, coarse_size int) {
+
+	total_size := code_size + coarse_size
+	num_codes := len(codes) / total_size
+	start_pos := 0
+
+	single_coarse_code := make([]byte, coarse_size)
+	for i := 0; i < num_codes; i++ {
+		copy_from := start_pos //actual code
+		copy(single_coarse_code, codes[copy_from:copy_from+coarse_size])
+		labels[i] = decodeListNo(single_coarse_code)
+
+		start_pos += total_size //pos of next code
+	}
+}
+
+//decodeListNo decodes the listno encoded
+//as little-endian []byte to an int64
+func decodeListNo(code []byte) int64 {
+	var listNo int64
+	nbit := 0
+
+	for i := 0; i < len(code); i++ {
+		listNo |= int64(code[i]) << nbit
+		nbit += 8
+	}
+
+	return listNo
+}
+
 func (idx *IndexImpl) DecodeVectors(nx int, codes []byte, x []float32) (err error) {
 
 	runtime.LockOSThread()
