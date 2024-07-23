@@ -580,6 +580,7 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 		recvCh:    recvCh,
 		writeItem: writeItem,
 		req:       r,
+		errCh:     make(chan error),
 	}
 
 	if r.useHeapForVectorIndex() {
