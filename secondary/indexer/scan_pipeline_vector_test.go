@@ -540,14 +540,17 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 	var ssnap1 SliceSnapshot
 	var ssnap2 SliceSnapshot
 
-	getWriteItem := func() WriteItem {
+	getWriteItem := func(injectError bool) WriteItem {
 		return func(data ...[]byte) error {
+			if injectError {
+				return fmt.Errorf("test error injection in writeItem")
+			}
 			logging.Verbosef("Data: %s", data)
 			return nil
 		}
 	}
 
-	testFunc := func(testErr error, stopPostWait, stopPreWait, restart bool) {
+	testFunc := func(testErr error, stopPostWait, stopPreWait, restart bool, injectWriteItemError bool) {
 
 		var err error
 		vectorDim := 3
@@ -601,7 +604,7 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 		logging.Infof("J2 Scan: %+v", j1.scan)
 
 		fioDone := make(chan struct{})
-		fio, err := NewMergeOperator(recvCh, r, getWriteItem())
+		fio, err := NewMergeOperator(recvCh, r, getWriteItem(injectWriteItemError))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -651,7 +654,7 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 			false, 0, 0, true))
 		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
 			false, 0, 0, true))
-		testFunc(nil, false, false, false)
+		testFunc(nil, false, false, false, false)
 		logging.Infof("gCount: %v", gCount)
 	})
 
@@ -662,7 +665,7 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 			false, 0, 0, false))
 		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
 			false, 0, 0, true))
-		testFunc(testErr, false, false, false)
+		testFunc(testErr, false, false, false, false)
 		logging.Infof("gCount: %v", gCount)
 	})
 
@@ -673,7 +676,17 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 			false, 0, 0, false))
 		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(true, 700, testErr,
 			false, 0, 0, true))
-		testFunc(testErr, false, false, false)
+		testFunc(testErr, false, false, false, false)
+		logging.Infof("gCount: %v", gCount)
+	})
+
+	t.Run("writeitemerror", func(t *testing.T) {
+		gCount = 0
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 0, 0, true))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 0, 0, true))
+		testFunc(nil, false, false, false, true)
 		logging.Infof("gCount: %v", gCount)
 	})
 }
