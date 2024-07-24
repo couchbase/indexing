@@ -322,12 +322,6 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 
 	cfg := s.config.Load()
 	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
-
-	if timeout != 0 {
-		r.ExpiredTime = time.Now().Add(timeout)
-		r.Timeout = time.NewTimer(timeout)
-	}
-
 	r.CancelCh = cancelCh
 
 	r.projectPrimaryKey = true
@@ -344,8 +338,10 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
+		setTimeoutTimer(timeout, r)
 		r.ScanType = HeloReq
 	case *protobuf.StatisticsRequest:
+		setTimeoutTimer(timeout, r)
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.ScanType = StatsReq
@@ -364,6 +360,11 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 
 	case *protobuf.CountRequest:
+		if req.GetReqTimeout() != 0 {
+			timeout = time.Millisecond * time.Duration(req.GetReqTimeout())
+		}
+		setTimeoutTimer(timeout, r)
+
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.User = req.GetUser()
@@ -403,6 +404,11 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 
 	case *protobuf.ScanRequest:
+		if req.GetReqTimeout() != 0 {
+			timeout = time.Millisecond * time.Duration(req.GetReqTimeout())
+		}
+		setTimeoutTimer(timeout, r)
+
 		r.isVectorScan = (req.GetIndexVector() != nil)
 		if r.isVectorScan {
 			ivec := req.GetIndexVector()
@@ -479,6 +485,11 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.setExplodePositions()
 
 	case *protobuf.ScanAllRequest:
+		if req.GetReqTimeout() != 0 {
+			timeout = time.Millisecond * time.Duration(req.GetReqTimeout())
+		}
+		setTimeoutTimer(timeout, r)
+
 		r.isVectorScan = (req.GetIndexVector() != nil)
 		if r.isVectorScan {
 			ivec := req.GetIndexVector()
@@ -2067,6 +2078,13 @@ func IndexKeyLessThan(a, b IndexKey) bool {
 		return true
 	}
 	return (bytes.Compare(a.Bytes(), b.Bytes()) < 0)
+}
+
+func setTimeoutTimer(timeout time.Duration, r *ScanRequest) {
+	if timeout != 0 {
+		r.ExpiredTime = time.Now().Add(timeout)
+		r.Timeout = time.NewTimer(timeout)
+	}
 }
 
 func (r ScanRequest) String() string {

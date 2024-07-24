@@ -699,7 +699,7 @@ func (c *GsiClient) Lookup(
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
-	return c.LookupInternal(defnID, requestId, values, distinct, limit, cons, tsvector, broker, scanParams)
+	return c.LookupInternal(defnID, requestId, values, distinct, limit, cons, tsvector, broker, scanParams, time.Time{}, 0)
 }
 
 // Lookup scan index between low and high.
@@ -707,7 +707,8 @@ func (c *GsiClient) LookupInternal(
 	defnID uint64, requestId string, values []common.SecondaryKey,
 	distinct bool, limit int64,
 	cons common.Consistency, tsvector *TsConsistency,
-	broker *RequestBroker, scanParams map[string]interface{}) (err error) {
+	broker *RequestBroker, scanParams map[string]interface{},
+	reqDeadline time.Time, reqDeadlineSlack time.Duration) (err error) {
 
 	if c.bridge == nil {
 		return ErrorClientUninitialized
@@ -732,7 +733,8 @@ func (c *GsiClient) LookupInternal(
 		}
 		return qc.Lookup(
 			uint64(index.DefnId), requestId, values, distinct, broker.GetLimit(), cons,
-			tsvector, callb, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), scanParams)
+			tsvector, callb, rollbackTime, partitions, dataEncFmt, broker.DoRetry(),
+			scanParams, reqDeadline, reqDeadlineSlack)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -757,7 +759,7 @@ func (c *GsiClient) Range(
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
-	return c.RangeInternal(defnID, requestId, low, high, inclusion, distinct, limit, cons, tsvector, broker, scanParams)
+	return c.RangeInternal(defnID, requestId, low, high, inclusion, distinct, limit, cons, tsvector, broker, scanParams, time.Time{}, 0)
 }
 
 // Range scan index between low and high.
@@ -765,7 +767,8 @@ func (c *GsiClient) RangeInternal(
 	defnID uint64, requestId string, low, high common.SecondaryKey,
 	inclusion Inclusion, distinct bool, limit int64,
 	cons common.Consistency, tsvector *TsConsistency,
-	broker *RequestBroker, scanParams map[string]interface{}) (err error) {
+	broker *RequestBroker, scanParams map[string]interface{},
+	reqDeadline time.Time, reqDeadlineSlack time.Duration) (err error) {
 
 	if c.bridge == nil {
 		return ErrorClientUninitialized
@@ -805,13 +808,14 @@ func (c *GsiClient) RangeInternal(
 			return qc.RangePrimary(
 				uint64(index.DefnId), requestId, l, h, inclusion, distinct,
 				broker.GetLimit(), cons, tsvector, handler, rollbackTime,
-				partitions, dataEncFmt, broker.DoRetry(), scanParams)
+				partitions, dataEncFmt, broker.DoRetry(), scanParams, reqDeadline,
+				reqDeadlineSlack)
 		}
 		// dealing with secondary index.
 		return qc.Range(
 			uint64(index.DefnId), requestId, low, high, inclusion, distinct,
 			broker.GetLimit(), cons, tsvector, handler, rollbackTime, partitions,
-			dataEncFmt, broker.DoRetry(), scanParams)
+			dataEncFmt, broker.DoRetry(), scanParams, reqDeadline, reqDeadlineSlack)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -835,14 +839,15 @@ func (c *GsiClient) ScanAll(
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
-	return c.ScanAllInternal(defnID, requestId, limit, cons, tsvector, broker, scanParams)
+	return c.ScanAllInternal(defnID, requestId, limit, cons, tsvector, broker, scanParams, time.Time{}, 0)
 }
 
 // ScanAll for full table scan.
 func (c *GsiClient) ScanAllInternal(
 	defnID uint64, requestId string, limit int64,
 	cons common.Consistency, tsvector *TsConsistency,
-	broker *RequestBroker, scanParams map[string]interface{}) (err error) {
+	broker *RequestBroker, scanParams map[string]interface{},
+	reqDeadline time.Time, reqDeadlineSlack time.Duration) (err error) {
 
 	if c.bridge == nil {
 		return ErrorClientUninitialized
@@ -866,7 +871,8 @@ func (c *GsiClient) ScanAllInternal(
 			return err, false
 		}
 		return qc.ScanAll(uint64(index.DefnId), requestId, broker.GetLimit(),
-			cons, tsvector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), scanParams)
+			cons, tsvector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(),
+			scanParams, reqDeadline, reqDeadlineSlack)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -890,14 +896,15 @@ func (c *GsiClient) MultiScan(
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
-	return c.MultiScanInternal(defnID, requestId, scans, reverse, distinct, projection, offset, limit, cons, tsvector, broker, scanParams)
+	return c.MultiScanInternal(defnID, requestId, scans, reverse, distinct, projection, offset, limit, cons, tsvector, broker, scanParams, time.Time{}, 0)
 }
 
 func (c *GsiClient) MultiScanInternal(
 	defnID uint64, requestId string, scans Scans, reverse,
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, tsvector *TsConsistency,
-	broker *RequestBroker, scanParams map[string]interface{}) (err error) {
+	broker *RequestBroker, scanParams map[string]interface{},
+	reqDeadline time.Time, reqDeadlineSlack time.Duration) (err error) {
 
 	if c.bridge == nil {
 		return ErrorClientUninitialized
@@ -925,13 +932,15 @@ func (c *GsiClient) MultiScanInternal(
 			return qc.MultiScanPrimary(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
 				projection, broker.GetOffset(), broker.GetLimit(), cons,
-				tsvector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), scanParams)
+				tsvector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(),
+				scanParams, reqDeadline, reqDeadlineSlack)
 		}
 
 		return qc.MultiScan(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
 			projection, broker.GetOffset(), broker.GetLimit(), cons, tsvector,
-			handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), scanParams)
+			handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), scanParams,
+			reqDeadline, reqDeadlineSlack)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -957,14 +966,15 @@ func (c *GsiClient) CountLookup(
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(nil, dataEncFmt)
-	return c.CountLookupInternal(defnID, requestId, values, cons, tsvector, broker)
+	return c.CountLookupInternal(defnID, requestId, values, cons, tsvector, broker, time.Time{}, 0)
 }
 
 // CountLookup to count number entries for given set of keys.
 func (c *GsiClient) CountLookupInternal(
 	defnID uint64, requestId string, values []common.SecondaryKey,
 	cons common.Consistency, tsvector *TsConsistency,
-	broker *RequestBroker) (count int64, err error) {
+	broker *RequestBroker, reqDeadline time.Time,
+	reqDeadlineSlack time.Duration) (count int64, err error) {
 
 	if c.bridge == nil {
 		return count, ErrorClientUninitialized
@@ -995,11 +1005,13 @@ func (c *GsiClient) CountLookupInternal(
 			}
 
 			count, err = qc.CountLookupPrimary(
-				uint64(index.DefnId), requestId, equals, cons, tsvector, rollbackTime, partitions, broker.DoRetry())
+				uint64(index.DefnId), requestId, equals, cons, tsvector, rollbackTime, partitions, broker.DoRetry(),
+				reqDeadline, reqDeadlineSlack)
 			return count, err, false
 		}
 
-		count, err = qc.CountLookup(uint64(index.DefnId), requestId, values, cons, tsvector, rollbackTime, partitions, broker.DoRetry())
+		count, err = qc.CountLookup(uint64(index.DefnId), requestId, values, cons, tsvector, rollbackTime, partitions, broker.DoRetry(),
+		reqDeadline, reqDeadlineSlack)
 		return count, err, false
 	}
 
@@ -1020,7 +1032,7 @@ func (c *GsiClient) CountRange(
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(nil, dataEncFmt)
-	return c.CountRangeInternal(defnID, requestId, low, high, inclusion, cons, tsvector, broker)
+	return c.CountRangeInternal(defnID, requestId, low, high, inclusion, cons, tsvector, broker, time.Time{}, 0)
 }
 
 // CountRange to count number entries in the given range.
@@ -1029,7 +1041,8 @@ func (c *GsiClient) CountRangeInternal(
 	low, high common.SecondaryKey,
 	inclusion Inclusion,
 	cons common.Consistency, tsvector *TsConsistency,
-	broker *RequestBroker) (count int64, err error) {
+	broker *RequestBroker, reqDeadline time.Time,
+	reqDeadlineSlack time.Duration) (count int64, err error) {
 
 	if c.bridge == nil {
 		return count, ErrorClientUninitialized
@@ -1065,12 +1078,14 @@ func (c *GsiClient) CountRangeInternal(
 				}
 			}
 			count, err = qc.CountRangePrimary(
-				uint64(index.DefnId), requestId, l, h, inclusion, cons, tsvector, rollbackTime, partitions, broker.DoRetry())
+				uint64(index.DefnId), requestId, l, h, inclusion, cons, tsvector, rollbackTime, partitions, broker.DoRetry(),
+				reqDeadline, reqDeadlineSlack)
 			return count, err, false
 		}
 
 		count, err = qc.CountRange(
-			uint64(index.DefnId), requestId, low, high, inclusion, cons, tsvector, rollbackTime, partitions, broker.DoRetry())
+			uint64(index.DefnId), requestId, low, high, inclusion, cons, tsvector, rollbackTime, partitions, broker.DoRetry(),
+			reqDeadline, reqDeadlineSlack)
 		return count, err, false
 	}
 
@@ -1084,19 +1099,21 @@ func (c *GsiClient) CountRangeInternal(
 }
 
 func (c *GsiClient) MultiScanCount(defnID uint64, requestId string, scans Scans,
-	distinct bool, cons common.Consistency, tsvector *TsConsistency, scanParams map[string]interface{}) (
+	distinct bool, cons common.Consistency, tsvector *TsConsistency, scanParams map[string]interface{},
+	reqDeadline time.Time, reqDeadlineSlack time.Duration) (
 	count int64, readUnits uint64, err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(nil, dataEncFmt)
-	return c.MultiScanCountInternal(defnID, requestId, scans, distinct, cons, tsvector, broker, scanParams)
+	return c.MultiScanCountInternal(defnID, requestId, scans, distinct, cons, tsvector, broker, scanParams, reqDeadline, reqDeadlineSlack)
 }
 
 func (c *GsiClient) MultiScanCountInternal(
 	defnID uint64, requestId string,
 	scans Scans, distinct bool,
 	cons common.Consistency, tsvector *TsConsistency,
-	broker *RequestBroker, scanParams map[string]interface{}) (
+	broker *RequestBroker, scanParams map[string]interface{},
+	reqDeadline time.Time, reqDeadlineSlack time.Duration) (
 	count int64, readUnits uint64, err error) {
 
 	if c.bridge == nil {
@@ -1120,13 +1137,15 @@ func (c *GsiClient) MultiScanCountInternal(
 		}
 		if c.bridge.IsPrimary(uint64(index.DefnId)) {
 			count, ru, err = qc.MultiScanCountPrimary(
-				uint64(index.DefnId), requestId, scans, distinct, cons, tsvector, rollbackTime, partitions, broker.DoRetry(), scanParams)
+				uint64(index.DefnId), requestId, scans, distinct, cons, tsvector, rollbackTime, partitions, broker.DoRetry(), scanParams,
+				reqDeadline,  reqDeadlineSlack)
 			atomic.AddUint64(&readUnits, ru)
 			return count, err, false
 		}
 
 		count, ru, err = qc.MultiScanCount(uint64(index.DefnId), requestId,
-			scans, distinct, cons, tsvector, rollbackTime, partitions, broker.DoRetry(), scanParams)
+			scans, distinct, cons, tsvector, rollbackTime, partitions, broker.DoRetry(),
+			scanParams, reqDeadline, reqDeadlineSlack)
 		atomic.AddUint64(&readUnits, ru)
 		return count, err, false
 	}
@@ -1151,7 +1170,7 @@ func (c *GsiClient) Scan3(
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.ScanInternal("scan3", defnID, requestId, scans, reverse, distinct,
 		projection, offset, limit, groupAggr, indexOrder, cons, tsvector, broker, scanParams,
-		nil)
+		nil, time.Time{}, 0)
 }
 
 func (c *GsiClient) Scan6(
@@ -1166,7 +1185,7 @@ func (c *GsiClient) Scan6(
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.ScanInternal("scan6", defnID, requestId, scans, reverse, distinct,
 		projection, offset, limit, groupAggr, indexOrder, cons, tsvector, broker, scanParams,
-		indexVector)
+		indexVector, time.Time{}, 0)
 }
 
 func (c *GsiClient) ScanInternal(logPrefix string,
@@ -1175,7 +1194,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	cons common.Consistency, tsvector *TsConsistency,
 	broker *RequestBroker, scanParams map[string]interface{},
-	indexVector *IndexVector) (err error) {
+	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration) (err error) {
 
 	if c.bridge == nil {
 		return ErrorClientUninitialized
@@ -1204,14 +1223,16 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
 				projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 				broker.GetSorted(), cons, tsvector, handler, rollbackTime,
-				partitions, dataEncFmt, broker.DoRetry(), scanParams, indexVector)
+				partitions, dataEncFmt, broker.DoRetry(), scanParams, indexVector,
+				reqDeadline, reqDeadlineSlack)
 		}
 
 		return qc.Scan(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
 			projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 			broker.GetSorted(), cons, tsvector, handler, rollbackTime,
-			partitions, dataEncFmt, broker.DoRetry(), scanParams, indexVector)
+			partitions, dataEncFmt, broker.DoRetry(), scanParams, indexVector,
+			reqDeadline, reqDeadlineSlack)
 	}
 
 	broker.SetScanRequestHandler(handler)

@@ -861,6 +861,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"queryport.client.reqTimeoutSlack": ConfigValue{
+		15000,
+		"Extra period, in ms, added to the request timeout to handle potential delays and communication issues",
+		15000,
+		false,
+		false,
+	},
 	"indexer.allowPartialQuorum": ConfigValue{
 		false,
 		"This boolean flag, when set, allows index creation with partial quorum. " +

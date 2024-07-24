@@ -510,7 +510,7 @@ func MultiScanCount(indexName, bucketName, server string, scans qc.Scans, distin
 
 	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	count, ru, err := client.MultiScanCount(defnID, "", scans, distinct, consistency, vector, scanParams)
+	count, ru, err := client.MultiScanCount(defnID, "", scans, distinct, consistency, vector, scanParams, time.Time{}, 0)
 	if ru != 0 {
 		log.Printf("MultiScanCount: ReadUnits: %v bucket: %v indexName: %v scans: %v distinct: %v", ru,
 			bucketName, indexName, scans, distinct)
