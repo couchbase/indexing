@@ -357,7 +357,8 @@ func (w *ScanWorker) Sender() {
 			newBuf := make([]byte, 0, len(rows[i].key)+(3*len(distCode)))
 			newEntry, err := codec.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
 			if err != nil {
-				logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray", w.logPrefix, err)
+				logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
+					w.logPrefix, err, logging.TagStrUD(rows[i].key), vectorKeyPos, distCode)
 				w.senderErrCh <- err
 				return
 			}

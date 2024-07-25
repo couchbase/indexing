@@ -257,7 +257,7 @@ func (codec *Codec) ReplaceEncodedFieldInArray(code []byte, replaceFieldPos int,
 			for code[0] != Terminator && code[0] != ^Terminator {
 				ts, code, err = codec.extractEncodedField(code, 0)
 				if err != nil {
-					break
+					return nil, err
 				}
 				if currField == replaceFieldPos {
 					newCodeLen := len(orig[:currFieldStart]) + len(dataToReplace) + len(orig[currFieldStart+len(ts):])
