@@ -397,9 +397,14 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 	entry1 := secondaryIndexEntry(entry)
 
 	var r Row
-	r.key = entry
-	r.value = value
 	r.len = entry1.lenKey()
+
+	// VECTOR_TODO: Stop copying entry and value once MB-62901 and MB-62881 are resolved
+	r.key = make([]byte, len(entry))
+	copy(r.key, entry)
+
+	r.value = make([]byte, len(value))
+	copy(r.value, value)
 
 	select {
 	case <-w.stopCh:
