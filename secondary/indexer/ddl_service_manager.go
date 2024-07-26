@@ -246,10 +246,10 @@ func (m *DDLServiceMgr) cleanupTokens() {
 	}
 
 	// Clean up old tokens
-	m.cleanupCreateCommand(provider)
+	allCreateCommandTokens := m.cleanupCreateCommand(provider)
 	m.cleanupBuildCommand(provider)
 	m.cleanupDelCommand(provider)
-	m.cleanupDropInstanceCommand(provider)
+	m.cleanupDropInstanceCommand(provider, allCreateCommandTokens)
 }
 
 func (m *DDLServiceMgr) handleSupervisorCommands(cmd Message) {
@@ -581,9 +581,9 @@ func (m *DDLServiceMgr) cleanupBuildCommand(provider *client.MetadataProvider) {
 // cleanupCreateCommand deletes old create DDL command tokens from metakv. Unlike other DDL tokens,
 // these are normally cleaned up as soon as processed, so this is only to catch any that "leaked"
 // due to a failure in the normal processing.
-func (m *DDLServiceMgr) cleanupCreateCommand(provider *client.MetadataProvider) {
+func (m *DDLServiceMgr) cleanupCreateCommand(provider *client.MetadataProvider) map[common.IndexDefnId]map[uint64]*mc.CreateCommandToken {
 	if !m.canProcessDDL() {
-		return
+		return nil
 	}
 
 	// Get all virtual paths of create tokens from metakv. Since they are
@@ -592,8 +592,10 @@ func (m *DDLServiceMgr) cleanupCreateCommand(provider *client.MetadataProvider) 
 	entries, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("DDLServiceMgr: Failed to fetch token from metakv.  Internal Error = %v", err)
-		return
+		return nil
 	}
+
+	allCreateCommandTokens := make(map[common.IndexDefnId]map[uint64]*mc.CreateCommandToken)
 
 	deleted := make(map[common.IndexDefnId]map[uint64]bool)
 	malformed := make(map[common.IndexDefnId]map[uint64]bool)
@@ -619,6 +621,20 @@ func (m *DDLServiceMgr) cleanupCreateCommand(provider *client.MetadataProvider) 
 		malformed[defnId][requestId] = true
 	}
 
+	addToAllCreateTokens := func(defnId common.IndexDefnId, requestId uint64, token *mc.CreateCommandToken) {
+		if _, ok := allCreateCommandTokens[defnId]; !ok {
+			allCreateCommandTokens[defnId] = make(map[uint64]*mc.CreateCommandToken)
+		}
+		allCreateCommandTokens[defnId][requestId] = token
+	}
+
+	removeFromAllCreateTokens := func(defnId common.IndexDefnId, requestId uint64) {
+		delete(allCreateCommandTokens[defnId], requestId)
+		if len(allCreateCommandTokens[defnId]) == 0 {
+			delete(allCreateCommandTokens, defnId)
+		}
+	}
+
 	for _, entry := range entries {
 
 		delete := false
@@ -637,8 +653,10 @@ func (m *DDLServiceMgr) cleanupCreateCommand(provider *client.MetadataProvider) 
 		token, err := mc.FetchCreateCommandToken(defnId, requestId)
 		if err != nil {
 			logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
+			addToAllCreateTokens(defnId, requestId, nil) // since the token value can not be deduced, add a nil entry
 			continue
 		}
+		addToAllCreateTokens(defnId, requestId, token)
 
 		if token != nil {
 			// If there is a drop token, then do not process the create token.
@@ -676,6 +694,7 @@ func (m *DDLServiceMgr) cleanupCreateCommand(provider *client.MetadataProvider) 
 			if err := mc.DeleteCreateCommandToken(defnId, requestId); err != nil {
 				logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", entry.Path, err)
 			} else {
+				removeFromAllCreateTokens(defnId, requestId)
 				logging.Infof("DDLServiceMgr: Remove create index token %v.", entry.Path)
 			}
 			addDeleted(defnId, requestId)
@@ -695,6 +714,7 @@ func (m *DDLServiceMgr) cleanupCreateCommand(provider *client.MetadataProvider) 
 
 					// If already deleted, then ingore it.
 					if isDeleted(defnId, requestId) {
+						removeFromAllCreateTokens(defnId, requestId)
 						continue
 					}
 
@@ -711,6 +731,7 @@ func (m *DDLServiceMgr) cleanupCreateCommand(provider *client.MetadataProvider) 
 						if err := mc.DeleteCreateCommandToken(defnId, requestId); err != nil {
 							logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", defnId, err)
 						} else {
+							removeFromAllCreateTokens(defnId, requestId)
 							logging.Infof("DDLServiceMgr: Remove create index token %v.", defnId)
 						}
 						addDeleted(defnId, requestId)
@@ -719,6 +740,8 @@ func (m *DDLServiceMgr) cleanupCreateCommand(provider *client.MetadataProvider) 
 			}
 		}
 	}
+
+	return allCreateCommandTokens
 }
 
 func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
@@ -1055,8 +1078,37 @@ func (m *DDLServiceMgr) processCreateCommand() {
 // Drop Instance Token
 //////////////////////////////////////////////////////////////
 
+func createTokenExists(allCreateCommandTokens map[common.IndexDefnId]map[uint64]*mc.CreateCommandToken,
+	command *mc.DropInstanceCommandToken) (uint64, bool) {
+
+	// If there is a create token, then do not process the drop token.
+	// Let the create token be deleted first to avoid any unexpected
+	// race condition.  If the drop token is removed before create token
+	// is removed, then the instance can get re-created again as the system
+	// does not know that the instance has been dropped (since the token is
+	// removed from metaKV)
+
+	for requestId, token := range allCreateCommandTokens[command.DefnId] {
+		// token will be nil if the value can not be fetched from metaKV.
+		// In such a case, assume the presence of create token in metaKV
+		if token == nil {
+			return requestId, true
+		} else {
+			for _, defns := range token.Definitions {
+				for _, defn := range defns {
+					if defn.InstId == command.InstId {
+						return requestId, true
+					}
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
 // Recover drop instance command
-func (m *DDLServiceMgr) cleanupDropInstanceCommand(provider *client.MetadataProvider) {
+func (m *DDLServiceMgr) cleanupDropInstanceCommand(provider *client.MetadataProvider,
+	allCreateCommandTokens map[common.IndexDefnId]map[uint64]*mc.CreateCommandToken) {
 	if !m.canProcessDDL() {
 		return
 	}
@@ -1078,21 +1130,14 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand(provider *client.MetadataProv
 			logging.Infof("DDLServiceMgr: processing delete index instance token %v", entry.Path)
 
 			command, err := mc.GetDropInstanceTokenFromPath(entry.Path)
-			if command == nil {
-				logging.Verbosef("DDLServiceMgr: delete index instance token for path %v does not exist", entry.Path)
+			if command == nil || err != nil {
+				logging.Verbosef("DDLServiceMgr: delete index instance token for path %v does not exist, err: %v", entry.Path, err)
 				continue
 			}
 
-			// If there is a create token, then do not process the drop token.
-			// Let the create token be deleted first to avoid any unexpected
-			// race condition.  This is more for safety than necessity.
-			exist, err := mc.CreateCommandTokenExist(command.DefnId)
-			if err != nil {
-				logging.Warnf("DDLServiceMgr: Failed to check create token.  Skip command %v.  Error = %v.", entry.Path, err)
-				continue
-			}
-			if exist {
-				logging.Warnf("DDLServiceMgr: Create token exist for %v.  Skip processing drop token %v.", command.DefnId, entry.Path)
+			if requestId, exists := createTokenExists(allCreateCommandTokens, command); exists {
+				logging.Warnf("DDLServiceMgr: Create token exist for %v, %v with requestId: %v.  Skip processing drop token %v.",
+					command.DefnId, command.InstId, requestId, entry.Path)
 				continue
 			}
 
