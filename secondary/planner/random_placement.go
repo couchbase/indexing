@@ -607,7 +607,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution) (bool, bool, bool) {
 }
 
 // Randomly select a single index to move to a different node
-func (p *RandomPlacement) randomMoveNoConstraint(s *Solution, target int) (uint64, uint64) {
+func (p *RandomPlacement) randomMoveNoConstraint(s *Solution, target int, allowEmptyNode bool) (uint64, uint64) {
 
 	numOfIndexers := len(s.Placement)
 	if numOfIndexers == 1 {
@@ -626,6 +626,10 @@ func (p *RandomPlacement) randomMoveNoConstraint(s *Solution, target int) (uint6
 			return 0, 0
 		}
 
+		// Dont shift the last index on the random source node
+		if !allowEmptyNode && len(source.Indexes) == 1 {
+			continue
+		}
 		index := getRandomIndex(p.rs, source.Indexes)
 		if index == nil {
 			continue

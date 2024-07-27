@@ -3897,7 +3897,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 
 	if shuffle != 0 {
 		placement := newRandomPlacement(indexes, config.AllowSwap, false)
-		movedIndex, movedData = placement.randomMoveNoConstraint(r, shuffle)
+		movedIndex, movedData = placement.randomMoveNoConstraint(r, shuffle, false)
 	}
 
 	if !isRetry {
