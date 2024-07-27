@@ -125,6 +125,27 @@ func TestCodebookIVFPQ(t *testing.T) {
 	t.Logf("Computed distance %v", dist)
 	t.Logf("Computed distance timing %v", delta)
 
+	//encode and assign vector
+	codes = make([]byte, n*codeSize)
+	labels := make([]int64, n)
+	t0 = time.Now()
+	err = codebook.EncodeAndAssignVectors(query_vecs, codes, labels)
+	delta = time.Now().Sub(t0)
+	if err != nil {
+		t.Errorf("Error encoding vector %v", err)
+	}
+	validate_code_size(t, codes, codeSize, n)
+	t.Logf("Num EncodeAndAssign %v", len(codes)/codeSize)
+	t.Logf("EncodeAndAssign timing %v", delta)
+	t.Logf("EncodeAndAssign code %v", codes[0])
+	t.Logf("EncodeAndAssign label %v", labels)
+
+	for _, l := range labels {
+		if l > int64(nlist) || l == 0 {
+			t.Errorf("Result label out of range. Total %v. Label %v", nlist, l)
+		}
+	}
+
 	//check the size
 	pSize := codebook.Size()
 	if pSize == 0 {
