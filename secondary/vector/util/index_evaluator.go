@@ -53,6 +53,8 @@ func FetchSampleVectorsForIndexes(cluster string,
 
 	var newBuf []byte
 
+	sampleCnt := 0
+
 sampling:
 	for {
 
@@ -68,6 +70,7 @@ sampling:
 				if cap(newBuf) > cap(encodeBuf) {
 					encodeBuf = newBuf[:0]
 				}
+				sampleCnt++
 			} else {
 				//doc sampling has finished
 				break sampling
@@ -82,6 +85,8 @@ sampling:
 
 		}
 	}
+	logging.Infof("FetchSampleVectorsForIndexes Total sampled %v for requested "+
+		"sampleSize %v", sampleCnt, sampleSize)
 	return vectors, nil
 }
 
