@@ -26,7 +26,7 @@ func FetchSampleVectorsForIndexes(cluster string,
 	collection string,
 	cid string,
 	idxInsts []*c.IndexInst,
-	sampleSize int64) ([][][]float32, error) {
+	sampleSize int64) ([][]float32, error) {
 
 	evaluators := make([]*protoProj.IndexEvaluator, len(idxInsts))
 
@@ -49,7 +49,7 @@ func FetchSampleVectorsForIndexes(cluster string,
 	defer close(donech)
 
 	encodeBuf := make([]byte, 0, ENCODE_BUF_SIZE)
-	vectors := make([][][]float32, len(idxInsts)) //slice of [instId][vecs of float32s]
+	vectors := make([][]float32, len(idxInsts)) //slice of [instId][multiple unpacked vectors as float32 slice]
 
 	var newBuf []byte
 
@@ -92,7 +92,7 @@ sampling:
 
 func evaluateEvent(evaluators []*protoProj.IndexEvaluator,
 	m *memcached.DcpEvent,
-	outvecs [][][]float32,
+	outvecs [][]float32,
 	encodeBuf []byte) ([]byte, error) {
 
 	var nvalue qvalue.Value
@@ -117,7 +117,9 @@ func evaluateEvent(evaluators []*protoProj.IndexEvaluator,
 		}
 
 		if len(vectors) != 0 {
-			outvecs[i] = append(outvecs[i], vectors...)
+			for _, vec := range vectors {
+				outvecs[i] = append(outvecs[i], vec...)
+			}
 		}
 	}
 	return newBuf, nil
