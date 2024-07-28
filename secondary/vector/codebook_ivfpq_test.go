@@ -256,7 +256,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 
 }
 
-type pqEncodeTimingTestCase struct {
+type pqTimingTestCase struct {
 	name string
 
 	dim    int
@@ -274,18 +274,19 @@ type pqEncodeTimingTestCase struct {
 	iters     int
 }
 
-var pqEncodeTimingTestCases = []pqEncodeTimingTestCase{
+var pqTimingTestCases = []pqTimingTestCase{
 
 	{"PQ8x8 Batch 1 Concur 1", 128, METRIC_L2, 1000, 8, 8, 10000, 10000, 1, 1, 10000},
 	{"PQ8x8 Batch 1 Concur 10", 128, METRIC_L2, 1000, 8, 8, 10000, 10000, 1, 10, 10000},
 	{"PQ8x8 Batch 10 Concur 1", 128, METRIC_L2, 1000, 8, 8, 10000, 10000, 10, 1, 10000},
 	{"PQ8x8 Batch 10 Concur 10", 128, METRIC_L2, 1000, 8, 8, 10000, 10000, 10, 10, 10000},
-	//	{"PQ32x8 Batch 10 Concur 20", 128, METRIC_L2, 1000, 32, 8, 10000, 10000, 10, 20, 10000},
+	{"PQ8x8 Batch 50 Concur 10", 128, METRIC_L2, 1000, 8, 8, 10000, 10000, 50, 10, 10000},
+	//{"PQ32x8 Batch 50 Concur 10", 128, METRIC_L2, 1000, 32, 8, 10000, 10000, 50, 5, 10000},
 }
 
-func TestIVFPQEncodeTiming(t *testing.T) {
+func TestIVFPQTiming(t *testing.T) {
 
-	for _, tc := range pqEncodeTimingTestCases {
+	for _, tc := range pqTimingTestCases {
 		t.Run(tc.name, func(t *testing.T) {
 
 			codebook, err := NewCodebookIVFPQ(tc.dim, tc.nsub, tc.nbits, tc.nlist, tc.metric)
@@ -310,11 +311,11 @@ func TestIVFPQEncodeTiming(t *testing.T) {
 
 			encode_batch := convertTo1D(vecs[:tc.batchSize])
 
-			pcodes := make([][]byte, tc.concur)
-			var timings time.Duration
+			pqcodes := make([][]byte, tc.concur)
+			var encodeTimings time.Duration
 
-			for i := range pcodes {
-				pcodes[i] = make([]byte, tc.batchSize*codeSize)
+			for i := range pqcodes {
+				pqcodes[i] = make([]byte, tc.batchSize*codeSize)
 			}
 			for j := 0; j < tc.iters; j++ {
 				var wg sync.WaitGroup
@@ -323,9 +324,9 @@ func TestIVFPQEncodeTiming(t *testing.T) {
 					go func(wg *sync.WaitGroup, pos int) {
 						defer wg.Done()
 						t0 := time.Now()
-						err = codebook.EncodeVectors(encode_batch, pcodes[pos])
+						err = codebook.EncodeVectors(encode_batch, pqcodes[pos])
 						delta := time.Now().Sub(t0)
-						timings += delta
+						encodeTimings += delta
 						//		t.Logf("Encode %v parallel timing %v", concur, delta)
 						if err != nil {
 							t.Errorf("Error encoding vector %v", err)
@@ -333,15 +334,139 @@ func TestIVFPQEncodeTiming(t *testing.T) {
 					}(&wg, i)
 				}
 				wg.Wait()
-				var pcodes1D []byte
-				for _, pcode := range pcodes {
-					pcodes1D = append(pcodes1D, pcode...)
+				var pqcodes1D []byte
+				for _, pqcode := range pqcodes {
+					pqcodes1D = append(pqcodes1D, pqcode...)
 				}
-				validate_code_size(t, pcodes1D, codeSize, tc.concur*tc.batchSize)
+				validate_code_size(t, pqcodes1D, codeSize, tc.concur*tc.batchSize)
+			}
+
+			dvecs := make([][]float32, tc.concur)
+			var decodeTimings time.Duration
+
+			for i := range pqcodes {
+				dvecs[i] = make([]float32, tc.batchSize*tc.dim)
+			}
+
+			for j := 0; j < tc.iters; j++ {
+				var wg sync.WaitGroup
+				for i := 0; i < tc.concur; i++ {
+					wg.Add(1)
+					go func(wg *sync.WaitGroup, pos int) {
+						defer wg.Done()
+						t0 := time.Now()
+						err = codebook.DecodeVectors(tc.batchSize, pqcodes[pos], dvecs[pos])
+						delta := time.Now().Sub(t0)
+						decodeTimings += delta
+						//		t.Logf("Encode %v parallel timing %v", concur, delta)
+						if err != nil {
+							t.Errorf("Error decoding vector %v", err)
+						}
+					}(&wg, i)
+				}
+				wg.Wait()
 			}
 
 			total_ops := time.Duration(tc.iters * tc.concur * tc.batchSize)
-			t.Logf("Encode average for iter %v concurrency %v batch %v is %v", tc.iters, tc.concur, tc.batchSize, timings/total_ops)
+			t.Logf("Encode average for iter %v concurrency %v batch %v is %v per op", tc.iters, tc.concur, tc.batchSize, encodeTimings/total_ops)
+			t.Logf("Decode average for iter %v concurrency %v batch %v is %v per op", tc.iters, tc.concur, tc.batchSize, decodeTimings/total_ops)
+
+		})
+	}
+
+}
+
+//concurrent encode/decode
+func TestIVFPQConcurrentTiming(t *testing.T) {
+
+	for _, tc := range pqTimingTestCases {
+		t.Run(tc.name, func(t *testing.T) {
+
+			codebook, err := NewCodebookIVFPQ(tc.dim, tc.nsub, tc.nbits, tc.nlist, tc.metric)
+			if err != nil || codebook == nil {
+				t.Errorf("Unable to create index. Err %v", err)
+			}
+
+			//generate random vectors
+			vecs := genRandomVecs(tc.dim, tc.num_vecs)
+
+			//train the codebook
+			train_vecs := convertTo1D(vecs[:tc.trainlist])
+			err = codebook.Train(train_vecs)
+			if err != nil || !codebook.IsTrained() {
+				t.Errorf("Unable to train index. Err %v", err)
+			}
+
+			codeSize, err := codebook.CodeSize()
+			if err != nil {
+				t.Errorf("Error fetching code size %v", err)
+			}
+
+			encode_batch := convertTo1D(vecs[:tc.batchSize])
+			pqcode_batch := make([]byte, tc.batchSize*codeSize)
+
+			err = codebook.EncodeVectors(encode_batch, pqcode_batch)
+			if err != nil {
+				t.Errorf("Error encoding vector %v", err)
+			}
+
+			pqcodes := make([][]byte, tc.concur)
+			var encodeTimings time.Duration
+
+			for i := range pqcodes {
+				pqcodes[i] = make([]byte, tc.batchSize*codeSize)
+			}
+
+			dvecs := make([][]float32, tc.concur)
+			var decodeTimings time.Duration
+
+			for i := range pqcodes {
+				dvecs[i] = make([]float32, tc.batchSize*tc.dim)
+			}
+
+			go func() {
+				for j := 0; j < tc.iters; j++ {
+					var wg sync.WaitGroup
+					for i := 0; i < tc.concur; i++ {
+						wg.Add(1)
+						go func(wg *sync.WaitGroup, pos int) {
+							defer wg.Done()
+							t0 := time.Now()
+							err = codebook.DecodeVectors(tc.batchSize, pqcode_batch, dvecs[pos])
+							delta := time.Now().Sub(t0)
+							decodeTimings += delta
+							//		t.Logf("Encode %v parallel timing %v", concur, delta)
+							if err != nil {
+								t.Errorf("Error encoding vector %v", err)
+							}
+						}(&wg, i)
+					}
+					wg.Wait()
+				}
+			}()
+
+			for j := 0; j < tc.iters; j++ {
+				var wg sync.WaitGroup
+				for i := 0; i < tc.concur; i++ {
+					wg.Add(1)
+					go func(wg *sync.WaitGroup, pos int) {
+						defer wg.Done()
+						t0 := time.Now()
+						err = codebook.EncodeVectors(encode_batch, pqcodes[pos])
+						delta := time.Now().Sub(t0)
+						encodeTimings += delta
+						//		t.Logf("Encode %v parallel timing %v", concur, delta)
+						if err != nil {
+							t.Errorf("Error encoding vector %v", err)
+						}
+					}(&wg, i)
+				}
+				wg.Wait()
+			}
+
+			total_ops := time.Duration(tc.iters * tc.concur * tc.batchSize)
+			t.Logf("Encode average for iter %v concurrency %v batch %v is %v per op", tc.iters, tc.concur, tc.batchSize, encodeTimings/total_ops)
+			t.Logf("Decode average for iter %v concurrency %v batch %v is %v per op", tc.iters, tc.concur, tc.batchSize, decodeTimings/total_ops)
 
 		})
 	}
