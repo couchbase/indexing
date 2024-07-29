@@ -13419,12 +13419,13 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					continue
 				}
 
-				if err := slice.Train(vectors[i]); err != nil {
+				if err := idx.handleTrainingAndCheckForDrop(keyspaceId, instId, slice, vectors[i], droppedInsts, allInsts); err != nil {
 					slice.ResetCodebook()
 					logging.Errorf("Indexer::initiateTraining error observed during training phase of codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
 					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
 					continue
 				}
+
 				logging.Infof("Indexer::initiateTraining Training completed for vector index instance: %v, "+
 					"partnId: %v, elapsed: %v", instId, partnId, time.Since(start))
 
@@ -13478,6 +13479,53 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 			errMap:     errMap,
 		}
 	}
+}
+
+func (idx *indexer) handleTrainingAndCheckForDrop(keyspaceId string,
+	currInstId c.IndexInstId, slice Slice, vectors []float32,
+	droppedInsts map[c.IndexInstId]bool, allInsts []c.IndexInstId) error {
+
+	respCh := make(chan error, 1)
+	ticker := time.NewTicker(1 * time.Second) // Check for dropped instances every 1 second
+
+	defer ticker.Stop()
+
+	go func() {
+		respCh <- slice.Train(vectors)
+	}()
+
+	for {
+		select {
+		case err := <-respCh:
+			return err
+		case <-ticker.C:
+			for _, instId := range allInsts {
+				if _, ok := droppedInsts[instId]; ok {
+					continue
+				}
+
+				// Do not process drop for current instance as training is on-going
+				// for this instance. Index will be dropped after training is done
+				if instId == currInstId {
+					continue
+				}
+
+				if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
+					droppedInsts[instId] = true
+
+					logging.Infof("Indexer::handleTrainingAndCheckForDrop Observed that inst: %v is dropped during training. "+
+						"Skip further processing", instId)
+
+					idx.internalRecvCh <- &MsgIndexTrainingDone{
+						keyspaceId: keyspaceId,
+						dropMap:    map[c.IndexInstId]MsgChannel{instId: clientCh},
+					}
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func (idx *indexer) handleIndexTrainingDone(cmd Message) {
