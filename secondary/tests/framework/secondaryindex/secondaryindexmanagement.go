@@ -327,6 +327,9 @@ func BuildIndexesAsync(defnIds []uint64, server string, indexActiveTimeoutSecond
 
 func WaitTillIndexActive(defnID uint64, client *qc.GsiClient, indexActiveTimeoutSeconds int64) error {
 	start := time.Now()
+	interval := 1 * time.Second
+	logAt := 1 * time.Second
+
 	for {
 		elapsed := time.Since(start)
 		if elapsed.Seconds() >= float64(indexActiveTimeoutSeconds) {
@@ -339,7 +342,13 @@ func WaitTillIndexActive(defnID uint64, client *qc.GsiClient, indexActiveTimeout
 			log.Printf("Index is %d now active", defnID)
 			return nil
 		} else {
-			log.Printf("Waiting for index %d to go active ...", defnID)
+			if elapsed >= logAt {
+				log.Printf("Waiting for index %d to go active ...", defnID)
+				logAt += interval
+				if interval < time.Duration(indexActiveTimeoutSeconds/10)*time.Second {
+					interval = interval * time.Duration(2)
+				}
+			}
 			time.Sleep(1 * time.Second)
 		}
 	}

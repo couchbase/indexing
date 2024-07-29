@@ -83,8 +83,8 @@ func TestVectorCreateIndex(t *testing.T) {
 	// Create Index
 	stmt := "CREATE INDEX " + idx_sif10k +
 		" ON default(gender, sift VECTOR, docnum)" +
-		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\"};"
-	_, err := execN1QL(bucket, stmt)
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+	err := createWithDeferAndBuild(idx_sif10k, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
 	FailTestIfError(err, "Error in creating idx_sift10k", t)
 
 	vecIndexCreated = true
@@ -154,8 +154,8 @@ func TestVectorIndexWithDesc(t *testing.T) {
 	// Create Index
 	stmt := "CREATE INDEX " + idx_sif10k_desc +
 		" ON default(gender, docnum DESC, sift VECTOR)" +
-		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\"};"
-	_, err := execN1QL(bucket, stmt)
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+	err := createWithDeferAndBuild(idx_sif10k_desc, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
 	FailTestIfError(err, "Error in creating idx_sift10k", t)
 
 	vecIndexCreated = true
@@ -219,8 +219,8 @@ func TestVectorOnlyIndex(t *testing.T) {
 	// Create Index
 	stmt := "CREATE INDEX " + idx_vecOnly +
 		" ON default(sift VECTOR)" +
-		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\"};"
-	_, err := execN1QL(bucket, stmt)
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+	err := createWithDeferAndBuild(idx_vecOnly, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
 	FailTestIfError(err, "Error in creating idx_sift10k", t)
 
 	// 40K data has 10K 4 times so expecting repeated elements so making limit 5 * 4
@@ -271,8 +271,8 @@ func TestVectorPartialIndex(t *testing.T) {
 	stmt := "CREATE INDEX " + idx_partial +
 		" ON default(gender, sift VECTOR, direction)" +
 		" WHERE direction = \"east\"" +
-		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\"};"
-	_, err := execN1QL(bucket, stmt)
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+	err := createWithDeferAndBuild(idx_partial, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
 	FailTestIfError(err, "Error in creating idx_sift10k", t)
 
 	// WHERE direction = \"east\"" will restrict the data to first 10K all of them will be female too
@@ -327,8 +327,8 @@ func TestVectorIndexMissingTrailing(t *testing.T) {
 	stmt := "CREATE INDEX " + idx_missing_trailing +
 		" ON default(gender, sift VECTOR, `missing`)" +
 		" WHERE `missing` is not missing" +
-		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\"};"
-	_, err := execN1QL(bucket, stmt)
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+	err := createWithDeferAndBuild(idx_missing_trailing, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
 	FailTestIfError(err, "Error in creating idx_sift10k", t)
 
 	vecIndexCreated = true
@@ -384,8 +384,8 @@ func TestVectorPartitionedIndex(t *testing.T) {
 	stmt := "CREATE INDEX " + idx_sif10k_partn +
 		" ON default(gender, sift VECTOR, docnum)" +
 		" PARTITION BY HASH(meta().id)" +
-		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\"};"
-	_, err := execN1QL(bucket, stmt)
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+	err := createWithDeferAndBuild(idx_sif10k_partn, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
 	FailTestIfError(err, "Error in creating idx_sift10k", t)
 
 	vecPartnIndexCreated = true
