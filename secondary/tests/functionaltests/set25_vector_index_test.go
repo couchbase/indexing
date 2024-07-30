@@ -130,7 +130,7 @@ func TestVectorCreateIndex(t *testing.T) {
 
 	limit := int64(5)
 	// Scan
-	scanResults, err := secondaryindex.Scan6(idx_sif10k, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	scanResults, err := secondaryindex.Scan6(idx_sif10k, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
 	vectorPosReturned := make([]uint32, 0)
@@ -201,7 +201,7 @@ func TestVectorIndexWithDesc(t *testing.T) {
 
 	limit := int64(5)
 	// Scan
-	scanResults, err := secondaryindex.Scan6(idx_sif10k_desc, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	scanResults, err := secondaryindex.Scan6(idx_sif10k_desc, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
 	vectorPosReturned := make([]uint32, 0)
@@ -252,7 +252,7 @@ func TestVectorOnlyIndex(t *testing.T) {
 	}
 
 	// Scan
-	scanResults, err := secondaryindex.Scan6(idx_vecOnly, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	scanResults, err := secondaryindex.Scan6(idx_vecOnly, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
 	vectorPosReturned := make([]uint32, 0)
@@ -328,7 +328,7 @@ func TestIndexConfigs(t *testing.T) {
 			err := createWithDeferAndBuild(tc.name, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
 			FailTestIfError(err, "Error in creating "+tc.name, t)
 			// Scan
-			scanResults, err := secondaryindex.Scan6(tc.name, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+			scanResults, err := secondaryindex.Scan6(tc.name, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 			FailTestIfError(err, "Error during secondary index scan", t)
 
 			vectorPosReturned := make([]uint32, 0)
@@ -386,7 +386,7 @@ func TestVectorPartialIndex(t *testing.T) {
 
 	limit := int64(5)
 	// Scan
-	scanResults, err := secondaryindex.Scan6(idx_partial, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	scanResults, err := secondaryindex.Scan6(idx_partial, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
 	vectorPosReturned := make([]uint32, 0)
@@ -445,7 +445,7 @@ func TestVectorIndexMissingTrailing(t *testing.T) {
 
 	limit := int64(5)
 	// Scan
-	scanResults, err := secondaryindex.Scan6(idx_missing_trailing, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	scanResults, err := secondaryindex.Scan6(idx_missing_trailing, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
 	vectorPosReturned := make([]uint32, 0)
@@ -510,7 +510,7 @@ func TestVectorPartitionedIndex(t *testing.T) {
 	}
 
 	// Scan
-	scanResults, err := secondaryindex.Scan6(idx_sif10k_partn, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	scanResults, err := secondaryindex.Scan6(idx_sif10k_partn, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
 	vectorPosReturned := make([]uint32, 0)
@@ -784,7 +784,7 @@ func testScalarPredicates(t *testing.T, idx string) {
 		t.Run(tt.name, func(t *testing.T) {
 			limit := int64(5)
 			// Scan
-			scanResults, err := secondaryindex.Scan6(idx, bucket, kvaddress, tt.scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+			scanResults, err := secondaryindex.Scan6(idx, bucket, "", "", kvaddress, tt.scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 			FailTestIfError(err, "Error during secondary index scan", t)
 
 			vectorPosReturned := make([]uint32, 0)
