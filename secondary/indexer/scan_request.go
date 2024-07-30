@@ -557,6 +557,28 @@ func (r *ScanRequest) setVectorIndexParamsFromDefn() (err error) {
 	return nil
 }
 
+func (r *ScanRequest) ProjectVectorDist() bool {
+	// If index projection is not pushed down
+	if r.Indexprojection == nil {
+		logging.Verbosef("%v ProjectVectorDist projecting vector distance as projection is not pushed down", r.LogPrefix)
+		return true
+	}
+
+	// If we are projecting all keys or entry keys projector vector distance in place of vector field
+	if !r.Indexprojection.projectSecKeys {
+		logging.Verbosef("%v ProjectVectorDist projecting vector distance as all keys are being projected", r.LogPrefix)
+		return true
+	}
+
+	// If vectorKeyPos is in the list of keys being project project vector distance
+	if r.Indexprojection.projectionKeys[r.vectorPos] {
+		logging.Verbosef("%v ProjectVectorDist projecting vector distance as vector keys is being projected", r.LogPrefix)
+		return true
+	}
+
+	return false
+}
+
 func (r *ScanRequest) useHeapForVectorIndex() bool {
 	return r.Limit != 0 && r.Limit != math.MaxInt64
 }

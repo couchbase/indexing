@@ -344,34 +344,38 @@ func (w *ScanWorker) Sender() {
 		vectorKeyPos := w.r.getVectorKeyPos()
 		i := 0
 		for ; i < batchSize && !rows[i].last; i++ {
-			// Substitute distance in place of centroid ID.
-			// VECTOR_TODO: Do this only when you need to project distance field
-			distVal := n1qlval.NewValue(float64(dists[i]))
-			encodeBuf := make([]byte, 0, distVal.Size()*3)
-			distCode, err := codec.EncodeN1QLValue(distVal, encodeBuf)
-			if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
-				distCode, err = encodeN1qlVal(distVal)
-			}
-			if err != nil {
-				logging.Verbosef("%v Sender got error: %v from EncodeN1qlvalue", w.logPrefix, err)
-				w.senderErrCh <- err
-				return
+			// Substitute distance in place of centroid ID
+			// 1. when projection is not pushed down (w.r.Indexprojection == nil )
+			// 2. when we are projecting all keys (projectVectorDist)
+			// 3. when vector field is being projected (projectVectorDist)
+			if w.r.ProjectVectorDist() {
+				distVal := n1qlval.NewValue(float64(dists[i]))
+				encodeBuf := make([]byte, 0, distVal.Size()*3)
+				distCode, err := codec.EncodeN1QLValue(distVal, encodeBuf)
+				if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
+					distCode, err = encodeN1qlVal(distVal)
+				}
+				if err != nil {
+					logging.Verbosef("%v Sender got error: %v from EncodeN1qlvalue", w.logPrefix, err)
+					w.senderErrCh <- err
+					return
+				}
+
+				// VECTOR_TODO: Use buffer pools for these buffer allocations
+				// VECTOR_TODO: Try to use fixed length encoding for float64 distance replacement with centroidID
+				// ReplaceEncodedFieldInArray encodes distCode and replaces centroidId in key so add more buffer
+				// for encoding of distCode incase it needs more space than centroidId => adding 3 * distCode size
+				newBuf := make([]byte, 0, len(rows[i].key)+(3*len(distCode)))
+				newEntry, err := codec.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
+				if err != nil {
+					logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
+						w.logPrefix, err, logging.TagStrUD(rows[i].key), vectorKeyPos, distCode)
+					w.senderErrCh <- err
+					return
+				}
+				rows[i].key = newEntry // Replace old entry with centoidId to new entry with distance
 			}
 
-			// VECTOR_TODO: Use buffer pools for these buffer allocations
-			// VECTOR_TODO: Try to use fixed length encoding for float64 distance replacement with centroidID
-			// ReplaceEncodedFieldInArray encodes distCode and replaces centroidId in key so add more buffer
-			// for encoding of distCode incase it needs more space than centroidId => adding 3 * distCode size
-			newBuf := make([]byte, 0, len(rows[i].key)+(3*len(distCode)))
-			newEntry, err := codec.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
-			if err != nil {
-				logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
-					w.logPrefix, err, logging.TagStrUD(rows[i].key), vectorKeyPos, distCode)
-				w.senderErrCh <- err
-				return
-			}
-
-			rows[i].key = newEntry  // Replace old entry with centoidId to new entry with distance
 			rows[i].dist = dists[i] // Add distance for sorting in heap
 
 			select {
