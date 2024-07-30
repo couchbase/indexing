@@ -11,6 +11,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	l "github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	n1qlval "github.com/couchbase/query/value"
@@ -261,6 +262,13 @@ func (w *ScanWorker) unblockJobSender(doneCh chan<- struct{}) {
 
 func (w *ScanWorker) Sender() {
 	defer close(w.senderErrCh)
+	defer func() {
+		if r := recover(); r != nil {
+			l.Fatalf("%v - panic(%v) detected while processing %s", w.logPrefix, r, w.r)
+			l.Fatalf("%s", l.StackTraceAll())
+			w.senderErrCh <- fmt.Errorf("%v panic %v", w.logPrefix, r)
+		}
+	}()
 
 	batchSize := w.senderBatchSize
 	rows := make([]*Row, batchSize)
