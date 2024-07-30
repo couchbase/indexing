@@ -136,8 +136,8 @@ func (cb *codebookIVFSQ) EncodeAndAssignVectors(vecs []float32, codes []byte, la
 	if !cb.IsTrained() {
 		return c.ErrCodebookNotTrained
 	}
-	//VECTOR_TODO implement EncodeAndAssign for SQ
-	return nil
+
+	return cb.index.EncodeAndAssignSQ(vecs, codes, labels, cb.nlist)
 }
 
 // Find the nearest k centroidIDs for a given vector.
