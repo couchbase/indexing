@@ -47,7 +47,7 @@ var vecPartnIndexCreated = false
 // missing   -> if (repitionCount % 10 != 0) "NotMissing"
 // docnum    -> overflow*10000 + vecnum
 // count     -> atomic int value of number of docs loaded
-func vectorSetup(t *testing.T) {
+func vectorSetup(t *testing.T, bucket, scope, coll string, numDocs int) {
 	skipIfNotPlasma(t)
 
 	// Drop all indexes from earlier tests
@@ -56,11 +56,30 @@ func vectorSetup(t *testing.T) {
 
 	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 
+	e = loadVectorData(t, bucket, scope, coll, numDocs)
+	FailTestIfError(e, "Error in loading vector data", t)
+
+	vectorsLoaded = true
+}
+
+func loadVectorData(t *testing.T, bucket, scope, coll string, numDocs int) error {
+	if scope == "" {
+		scope = c.DEFAULT_SCOPE
+	}
+	if coll == "" {
+		coll = c.DEFAULT_COLLECTION
+	}
+	if numDocs == 0 {
+		numDocs = 40000
+	}
+
 	// Load Data
 	cfg := randdocs.Config{
 		ClusterAddr:    "127.0.0.1:9000",
 		Bucket:         bucket,
-		NumDocs:        40000,
+		Scope:          scope,
+		Collection:     coll,
+		NumDocs:        numDocs,
 		Iterations:     1,
 		Threads:        8,
 		OpsPerSec:      100000,
@@ -68,16 +87,14 @@ func vectorSetup(t *testing.T) {
 		SkipNormalData: true,
 		SIFTFVecsFile:  "../../tools/randdocs/siftsmall/siftsmall_base.fvecs",
 	}
-	randdocs.Run(cfg)
-
-	vectorsLoaded = true
+	return randdocs.Run(cfg)
 }
 
 func TestVectorCreateIndex(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	// Create Index
@@ -146,7 +163,7 @@ func TestVectorIndexWithDesc(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	idx_sif10k_desc := "idx_sif10k_desc"
@@ -207,7 +224,7 @@ func TestVectorOnlyIndex(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	idx_vecOnly := "idx_vecOnly"
@@ -258,7 +275,7 @@ func TestIndexConfigs(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	var testIndexConfigs = []struct {
@@ -336,7 +353,7 @@ func TestVectorPartialIndex(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	idx_partial := "idx_sift10k_partial"
@@ -392,7 +409,7 @@ func TestVectorIndexMissingTrailing(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	idx_missing_trailing := "idx_missing_trailing"
@@ -451,7 +468,7 @@ func TestVectorPartitionedIndex(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	// Drop all indexes from earlier tests

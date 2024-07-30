@@ -512,3 +512,7 @@ func ValidateClusterState(asm AlternateShardMap, logFails bool) map[InvalidClust
 	}
 	return res
 }
+
+func GetCodebookName(name, bucket string, instId c.IndexInstId, partnId c.PartitionId) string {
+	return fmt.Sprintf("%s_%s_%d_%d.codebook", bucket, name, instId, partnId)
+}
