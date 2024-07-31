@@ -83,9 +83,17 @@ func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap Key
 	dpconf := config.SectionConfig(
 		"dataport.", true /*trim*/)
 
+	var portBlockHist *Stats.Histogram = nil
+	switch streamId {
+	case common.MAINT_STREAM:
+		portBlockHist = &stats.datapMaintBlockedDurHist
+	case common.INIT_STREAM:
+		portBlockHist = &stats.datapInitBlockedDurHist
+	}
+
 	dpconf = overrideDataportConf(dpconf)
 	stream, err := dataport.NewServer(string(StreamAddrMap[streamId]),
-		dpconf, streamMutch, enableAuth)
+		dpconf, streamMutch, enableAuth, portBlockHist)
 	if err != nil {
 		//return stream init error
 		logging.Fatalf("MutationStreamReader: Error returned from NewServer."+

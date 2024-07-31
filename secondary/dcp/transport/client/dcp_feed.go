@@ -1564,8 +1564,7 @@ type DcpStats struct {
 	OsoSnapshotStart  stats.Uint64Val
 	OsoSnapshotEnd    stats.Uint64Val
 
-	TotalBlockedDur stats.Uint64Val
-	BlockedDurHist  stats.Histogram
+	BlockedDurHist stats.Histogram
 
 	rcvch      chan []interface{}
 	Dcplatency stats.Average
@@ -1608,7 +1607,6 @@ func (dcpStats *DcpStats) Init() {
 	dcpStats.OsoSnapshotStart.Init()
 	dcpStats.OsoSnapshotEnd.Init()
 
-	dcpStats.TotalBlockedDur.Init()
 	dcpStats.BlockedDurHist.InitLatency(projBlockedDur, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 }
 
@@ -1656,7 +1654,7 @@ func (stats *DcpStats) String() (string, string) {
 	stitems[25] = `"queueSize":` + strconv.FormatUint(uint64(stats.mutationQueue.GetSize()), 10)
 	stitems[26] = `"totalEnq":` + strconv.FormatUint(uint64(stats.mutationQueue.GetTotalEnq()), 10)
 	stitems[27] = `"totalDeq":` + strconv.FormatUint(uint64(stats.mutationQueue.GetTotalDeq()), 10)
-	stitems[28] = `"totalBlockedDur":` + strconv.FormatUint(stats.TotalBlockedDur.Value(), 10)
+	stitems[28] = `"totalBlockedDur":` + strconv.FormatUint(stats.BlockedDurHist.GetTotal(), 10)
 	stitems[29] = `"projBlockedHist":` + stats.BlockedDurHist.String()
 	statjson := strings.Join(stitems[:], ",")
 
@@ -1709,7 +1707,7 @@ func (stats *DcpStats) Map() (map[string]interface{}, map[string]interface{}) {
 	statMap["totalEnq"] = uint64(stats.mutationQueue.GetTotalEnq())
 	statMap["totalDeq"] = uint64(stats.mutationQueue.GetTotalDeq())
 
-	statMap["totBlckd"] = stats.TotalBlockedDur.Value()
+	statMap["totBlckd"] = stats.BlockedDurHist.GetTotal()
 	statMap["projBlckdHist"] = stats.BlockedDurHist.GetValue()
 
 	return statMap, stats.Dcplatency.Json()
@@ -1962,7 +1960,6 @@ loop:
 			duration += blockedTs
 			blocked = false
 
-			feed.stats.TotalBlockedDur.Add(uint64(blockedTs))
 			feed.stats.BlockedDurHist.Add(int64(blockedTs))
 
 			if blockedTs > blockdThresholdDur {

@@ -59,7 +59,7 @@ func Application(
 	enableAuth := uint32(1)
 
 	appch := make(chan interface{}, 10000)
-	_, err := NewServer(addr, config, appch, &enableAuth)
+	_, err := NewServer(addr, config, appch, &enableAuth, nil)
 	if err != nil && doCallb(err) == false {
 		return
 	}

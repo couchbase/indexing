@@ -66,6 +66,10 @@ func init() {
 	uptime = time.Now()
 }
 
+func prettyTimeToString(v int64) string {
+	return fmt.Sprintf("%vms", v/int64(time.Millisecond))
+}
+
 // KeyspaceStats tracks statistics of all indexes in a given keyspace in a stream.
 // It is used internally for debugging and available in unspecified format under the
 // "GET /api/v1/stats" REST API but is not used by the UI.
@@ -594,10 +598,10 @@ func (s *IndexStats) Init() {
 	s.keySizeDist.Init()
 	s.arrKeySizeDist.Init()
 
-	s.scanReqInitLatDist.InitLatency(scanReqLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
-	s.scanReqWaitLatDist.InitLatency(scanReqLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
-	s.scanReqLatDist.InitLatency(scanReqLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
-	s.snapGenLatDist.InitLatency(snapLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
+	s.scanReqInitLatDist.InitLatency(scanReqLatencyDist, prettyTimeToString)
+	s.scanReqWaitLatDist.InitLatency(scanReqLatencyDist, prettyTimeToString)
+	s.scanReqLatDist.InitLatency(scanReqLatencyDist, prettyTimeToString)
+	s.snapGenLatDist.InitLatency(snapLatencyDist, prettyTimeToString)
 
 	s.partitions = make(map[common.PartitionId]*IndexStats)
 
@@ -877,6 +881,9 @@ type IndexerStats struct {
 	ShardCompatVersion stats.Int64Val
 
 	RebalanceTransferProgress *MapHolder
+
+	datapMaintBlockedDurHist stats.Histogram
+	datapInitBlockedDurHist  stats.Histogram
 }
 
 func (s *IndexerStats) Init() {
@@ -952,6 +959,8 @@ func (s *IndexerStats) Init() {
 	s.RebalanceTransferProgress.Init()
 	s.RebalanceTransferProgress.AddFilter(stats.IndexStatusFilter) // Retrieved via getIndexStatus using rebalance
 
+	s.datapInitBlockedDurHist.InitLatency(common.PortBlockDist, prettyTimeToString)
+	s.datapMaintBlockedDurHist.InitLatency(common.PortBlockDist, prettyTimeToString)
 }
 
 // SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
@@ -1334,6 +1343,14 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 
 	is.ShardCompatVersion.Set(int64(GetShardCompactVersion()))
 	statMap.AddStatValueFiltered("shard_compat_version", &is.ShardCompatVersion)
+
+	statMap.AddStatValueFiltered("maint_port_blocked_hist", &is.datapMaintBlockedDurHist)
+	statMap.AddStatValueFiltered("init_port_blocked_hist", &is.datapInitBlockedDurHist)
+
+	if is.datapInitBlockedDurHist.Map(statMap.spec.consumerFilter) {
+		statMap.AddStat("maint_port_blocked_total_dur", is.datapMaintBlockedDurHist.GetTotal())
+		statMap.AddStat("init_port_blocked_total_dur", is.datapInitBlockedDurHist.GetTotal())
+	}
 }
 
 func (is *IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {
@@ -2021,7 +2038,6 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			return ss.numItemsFlushed.Value()
 		},
 		&s.numItemsFlushed, s.partnInt64Stats)
-
 
 	statMap.AddAggrStatFiltered("disk_bytes",
 		func(ss *IndexStats) int64 {
