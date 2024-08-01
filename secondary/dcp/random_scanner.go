@@ -212,7 +212,7 @@ func (rs *randomScan) setConcurrency() {
 		sc++
 		var cc int
 		ccnt := n.CpuCount
-		if ccnt == 0 {
+		if ccnt != 0 {
 			cc = int(ccnt / float64(len(n.Services)) * KV_CPU_MULTIPLIER)
 		} else {
 			cc = 1
@@ -227,7 +227,9 @@ func (rs *randomScan) setConcurrency() {
 	if maxCC < 1 {
 		maxCC = 1
 	}
-	rs.concurrency = 10
+
+	rs.concurrency = maxCC
+
 	logging.Infof("RandomScanner: Concurrency per server set to: %v", rs.concurrency)
 }
 

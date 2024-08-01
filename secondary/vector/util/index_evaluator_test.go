@@ -16,9 +16,11 @@ func SkipTestFetchSampleVectorsForIndexes(t *testing.T) {
 	collection := "_default"
 	cid := "0"
 
+	dim := 128
+
 	meta := &c.VectorMetadata{
 		IsCompositeIndex: true,
-		Dimension:        128,
+		Dimension:        dim,
 	}
 
 	idxDefn := c.IndexDefn{
@@ -45,7 +47,7 @@ func SkipTestFetchSampleVectorsForIndexes(t *testing.T) {
 
 	vectors, err := FetchSampleVectorsForIndexes(cluster, pool, bucket, scope, collection, cid, indexInsts, 800)
 
-	t.Logf("Vectors %v, Err %v", len(vectors[0]), err)
+	t.Logf("Vectors %v, Err %v", len(vectors[0])/dim, err)
 
-	t.Logf("Sample Vector %v", vectors[0][0])
+	t.Logf("Sample Vector %v", vectors[0][:dim])
 }

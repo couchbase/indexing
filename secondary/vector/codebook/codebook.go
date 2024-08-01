@@ -29,6 +29,10 @@ type Codebook interface {
 	//Must be run on a trained codebook.
 	EncodeVectors(vecs []float32, codes []byte) error
 
+	//Compute the quantized code and find the nearest centroidID
+	//for a given list of vectors. Must be run on a trained codebook.
+	EncodeAndAssignVectors(vecs []float32, codes []byte, labels []int64) error
+
 	//Size returns the memory size in bytes.
 	Size() uint64
 

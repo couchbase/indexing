@@ -135,8 +135,11 @@ func (mc *MockCodebook) DecodeVectors(n int, codes []byte, vecs []float32) error
 	return nil
 }
 
-func (mc *MockCodebook) CodeSize() (int, error)                                        { return 0, nil }
-func (mc *MockCodebook) EncodeVectors(vecs []float32, codes []byte) error              { return nil }
+func (mc *MockCodebook) CodeSize() (int, error)                           { return 0, nil }
+func (mc *MockCodebook) EncodeVectors(vecs []float32, codes []byte) error { return nil }
+func (mc *MockCodebook) EncodeAndAssignVectors(vecs []float32, codes []byte, labels []int64) error {
+	return nil
+}
 func (mc *MockCodebook) ComputeDistanceTable(vec []float32) ([][]float32, error)       { return nil, nil }
 func (mc *MockCodebook) ComputeDistanceWithDT(code []byte, dtable [][]float32) float32 { return 0.0 }
 func (mc *MockCodebook) Size() uint64                                                  { return 0 }

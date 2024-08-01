@@ -20,8 +20,8 @@ import (
 )
 
 type codebookIVFSQ struct {
-	dim   int //vector dimension
-	nlist int //number of centroids
+	dim     int                         //vector dimension
+	nlist   int                         //number of centroids
 	sqRange common.ScalarQuantizerRange //scalar quantizer type
 
 	codeSize int //size of the code
@@ -34,9 +34,9 @@ type codebookIVFSQ struct {
 }
 
 type codebookIVFSQ_IO struct {
-	Dim   int `json:"dim,omitempty"`
+	Dim     int                         `json:"dim,omitempty"`
 	SQRange common.ScalarQuantizerRange `json:"sqrange,omitempty"`
-	Nlist int `json:"nlist,omitempty"`
+	Nlist   int                         `json:"nlist,omitempty"`
 
 	IsTrained bool       `json:"istrained,omitempty"`
 	Metric    MetricType `json:"metric,omitempty"`
@@ -56,10 +56,10 @@ func NewCodebookIVFSQ(dim, nlist int, sqRange common.ScalarQuantizerRange, metri
 	}
 
 	codebook := &codebookIVFSQ{
-		dim:    	dim,
-		sqRange:	sqRange,
-		nlist:  	nlist,
-		metric: 	metric,
+		dim:     dim,
+		sqRange: sqRange,
+		nlist:   nlist,
+		metric:  metric,
 	}
 
 	faissMetric := convertToFaissMetric(metric)
@@ -127,6 +127,17 @@ func (cb *codebookIVFSQ) EncodeVectors(vecs []float32, codes []byte) error {
 		return c.ErrCodebookNotTrained
 	}
 	return cb.index.EncodeVectors(vecs, codes, cb.nlist)
+}
+
+//Compute the quantized code and find the nearest centroidID
+//for a given list of vectors. Must be run on a trained codebook.
+func (cb *codebookIVFSQ) EncodeAndAssignVectors(vecs []float32, codes []byte, labels []int64) error {
+
+	if !cb.IsTrained() {
+		return c.ErrCodebookNotTrained
+	}
+
+	return cb.index.EncodeAndAssignSQ(vecs, codes, labels, cb.nlist)
 }
 
 // Find the nearest k centroidIDs for a given vector.

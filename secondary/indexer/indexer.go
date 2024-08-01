@@ -13105,7 +13105,7 @@ func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c
 		// in the keyspace at the time of build
 		minCentroidsRequired = max(1<<vm.Quantizer.Nbits, nlist)
 	}
-	
+
 	if trainlistSize < uint64(minCentroidsRequired) {
 		var errStr string
 		if vm.TrainList == 0 {
@@ -13381,7 +13381,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					continue
 				}
 
-				if err := slice.Train(convertTo1D(vectors[i])); err != nil {
+				if err := slice.Train(vectors[i]); err != nil {
 					slice.ResetCodebook()
 					logging.Errorf("Indexer::initiateTraining error observed during training phase of codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
 					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
@@ -13547,12 +13547,4 @@ func (idx *indexer) removeResidualFile(path string) error {
 		return nil // File does not exist
 	}
 	return iowrap.Os_RemoveAll(path) // Remove file if any
-}
-
-func convertTo1D(vecs [][]float32) []float32 {
-	var vecs1D []float32
-	for _, vec := range vecs {
-		vecs1D = append(vecs1D, vec...)
-	}
-	return vecs1D
 }

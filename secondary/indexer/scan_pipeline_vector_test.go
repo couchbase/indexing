@@ -311,7 +311,7 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 		})
 	}
 
-	batchSizes := []int{1, 2, 3, 5, 10}
+	batchSizes := []int{1, 2, 3, 5, 10, 20, 50}
 	for _, senderBatchSize = range batchSizes {
 		name := fmt.Sprintf("batchSize_%v", senderBatchSize)
 		t.Run(name, func(t *testing.T) {
@@ -358,7 +358,7 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 		}
 
 		wp := NewWorkerPool(2)
-		wp.Init(r)
+		wp.Init(r, 20, 1)
 		recvCh := wp.GetOutCh()
 
 		var j1 = ScanJob{
@@ -580,7 +580,7 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 		}
 
 		wp := NewWorkerPool(2)
-		wp.Init(r)
+		wp.Init(r, 100, 50)
 		recvCh := wp.GetOutCh()
 
 		var j1 = ScanJob{

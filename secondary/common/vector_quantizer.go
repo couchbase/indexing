@@ -109,10 +109,9 @@ func (vq *VectorQuantizer) String() string {
 // In all other cases, indexer should return error
 func ParseVectorDesciption(inp string) (*VectorQuantizer, error) {
 	inp = strings.TrimSpace(inp)
-	inp = strings.ToUpper(inp)
 	quantizer := &VectorQuantizer{}
 
-	re := regexp.MustCompile(`(IVF)(\d*),( *)(PQ(\d+)X(\d+)(FS)?$|SQ_FP16$|SQ_4BIT$|SQ_6BIT$|SQ_8BIT$|SQ_4BIT_UNIFORM$|SQ_8BIT_UNIFORM$|SQ_8BIT_DIRECT$)`)
+	re := regexp.MustCompile(`(IVF)(\d*),( *)(PQ(\d+)x(\d+)(FS)?$|SQfp16$|SQ4$|SQ6$|SQ8$|SQ_4BIT_UNIFORM$|SQ_8BIT_UNIFORM$|SQ_8BIT_DIRECT$)`)
 	matches := re.FindStringSubmatch(inp)
 
 	// On a successful match, there will be 8 substrings in matches
@@ -165,9 +164,9 @@ func ParseVectorDesciption(inp string) (*VectorQuantizer, error) {
 		case SQ_8BIT, SQ_6BIT, SQ_4BIT, SQ_FP16:
 			quantizer.SQRange = ScalarQuantizerRange(matches[4])
 		case SQ_8BIT_DIRECT, SQ_8BIT_UNIFORM, SQ_4BIT_UNIFORM:
-			return nil, fmt.Errorf("Currently only `SQ_4bit`,`SQ_6bit`,`SQ_8bit`,`SQ_fp16` are supported for scalar quantization.")
+			return nil, fmt.Errorf("Currently only `SQ4`,`SQ6`,`SQ8`,`SQfp16` are supported for scalar quantization.")
 		default:
-			return nil, fmt.Errorf("Invalid format for scalar quantization. Expected one of `SQ_4bit`,`SQ_6bit`,`SQ_8bit`,`SQ_fp16`,`SQ_8bit_DIRECT`,`SQ_8bit_UNIFORM`,`SQ_4bit_UNIFORM`. Observed different format")
+			return nil, fmt.Errorf("Invalid format for scalar quantization. Expected one of `SQ4`,`SQ6`,`SQ8`,`SQfp16`,`SQ_8bit_DIRECT`,`SQ_8bit_UNIFORM`,`SQ_4bit_UNIFORM`. Observed different format")
 		}
 	} else {
 		return nil, fmt.Errorf("Invalid format for description")

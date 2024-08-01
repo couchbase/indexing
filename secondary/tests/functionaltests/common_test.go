@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1451,4 +1452,41 @@ func executeGroupAggrTest2(scans qc.Scans, ga *qc.GroupAggr, proj *qc.IndexProje
 	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
 		clusterconfig.Password, bucket, n1qlEquivalent, ga, proj, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
+}
+
+// Index creation through N1QL statement can take more time than the timeout.
+// Rather than increasing the timeout, the index creation can be done with
+// defer build=True and then a call for secondaryIndex.buildIndex can be done
+// This build call can be either blocking or non-blocking as per the arguments
+// NOTE:The N1QL statement should have defer in it to work
+func createWithDeferAndBuild(idxName string, bucket, scope, coll, stmt string, indexActiveTimeout int64) (err error) {
+	if _, err = execN1QL(bucket, stmt); err != nil {
+		return err
+	}
+	if scope == "" {
+		scope = c.DEFAULT_SCOPE
+	}
+	if coll == "" {
+		coll = c.DEFAULT_COLLECTION
+	}
+	err = secondaryindex.BuildIndexes2([]string{idxName}, bucket, scope, coll, indexManagementAddress, indexActiveTimeout)
+	return err
+}
+
+func createWithDeferAndBuildAsync(idxName, bucket, scope, coll, stmt string, indexActiveTimeout int64, wg *sync.WaitGroup) (err error) {
+	if _, err = execN1QL(bucket, stmt); err != nil {
+		return err
+	}
+	if scope == "" {
+		scope = c.DEFAULT_SCOPE
+	}
+	if coll == "" {
+		coll = c.DEFAULT_COLLECTION
+	}
+	go func() {
+		err = secondaryindex.BuildIndexes2([]string{idxName}, bucket, scope, coll, indexManagementAddress, indexActiveTimeout)
+
+		wg.Done()
+	}()
+	return err
 }

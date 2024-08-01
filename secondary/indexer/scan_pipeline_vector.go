@@ -11,6 +11,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	l "github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	n1qlval "github.com/couchbase/query/value"
@@ -261,9 +262,17 @@ func (w *ScanWorker) unblockJobSender(doneCh chan<- struct{}) {
 
 func (w *ScanWorker) Sender() {
 	defer close(w.senderErrCh)
+	defer func() {
+		if r := recover(); r != nil {
+			l.Fatalf("%v - panic(%v) detected while processing %s", w.logPrefix, r, w.r)
+			l.Fatalf("%s", l.StackTraceAll())
+			w.senderErrCh <- fmt.Errorf("%v panic %v", w.logPrefix, r)
+		}
+	}()
 
 	batchSize := w.senderBatchSize
 	rows := make([]*Row, batchSize)
+	logging.Verbosef("%v ChannelSize: %v BatchSize: %v", w.logPrefix, cap(w.senderCh), batchSize)
 
 	var err error
 	var ok bool
@@ -336,33 +345,38 @@ func (w *ScanWorker) Sender() {
 		vectorKeyPos := w.r.getVectorKeyPos()
 		i := 0
 		for ; i < batchSize && !rows[i].last; i++ {
-			// Substitute distance in place of centroid ID.
-			// VECTOR_TODO: Do this only when you need to project distance field
-			distVal := n1qlval.NewValue(float64(dists[i]))
-			encodeBuf := make([]byte, 0, distVal.Size()*3)
-			distCode, err := codec.EncodeN1QLValue(distVal, encodeBuf)
-			if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
-				distCode, err = encodeN1qlVal(distVal)
-			}
-			if err != nil {
-				logging.Verbosef("%v Sender got error: %v from EncodeN1qlvalue", w.logPrefix, err)
-				w.senderErrCh <- err
-				return
+			// Substitute distance in place of centroid ID
+			// 1. when projection is not pushed down (w.r.Indexprojection == nil )
+			// 2. when we are projecting all keys (projectVectorDist)
+			// 3. when vector field is being projected (projectVectorDist)
+			if w.r.ProjectVectorDist() {
+				distVal := n1qlval.NewValue(float64(dists[i]))
+				encodeBuf := make([]byte, 0, distVal.Size()*3)
+				distCode, err := codec.EncodeN1QLValue(distVal, encodeBuf)
+				if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
+					distCode, err = encodeN1qlVal(distVal)
+				}
+				if err != nil {
+					logging.Verbosef("%v Sender got error: %v from EncodeN1qlvalue", w.logPrefix, err)
+					w.senderErrCh <- err
+					return
+				}
+
+				// VECTOR_TODO: Use buffer pools for these buffer allocations
+				// VECTOR_TODO: Try to use fixed length encoding for float64 distance replacement with centroidID
+				// ReplaceEncodedFieldInArray encodes distCode and replaces centroidId in key so add more buffer
+				// for encoding of distCode incase it needs more space than centroidId => adding 3 * distCode size
+				newBuf := make([]byte, 0, len(rows[i].key)+(3*len(distCode)))
+				newEntry, err := codec.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
+				if err != nil {
+					logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
+						w.logPrefix, err, logging.TagStrUD(rows[i].key), vectorKeyPos, distCode)
+					w.senderErrCh <- err
+					return
+				}
+				rows[i].key = newEntry // Replace old entry with centoidId to new entry with distance
 			}
 
-			// VECTOR_TODO: Use buffer pools for these buffer allocations
-			// VECTOR_TODO: Try to use fixed length encoding for float64 distance replacement with centroidID
-			// ReplaceEncodedFieldInArray encodes distCode and replaces centroidId in key so add more buffer
-			// for encoding of distCode incase it needs more space than centroidId => adding 3 * distCode size
-			newBuf := make([]byte, 0, len(rows[i].key)+(3*len(distCode)))
-			newEntry, err := codec.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
-			if err != nil {
-				logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray", w.logPrefix, err)
-				w.senderErrCh <- err
-				return
-			}
-
-			rows[i].key = newEntry  // Replace old entry with centoidId to new entry with distance
 			rows[i].dist = dists[i] // Add distance for sorting in heap
 
 			select {
@@ -383,9 +397,14 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 	entry1 := secondaryIndexEntry(entry)
 
 	var r Row
-	r.key = entry
-	r.value = value
 	r.len = entry1.lenKey()
+
+	// VECTOR_TODO: Stop copying entry and value once MB-62901 and MB-62881 are resolved
+	r.key = make([]byte, len(entry))
+	copy(r.key, entry)
+
+	r.value = make([]byte, len(value))
+	copy(r.value, value)
 
 	select {
 	case <-w.stopCh:
@@ -474,14 +493,13 @@ func NewWorkerPool(numWorkers int) *WorkerPool {
 }
 
 // Init starts the worker pool
-func (wp *WorkerPool) Init(r *ScanRequest) {
+func (wp *WorkerPool) Init(r *ScanRequest, scanWorkerSenderChSize, scanWorkerBatchSize int) {
 	wp.sendCh = make(chan *Row, 20*wp.numWorkers)
 	wp.logPrefix = fmt.Sprintf("%v[%v]WorkerPool", r.LogPrefix, r.RequestId)
 
 	for i := 0; i < wp.numWorkers; i++ {
-		// VECTOR_TODO: Tune the sender channel and batch sizes as needed
 		wp.workers[i] = NewScanWorker(i, r, wp.jobs, wp.sendCh,
-			wp.stopCh, wp.errCh, &wp.jobsWg, 100, 50)
+			wp.stopCh, wp.errCh, &wp.jobsWg, scanWorkerSenderChSize, scanWorkerBatchSize)
 	}
 }
 
@@ -791,9 +809,13 @@ func (s *IndexScanSource2) Routine() error {
 	scans := s.p.req.vectorScans
 	codebooks := s.p.req.codebookMap
 
+	// Get values from config
+	scanWorkerBatchSize := s.p.config["scan.vector.scanworker_batch_size"].Int()
+	scanWorkerSenderChSize := s.p.config["scan.vector.scanworker_senderch_size"].Int()
+
 	// Spawn Scan Workers
 	wp := NewWorkerPool(readersPerPartition * len(s.p.req.PartitionIds))
-	wp.Init(s.p.req)
+	wp.Init(s.p.req, scanWorkerSenderChSize, scanWorkerBatchSize)
 	wpOutCh := wp.GetOutCh() // Output of Workerpool is input of MergeOperator
 
 	writeItemAddStat := func(itm ...[]byte) error {
