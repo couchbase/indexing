@@ -1963,3 +1963,15 @@ func ComputeSHA256ForFloat32Array(vecs []float32) []byte {
 		return sum[:]
 	}
 }
+
+// Use fixed length byte array so that indexer can compute the position
+// of the SHA value in the stored entry without any special encoding
+func ComputeSHA256ForByteArray(bytes []byte) []byte {
+	if bytes == nil {
+		sum := sha256.Sum256(nil)
+		return sum[:]
+	} else {
+		sum := sha256.Sum256(bytes)
+		return sum[:]
+	}
+}
