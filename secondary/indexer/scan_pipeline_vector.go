@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
@@ -32,6 +33,9 @@ type ScanJob struct {
 	bytesRead    uint64
 	rowsScanned  uint64
 	rowsReturned uint64
+
+	decodeDur int64
+	decodeCnt int64
 
 	logPrefix string
 	startTime time.Time
@@ -322,12 +326,16 @@ func (w *ScanWorker) Sender() {
 
 		// Decode vectors
 		fvecs := make([]float32, vecCount*w.r.getVectorDim())
+
+		t0 := time.Now()
 		err = w.currJob.codebook.DecodeVectors(vecCount, codes, fvecs)
 		if err != nil {
 			logging.Verbosef("%v Sender got error: %v from DecodeVectors", w.logPrefix, err)
 			w.senderErrCh <- err
 			return
 		}
+		atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
+		atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
 
 		// Compute distance from query vector using codebook
 		qvec := w.r.queryVector
@@ -877,8 +885,12 @@ func (s *IndexScanSource2) Routine() error {
 	defer func() {
 		for i := 0; i <= maxBatchId; i++ {
 			for _, job := range jobMap[i] {
+				logging.Verbosef("%v dur %v, cnt %v, scanned %v", job.logPrefix,
+					job.decodeDur, job.decodeCnt, job.rowsScanned)
 				s.p.rowsScanned += job.rowsScanned
 				s.p.bytesRead += job.bytesRead
+				s.p.decodeDur += job.decodeDur
+				s.p.decodeCnt += job.decodeCnt
 			}
 		}
 	}()

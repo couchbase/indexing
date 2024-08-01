@@ -156,6 +156,7 @@ type IndexTimingStats struct {
 	//vector index specific stats
 	vtAssign stats.TimingStat
 	vtEncode stats.TimingStat
+	vtDecode stats.TimingStat
 }
 
 func (it *IndexTimingStats) Init() {
@@ -177,6 +178,7 @@ func (it *IndexTimingStats) Init() {
 	it.n1qlExpr.Init()
 	it.vtAssign.Init()
 	it.vtEncode.Init()
+	it.vtDecode.Init()
 }
 
 // IndexStats holds statistics for a single index instance. If it is non-partitioned,
@@ -2222,11 +2224,18 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			},
 			&s.Timings.vtEncode, s.partnTimingStats)
 
+		statMap.AddAggrTimingStatFiltered("timings/vector_decode",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.vtDecode
+			},
+			&s.Timings.vtDecode, s.partnTimingStats)
+
 		statMap.AddAggrTimingStatFiltered("timings/storage_set",
 			func(ss *IndexStats) *stats.TimingStat {
 				return &ss.Timings.stKVSet
 			},
 			&s.Timings.stKVSet, s.partnTimingStats)
+
 	}
 
 	// TODO:

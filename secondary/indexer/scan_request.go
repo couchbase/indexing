@@ -587,9 +587,13 @@ func (r *ScanRequest) getNearestCentroids() error {
 	r.centroidMap = make(map[common.PartitionId][]int64)
 
 	for pid, cb := range r.codebookMap {
+		t0 := time.Now()
 		centroids, err := cb.FindNearestCentroids(r.queryVector, int64(r.nprobes))
 		if err != nil {
 			return err
+		}
+		if r.Stats != nil {
+			r.Stats.Timings.vtAssign.Put(time.Now().Sub(t0))
 		}
 		r.centroidMap[pid] = centroids
 	}
