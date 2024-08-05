@@ -3,7 +3,6 @@ package functionaltests
 import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/indexer"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	"github.com/couchbase/indexing/secondary/testcode"
 	"github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
@@ -28,9 +27,8 @@ var idxShared = "idxCVI_shared_partn"
 
 var limit int64 = 5
 
-func TestVectorIndexShardRebalance(t *testing.T) {
+func TestVectorIndexDCPRebalance(t *testing.T) {
 	skipIfNotPlasma(t)
-
 	t.Run("RebalanceSetupCluster", func(subt *testing.T) {
 		TestRebalanceSetupCluster(subt)
 		vectorsLoaded = false
@@ -42,25 +40,6 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		err = secondaryindex.WaitTillAllIndexNodesActive(kvaddress, defaultIndexActiveTimeout)
 		tc.HandleError(err, fmt.Sprintf("The indexer nodes didnt become active, err:%v", err))
 
-		// For Shard and codebook movement enable shard affinity
-		configChanges := map[string]interface{}{
-			"indexer.settings.enable_shard_affinity": true,
-			"indexer.planner.honourNodesInDefn":      true,
-		}
-		err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
-		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
-	})
-
-	defer t.Run("RebalanceResetCluster", func(subt *testing.T) {
-		TestRebalanceResetCluster(subt)
-
-		configChanges := map[string]interface{}{
-			"indexer.settings.enable_shard_affinity": false,
-			"indexer.planner.honourNodesInDefn":      false,
-			"indexer.shardRebalance.execTestAction":  false,
-		}
-		err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
-		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 	})
 
 	t.Run("LoadVectorDocsBeforeRebalance", func(subt *testing.T) {
@@ -100,9 +79,20 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		FailTestIfError(err, "Error in creating "+idxShared, t)
 	})
 
+	defer t.Run("RebalanceResetCluster", func(subt *testing.T) {
+		TestRebalanceResetCluster(subt)
+
+		configChanges := map[string]interface{}{
+			"indexer.settings.enable_shard_affinity": false,
+			"indexer.planner.honourNodesInDefn":      false,
+		}
+		err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
+	})
+
 	// entry cluster config - [0: kv n1ql] [1: index]
 	// exit cluster config - [0: kv n1ql] [1: index] [2: index] [3: index]
-	t.Run("AddTwoNodesAndRebalanceIn", func(subt *testing.T) {
+	t.Run("TestAddTwoNodesAndRebalanceIn", func(subt *testing.T) {
 		addTwoNodesAndRebalance("AddTwoNodesAndRebalanceIn", t)
 		waitForRebalanceCleanup()
 
@@ -120,13 +110,154 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		}
 
 		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		validateVectorScan(subt)
+	})
+
+	t.Run("TestIndexNodeRebalanceOut", func(subt *testing.T) {
+		TestIndexNodeRebalanceOut(subt)
+
+		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		validateVectorScan(subt)
+	})
+
+	t.Run("TestFailoverAndRebalance", func(subt *testing.T) {
+		TestFailoverAndRebalance(subt)
+
+		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		validateVectorScan(subt)
+	})
+
+	t.Run("TestSwapRebalance", func(subt *testing.T) {
+		TestSwapRebalance(t)
+
+		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		validateVectorScan(subt)
+	})
+}
+
+func TestVectorIndexShardRebalance(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	t.Run("RebalanceSetupCluster", func(subt *testing.T) {
+		TestRebalanceSetupCluster(subt)
+		vectorsLoaded = false
+
+		err := clusterutility.SetDataAndIndexQuota(clusterconfig.Nodes[0], clusterconfig.Username, clusterconfig.Password, "1500", VECTOR_INDEX_INDEXER_QUOTA)
+		tc.HandleError(err, "Failed to set memory quota in cluster")
+
+		// wait for indexer to come up as the above step will cause a restart
+		err = secondaryindex.WaitTillAllIndexNodesActive(kvaddress, defaultIndexActiveTimeout)
+		tc.HandleError(err, fmt.Sprintf("The indexer nodes didnt become active, err:%v", err))
+
+		configChanges := map[string]interface{}{
+			"indexer.settings.enable_shard_affinity": true,
+			"indexer.planner.honourNodesInDefn":      true,
+		}
+		err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
+
+	})
+
+	t.Run("LoadVectorDocsBeforeRebalance", func(subt *testing.T) {
+
+		// Any index created on default scope and collection will be a dedicated instance
+		vectorSetup(subt, BUCKET, "", "", 10000)
+
+		log.Printf("******** Create vector docs on scope and collection **********")
+
+		manifest := kvutility.CreateCollection(BUCKET, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
+		kvutility.GetCollectionID(BUCKET, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
+		kvutility.WaitForCollectionCreation(BUCKET, scope, coll, clusterconfig.Username, clusterconfig.Password, []string{kvaddress}, manifest)
+
+		e := loadVectorData(subt, BUCKET, scope, coll, 10000)
+		FailTestIfError(e, "Error in loading vector data", t)
+	})
+
+	t.Run("CreateCompositeVectorIndexesBeforeRebalance", func(subt *testing.T) {
+
+		stmt := fmt.Sprintf("CREATE INDEX %v"+
+			" ON `%v`(sift VECTOR)"+
+			" PARTITION BY HASH(meta().id)"+
+			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_partition\":3, \"defer_build\":true};",
+			idxDedicated, BUCKET)
+		err := createWithDeferAndBuild(idxDedicated, BUCKET, "", "", stmt, defaultIndexActiveTimeout)
+		FailTestIfError(err, "Error in creating "+idxDedicated, t)
+
+		// Any index created on non-default scope and coll will be a shared instance
+		log.Printf("********Create composite indices on scope and collection**********")
+
+		stmt = fmt.Sprintf("CREATE INDEX %v"+
+			" ON `%v`.`%v`.`%v`(sift VECTOR)"+
+			" PARTITION BY HASH(meta().id)"+
+			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_partition\":3, \"defer_build\":true};",
+			idxShared, BUCKET, scope, coll)
+		err = createWithDeferAndBuild(idxShared, BUCKET, scope, coll, stmt, defaultIndexActiveTimeout)
+		FailTestIfError(err, "Error in creating "+idxShared, t)
+	})
+
+	defer t.Run("RebalanceResetCluster", func(subt *testing.T) {
+		TestRebalanceResetCluster(subt)
+
+		configChanges := map[string]interface{}{
+			"indexer.settings.enable_shard_affinity": false,
+			"indexer.planner.honourNodesInDefn":      false,
+			"indexer.shardRebalance.execTestAction":  false,
+		}
+		err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
+	})
+
+	// entry cluster config - [0: kv n1ql] [1: index]
+	// exit cluster config - [0: kv n1ql] [1: index] [2: index] [3: index]
+	t.Run("TestAddTwoNodesAndRebalanceIn", func(subt *testing.T) {
+		addTwoNodesAndRebalance("AddTwoNodesAndRebalanceIn", t)
+		waitForRebalanceCleanup()
+
+		report, err := getLastRebalanceReport(kvaddress, clusterconfig.Username,
+			clusterconfig.Password)
+		tc.HandleError(err, "Failed to get last rebalance report")
+		if completionMsg, exists := report["completionMessage"]; exists &&
+			!strings.Contains(completionMsg.(string), "Rebalance completed successfully.") {
+			subt.Fatalf("Expected rebalance to be successful- %v",
+				report)
+		} else if !exists {
+			subt.Fatalf("Rebalance report does not have any completion message - %v",
+				report)
+		}
+
+		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
 		performStagingCleanupValidation(subt)
 		validateVectorScan(subt)
 	})
 
+	t.Run("TestIndexNodeRebalanceOut", func(subt *testing.T) {
+		TestIndexNodeRebalanceOut(subt)
+
+		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		performStagingCleanupValidation(subt)
+		validateVectorScan(subt)
+	})
+
+	t.Run("TestFailoverAndRebalance", func(subt *testing.T) {
+		TestFailoverAndRebalance(subt)
+
+		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		performStagingCleanupValidation(subt)
+		validateVectorScan(subt)
+	})
+
+	t.Run("TestSwapRebalance", func(subt *testing.T) {
+		TestSwapRebalance(t)
+
+		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		performStagingCleanupValidation(subt)
+		validateVectorScan(subt)
+	})
+
+	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index]
 	t.Run("TestRebalanceCancelIndexerAfterTransfer", func(subt *testing.T) {
 		// Due to previous cluster config, node[3] is still part of the cluster
-		removeNode(clusterconfig.Nodes[3], subt)
+		swapRebalance(t, 2, 3)
 
 		log.Print("In TestRebalanceCancelIndexerAfterTransfer")
 		status := getClusterStatus()
@@ -156,28 +287,10 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 			clusterconfig.Password, tag, testcode.REBALANCE_CANCEL, "", 0)
 		FailTestIfError(err, "Error while posting request to metaKV", subt)
 
-		log.Print("** Starting Shard Rebalance (node n2 <=> n3)")
-		swapRebalance(subt, 3, 2)
-
-		report, err := getLastRebalanceReport(kvaddress, clusterconfig.Username,
-			clusterconfig.Password)
-		tc.HandleError(err, "Failed to get last rebalance report")
-		if completionMsg, exists := report["completionMessage"]; exists &&
-			!strings.Contains(completionMsg.(string), "stopped by user") {
-			subt.Fatalf("Expected rebalance to be cancelled but it did not cancel. Report - %v",
-				report)
-		} else if !exists {
-			subt.Fatalf("Rebalance report does not have any completion message - %v",
-				report)
-		}
-
-		waitForRebalanceCleanup()
-
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
-		performStagingCleanupValidation(subt)
-		validateVectorScan(subt)
+		swapAndCheckForCleanup(subt, 3, 2)
 	})
 
+	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index]
 	t.Run("TestRebalanceCancelIndexerAfterRestore", func(subt *testing.T) {
 
 		log.Print("In TestRebalanceCancelIndexerAfterRestore")
@@ -204,34 +317,14 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		}()
 
 		tag := testcode.DEST_SHARDTOKEN_AFTER_RESTORE
-		err = testcode.PostOptionsRequestToMetaKV(clusterconfig.Nodes[2], clusterconfig.Username,
+		err = testcode.PostOptionsRequestToMetaKV(clusterconfig.Nodes[3], clusterconfig.Username,
 			clusterconfig.Password, tag, testcode.REBALANCE_CANCEL, "", 0)
 		FailTestIfError(err, "Error while posting request to metaKV", subt)
 
-		log.Print("** Starting Shard Rebalance (node n2 <=> n3)")
-		swapRebalance(subt, 3, 2)
-
-		report, err := getLastRebalanceReport(kvaddress, clusterconfig.Username,
-			clusterconfig.Password)
-		tc.HandleError(err, "Failed to get last rebalance report")
-		if completionMsg, exists := report["completionMessage"]; exists &&
-			!strings.Contains(completionMsg.(string), "stopped by user") {
-			subt.Fatalf("Expected rebalance to be cancelled but it did not cancel. Report - %v",
-				report)
-		} else if !exists {
-			subt.Fatalf("Rebalance report does not have any completion message - %v",
-				report)
-		}
-
-		waitForRebalanceCleanup()
-
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
-		performStagingCleanupValidation(subt)
-		validateVectorScan(subt)
+		swapAndCheckForCleanup(subt, 3, 2)
 	})
 
-	// entry cluster config - [0: kv n1ql] [1: index] [2: index] [3: index]
-	// exit cluster config - [0: kv n1ql] [1: index] [2: index]
+	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index]
 	t.Run("TestRebalanceCancelIndexerBeforeRecovery", func(subt *testing.T) {
 
 		log.Print("In TestRebalanceCancelIndexerBeforeRecovery")
@@ -262,26 +355,7 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 			clusterconfig.Password, tag, testcode.REBALANCE_CANCEL, "", 0)
 		FailTestIfError(err, "Error while posting request to metaKV", subt)
 
-		log.Print("** Starting Shard Rebalance (node n2 <=> n3)")
-		swapRebalance(subt, 3, 2)
-
-		report, err := getLastRebalanceReport(kvaddress, clusterconfig.Username,
-			clusterconfig.Password)
-		tc.HandleError(err, "Failed to get last rebalance report")
-		if completionMsg, exists := report["completionMessage"]; exists &&
-			!strings.Contains(completionMsg.(string), "stopped by user") {
-			subt.Fatalf("Expected rebalance to be cancelled but it did not cancel. Report - %v",
-				report)
-		} else if !exists {
-			subt.Fatalf("Rebalance report does not have any completion message - %v",
-				report)
-		}
-
-		waitForRebalanceCleanup()
-
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
-		performStagingCleanupValidation(subt)
-		validateVectorScan(subt)
+		swapAndCheckForCleanup(subt, 3, 2)
 	})
 
 	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index]
@@ -314,27 +388,30 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 			clusterconfig.Password, tag, testcode.REBALANCE_CANCEL, "", 0)
 		FailTestIfError(err, "Error while posting request to metaKV", subt)
 
-		log.Print("** Starting Shard Rebalance (node n2 <=> n3)")
-		swapRebalance(subt, 3, 2)
-
-		report, err := getLastRebalanceReport(kvaddress, clusterconfig.Username,
-			clusterconfig.Password)
-		tc.HandleError(err, "Failed to get last rebalance report")
-		if completionMsg, exists := report["completionMessage"]; exists &&
-			!strings.Contains(completionMsg.(string), "stopped by user") {
-			subt.Fatalf("Expected rebalance to be cancelled but it did not cancel. Report - %v",
-				report)
-		} else if !exists {
-			subt.Fatalf("Rebalance report does not have any completion message - %v",
-				report)
-		}
-
-		waitForRebalanceCleanup()
-
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
-		performStagingCleanupValidation(subt)
-		validateVectorScan(subt)
+		swapAndCheckForCleanup(subt, 3, 2)
 	})
+}
+
+func swapAndCheckForCleanup(t *testing.T, nidIn, nidOut int) {
+	log.Printf("** Starting Shard Rebalance (node n%v <=> n%v)", nidOut, nidIn)
+	swapRebalance(t, nidIn, nidOut)
+
+	report, err := getLastRebalanceReport(kvaddress, clusterconfig.Username,
+		clusterconfig.Password)
+	tc.HandleError(err, "Failed to get last rebalance report")
+	if completionMsg, exists := report["completionMessage"]; exists &&
+		!strings.Contains(completionMsg.(string), "stopped by user") {
+		t.Fatalf("Expected rebalance to be cancelled but it did not cancel. Report - %v",
+			report)
+	} else if !exists {
+		t.Fatalf("Rebalance report does not have any completion message - %v",
+			report)
+	}
+
+	waitForRebalanceCleanup()
+
+	performCodebookTransferValidation(t, []string{idxDedicated, idxShared})
+	validateVectorScan(t)
 }
 
 func validateVectorScan(t *testing.T) {
@@ -435,7 +512,7 @@ func performCodebookTransferValidation(subt *testing.T, idxNames []string) {
 				FailTestIfError(err, "Error while GetIndexSlicePath", subt)
 
 				codebookName := tc.GetCodebookName(status.Name, status.Bucket, status.InstId, c.PartitionId(partnId))
-				codebookPath := filepath.Join(slicePath, indexer.CODEBOOK_DIR, codebookName)
+				codebookPath := filepath.Join(slicePath, tc.CODEBOOK_DIR, codebookName)
 
 				if exist, err1 := verifyPathExists(codebookPath); err1 != nil {
 					FailTestIfError(err1, "Error while verifying codebook path", subt)
@@ -453,7 +530,7 @@ func performStagingCleanupValidation(subt *testing.T) {
 	storageDirMap := getAllStorageDirs(subt)
 
 	for _, path := range storageDirMap {
-		rebalStagingDir := filepath.Join(path, indexer.REBALANCE_STAGING_DIR)
+		rebalStagingDir := filepath.Join(path, tc.REBALANCE_STAGING_DIR)
 		if exist, err := verifyPathExists(rebalStagingDir); err != nil {
 			FailTestIfError(err, "Error while verifying staging dir", subt)
 		} else if !exist {
@@ -462,7 +539,7 @@ func performStagingCleanupValidation(subt *testing.T) {
 		}
 
 		// if the staging dir exist, check for residual in the codebook folder
-		codebookStaging := filepath.Join(rebalStagingDir, indexer.CODEBOOK_COPY_PREFIX)
+		codebookStaging := filepath.Join(rebalStagingDir, tc.CODEBOOK_COPY_PREFIX)
 		if exist, err := verifyPathExists(rebalStagingDir); err != nil {
 			FailTestIfError(err, "Error while verifying staging dir", subt)
 		} else if !exist {
