@@ -8,13 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"github.com/couchbase/bhive"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/iowrap"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/vector"
-	"github.com/couchbase/indexing/secondary/vector/codebook"
-	"github.com/couchbase/plasma"
 	"math"
 	"os"
 	"path/filepath"
@@ -22,6 +15,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/bhive"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/iowrap"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/vector"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
+	"github.com/couchbase/plasma"
 )
 
 // Copyright 2014-Present Couchbase, Inc.
@@ -76,6 +77,9 @@ type bhiveSlice struct {
 	// main store
 	mainstore   *bhive.Bhive
 	mainWriters []*bhive.Writer
+
+	// main store readers
+	readers chan *bhive.Reader
 
 	//
 	// back store
@@ -218,7 +222,9 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 	slice.maxRollbacks = sysconf["settings.plasma.recovery.max_rollbacks"].Int()
 	slice.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()
 	slice.maxNumWriters = sysconf["numSliceWriters"].Int()
-	//numReaders := sysconf["plasma.numReaders"].Int()
+
+	numReaders := sysconf["bhive.numReaders"].Int()
+	slice.readers = make(chan *bhive.Reader, numReaders)
 
 	// stats
 	slice.idxStats = idxStats
@@ -438,6 +444,11 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 	}
 	if err := handleError(); err != nil {
 		return err
+	}
+
+	// Initialize readers
+	for i := 0; i < cap(slice.readers); i++ {
+		slice.readers <- slice.mainstore.NewReader()
 	}
 
 	return err
