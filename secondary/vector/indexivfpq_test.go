@@ -33,7 +33,7 @@ func TestIndexIVFPQ(t *testing.T) {
 	num_train_vecs := 10000
 
 	//generate random vectors
-	vecs := genRandomVecs(dim, total_vecs)
+	vecs := genRandomVecs(dim, total_vecs, 0)
 
 	//train the index using 10000 vecs
 	train_vecs := convertTo1D(vecs[:num_train_vecs])
@@ -77,7 +77,7 @@ func TestIndexIVFPQ(t *testing.T) {
 
 	//compute recall with random query vectors
 	t.Logf("Testing recall with random query vectors")
-	vecs = genRandomVecs(dim, 1000)
+	vecs = genRandomVecs(dim, 1000, 0)
 	recall = computeRecall(t, indexPQ, indexFlat, 10, 100, vecs)
 	t.Logf("Recall@%v is %v", 10, recall)
 }
@@ -106,7 +106,7 @@ func TestIndexIVFPQ_HNSW(t *testing.T) {
 	num_train_vecs := 10000
 
 	//generate random vectors
-	vecs := genRandomVecs(dim, total_vecs)
+	vecs := genRandomVecs(dim, total_vecs, 0)
 
 	//train the index using 10000 vecs
 	train_vecs := convertTo1D(vecs[:num_train_vecs])
@@ -150,7 +150,7 @@ func TestIndexIVFPQ_HNSW(t *testing.T) {
 
 	//compute recall with random query vectors
 	t.Logf("Testing recall with random query vectors")
-	vecs = genRandomVecs(dim, 1000)
+	vecs = genRandomVecs(dim, 1000, 0)
 	recall = computeRecall(t, indexPQ, indexFlat, 10, 100, vecs)
 	t.Logf("Recall@%v is %v", 10, recall)
 }
@@ -225,7 +225,7 @@ func TestIndexIVFPQ_Timing(t *testing.T) {
 	total_vecs := 100000
 
 	//generate random vectors
-	vecs := genRandomVecs(dim, total_vecs)
+	vecs := genRandomVecs(dim, total_vecs, 0)
 
 	//train the index
 	train_vecs := convertTo1D(vecs)
@@ -283,7 +283,7 @@ func TestIndexIVFPQ_HNSW_Timing(t *testing.T) {
 	total_vecs := 100000
 
 	//generate random vectors
-	vecs := genRandomVecs(dim, total_vecs)
+	vecs := genRandomVecs(dim, total_vecs, 0)
 
 	//train the index
 	train_vecs := convertTo1D(vecs)
@@ -324,7 +324,7 @@ func TestDistanceMetrics(t *testing.T) {
 	total_vecs := 10
 
 	//generate random vectors
-	vecs := genRandomVecs(dim, total_vecs)
+	vecs := genRandomVecs(dim, total_vecs, 0)
 	serialVecs := convertTo1D(vecs)
 	query_vec := convertTo1D(vecs[:1])
 
