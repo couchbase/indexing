@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
@@ -580,4 +581,43 @@ func vectorBackEntry2MainEntry(docid []byte, bentry []byte, buf []byte, sz keySi
 		nil, buf, false, nil, sz)
 
 	return entry
+}
+
+type bhiveCentroidId []byte
+
+func NewBhiveCentroidId(centroidId uint64) bhiveCentroidId {
+	var cid [8]byte
+	binary.LittleEndian.PutUint64(cid[:], uint64(centroidId))
+	return cid[:]
+}
+
+// Compare is not used by bhive iterator. Adding this method only for
+// interface compatibility
+func (k bhiveCentroidId) Compare(entry IndexEntry) int {
+	return 0
+}
+
+// ComparePrefixFields is not used by bhive iterator. Adding this method only for
+// interface compatibility
+func (k bhiveCentroidId) ComparePrefixFields(entry IndexEntry) int {
+	return 0
+}
+
+func (k bhiveCentroidId) CompareIndexKey(k1 IndexKey) int {
+	return bytes.Compare(k.Bytes(), k1.Bytes())
+}
+
+// ComparePrefixIndexKey is not used by bhive iterator. Adding this method only for
+// interface compatibility
+func (k bhiveCentroidId) ComparePrefixIndexKey(k1 IndexKey) int {
+	return 0
+}
+
+func (k bhiveCentroidId) Bytes() []byte {
+	return []byte(k)
+}
+
+func (k bhiveCentroidId) String() string {
+	val := binary.LittleEndian.Uint64(k.Bytes())
+	return strconv.FormatUint(val, 10) // return as decimal string
 }
