@@ -1302,8 +1302,66 @@ func (mdb *bhiveSlice) GetAlternateShardId(common.PartitionId) string {
 // reader
 // //////////////////////////////////////////////////////////
 
-func (mdb *bhiveSlice) GetReaderContext(user string, skipReadMetering bool) IndexReaderContext {
+////////////////////////////////////////////////
+// bhive readerCtx implementation
+////////////////////////////////////////////////
+
+type bhiveReaderCtx struct {
+	ch               chan *bhive.Reader
+	r                *bhive.Reader
+	readUnits        uint64
+	user             string
+	skipReadMetering bool
+}
+
+func (ctx *bhiveReaderCtx) Init(donech chan bool) bool {
+	select {
+	case ctx.r = <-ctx.ch:
+		return true
+	case <-donech:
+	}
+
+	return false
+}
+
+func (ctx *bhiveReaderCtx) Done() {
+	if ctx.r != nil {
+		ctx.ch <- ctx.r
+	}
+}
+
+func (ctx *bhiveReaderCtx) ReadUnits() uint64 {
+	return ctx.readUnits
+}
+
+func (ctx *bhiveReaderCtx) RecordReadUnits(ru uint64) {
+	ctx.readUnits += ru
+}
+
+func (ctx *bhiveReaderCtx) User() string {
+	return ctx.user
+}
+
+func (ctx *bhiveReaderCtx) SkipReadMetering() bool {
+	return ctx.skipReadMetering
+}
+
+// For vector indices, there is no support for "distinct" pushdown
+// Hence, return nil for GetCursorKey()
+func (ctx *bhiveReaderCtx) GetCursorKey() *[]byte {
 	return nil
+}
+
+func (ctx *bhiveReaderCtx) SetCursorKey(key *[]byte) {
+	// no-op
+}
+
+func (mdb *bhiveSlice) GetReaderContext(user string, skipReadMetering bool) IndexReaderContext {
+	return &bhiveReaderCtx{
+		ch:               mdb.readers,
+		user:             user,
+		skipReadMetering: skipReadMetering,
+	}
 }
 
 // //////////////////////////////////////////////////////////
