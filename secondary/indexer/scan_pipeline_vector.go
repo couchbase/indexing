@@ -349,7 +349,6 @@ func (w *ScanWorker) Sender() {
 
 		// Substitue distance in place centroidId and send to outCh
 		// VECTOR_TODO: Check if we can discard moving value to next stage
-		codec := collatejson.NewCodec(16)
 		vectorKeyPos := w.r.getVectorKeyPos()
 		i := 0
 		for ; i < batchSize && !rows[i].last; i++ {
@@ -360,7 +359,8 @@ func (w *ScanWorker) Sender() {
 			if w.r.ProjectVectorDist() {
 				distVal := n1qlval.NewValue(float64(dists[i]))
 				encodeBuf := make([]byte, 0, distVal.Size()*3)
-				distCode, err := codec.EncodeN1QLValue(distVal, encodeBuf)
+				codec1 := collatejson.NewCodec(16)
+				distCode, err := codec1.EncodeN1QLValue(distVal, encodeBuf)
 				if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
 					distCode, err = encodeN1qlVal(distVal)
 				}
@@ -375,7 +375,8 @@ func (w *ScanWorker) Sender() {
 				// ReplaceEncodedFieldInArray encodes distCode and replaces centroidId in key so add more buffer
 				// for encoding of distCode incase it needs more space than centroidId => adding 3 * distCode size
 				newBuf := make([]byte, 0, len(rows[i].key)+(3*len(distCode)))
-				newEntry, err := codec.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
+				codec2 := collatejson.NewCodec(16)
+				newEntry, err := codec2.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
 				if err != nil {
 					logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
 						w.logPrefix, err, logging.TagStrUD(rows[i].key), vectorKeyPos, distCode)
