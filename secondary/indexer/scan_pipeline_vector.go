@@ -282,45 +282,47 @@ func (w *ScanWorker) Sender() {
 	var ok bool
 
 	for {
-		for i := 0; i < batchSize; {
-			rows[i], ok = <-w.senderCh
+		vecCount := 0
+		lastRowReceived := false
+		for vecCount < batchSize {
+			rows[vecCount], ok = <-w.senderCh
 			if !ok {
 				return
 			}
 
-			if rows[i].last {
+			if rows[vecCount].last {
+				lastRowReceived = true
 				break // Finish the data gathered till ensemble
 			}
 
-			rows[i].key, err = w.reverseCollate(rows[i].key)
+			rows[vecCount].key, err = w.reverseCollate(rows[vecCount].key)
 			if err != nil {
 				logging.Verbosef("%v Sender got error: %v from reverseCollate", w.logPrefix, err)
 				w.senderErrCh <- err
 				return
 			}
 
-			skipRow, err := w.skipRow(rows[i].key)
+			skipRow, err := w.skipRow(rows[vecCount].key)
 			if err != nil {
 				logging.Verbosef("%v Sender got error: %v from skipRow", w.logPrefix, err)
 				w.senderErrCh <- err
 				return
 			}
 			if !skipRow {
-				i++
+				vecCount++
 			}
 		}
 
 		// If we did not even get one valid Row before last
-		if rows[0].last {
+		if vecCount == 0 {
 			return
 		}
 
 		// Make list of vectors to calculate distance
 		// VECTOR_TODO: Allocate the codes buffer once per scan and reuse the same memory
 		codes := make([]byte, 0)
-		vecCount := 0
-		for ; vecCount < batchSize && !rows[vecCount].last; vecCount++ {
-			codei := rows[vecCount].value
+		for i := 0; i < vecCount; i++ {
+			codei := rows[i].value
 			codes = append(codes, codei...)
 		}
 
@@ -350,8 +352,7 @@ func (w *ScanWorker) Sender() {
 		// Substitue distance in place centroidId and send to outCh
 		// VECTOR_TODO: Check if we can discard moving value to next stage
 		vectorKeyPos := w.r.getVectorKeyPos()
-		i := 0
-		for ; i < batchSize && !rows[i].last; i++ {
+		for i := 0; i < vecCount; i++ {
 			// Substitute distance in place of centroid ID
 			// 1. when projection is not pushed down (w.r.Indexprojection == nil )
 			// 2. when we are projecting all keys (projectVectorDist)
@@ -394,9 +395,11 @@ func (w *ScanWorker) Sender() {
 				w.rowsReturned++
 				w.currJob.rowsReturned++
 			}
+
+			rows[i] = nil
 		}
 
-		if i > 0 && i < batchSize && rows[i].last {
+		if lastRowReceived {
 			return
 		}
 	}
