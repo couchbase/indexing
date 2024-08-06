@@ -2172,6 +2172,22 @@ func (r *ScanRequest) getVectorKeyPos() int {
 	return r.vectorPos
 }
 
+//return the codeSize for vector index. 0 indicates unknown.
+func (r *ScanRequest) getVectorCodeSize() int {
+
+	if r.codebookMap != nil {
+		for _, cb := range r.codebookMap {
+			if cb != nil {
+				cs, err := cb.CodeSize()
+				if err == nil {
+					return cs
+				}
+			}
+		}
+	}
+	return 0
+}
+
 /////////////////////////////////////////////////////////////////////////
 //
 // IndexPoints Implementation

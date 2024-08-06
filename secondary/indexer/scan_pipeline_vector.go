@@ -281,6 +281,12 @@ func (w *ScanWorker) Sender() {
 	rows := make([]*Row, batchSize)
 	logging.Verbosef("%v ChannelSize: %v BatchSize: %v", w.logPrefix, cap(w.senderCh), batchSize)
 
+	vectorDim := w.r.getVectorDim()
+
+	codes := make([]byte, 0, batchSize*w.r.getVectorCodeSize())
+	fvecs := make([]float32, batchSize*vectorDim)
+	dists := make([]float32, batchSize)
+
 	var err error
 	var ok bool
 
@@ -305,18 +311,14 @@ func (w *ScanWorker) Sender() {
 		}
 
 		// Make list of vectors to calculate distance
-		// VECTOR_TODO: Allocate the codes buffer once per scan and reuse the same memory
-		codes := make([]byte, 0)
 		for i := 0; i < vecCount; i++ {
 			codei := rows[i].value
 			codes = append(codes, codei...)
 		}
 
 		// Decode vectors
-		fvecs := make([]float32, vecCount*w.r.getVectorDim())
-
 		t0 := time.Now()
-		err = w.currJob.codebook.DecodeVectors(vecCount, codes, fvecs)
+		err = w.currJob.codebook.DecodeVectors(vecCount, codes, fvecs[:vecCount*vectorDim])
 		if err != nil {
 			logging.Verbosef("%v Sender got error: %v from DecodeVectors", w.logPrefix, err)
 			w.senderErrCh <- err
@@ -327,8 +329,8 @@ func (w *ScanWorker) Sender() {
 
 		// Compute distance from query vector using codebook
 		qvec := w.r.queryVector
-		dists := make([]float32, vecCount)
-		err = w.currJob.codebook.ComputeDistance(qvec, fvecs, dists)
+		dists = dists[:vecCount]
+		err = w.currJob.codebook.ComputeDistance(qvec, fvecs[:vecCount*vectorDim], dists)
 		if err != nil {
 			logging.Verbosef("%v Sender got error: %v from ComputeDistance", w.logPrefix, err)
 			w.senderErrCh <- err
@@ -352,6 +354,11 @@ func (w *ScanWorker) Sender() {
 		if lastRowReceived {
 			return
 		}
+		//re-init for the next batch
+		codes = codes[:0]
+		fvecs = fvecs[:0]
+		dists = dists[:0]
+
 	}
 }
 
