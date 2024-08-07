@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
@@ -32,6 +33,9 @@ type ScanJob struct {
 	bytesRead    uint64
 	rowsScanned  uint64
 	rowsReturned uint64
+
+	decodeDur int64
+	decodeCnt int64
 
 	logPrefix string
 	startTime time.Time
@@ -278,56 +282,62 @@ func (w *ScanWorker) Sender() {
 	var ok bool
 
 	for {
-		for i := 0; i < batchSize; {
-			rows[i], ok = <-w.senderCh
+		vecCount := 0
+		lastRowReceived := false
+		for vecCount < batchSize {
+			rows[vecCount], ok = <-w.senderCh
 			if !ok {
 				return
 			}
 
-			if rows[i].last {
+			if rows[vecCount].last {
+				lastRowReceived = true
 				break // Finish the data gathered till ensemble
 			}
 
-			rows[i].key, err = w.reverseCollate(rows[i].key)
+			rows[vecCount].key, err = w.reverseCollate(rows[vecCount].key)
 			if err != nil {
 				logging.Verbosef("%v Sender got error: %v from reverseCollate", w.logPrefix, err)
 				w.senderErrCh <- err
 				return
 			}
 
-			skipRow, err := w.skipRow(rows[i].key)
+			skipRow, err := w.skipRow(rows[vecCount].key)
 			if err != nil {
 				logging.Verbosef("%v Sender got error: %v from skipRow", w.logPrefix, err)
 				w.senderErrCh <- err
 				return
 			}
 			if !skipRow {
-				i++
+				vecCount++
 			}
 		}
 
 		// If we did not even get one valid Row before last
-		if rows[0].last {
+		if vecCount == 0 {
 			return
 		}
 
 		// Make list of vectors to calculate distance
 		// VECTOR_TODO: Allocate the codes buffer once per scan and reuse the same memory
 		codes := make([]byte, 0)
-		vecCount := 0
-		for ; vecCount < batchSize && !rows[vecCount].last; vecCount++ {
-			codei := rows[vecCount].value
+		for i := 0; i < vecCount; i++ {
+			codei := rows[i].value
 			codes = append(codes, codei...)
 		}
 
 		// Decode vectors
 		fvecs := make([]float32, vecCount*w.r.getVectorDim())
+
+		t0 := time.Now()
 		err = w.currJob.codebook.DecodeVectors(vecCount, codes, fvecs)
 		if err != nil {
 			logging.Verbosef("%v Sender got error: %v from DecodeVectors", w.logPrefix, err)
 			w.senderErrCh <- err
 			return
 		}
+		atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
+		atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
 
 		// Compute distance from query vector using codebook
 		qvec := w.r.queryVector
@@ -341,10 +351,8 @@ func (w *ScanWorker) Sender() {
 
 		// Substitue distance in place centroidId and send to outCh
 		// VECTOR_TODO: Check if we can discard moving value to next stage
-		codec := collatejson.NewCodec(16)
 		vectorKeyPos := w.r.getVectorKeyPos()
-		i := 0
-		for ; i < batchSize && !rows[i].last; i++ {
+		for i := 0; i < vecCount; i++ {
 			// Substitute distance in place of centroid ID
 			// 1. when projection is not pushed down (w.r.Indexprojection == nil )
 			// 2. when we are projecting all keys (projectVectorDist)
@@ -352,7 +360,8 @@ func (w *ScanWorker) Sender() {
 			if w.r.ProjectVectorDist() {
 				distVal := n1qlval.NewValue(float64(dists[i]))
 				encodeBuf := make([]byte, 0, distVal.Size()*3)
-				distCode, err := codec.EncodeN1QLValue(distVal, encodeBuf)
+				codec1 := collatejson.NewCodec(16)
+				distCode, err := codec1.EncodeN1QLValue(distVal, encodeBuf)
 				if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
 					distCode, err = encodeN1qlVal(distVal)
 				}
@@ -367,7 +376,8 @@ func (w *ScanWorker) Sender() {
 				// ReplaceEncodedFieldInArray encodes distCode and replaces centroidId in key so add more buffer
 				// for encoding of distCode incase it needs more space than centroidId => adding 3 * distCode size
 				newBuf := make([]byte, 0, len(rows[i].key)+(3*len(distCode)))
-				newEntry, err := codec.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
+				codec2 := collatejson.NewCodec(16)
+				newEntry, err := codec2.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
 				if err != nil {
 					logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
 						w.logPrefix, err, logging.TagStrUD(rows[i].key), vectorKeyPos, distCode)
@@ -385,9 +395,11 @@ func (w *ScanWorker) Sender() {
 				w.rowsReturned++
 				w.currJob.rowsReturned++
 			}
+
+			rows[i] = nil
 		}
 
-		if i > 0 && i < batchSize && rows[i].last {
+		if lastRowReceived {
 			return
 		}
 	}
@@ -877,8 +889,12 @@ func (s *IndexScanSource2) Routine() error {
 	defer func() {
 		for i := 0; i <= maxBatchId; i++ {
 			for _, job := range jobMap[i] {
+				logging.Verbosef("%v dur %v, cnt %v, scanned %v", job.logPrefix,
+					job.decodeDur, job.decodeCnt, job.rowsScanned)
 				s.p.rowsScanned += job.rowsScanned
 				s.p.bytesRead += job.bytesRead
+				s.p.decodeDur += job.decodeDur
+				s.p.decodeCnt += job.decodeCnt
 			}
 		}
 	}()

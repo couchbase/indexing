@@ -3300,6 +3300,7 @@ type MsgIndexTrainingDone struct {
 	keyspaceId string
 	errMap     map[common.IndexInstId]map[common.PartitionId]error
 	successMap map[common.IndexInstId]bool
+	dropMap    map[common.IndexInstId]MsgChannel
 	reqCtx     *c.MetadataRequestContext
 	respCh     MsgChannel
 }
@@ -3318,6 +3319,10 @@ func (m *MsgIndexTrainingDone) GetErrMap() map[common.IndexInstId]map[common.Par
 
 func (m *MsgIndexTrainingDone) GetSuccessMap() map[common.IndexInstId]bool {
 	return m.successMap
+}
+
+func (m *MsgIndexTrainingDone) GetDropMap() map[common.IndexInstId]MsgChannel {
+	return m.dropMap
 }
 
 func (m *MsgIndexTrainingDone) GetReqCtx() *c.MetadataRequestContext {

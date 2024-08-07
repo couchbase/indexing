@@ -44,6 +44,10 @@ type ScanPipeline struct {
 	cacheHitRatio int
 	exprEvalDur   time.Duration
 	exprEvalNum   int64
+
+	//vector index specific
+	decodeDur int64
+	decodeCnt int64
 }
 
 func (p *ScanPipeline) Cancel(err error) {
@@ -74,6 +78,15 @@ func (p ScanPipeline) AvgExprEvalDur() time.Duration {
 
 	if p.exprEvalNum != 0 {
 		return time.Duration(int64(p.exprEvalDur) / p.exprEvalNum)
+	}
+	return time.Duration(0)
+}
+
+//vector specific
+func (p ScanPipeline) AvgDecodeDur() time.Duration {
+
+	if p.decodeCnt != 0 {
+		return time.Duration(p.decodeDur / p.decodeCnt)
 	}
 	return time.Duration(0)
 }

@@ -206,7 +206,7 @@ mkdir -p "$WORKSPACE/go"
 export GOROOT=$HOME/.cbdepscache/exploded/$arch/$golatest/go
 export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
 export PATH=$GOROOT/bin:$PATH
-export C_INCLUDE_PATH=$WORKSPACE/platform/include/:$WORKSPACE/install/include:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include:$WORKSPACE/sigar/include:$WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include:$WORKSPACE/build/tlm/deps/faiss.exploded/include
+export C_INCLUDE_PATH=$WORKSPACE/platform/include/:$WORKSPACE/install/include:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include:$WORKSPACE/sigar/include:$WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include:$WORKSPACE/build/tlm/deps/faiss.exploded/include:$WORKSPACE/magma/include
 export CGO_LDFLAGS="-L $WORKSPACE/install/lib -Wl,-rpath $WORKSPACE/install/lib"
 # export LD_LIBRARY_PATH=$WORKSPACE/install/lib
 #Note: enabling auto tells go get to download modules under godeps/pkg/mod
