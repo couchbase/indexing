@@ -798,6 +798,8 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 	primCreateCollection := "CREATE PRIMARY INDEX `%s` ON `%s`.`%s`.`%s`"
 	secCreate := "CREATE INDEX `%s` ON `%s`(%s)"
 	secCreateCollection := "CREATE INDEX `%s` ON `%s`.`%s`.`%s`(%s)"
+	bhiveCreate := "CREATE VECTOR INDEX `%s` on `%s`(%s)"
+	bhiveCreateCollection := "CREATE VECTOR INDEX `%s` ON `%s`.`%s`.`%s`(%s)"
 	where := " WHERE %s"
 	partition := " PARTITION BY hash(%s)"
 
@@ -833,9 +835,17 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 		}
 
 		if def.IndexOnCollection() {
-			stmt = fmt.Sprintf(secCreateCollection, def.Name, def.Bucket, def.Scope, def.Collection, exprs)
+			if def.IsBhive() {
+				stmt = fmt.Sprintf(bhiveCreateCollection, def.Name, def.Bucket, def.Scope, def.Collection, exprs)
+			} else {
+				stmt = fmt.Sprintf(secCreateCollection, def.Name, def.Bucket, def.Scope, def.Collection, exprs)
+			}
 		} else {
-			stmt = fmt.Sprintf(secCreate, def.Name, def.Bucket, exprs)
+			if def.IsBhive() {
+				stmt = fmt.Sprintf(bhiveCreate, def.Name, def.Bucket, exprs)
+			} else {
+				stmt = fmt.Sprintf(secCreate, def.Name, def.Bucket, exprs)
+			}
 		}
 
 		stmt += getPartnStmt()
@@ -903,6 +913,26 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 			}
 
 			withExpr += fmt.Sprintf(" \"num_partition\":%v", numPartitions)
+		}
+	}
+
+	if def.IsVectorIndex {
+		withExpr += fmt.Sprintf(" \"dimension\":%v,", def.VectorMeta.Dimension)
+		withExpr += fmt.Sprintf(" \"similarity\":\"%v\",", def.VectorMeta.Similarity)
+		withExpr += fmt.Sprintf(" \"description\":\"%v\"", def.VectorMeta.Quantizer.String())
+
+		if def.VectorMeta.Nprobes > 1 {
+			if len(withExpr) != 0 {
+				withExpr += ","
+			}
+			withExpr += fmt.Sprintf(" \"scan_nprobes\":%v", def.VectorMeta.Nprobes)
+		}
+
+		if def.VectorMeta.TrainList > 0 {
+			if len(withExpr) != 0 {
+				withExpr += ","
+			}
+			withExpr += fmt.Sprintf(" \"train_list\":%v", def.VectorMeta.TrainList)
 		}
 	}
 

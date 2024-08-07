@@ -536,6 +536,13 @@ func (defn *IndexDefn) GetVectorKeyPosExploded() (vectorPos int) {
 	return -1
 }
 
+func (defn *IndexDefn) IsBhive() bool {
+	if defn.IsVectorIndex && defn.VectorMeta != nil && defn.VectorMeta.IsBhive == true {
+		return true
+	}
+	return false
+}
+
 func (idx IndexInst) IsProxy() bool {
 	return idx.RealInstId != 0
 }
