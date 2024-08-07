@@ -197,6 +197,9 @@ func (w *ScanWorker) Scanner() {
 		snap := job.snap.Snapshot()
 		ctx := job.ctx
 		handler := w.scanIteratorCallback
+		if w.r.isBhiveScan {
+			handler = w.bhiveIteratorCallback
+		}
 
 		// VECTOR_TODO: Check if we can move this logic to another goroutine so that
 		// this main goroutine is free for error handling and check if use of row.last
@@ -207,7 +210,7 @@ func (w *ScanWorker) Scanner() {
 		} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
 			err = snap.Range(ctx, scan.Low, scan.High, scan.Incl, handler)
 		} else {
-			err = fmt.Errorf("invalid scan type received at scan worker %v", scan.ScanType)
+			err = snap.Lookup(ctx, scan.Low, handler)
 		}
 
 		// Got error from storage layer or iterator callback
@@ -431,6 +434,39 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 	w.currJob.rowsScanned++
 	w.bytesRead += uint64(len(entry))
 	w.currJob.bytesRead += uint64(len(entry))
+	if value != nil {
+		w.bytesRead += uint64(len(value))
+		w.currJob.bytesRead += uint64(len(value))
+	}
+
+	return nil
+}
+
+func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
+
+	recordId, meta := w.currJob.snap.Snapshot().DecodeMeta(value)
+	// Replace value with meta for now. Once include column support is added,
+	// meta() has to be split into include column fields and quantized codes
+	value = meta
+
+	var r Row
+	r.key = entry
+	r.value = value
+	r.recordId = recordId
+
+	select {
+	case <-w.stopCh:
+		return ErrScanWorkerStopped
+	case err := <-w.senderErrCh:
+		logging.Tracef("%v scanIteratorCallback got error: %v from Sender", w.logPrefix, err)
+		return err
+	case w.senderCh <- &r:
+	}
+
+	w.rowsScanned++
+	w.currJob.rowsScanned++
+	w.bytesRead += uint64(len(entry) + 8) // 8 bytes for centroidId that are read and filtered out
+	w.currJob.bytesRead += uint64(len(entry) + 8)
 	if value != nil {
 		w.bytesRead += uint64(len(value))
 		w.currJob.bytesRead += uint64(len(value))
@@ -692,7 +728,8 @@ func (fio *MergeOperator) Collector() {
 
 		// If not get projected fields and send it down stream
 		entry := row.key
-		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
+		// [VECTOR_TODO]: Skip projection of distance for bhive indexes for now. Add support later
+		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys && !fio.req.isBhiveScan {
 			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
 			if err != nil {
 				logging.Verbosef("%v Collector got error: %v from projectKeys", fio.logPrefix, err)
@@ -730,7 +767,7 @@ func (fio *MergeOperator) Collector() {
 	// Read from Heap and get projected fields and send it down stream
 	for _, row := range sortedRows.rows {
 		entry := row.key
-		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
+		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys && !fio.req.isBhiveScan {
 			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
 			if err != nil {
 				logging.Verbosef("%v Collector got error: %v from projectKeys from heap", fio.logPrefix, err)

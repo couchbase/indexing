@@ -82,7 +82,7 @@ func (p ScanPipeline) AvgExprEvalDur() time.Duration {
 	return time.Duration(0)
 }
 
-//vector specific
+// vector specific
 func (p ScanPipeline) AvgDecodeDur() time.Duration {
 
 	if p.decodeCnt != 0 {
@@ -489,6 +489,8 @@ loop:
 				d.CloseWithError(err)
 				break loop
 			}
+		} else if d.p.req.isBhiveScan {
+			docid = row // For bhive index, sk would be nil and row would be docid
 		} else {
 			if dataEncFmt == c.DATA_ENC_COLLATEJSON {
 				sk, docid, err = siSplitEntryCJson(row)
