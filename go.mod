@@ -38,7 +38,7 @@ replace github.com/couchbase/regulator => ../regulator
 
 require (
 	github.com/couchbase/bhive v0.0.0-00010101000000-000000000000
-	github.com/couchbase/cbauth v0.1.11
+	github.com/couchbase/cbauth v0.1.12
 	github.com/couchbase/go-couchbase v0.1.1
 	github.com/couchbase/go-slab v0.0.0-20220303011136-e47646b420b3
 	github.com/couchbase/goforestdb v0.0.0-20161215171854-0b501227de0e

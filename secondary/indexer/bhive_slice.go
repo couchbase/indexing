@@ -1684,15 +1684,76 @@ func (s *bhiveSnapshot) Destroy() {
 // Snapshot Reader - Placeholder (to be implemented by Varun)
 // //////////////////////////////////////////////////////////
 
+// [VECTOR_TODO] The Count logic needs support from snapshot. Currently,
+// implement dummy methods for IndexReader compatibility
 func (s *bhiveSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error) {
 	return 0, nil
 }
 
+// [VECTOR_TODO] The Count logic needs support from snapshot. Currently,
+// implement dummy methods for IndexReader compatibility
 func (s *bhiveSnapshot) StatCountTotal() (uint64, error) {
 	return 0, nil
 }
+func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, callb EntryCallback) error {
 
-func (s *bhiveSnapshot) Range(IndexReaderContext, IndexKey, IndexKey, Inclusion, EntryCallback) error {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("bhiveSnapshot::Iterate: panic detected while iterating snapshot "+
+				"key = %s Index %v, Bucket %v, IndexInstId %v, "+
+				"PartitionId %v, centroidId: %v", logging.TagStrUD(centroidId), s.slice.idxDefn.Name,
+				s.slice.idxDefn.Bucket, s.slice.idxInstId, s.slice.idxPartnId, centroidId)
+			logging.Fatalf("%s", logging.StackTraceAll())
+			panic(r)
+		}
+	}()
+
+	var err error
+	t0 := time.Now()
+
+	reader := ctx.(*bhiveReaderCtx)
+	reader.r.Begin()
+	defer reader.r.End()
+
+	iter, err := reader.r.NewKeyPrefixIterator()
+	if err != nil {
+		return err
+	}
+
+	defer iter.Close()
+
+	// Capture the time taken to initialize new iterator
+	s.slice.idxStats.Timings.stNewIterator.Put(time.Since(t0))
+
+	// [VECTOR_TODO]: Add more timing stats
+
+	err = iter.Execute(s.MainSnap, bhive.CentroidID(centroidId.Bytes()))
+	if err != nil {
+		return err
+	}
+
+	for iter.Valid() {
+		// rawKey would be only "docid"
+		// rawMeta would include recordID (used internally by Magma) and the meta information
+		// like include columns, quantized codes etc. Scan pipeline will split the recordID
+		// from rawMeta and use the recordID to extract the actual Value field for re-ranking
+		// purposes
+		_, rawKey, rawMeta, err := iter.GetRawKeyAndMeta()
+		if err != nil {
+			return err
+		}
+
+		if err := callb(rawKey, rawMeta); err != nil {
+			return err
+		}
+
+		iter.Next()
+	}
+
+	return nil
+}
+
+func (s *bhiveSnapshot) Range(ctx IndexReaderContext, low IndexKey, high IndexKey, incl Inclusion, callb EntryCallback) error {
 	return nil
 }
 
