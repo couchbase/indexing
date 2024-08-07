@@ -1903,12 +1903,6 @@ func (si *secondaryIndex6) Scan6(
 	tsvector timestamp.Vector,
 	conn *datastore.IndexConnection) {
 
-	if si.isBhive || len(indexKeyNames) > 0 {
-		conn.Error(n1qlError(si.gsi.gsiClient, errors.NewError(nil, "BHIVE indexes are currently not supported")))
-		conn.Sender().Close()
-		return
-	}
-
 	sender := conn.Sender()
 	skipReadMetering := conn.SkipMetering()
 	user := conn.User()

@@ -1369,6 +1369,9 @@ func getStatsForPartition(instStats StorageStats, storageMode string) map[string
 		storageStats := make(map[string]interface{})
 		storageStats[STAT_PARTITION_ID] = instStats.PartitionId
 		stats := instStats.Stats
+		if _, ok := stats["MainStore"]; !ok {
+			return nil
+		}
 		mainStoreStats := stats["MainStore"].(map[string]interface{})
 		storageStats[STAT_NUM_PAGES] = mainStoreStats["num_pages"]
 		storageStats[STAT_NUM_ITEMS] = mainStoreStats["items_count"]
