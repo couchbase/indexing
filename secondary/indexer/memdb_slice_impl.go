@@ -2092,6 +2092,10 @@ func (s *memdbSnapshot) Info() SnapshotInfo {
 	return s.info
 }
 
+func (s *memdbSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
+	return 0, nil
+}
+
 // ==============================
 // Snapshot reader implementation
 // ==============================

@@ -167,6 +167,7 @@ type bhiveSnapshot struct {
 	ts         *common.TsVbuuid
 	info       *bhiveSnapshotInfo
 
+	codec    bhive.Codec
 	MainSnap bhive.Snapshot
 	BackSnap bhive.Snapshot
 
@@ -1422,6 +1423,7 @@ func (mdb *bhiveSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		info:       snapInfo,
 		ts:         snapInfo.Timestamp(),
 		committed:  info.IsCommitted(),
+		codec:      mdb.mainstore.GetCodec(),
 	}
 
 	s.Open()
@@ -1832,6 +1834,11 @@ func (s *bhiveSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 // VECTOR_TODO: All can be implemented using KeyIterator by scanning the entire storage
 func (s *bhiveSnapshot) All(IndexReaderContext, EntryCallback) error {
 	panic("bhiveSnapshot::All - Currently not supported")
+}
+
+func (s *bhiveSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
+	recordId, actualMeta := s.codec.DecodeMeta(meta)
+	return uint64(recordId), actualMeta
 }
 
 // //////////////////////////////////////////////////////////

@@ -4545,6 +4545,10 @@ func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
 	return err
 }
 
+func (s *plasmaSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
+	return 0, nil
+}
+
 // TODO: Cleanup the leaky hack to reuse the buffer
 // Extract only secondary key
 func entry2BackEntry(entry secondaryIndexEntry) []byte {

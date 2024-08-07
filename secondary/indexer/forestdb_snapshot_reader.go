@@ -292,6 +292,10 @@ func (s *fdbSnapshot) iterEqualKeys(k IndexKey, it *ForestDBIterator,
 	return err
 }
 
+func (s *fdbSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
+	return 0, nil
+}
+
 func compareExact(k IndexKey, entry IndexEntry) int {
 	return k.Compare(entry)
 }

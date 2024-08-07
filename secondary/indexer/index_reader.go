@@ -43,7 +43,6 @@ type Exister interface {
 // Looker is a class of algorithms that allow looking up a key in an index.
 // Usually, being able to look up a key means we can iterate through all keys
 // too, and so that is introduced here as well.
-//
 type Looker interface {
 	Exister
 	Lookup(IndexReaderContext, IndexKey, EntryCallback) error
@@ -71,6 +70,8 @@ type IndexReader interface {
 	Counter
 	Ranger
 	RangeCounter
+
+	DecodeMeta([]byte) (uint64, []byte) // Used only for BHIVE storage currently
 }
 
 // Abstract context implemented by storage subsystem

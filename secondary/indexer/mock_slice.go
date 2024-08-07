@@ -307,14 +307,15 @@ type mockSnapshot struct {
 	feeder snapshotFeeder
 }
 
-func (ms *mockSnapshot) Open() error                { return nil }
-func (ms *mockSnapshot) Close() error               { return nil }
-func (ms *mockSnapshot) IsOpen() bool               { return true }
-func (ms *mockSnapshot) Id() SliceId                { return ms.id }
-func (ms *mockSnapshot) IndexInstId() c.IndexInstId { return ms.indInstid }
-func (ms *mockSnapshot) IndexDefnId() c.IndexDefnId { return ms.indDefId }
-func (ms *mockSnapshot) Timestamp() *c.TsVbuuid     { return ms.ts }
-func (ms *mockSnapshot) Info() SnapshotInfo         { return &mockSnapshotInfo{} }
+func (ms *mockSnapshot) Open() error                             { return nil }
+func (ms *mockSnapshot) Close() error                            { return nil }
+func (ms *mockSnapshot) IsOpen() bool                            { return true }
+func (ms *mockSnapshot) Id() SliceId                             { return ms.id }
+func (ms *mockSnapshot) IndexInstId() c.IndexInstId              { return ms.indInstid }
+func (ms *mockSnapshot) IndexDefnId() c.IndexDefnId              { return ms.indDefId }
+func (ms *mockSnapshot) Timestamp() *c.TsVbuuid                  { return ms.ts }
+func (ms *mockSnapshot) Info() SnapshotInfo                      { return &mockSnapshotInfo{} }
+func (ms *mockSnapshot) DecodeMeta(meta []byte) (uint64, []byte) { return 0, nil }
 
 // -----------
 // IndexReader
