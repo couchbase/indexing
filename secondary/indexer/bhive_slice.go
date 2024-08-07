@@ -1754,32 +1754,84 @@ func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, cal
 }
 
 func (s *bhiveSnapshot) Range(ctx IndexReaderContext, low IndexKey, high IndexKey, incl Inclusion, callb EntryCallback) error {
-	return nil
+	if low.CompareIndexKey(high) != 0 || incl != Both {
+		panic(fmt.Errorf("bhiveSnapshot::Range low: %v and high: %v should be same for Range on bhive snapshot with inclusion: %v being Both", low, high, incl))
+	}
+	return s.Iterate(ctx, low, callb)
 }
 
 func (s *bhiveSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion, stopch StopChannel) (uint64, error) {
-	return 0, nil
+
+	var count uint64
+	callb := func(key, value []byte) error {
+		select {
+		case <-stopch:
+			return common.ErrClientCancel
+		default:
+			count++
+		}
+
+		return nil
+	}
+
+	err := s.Range(ctx, low, high, inclusion, callb)
+	return count, err
+}
+
+func (s *bhiveSnapshot) Lookup(ctx IndexReaderContext, centroidId IndexKey, callb EntryCallback) error {
+	return s.Iterate(ctx, centroidId, callb)
 }
 
 func (s *bhiveSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, stopch StopChannel) (uint64, error) {
-	return 0, nil
+	var err error
+	var count uint64
+
+	callb := func(key, value []byte) error {
+		select {
+		case <-stopch:
+			return common.ErrClientCancel
+		default:
+			count++
+		}
+
+		return nil
+	}
+
+	for _, k := range keys {
+		if err = s.Lookup(ctx, k, callb); err != nil {
+			break
+		}
+	}
+
+	return count, err
 }
 
+func (s *bhiveSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch StopChannel) (bool, error) {
+	var count uint64
+	callb := func(key, value []byte) error {
+		select {
+		case <-stopch:
+			return common.ErrClientCancel
+		default:
+			count++
+		}
+
+		return nil
+	}
+
+	err := s.Lookup(ctx, key, callb)
+	return count != 0, err
+}
+
+// VECTOR_TODO: Add support for multi scan count. Till then panic
 func (s *bhiveSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	scan Scan, distinct bool, stopch StopChannel) (uint64, error) {
-	return 0, nil
+	panic("bhiveSnapshot::MultiScanCount - Currently not supported")
 }
 
-func (s *bhiveSnapshot) Lookup(IndexReaderContext, IndexKey, EntryCallback) error {
-	return nil
-}
-
+// VECTOR_TODO: All can be implemented using KeyIterator by scanning the entire storage
 func (s *bhiveSnapshot) All(IndexReaderContext, EntryCallback) error {
-	return nil
-}
-
-func (s *bhiveSnapshot) Exists(ctx IndexReaderContext, Indexkey IndexKey, stopch StopChannel) (bool, error) {
-	return true, nil
+	panic("bhiveSnapshot::All - Currently not supported")
 }
 
 // //////////////////////////////////////////////////////////
