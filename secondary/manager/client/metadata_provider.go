@@ -2578,6 +2578,12 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 	}
 
+	if isArrayIndex && (isCompositeVectorIndex || isBhive) {
+		return nil,
+			errors.New("Failure to create vector index. Vector index with any field having array expression is currently not supported"),
+			false
+	}
+
 	//
 	// Create Index Definition
 	//
