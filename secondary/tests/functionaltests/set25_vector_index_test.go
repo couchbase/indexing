@@ -254,6 +254,79 @@ func TestVectorOnlyIndex(t *testing.T) {
 		expectedVectorPosTop100[0:int(limit)], vectorPosReturned, scanResults)
 }
 
+func TestIndexConfigs(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	if !vectorsLoaded {
+		vectorSetup(t)
+	}
+
+	var testIndexConfigs = []struct {
+		name        string
+		dim         string
+		description string
+		similarity  string
+	}{
+		{"idx_sift10k_SQ4", "128", "IVF256,SQ4", "L2_SQUARED"},
+		{"idx_sift10k_SQ6", "128", "IVF256,SQ6", "L2_SQUARED"},
+		{"idx_sift10k_SQ8", "128", "IVF256,SQ8", "L2_SQUARED"},
+		{"idx_sift10k_SQfp16", "128", "IVF256,SQfp16", "L2_SQUARED"},
+	}
+
+	// Scan setting
+	scans := qc.Scans{
+		&qc.Scan{
+			Filter: []*qc.CompositeElementFilter{
+				&qc.CompositeElementFilter{
+					Low:       "male",
+					High:      "male",
+					Inclusion: qc.Both,
+				},
+				&qc.CompositeElementFilter{},
+				&qc.CompositeElementFilter{
+					Low:       0,
+					High:      20000,
+					Inclusion: qc.Both,
+				},
+			},
+		},
+	}
+
+	limit := int64(5)
+
+	for _, tc := range testIndexConfigs {
+		t.Run(tc.name, func(t *testing.T) {
+			e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+			FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+			stmt := "CREATE INDEX " + tc.name +
+				" ON default(gender, sift VECTOR, docnum)" +
+				" WITH { \"dimension\":" + tc.dim + ", \"description\": \"" + tc.description +
+				"\", \"similarity\":\"" + tc.similarity + "\", \"defer_build\":true};"
+			err := createWithDeferAndBuild(tc.name, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
+			FailTestIfError(err, "Error in creating "+tc.name, t)
+			// Scan
+			scanResults, err := secondaryindex.Scan6(tc.name, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+			FailTestIfError(err, "Error during secondary index scan", t)
+
+			vectorPosReturned := make([]uint32, 0)
+			for k, _ := range scanResults {
+				s := strings.Split(k, "_")
+				vps := s[1]
+				vp, err := strconv.Atoi(vps)
+				if err != nil {
+					t.Fatal(err)
+				}
+				vectorPosReturned = append(vectorPosReturned, uint32(vp))
+			}
+
+			recall := recallAtR(expectedVectorPosTop100[0:int(limit)], vectorPosReturned, int(limit))
+			log.Printf("Recall: %v expected values: %v result: %v %+v", recall,
+				expectedVectorPosTop100[0:int(limit)], vectorPosReturned, scanResults)
+		})
+	}
+}
+
 func TestVectorPartialIndex(t *testing.T) {
 	skipIfNotPlasma(t)
 
