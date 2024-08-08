@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
+	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/vector"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	"github.com/couchbase/plasma"
@@ -34,10 +36,17 @@ import (
 // the file licenses/APL2.txt.
 
 ////////////////////////////////////////////////
-// Type Declaration
+// Constant
 ////////////////////////////////////////////////
 
-const centroidIdLen int = 8
+const (
+	NumKVStore   = 10
+	MaxBatchSize = 256
+)
+
+////////////////////////////////////////////////
+// Type Declaration
+////////////////////////////////////////////////
 
 type bhiveSlice struct {
 	//
@@ -128,10 +137,9 @@ type bhiveSlice struct {
 
 	//
 	// vector index related metadata
-	nlist     int               // number of centroids to use for training
-	codebook  codebook.Codebook // cookbook
-	codeSize  int               // Size of the quantized codes after training
-	vectorPos int               // Position of the vector field in the encoded key. Derived from index defn
+	nlist    int               // number of centroids to use for training
+	codebook codebook.Codebook // cookbook
+	codeSize int               // Size of the quantized codes after training
 
 	// snapshot
 	persistorLock     sync.RWMutex
@@ -309,8 +317,8 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 
 	cfg.CentroidIDSize = int(reflect.TypeOf(i).Size())
 	cfg.KeyPrefixSize = uint64(cfg.CentroidIDSize)
-	cfg.NumKVStore = 10    // FIXME - from setting
-	cfg.MaxBatchSize = 256 // FIXME - from setting
+	cfg.NumKVStore = NumKVStore
+	cfg.MaxBatchSize = MaxBatchSize
 
 	cfg.NumWriters = slice.maxNumWriters
 	return cfg
@@ -326,9 +334,9 @@ func (slice *bhiveSlice) setupBackstoreConfig() bhive.Config {
 	cfg.EnableUpdateStatusForSet = false
 
 	cfg.CentroidIDSize = 0
-	//cfg.KeyPrefixSize = 0
-	cfg.NumKVStore = 10    // FIXME - from setting
-	cfg.MaxBatchSize = 256 // FIXME - from setting
+	cfg.KeyPrefixSize = uint64(cfg.CentroidIDSize)
+	cfg.NumKVStore = NumKVStore
+	cfg.MaxBatchSize = MaxBatchSize
 
 	cfg.NumWriters = slice.maxNumWriters
 	return cfg
@@ -1295,10 +1303,6 @@ func (mdb *bhiveSlice) BuildDone() {
 	atomic.StoreInt32(&mdb.isInitialBuild, 0)
 }
 
-func (mdb *bhiveSlice) GetAlternateShardId(common.PartitionId) string {
-	return ""
-}
-
 // //////////////////////////////////////////////////////////
 // reader
 // //////////////////////////////////////////////////////////
@@ -1489,7 +1493,105 @@ func (mdb *bhiveSlice) SetLastRollbackTs(ts *common.TsVbuuid) {
 // //////////////////////////////////////////////////////////
 
 func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, error) {
-	return StorageStatistics{}, nil
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("bhiveSlice::Statistics Error observed when processing Statistics on instId: %v, partnId: %v",
+				mdb.IndexInstId(), mdb.IndexPartnId())
+			panic(r)
+		}
+	}()
+
+	if consumerFilter == statsMgmt.N1QLStorageStatsFilter {
+		return mdb.handleN1QLStorageStatistics()
+	}
+
+	var sts StorageStatistics
+
+	var internalData []string
+	internalDataMap := make(map[string]interface{})
+
+	var docidCount int64
+	var numRecsMem, numRecsDisk int64
+	var cacheHits, cacheMiss int64
+	var bsNumRecsMem, bsNumRecsDisk int64
+
+	mStats := mdb.mainstore.GetStats()
+	numRecsMem += int64(float32(mStats.ItemCount) * mStats.ResidentRatio)
+	numRecsDisk += int64(float32(mStats.ItemCount) * (1 - mStats.ResidentRatio))
+	cacheHits += int64(mStats.CacheHits)
+	cacheMiss += int64(mStats.CacheMisses)
+
+	sts.MemUsed = int64(mStats.MemUsed)
+	sts.InsertBytes = int64(mStats.NWriteBytes)
+	sts.GetBytes = int64(mStats.NReadBytes)
+	sts.DiskSize = int64(mStats.TotalDiskUsage)
+	sts.DataSizeOnDisk = int64(mStats.TotalDataSize)
+	sts.LogSpace = int64(mStats.TotalDiskUsage)
+	sts.DataSize = int64(float32(mStats.TotalDataSize) * mStats.CompressionRatio)
+
+	bStats := mdb.backstore.GetStats()
+	docidCount = int64(bStats.ItemCount)
+	bsNumRecsMem += int64(float32(bStats.ItemCount) * bStats.ResidentRatio)
+	bsNumRecsDisk += int64(float32(bStats.ItemCount) * (1 - bStats.ResidentRatio))
+
+	sts.MemUsed += int64(bStats.MemUsed)
+	sts.InsertBytes += int64(bStats.NWriteBytes)
+	sts.GetBytes += int64(bStats.NReadBytes)
+	sts.DiskSize += int64(bStats.TotalDiskUsage)
+	sts.DataSizeOnDisk += int64(bStats.TotalDataSize)
+	sts.LogSpace += int64(bStats.TotalDiskUsage)
+	sts.DataSize = int64(float32(mStats.TotalDataSize) * mStats.CompressionRatio)
+
+	if consumerFilter == statsMgmt.AllStatsFilter {
+		internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", mStats))
+
+		statsMap1 := make(map[string]interface{})
+		if err := json.Unmarshal([]byte(mStats.String()), &statsMap1); err == nil {
+			internalDataMap["MainStore"] = statsMap1
+		} else {
+			logging.Errorf("bhiveSlice::Statistics unable to unmarshal mainstore stats for"+
+				" IndexInstId %v, PartitionId %v, IndexDefnId %v SliceId %v err: %v",
+				mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, mdb.id, err)
+			internalDataMap["MainStore"] = fmt.Sprintf("%v", mStats)
+		}
+
+		internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", bStats))
+
+		statsMap2 := make(map[string]interface{})
+		if err := json.Unmarshal([]byte(bStats.String()), &statsMap2); err == nil {
+			internalDataMap["BackStore"] = statsMap2
+		} else {
+			logging.Errorf("bhiveSlice::Statistics unable to unmarshal backstore stats for"+
+				" IndexInstId %v, PartitionId %v, IndexDefnId %v SliceId %v err: %v",
+				mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, mdb.id, err)
+			internalDataMap["BackStore"] = fmt.Sprintf("%v", mStats)
+		}
+
+		internalData = append(internalData, "}\n")
+	}
+
+	sts.InternalData = internalData
+	sts.InternalDataMap = internalDataMap
+	sts.LoggingDisabled = false
+
+	mdb.idxStats.docidCount.Set(docidCount)
+	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
+	mdb.idxStats.cacheHitPercent.Set(common.ComputePercent(cacheHits, cacheMiss))
+	mdb.idxStats.combinedResidentPercent.Set(common.ComputePercent((numRecsMem + bsNumRecsMem), (numRecsDisk + bsNumRecsDisk)))
+	mdb.idxStats.cacheHits.Set(cacheHits)
+	mdb.idxStats.cacheMisses.Set(cacheMiss)
+	mdb.idxStats.numRecsInMem.Set(numRecsMem)
+	mdb.idxStats.numRecsOnDisk.Set(numRecsDisk)
+	mdb.idxStats.bsNumRecsInMem.Set(bsNumRecsMem)
+	mdb.idxStats.bsNumRecsOnDisk.Set(bsNumRecsDisk)
+
+	return sts, nil
+}
+
+// CBO is not supported
+func (mdb *bhiveSlice) handleN1QLStorageStatistics() (StorageStatistics, error) {
+	var sts StorageStatistics
+	return sts, nil
 }
 
 func (mdb *bhiveSlice) GetTenantDiskSize() (int64, error) {
@@ -1500,8 +1602,77 @@ func (mdb *bhiveSlice) PrepareStats() {
 
 }
 
-func (mdb *bhiveSlice) ShardStatistics(common.PartitionId) *common.ShardStats {
-	return nil
+func (mdb *bhiveSlice) ShardStatistics(partnId common.PartitionId) *common.ShardStats {
+	var ss *common.ShardStats
+
+	if len(mdb.idxDefn.AlternateShardIds) == 0 || len(mdb.idxDefn.AlternateShardIds[partnId]) == 0 {
+		return nil
+	}
+	msAlternateShardId := mdb.idxDefn.AlternateShardIds[partnId][0]
+
+	ss = common.NewShardStats(msAlternateShardId)
+
+	val, err := bhive.GetShardInfo(msAlternateShardId)
+	if err != nil {
+		logging.Infof("bhiveSlice::ShardStatistics ShardInfo is not available for shard: %v, err: %v", msAlternateShardId, err)
+		return nil
+	}
+
+	getShardId := func(alternateShardId string) common.ShardId {
+		alternateId, err := plasma.ParseAlternateId(alternateShardId)
+		if err != nil {
+			logging.Errorf("bhiveSlice::ShardStatistics: plasma failed to parse alternate id %v for instance %v - partnId %v",
+				alternateShardId, mdb.idxDefn.InstId, partnId)
+			return 0
+		}
+		shard := bhive.AcquireShardByAltId(alternateId)
+		defer bhive.ReleaseShard(shard)
+
+		return common.ShardId(shard.GetShardId())
+	}
+
+	ss.ShardId = getShardId(msAlternateShardId)
+
+	ss.MemSz = val.MemSz
+	ss.LSSDataSize = val.LSSDataSize
+	ss.ItemsCount = val.ItemsCount
+	ss.LSSDiskSize = val.LSSDiskSize
+
+	// For computing resident ratio
+	ss.CachedRecords = val.CachedRecords
+	ss.TotalRecords = val.TotalRecords
+
+	for _, instPath := range val.InstList {
+		ss.Instances[instPath] = true
+	}
+
+	if len(mdb.idxDefn.AlternateShardIds[partnId]) > 1 {
+		bsAlternateShardId := mdb.idxDefn.AlternateShardIds[partnId][1]
+		val, err := bhive.GetShardInfo(bsAlternateShardId)
+		if err != nil {
+			logging.Infof("plasmaSlice::ShardStatistics ShardInfo is not available for shard: %v", bsAlternateShardId)
+			return nil
+		}
+		ss.MemSz += val.MemSz
+		ss.LSSDataSize += val.LSSDataSize
+		ss.ItemsCount += val.ItemsCount
+		ss.LSSDiskSize += val.LSSDiskSize
+
+		// For computing resident ratio
+		ss.CachedRecords += val.CachedRecords
+		ss.TotalRecords += val.TotalRecords
+
+		ss.BackstoreShardId = getShardId(bsAlternateShardId)
+	}
+
+	return ss
+}
+
+func (mdb *bhiveSlice) GetAlternateShardId(partnId common.PartitionId) string {
+	if len(mdb.idxDefn.AlternateShardIds) == 0 || len(mdb.idxDefn.AlternateShardIds[partnId]) == 0 {
+		return ""
+	}
+	return mdb.idxDefn.AlternateShardIds[partnId][0]
 }
 
 func (mdb *bhiveSlice) setCommittedCount() {
