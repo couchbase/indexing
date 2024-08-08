@@ -65,6 +65,39 @@ func (vq *VectorQuantizer) Clone() *VectorQuantizer {
 	}
 }
 
+func (vq *VectorQuantizer) IsEquivalent(uq *VectorQuantizer) bool {
+
+	if vq.Type != uq.Type {
+		return false
+	}
+
+	if vq.Nlist != uq.Nlist {
+		return false
+	}
+
+	if vq.SubQuantizers != uq.SubQuantizers {
+		return false
+	}
+
+	if vq.Nbits != uq.Nbits {
+		return false
+	}
+
+	if vq.FastScan != uq.FastScan {
+		return false
+	}
+
+	if vq.BlockSize != uq.BlockSize {
+		return false
+	}
+
+	if vq.SQRange != uq.SQRange {
+		return false
+	}
+
+	return true
+}
+
 func (vq *VectorQuantizer) String() string {
 	if vq == nil {
 		return ""
