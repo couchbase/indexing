@@ -28,6 +28,8 @@ replace github.com/couchbase/nitro => ../nitro
 
 replace github.com/couchbase/plasma => ../plasma
 
+replace github.com/couchbase/bhive => ../bhive
+
 replace github.com/couchbase/query => ../query
 
 replace github.com/couchbase/query-ee => ../query-ee
@@ -35,6 +37,7 @@ replace github.com/couchbase/query-ee => ../query-ee
 replace github.com/couchbase/regulator => ../regulator
 
 require (
+	github.com/couchbase/bhive v0.0.0-00010101000000-000000000000
 	github.com/couchbase/cbauth v0.1.11
 	github.com/couchbase/go-couchbase v0.1.1
 	github.com/couchbase/go-slab v0.0.0-20220303011136-e47646b420b3
@@ -48,6 +51,7 @@ require (
 	github.com/couchbase/regulator v0.0.0-00010101000000-000000000000
 	github.com/golang/protobuf v1.5.3
 	github.com/golang/snappy v0.0.4
+	github.com/kshard/fvecs v0.0.2
 	github.com/mschoch/smat v0.2.0
 	github.com/prataprc/collatejson v0.0.0-20210210112148-85df4e1659d0
 	github.com/prataprc/goparsec v0.0.0-20211219142520-daac0e635e7e
@@ -89,8 +93,8 @@ require (
 	github.com/prometheus/client_model v0.2.0 // indirect
 	github.com/prometheus/common v0.37.0 // indirect
 	github.com/prometheus/procfs v0.8.0 // indirect
-	github.com/stretchr/objx v0.5.0 // indirect
-	github.com/stretchr/testify v1.8.4 // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
+	github.com/stretchr/testify v1.9.0 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20201027041543-1326539a0a0a // indirect
 	golang.org/x/crypto v0.15.0 // indirect
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect

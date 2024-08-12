@@ -299,6 +299,13 @@ func (idx *IndexImpl) DecodeVectors(nx int, codes []byte, x []float32) (err erro
 	return err
 }
 
+func RenormL2(d int, nx int, x []float32) {
+	C.faiss_fvec_renorm_L2(
+		C.size_t(d),
+		C.size_t(nx),
+		(*C.float)(&x[0]))
+}
+
 // compute L2 square distance between x and batch of contiguous y vectors
 func L2sqrNy(dis, x, y []float32, d int) error {
 	ny := len(y) / int(d)
@@ -306,6 +313,35 @@ func L2sqrNy(dis, x, y []float32, d int) error {
 		return errors.New("invalid arg")
 	}
 	C.faiss_fvec_L2sqr_ny((*C.float)(&dis[0]),
+		(*C.float)(&x[0]),
+		(*C.float)(&y[0]),
+		C.size_t(d),
+		C.size_t(ny))
+	return nil
+}
+
+// compute dot product distance between x and batch of contiguous y vectors
+func InnerProductsNy(dis, x, y []float32, d int) error {
+	ny := len(y) / int(d)
+	if len(dis) < ny {
+		return errors.New("invalid arg")
+	}
+	C.faiss_fvec_inner_products_ny((*C.float)(&dis[0]),
+		(*C.float)(&x[0]),
+		(*C.float)(&y[0]),
+		C.size_t(d),
+		C.size_t(ny))
+	return nil
+}
+
+func CosineSimNy(dis, x, y []float32, d int) error {
+	RenormL2(d, 1, x)
+	ny := len(y) / int(d)
+	if len(dis) < ny {
+		return errors.New("invalid arg")
+	}
+
+	C.faiss_fvec_inner_products_ny((*C.float)(&dis[0]),
 		(*C.float)(&x[0]),
 		(*C.float)(&y[0]),
 		C.size_t(d),

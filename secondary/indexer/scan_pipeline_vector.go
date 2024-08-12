@@ -518,11 +518,13 @@ func (wp *WorkerPool) Init(r *ScanRequest, scanWorkerSenderChSize, scanWorkerBat
 // Submit adds a job to the pool
 // Note: Submit and Wait cannot run concurrently but Stop can be run asynchronously
 func (wp *WorkerPool) Submit(job *ScanJob) error {
+	wp.jobsWg.Add(1) // If we are adding in case w.jobs <- job and if job is done before jobsWg.Add we will have negative counter
 	select {
 	case <-wp.stopCh:
+		wp.jobsWg.Add(-1) // Job not submitted so revert the added delta. This is same as jobsWd.Done()
 	case wp.jobs <- job:
-		wp.jobsWg.Add(1)
 	case err := <-wp.errCh:
+		wp.jobsWg.Add(-1) // Job not submitted so revert the added delta
 		logging.Verbosef("%v Submit: got error: %v", wp.logPrefix, err)
 		wp.Stop()
 		return err

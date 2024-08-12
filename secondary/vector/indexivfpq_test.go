@@ -2,6 +2,7 @@ package vector
 
 import (
 	"math/rand"
+	"sort"
 	"testing"
 	"time"
 
@@ -20,8 +21,9 @@ func TestIndexIVFPQ(t *testing.T) {
 	nlist := 128
 	nsub := 8
 	nbits := 8
+	useFastScan := false
 
-	indexPQ, err = NewIndexIVFPQ(dim, nlist, nsub, nbits, metric)
+	indexPQ, err = NewIndexIVFPQ(dim, nlist, nsub, nbits, metric, useFastScan)
 	if err != nil || indexPQ == nil {
 		t.Errorf("Unable to create index. Err %v", err)
 	}
@@ -92,8 +94,9 @@ func TestIndexIVFPQ_HNSW(t *testing.T) {
 	nlist := 128
 	nsub := 8
 	nbits := 8
+	useFastScan := false
 
-	indexPQ, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric)
+	indexPQ, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric, useFastScan)
 	if err != nil || indexPQ == nil {
 		t.Errorf("Unable to create index. Err %v", err)
 	}
@@ -212,8 +215,9 @@ func TestIndexIVFPQ_Timing(t *testing.T) {
 	nlist := 1024
 	nsub := 8
 	nbits := 8
+	useFastScan := false
 
-	indexPQ, err = NewIndexIVFPQ(dim, nlist, nsub, nbits, metric)
+	indexPQ, err = NewIndexIVFPQ(dim, nlist, nsub, nbits, metric, useFastScan)
 	if err != nil || indexPQ == nil {
 		t.Errorf("Unable to create index. Err %v", err)
 	}
@@ -269,8 +273,9 @@ func TestIndexIVFPQ_HNSW_Timing(t *testing.T) {
 	nlist := 1024
 	nsub := 8
 	nbits := 8
+	useFastScan := false
 
-	indexPQ, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric)
+	indexPQ, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric, useFastScan)
 	if err != nil || indexPQ == nil {
 		t.Errorf("Unable to create index. Err %v", err)
 	}
@@ -312,4 +317,60 @@ func TestIndexIVFPQ_HNSW_Timing(t *testing.T) {
 		t.Logf("Time taken to assign %v %v", n, elapsed)
 	}
 
+}
+
+func TestDistanceMetrics(t *testing.T) {
+	dim := 128
+	total_vecs := 10
+
+	//generate random vectors
+	vecs := genRandomVecs(dim, total_vecs)
+	serialVecs := convertTo1D(vecs)
+	query_vec := convertTo1D(vecs[:1])
+
+	metric := faiss.MetricL2
+	indexFlat, err := NewIndexFlat(dim, metric)
+	if err != nil || indexFlat == nil {
+		t.Errorf("Unable to create index. Err %v", err)
+	}
+
+	err = indexFlat.Add(serialVecs)
+	if err != nil {
+		t.Errorf("Unable to add data to flat index. Err %v", err)
+	}
+
+	dists, _, err := indexFlat.Search(query_vec, int64(total_vecs))
+	t.Logf("METRIC_L2 distances using index: %v", dists)
+
+	dists = make([]float32, total_vecs)
+	faiss.L2sqrNy(dists, query_vec, serialVecs, dim)
+
+	sort.Slice(dists, func(i, j int) bool {
+		return dists[i] < dists[j]
+	})
+
+	t.Logf("METRIC_L2 distances: %v", dists)
+
+	metric = faiss.MetricInnerProduct
+	indexFlat, err = NewIndexFlat(dim, metric)
+	if err != nil || indexFlat == nil {
+		t.Errorf("Unable to create index. Err %v", err)
+	}
+
+	err = indexFlat.Add(serialVecs)
+	if err != nil {
+		t.Errorf("Unable to add data to flat index. Err %v", err)
+	}
+
+	dists, _, err = indexFlat.Search(query_vec, int64(total_vecs))	
+	t.Logf("METRIC_INNER_PRODUCE distances using index: %v", dists)
+
+	dists = make([]float32, total_vecs)
+	faiss.InnerProductsNy(dists, query_vec, serialVecs, dim)
+
+	sort.Slice(dists, func(i, j int) bool {
+		return dists[i] > dists[j]
+	})
+
+	t.Logf("METRIC_INNER_PRODUCT: %v", dists)
 }

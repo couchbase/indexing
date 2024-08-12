@@ -10857,12 +10857,14 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	case common.PlasmaDB:
 
 		if indInst.Defn.IsVectorIndex && indInst.Defn.VectorMeta.IsBhive {
-			// [VECTOR_TODO]: NewBHIVESlice has to be created at this point.
-			// Till then use plasma slice only for BHIVE indices
+			slice, err = NewBhiveSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, numPartitions, conf,
+				partnStats[partitionId], memQuota, isNew, isInitialBuild(), numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
+				CodebookPath(indInst, partitionId, id))
+		} else {
+			slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
+				partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
+				CodebookPath(indInst, partitionId, id))
 		}
-		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
-			CodebookPath(indInst, partitionId, id))
 
 	}
 
