@@ -36,7 +36,7 @@ SET(CGO_LIBRARY_DIRS "${FORESTDB_LIBRARY_DIR};${sigar_BINARY_DIR}/src;${Platform
 SET(DEPS sigar forestdb platform proto-generated n1ql-yacc)
 
 IF (BUILD_ENTERPRISE)
-  LIST(APPEND DEPS magma)
+  LIST(APPEND DEPS magma_shared)
 ENDIF (BUILD_ENTERPRISE)
 
 IF(NOT JEMALLOC_FOUND)
