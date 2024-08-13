@@ -129,6 +129,7 @@ type ScanRequest struct {
 	nprobes               int
 	vectorPos             int
 	isVectorScan          bool
+	isBhiveScan           bool
 	queryVector           []float32
 	codebookMap           map[common.PartitionId]codebook.Codebook
 	centroidMap           map[common.PartitionId][]int64
@@ -603,6 +604,22 @@ func (r *ScanRequest) getNearestCentroids() error {
 // fillVectorScans must be called after getNearestCentroids as this function uses centroidIDs
 func (r *ScanRequest) fillVectorScans() (localErr error) {
 
+	if r.isBhiveScan {
+		scansForPartns := make(map[common.PartitionId]map[int64][]Scan)
+		for partnId, centroidIdList := range r.centroidMap {
+			scansForCentroids := make(map[int64][]Scan)
+			for _, cid := range centroidIdList {
+				bhiveCentroidId := NewBhiveCentroidId(uint64(cid))
+				scan := Scan{Low: bhiveCentroidId, High: bhiveCentroidId, Incl: Both, ScanType: LookupReq}
+				scansForCentroids[cid] = append(scansForCentroids[cid], scan)
+			}
+			scansForPartns[partnId] = scansForCentroids
+		}
+		r.vectorScans = scansForPartns
+		return nil
+	}
+
+	// Scans for composite vector index will be processed here
 	substituteCentroidID := func(centroidId int64) error {
 		for _, scan := range r.protoScans {
 			for filterPos, compFilter := range scan.Filters {
@@ -1406,6 +1423,9 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 		r.Stats = stats.indexes[r.IndexInstId]
 		rbMap := *r.sco.getRollbackInProgress()
 		r.hasRollback = rbMap[indexInst.Defn.Bucket]
+
+		// VECTOR_TODO: Replace this with IsBhive() method
+		r.isBhiveScan = r.isVectorScan && indexInst.Defn.IsVectorIndex && indexInst.Defn.VectorMeta.IsBhive
 	}
 	return
 }

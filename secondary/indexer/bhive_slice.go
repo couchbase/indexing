@@ -8,13 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"github.com/couchbase/bhive"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/iowrap"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/vector"
-	"github.com/couchbase/indexing/secondary/vector/codebook"
-	"github.com/couchbase/plasma"
 	"math"
 	"os"
 	"path/filepath"
@@ -22,6 +15,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/bhive"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/iowrap"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/vector"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
+	"github.com/couchbase/plasma"
 )
 
 // Copyright 2014-Present Couchbase, Inc.
@@ -76,6 +77,9 @@ type bhiveSlice struct {
 	// main store
 	mainstore   *bhive.Bhive
 	mainWriters []*bhive.Writer
+
+	// main store readers
+	readers chan *bhive.Reader
 
 	//
 	// back store
@@ -163,6 +167,7 @@ type bhiveSnapshot struct {
 	ts         *common.TsVbuuid
 	info       *bhiveSnapshotInfo
 
+	codec    bhive.Codec
 	MainSnap bhive.Snapshot
 	BackSnap bhive.Snapshot
 
@@ -218,7 +223,9 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 	slice.maxRollbacks = sysconf["settings.plasma.recovery.max_rollbacks"].Int()
 	slice.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()
 	slice.maxNumWriters = sysconf["numSliceWriters"].Int()
-	//numReaders := sysconf["plasma.numReaders"].Int()
+
+	numReaders := sysconf["bhive.numReaders"].Int()
+	slice.readers = make(chan *bhive.Reader, numReaders)
 
 	// stats
 	slice.idxStats = idxStats
@@ -438,6 +445,11 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 	}
 	if err := handleError(); err != nil {
 		return err
+	}
+
+	// Initialize readers
+	for i := 0; i < cap(slice.readers); i++ {
+		slice.readers <- slice.mainstore.NewReader()
 	}
 
 	return err
@@ -1291,8 +1303,66 @@ func (mdb *bhiveSlice) GetAlternateShardId(common.PartitionId) string {
 // reader
 // //////////////////////////////////////////////////////////
 
-func (mdb *bhiveSlice) GetReaderContext(user string, skipReadMetering bool) IndexReaderContext {
+////////////////////////////////////////////////
+// bhive readerCtx implementation
+////////////////////////////////////////////////
+
+type bhiveReaderCtx struct {
+	ch               chan *bhive.Reader
+	r                *bhive.Reader
+	readUnits        uint64
+	user             string
+	skipReadMetering bool
+}
+
+func (ctx *bhiveReaderCtx) Init(donech chan bool) bool {
+	select {
+	case ctx.r = <-ctx.ch:
+		return true
+	case <-donech:
+	}
+
+	return false
+}
+
+func (ctx *bhiveReaderCtx) Done() {
+	if ctx.r != nil {
+		ctx.ch <- ctx.r
+	}
+}
+
+func (ctx *bhiveReaderCtx) ReadUnits() uint64 {
+	return ctx.readUnits
+}
+
+func (ctx *bhiveReaderCtx) RecordReadUnits(ru uint64) {
+	ctx.readUnits += ru
+}
+
+func (ctx *bhiveReaderCtx) User() string {
+	return ctx.user
+}
+
+func (ctx *bhiveReaderCtx) SkipReadMetering() bool {
+	return ctx.skipReadMetering
+}
+
+// For vector indices, there is no support for "distinct" pushdown
+// Hence, return nil for GetCursorKey()
+func (ctx *bhiveReaderCtx) GetCursorKey() *[]byte {
 	return nil
+}
+
+func (ctx *bhiveReaderCtx) SetCursorKey(key *[]byte) {
+	// no-op
+}
+
+func (mdb *bhiveSlice) GetReaderContext(user string, skipReadMetering bool) IndexReaderContext {
+	return &bhiveReaderCtx{
+		ch:               mdb.readers,
+		user:             user,
+		skipReadMetering: skipReadMetering,
+	}
 }
 
 // //////////////////////////////////////////////////////////
@@ -1353,6 +1423,7 @@ func (mdb *bhiveSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		info:       snapInfo,
 		ts:         snapInfo.Timestamp(),
 		committed:  info.IsCommitted(),
+		codec:      mdb.mainstore.GetCodec(),
 	}
 
 	s.Open()
@@ -1615,41 +1686,159 @@ func (s *bhiveSnapshot) Destroy() {
 // Snapshot Reader - Placeholder (to be implemented by Varun)
 // //////////////////////////////////////////////////////////
 
+// [VECTOR_TODO] The Count logic needs support from snapshot. Currently,
+// implement dummy methods for IndexReader compatibility
 func (s *bhiveSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error) {
 	return 0, nil
 }
 
+// [VECTOR_TODO] The Count logic needs support from snapshot. Currently,
+// implement dummy methods for IndexReader compatibility
 func (s *bhiveSnapshot) StatCountTotal() (uint64, error) {
 	return 0, nil
 }
+func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, callb EntryCallback) error {
 
-func (s *bhiveSnapshot) Range(IndexReaderContext, IndexKey, IndexKey, Inclusion, EntryCallback) error {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("bhiveSnapshot::Iterate: panic detected while iterating snapshot "+
+				"key = %s Index %v, Bucket %v, IndexInstId %v, "+
+				"PartitionId %v, centroidId: %v", logging.TagStrUD(centroidId), s.slice.idxDefn.Name,
+				s.slice.idxDefn.Bucket, s.slice.idxInstId, s.slice.idxPartnId, centroidId)
+			logging.Fatalf("%s", logging.StackTraceAll())
+			panic(r)
+		}
+	}()
+
+	var err error
+	t0 := time.Now()
+
+	reader := ctx.(*bhiveReaderCtx)
+	reader.r.Begin()
+	defer reader.r.End()
+
+	iter, err := reader.r.NewKeyPrefixIterator()
+	if err != nil {
+		return err
+	}
+
+	defer iter.Close()
+
+	// Capture the time taken to initialize new iterator
+	s.slice.idxStats.Timings.stNewIterator.Put(time.Since(t0))
+
+	// [VECTOR_TODO]: Add more timing stats
+
+	err = iter.Execute(s.MainSnap, bhive.CentroidID(centroidId.Bytes()))
+	if err != nil {
+		return err
+	}
+
+	for iter.Valid() {
+		// rawKey would be only "docid"
+		// rawMeta would include recordID (used internally by Magma) and the meta information
+		// like include columns, quantized codes etc. Scan pipeline will split the recordID
+		// from rawMeta and use the recordID to extract the actual Value field for re-ranking
+		// purposes
+		_, rawKey, rawMeta, err := iter.GetRawKeyAndMeta()
+		if err != nil {
+			return err
+		}
+
+		if err := callb(rawKey, rawMeta); err != nil {
+			return err
+		}
+
+		iter.Next()
+	}
+
 	return nil
+}
+
+func (s *bhiveSnapshot) Range(ctx IndexReaderContext, low IndexKey, high IndexKey, incl Inclusion, callb EntryCallback) error {
+	if low.CompareIndexKey(high) != 0 || incl != Both {
+		panic(fmt.Errorf("bhiveSnapshot::Range low: %v and high: %v should be same for Range on bhive snapshot with inclusion: %v being Both", low, high, incl))
+	}
+	return s.Iterate(ctx, low, callb)
 }
 
 func (s *bhiveSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion, stopch StopChannel) (uint64, error) {
-	return 0, nil
+
+	var count uint64
+	callb := func(key, value []byte) error {
+		select {
+		case <-stopch:
+			return common.ErrClientCancel
+		default:
+			count++
+		}
+
+		return nil
+	}
+
+	err := s.Range(ctx, low, high, inclusion, callb)
+	return count, err
+}
+
+func (s *bhiveSnapshot) Lookup(ctx IndexReaderContext, centroidId IndexKey, callb EntryCallback) error {
+	return s.Iterate(ctx, centroidId, callb)
 }
 
 func (s *bhiveSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, stopch StopChannel) (uint64, error) {
-	return 0, nil
+	var err error
+	var count uint64
+
+	callb := func(key, value []byte) error {
+		select {
+		case <-stopch:
+			return common.ErrClientCancel
+		default:
+			count++
+		}
+
+		return nil
+	}
+
+	for _, k := range keys {
+		if err = s.Lookup(ctx, k, callb); err != nil {
+			break
+		}
+	}
+
+	return count, err
 }
 
+func (s *bhiveSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch StopChannel) (bool, error) {
+	var count uint64
+	callb := func(key, value []byte) error {
+		select {
+		case <-stopch:
+			return common.ErrClientCancel
+		default:
+			count++
+		}
+
+		return nil
+	}
+
+	err := s.Lookup(ctx, key, callb)
+	return count != 0, err
+}
+
+// VECTOR_TODO: Add support for multi scan count. Till then panic
 func (s *bhiveSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	scan Scan, distinct bool, stopch StopChannel) (uint64, error) {
-	return 0, nil
+	panic("bhiveSnapshot::MultiScanCount - Currently not supported")
 }
 
-func (s *bhiveSnapshot) Lookup(IndexReaderContext, IndexKey, EntryCallback) error {
-	return nil
-}
-
+// VECTOR_TODO: All can be implemented using KeyIterator by scanning the entire storage
 func (s *bhiveSnapshot) All(IndexReaderContext, EntryCallback) error {
-	return nil
+	panic("bhiveSnapshot::All - Currently not supported")
 }
 
-func (s *bhiveSnapshot) Exists(ctx IndexReaderContext, Indexkey IndexKey, stopch StopChannel) (bool, error) {
-	return true, nil
+func (s *bhiveSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
+	recordId, actualMeta := s.codec.DecodeMeta(meta)
+	return uint64(recordId), actualMeta
 }
 
 // //////////////////////////////////////////////////////////

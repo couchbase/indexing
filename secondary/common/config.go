@@ -2396,6 +2396,14 @@ var SystemConfig = Config{
 		false,
 	},
 
+	"indexer.bhive.numReaders": ConfigValue{
+		runtime.GOMAXPROCS(0) * 3,
+		"Numbers of readers for bhive",
+		runtime.GOMAXPROCS(0) * 3,
+		false, // mutable
+		false, // case-insensitive
+	},
+
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
 		uint64(500),
 		"Buffer Size for stream reader worker to hold mutations " +
