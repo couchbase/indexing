@@ -6520,7 +6520,7 @@ func (idx *indexer) handleCodebookRecoveryError(indexInst common.IndexInst, part
 	}
 
 	if recoveryErr == errCodebookPathNotFound {
-		if indexInst.TrainingPhase == common.TRAININIG_NOT_STARTED || indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+		if indexInst.TrainingPhase == common.TRAINING_NOT_STARTED || indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
 			logging.Infof("Indexer::initPartnInstance: Ignoring err: %v as training phase is not started for instId: %v, partnId: %v",
 				recoveryErr, indexInst.InstId, partnId)
 			return nil
@@ -9284,7 +9284,7 @@ func (idx *indexer) initFromPersistedState() error {
 		// will skip training and update the metadata state to TRAINING_COMPLETED.
 		// Otherwise, slice will be trained and then the stat is updated
 		if inst.TrainingPhase == common.TRAINING_IN_PROGRESS {
-			inst.TrainingPhase = common.TRAININIG_NOT_STARTED
+			inst.TrainingPhase = common.TRAINING_NOT_STARTED
 		}
 
 		idx.updateTopologyOnShardIdChange(&inst, partnShardIdMap)
@@ -13250,7 +13250,7 @@ func (idx *indexer) resetTrainingPhaseForNonVectorInsts(instIdList []common.Inde
 		if inst.Defn.IsVectorIndex {
 			continue
 		}
-		inst.TrainingPhase = c.TRAININIG_NOT_STARTED
+		inst.TrainingPhase = c.TRAINING_NOT_STARTED
 		idx.indexInstMap[instId] = inst
 	}
 }
@@ -13580,7 +13580,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		if inst.Defn.IsVectorIndex {
 			inst.TrainingPhase = c.TRAINING_COMPLETED
 		} else {
-			inst.TrainingPhase = c.TRAININIG_NOT_STARTED
+			inst.TrainingPhase = c.TRAINING_NOT_STARTED
 		}
 		idx.indexInstMap[instId] = inst
 		inst.Error = "" // Reset any error observed from earlier iterations
@@ -13605,7 +13605,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		// Even if one partition of an instance encounters error, reset training
 		// phase. Index build retry skip those partitions that are already trained
 		// and only train those partitions that are not trained
-		inst.TrainingPhase = c.TRAININIG_NOT_STARTED
+		inst.TrainingPhase = c.TRAINING_NOT_STARTED
 		errStr := ""
 		for partnId, err := range partnErrMap {
 			errStr += fmt.Sprintf("%v:%v ", partnId, err)

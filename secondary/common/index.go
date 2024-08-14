@@ -210,15 +210,15 @@ func (cons Consistency) String() string {
 type TrainingPhase byte
 
 const (
-	TRAININIG_NOT_STARTED TrainingPhase = iota
+	TRAINING_NOT_STARTED TrainingPhase = iota
 	TRAINING_IN_PROGRESS
 	TRAINING_COMPLETED
 )
 
 func (tp TrainingPhase) String() string {
 	switch tp {
-	case TRAININIG_NOT_STARTED:
-		return "TRAININIG_NOT_STARTED"
+	case TRAINING_NOT_STARTED:
+		return "TRAINING_NOT_STARTED"
 	case TRAINING_IN_PROGRESS:
 		return "TRAINING_IN_PROGRESS"
 	case TRAINING_COMPLETED:

@@ -2646,6 +2646,7 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 
 	state := inst.State
 	scheduled := inst.Scheduled
+	trainingPhase := inst.TrainingPhase
 
 	if false { // Disable for now due to false positives
 		m.assertShardMappings(defn.AlternateShardIds, change.ShardIdMap, defn.InstId)
@@ -2667,6 +2668,13 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 		if scheduled {
 			m.builder.notifych <- defn
 		}
+	}
+
+	// If the indexer changes the training phase from IN_PROGRESS to COMPLETED, then send the index to the builder.
+	// Lifecycle manager will not come to this code path when changing index state from IN_PROGRESS to COMPLETED.
+	if trainingPhase == common.TRAINING_IN_PROGRESS &&
+		change.TrainingPhase == common.TRAINING_COMPLETED {
+		m.builder.notifych <- defn
 	}
 
 	return nil
