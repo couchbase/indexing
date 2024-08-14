@@ -947,7 +947,7 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 			destination: "",
 			keyPrefix:   CODEBOOK_COPY_PREFIX,
 		}
-		srcRoot = filepath.Join(REBALANCE_STAGING_DIR, getCodebookRootDir(meta))
+		srcRoot = filepath.Join(plasma.RPCRootDir, getCodebookRootDir(meta))
 	default:
 		// the function should never come here
 		logging.Errorf("ShardTransferManager::processCodebookRestore received an unsupported taskType for codebook restore", taskType)

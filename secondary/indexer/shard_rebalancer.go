@@ -36,9 +36,6 @@ var ErrRebalanceDone = errors.New("Shard rebalance done received")
 // TODO add the Prefix in Indexer settings
 const CODEBOOK_COPY_PREFIX = "codebook_v1"
 
-// TODO: after the plasma changes this config will flow from Indexer to plasma RPC
-const REBALANCE_STAGING_DIR = "staging2"
-
 // ShardRebalancer embeds Rebalancer struct to reduce code
 // duplication across common functions
 type ShardRebalancer struct {
