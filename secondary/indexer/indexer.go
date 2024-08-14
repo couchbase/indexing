@@ -13271,12 +13271,13 @@ func getVectors(vectorMeta *c.VectorMetadata, nlist int) []float32 {
 }
 
 func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
-	indexPartnMap IndexPartnMap, config c.Config) (int64, []*c.IndexInst) {
-	var vectorInsts []*c.IndexInst
+	indexPartnMap IndexPartnMap, config c.Config) (int64, []*c.IndexInst, []*c.IndexInst) {
+	var vectorInsts, trainedOrNonVecInsts []*c.IndexInst
 	maxCentroids := 0
 	for _, instId := range instIds {
 		idxInst := indexInstMap[instId]
 		if idxInst.Defn.IsVectorIndex == false || idxInst.IsTrained() {
+			trainedOrNonVecInsts = append(trainedOrNonVecInsts, &idxInst)
 			continue
 		}
 
@@ -13297,7 +13298,7 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 		vecs_per_centroid = 1 // Minimum of one sample per centroid is required for training
 	}
 
-	return int64(maxCentroids * vecs_per_centroid), vectorInsts
+	return int64(maxCentroids * vecs_per_centroid), vectorInsts, trainedOrNonVecInsts
 }
 
 // [VECTOR_TODO]: Add a worker pool to take care of training
@@ -13333,7 +13334,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	clusterAddr := idx.config["clusterAddr"].String()
 
 	bucket, scope, collection := getBucketScopeAndCollFromKeyspaceId(keyspaceId)
-	maxSampleSize, vectorInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap, config)
+	maxSampleSize, vectorInsts, trainedOrNonVecInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap, config)
 
 	// Retrieve vectors from data service for training
 	vectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, vectorInsts, maxSampleSize)
@@ -13467,6 +13468,15 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 			}
 			// For dropped instances, the codebook dir will be removed
 			// during index cleanup
+		}
+	}
+
+	// If instance is not dropped, add non-vector (or) trained instances
+	// to the successMap so that build can be triggered for all the indexes
+	// together in same batch
+	for _, idxInst := range trainedOrNonVecInsts {
+		if _, ok := droppedInsts[idxInst.InstId]; !ok {
+			successMap[idxInst.InstId] = true
 		}
 	}
 
