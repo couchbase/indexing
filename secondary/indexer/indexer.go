@@ -13351,7 +13351,6 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		idx.internalRecvCh <- &MsgIndexTrainingDone{
 			keyspaceId: keyspaceId,
 			successMap: successMap,
-			reqCtx:     reqCtx,
 			errMap:     errMap,
 		}
 		return
@@ -13382,8 +13381,6 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				idx.internalRecvCh <- &MsgIndexTrainingDone{
 					keyspaceId: keyspaceId,
 					dropMap:    map[c.IndexInstId]MsgChannel{instId: clientCh},
-					reqCtx:     reqCtx,
-					errMap:     errMap,
 				}
 				continue
 			}
@@ -13475,10 +13472,11 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 	if len(successMap) > 0 || len(errMap) > 0 {
 		idx.internalRecvCh <- &MsgIndexTrainingDone{
-			keyspaceId: keyspaceId,
-			successMap: successMap,
-			reqCtx:     reqCtx,
-			errMap:     errMap,
+			keyspaceId:   keyspaceId,
+			successMap:   successMap,
+			reqCtx:       reqCtx,
+			errMap:       errMap,
+			droppedInsts: droppedInsts,
 		}
 	}
 }
@@ -13496,34 +13494,41 @@ func (idx *indexer) handleTrainingAndCheckForDrop(keyspaceId string,
 		respCh <- slice.Train(vectors)
 	}()
 
+	checkForInstDrop := func() {
+		for _, instId := range allInsts {
+			if _, ok := droppedInsts[instId]; ok {
+				continue
+			}
+
+			// Do not process drop for current instance as training is on-going
+			// for this instance. Index will be dropped after training is done
+			if instId == currInstId {
+				continue
+			}
+
+			if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
+				droppedInsts[instId] = true
+
+				logging.Infof("Indexer::handleTrainingAndCheckForDrop Observed that inst: %v is dropped during training. "+
+					"Skip further processing", instId)
+
+				idx.internalRecvCh <- &MsgIndexTrainingDone{
+					keyspaceId: keyspaceId,
+					dropMap:    map[c.IndexInstId]MsgChannel{instId: clientCh},
+				}
+			}
+		}
+	}
+
 	for {
 		select {
 		case err := <-respCh:
+			// If training takes less than a second, then drop can be delayed. Hence,
+			// process drop once before returning err
+			checkForInstDrop()
 			return err
 		case <-ticker.C:
-			for _, instId := range allInsts {
-				if _, ok := droppedInsts[instId]; ok {
-					continue
-				}
-
-				// Do not process drop for current instance as training is on-going
-				// for this instance. Index will be dropped after training is done
-				if instId == currInstId {
-					continue
-				}
-
-				if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
-					droppedInsts[instId] = true
-
-					logging.Infof("Indexer::handleTrainingAndCheckForDrop Observed that inst: %v is dropped during training. "+
-						"Skip further processing", instId)
-
-					idx.internalRecvCh <- &MsgIndexTrainingDone{
-						keyspaceId: keyspaceId,
-						dropMap:    map[c.IndexInstId]MsgChannel{instId: clientCh},
-					}
-				}
-			}
+			checkForInstDrop()
 		}
 	}
 
@@ -13533,6 +13538,7 @@ func (idx *indexer) handleTrainingAndCheckForDrop(keyspaceId string,
 func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	msg := cmd.(*MsgIndexTrainingDone)
 	successMap := msg.GetSuccessMap()
+	droppedInsts := msg.GetDroppedInsts()
 	errMap := msg.GetErrMap()
 	keyspaceId := msg.GetKeyspaceId()
 	reqCtx := msg.GetReqCtx()
@@ -13549,9 +13555,15 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	// For failed instances, set isTrained to false
 	for instId := range successMap {
 
-		if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
-			dropMap[instId] = clientCh
-			continue
+		if _, ok := droppedInsts[instId]; ok {
+			// Instance was dropped and not yet deleted.
+			if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
+				dropMap[instId] = clientCh
+			} else {
+				// Instance was dropped after training and the deletion process
+				// finished as well. Do not process this instance further
+			}
+			continue // Instance was dropped. No need to process it further
 		}
 
 		inst := idx.indexInstMap[instId]
@@ -13568,9 +13580,15 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 
 	for instId, partnErrMap := range errMap {
 
-		if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
-			dropMap[instId] = clientCh
-			continue
+		if _, ok := droppedInsts[instId]; ok {
+			// Instance was dropped and not yet deleted.
+			if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
+				dropMap[instId] = clientCh
+			} else {
+				// Instance was dropped after training and the deletion process
+				// finished as well. Do not process this instance further
+			}
+			continue // Instance was dropped. No need to process it further
 		}
 
 		inst := idx.indexInstMap[instId]
