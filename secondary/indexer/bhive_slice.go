@@ -903,6 +903,17 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
 	}
 
 	vec := vecs[0]
+
+	// compute centroidId and quantized code
+	quantizedCode, centroidId, err := mdb.getQuantizedCodeForVector(vec, mdb.codeSize, mdb.quantizedCodeBuf[workerId])
+	if err != nil {
+		logging.Errorf("bhiveSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
+			"Skipping docid:%s  due to error in computing centroidId and quantized code.  Error: %v",
+			mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+		atomic.AddInt32(&mdb.numKeysSkipped, 1)
+		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
+	}
+
 	if vec != nil {
 
 		// remove old record
@@ -910,25 +921,6 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
 			if _, changed := mdb.deleteVectorIndex(docid, vec, key, workerId); !changed {
 				return 0
 			}
-		}
-
-		// Compute centroidId for the vector
-		centroidId, err := mdb.getNearestCentroidId(vec)
-		if err != nil {
-			err := fmt.Errorf("Fatal - Error observed while retrieving centroidId for vector. "+
-				"docId: %s, Index instId: %v, err: %v", logging.TagUD(docid), mdb.IndexInstId(), err)
-			logging.Fatalf("bhiveSlice::insertVectorIndex %v", err)
-			atomic.AddInt32(&mdb.numKeysSkipped, 1)
-			panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
-		}
-
-		// Compute quantized code
-		quantizedCode, err := mdb.getQuantizedCodeForVector(vec, mdb.codeSize, mdb.quantizedCodeBuf[workerId])
-		if err != nil {
-			logging.Errorf("bhiveSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
-				"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
-			atomic.AddInt32(&mdb.numKeysSkipped, 1)
-			panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
 		}
 
 		mdb.mainWriters[workerId].Begin()
@@ -1187,20 +1179,21 @@ func (mdb *bhiveSlice) getNearestCentroidId(vec []float32) (int64, error) {
 }
 
 // Quantized codes are arranged as a slice of bytes
-func (mdb *bhiveSlice) getQuantizedCodeForVector(vec []float32, codeSize int, buf []byte) ([]byte, error) {
+func (mdb *bhiveSlice) getQuantizedCodeForVector(vec []float32, codeSize int, buf []byte) ([]byte, int64, error) {
 
 	buf = buf[:codeSize]
 
 	t0 := time.Now()
 
-	err := mdb.codebook.EncodeVector(vec, buf)
+	centroidId := make([]int64, 1, 1)
+	err := mdb.codebook.EncodeAndAssignVectors(vec, buf, centroidId)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	mdb.idxStats.Timings.vtEncode.Put(time.Now().Sub(t0))
 
-	return buf, nil
+	return buf, centroidId[0], nil
 }
 
 // Similar to getQuantizedCodeForVector() but processes array of vectors
