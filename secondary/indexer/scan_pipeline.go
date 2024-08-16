@@ -490,7 +490,16 @@ loop:
 				break loop
 			}
 		} else if d.p.req.isBhiveScan {
-			docid = row // For bhive index, sk would be nil and row would be docid
+			if d.p.req.ProjectVectorDist() {
+				sk, docid, err = siSplitEntryCJson(row)
+				if err != nil {
+					d.CloseWithError(err)
+					break loop
+				}
+			} else {
+				// For bhive index, sk would be nil and row would be docid when distance is not projected
+				docid = row
+			}
 		} else {
 			if dataEncFmt == c.DATA_ENC_COLLATEJSON {
 				sk, docid, err = siSplitEntryCJson(row)
@@ -780,8 +789,12 @@ func projectKeys(compositekeys [][]byte, key, buf []byte, r *ScanRequest, cktmp 
 	var err error
 
 	if r.Indexprojection.entryKeysEmpty {
-		entry := secondaryIndexEntry(key)
-		buf = append(buf, key[entry.lenKey():]...)
+		if r.isBhiveScan && r.ProjectVectorDist() == false {
+			return key, nil
+		} else {
+			entry := secondaryIndexEntry(key)
+			buf = append(buf, key[entry.lenKey():]...)
+		}
 		return buf, nil
 	}
 

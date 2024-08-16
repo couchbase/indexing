@@ -199,6 +199,20 @@ func NewSecondaryIndexEntry2(key []byte, docid []byte, isArray bool,
 	return e, nil
 }
 
+// used only in bhive scan path
+func NewSecondaryIndexEntry3(key []byte, docid []byte, buf []byte) (secondaryIndexEntry, error) {
+
+	buf = append(buf, key...)
+	buf = append(buf, docid...)
+
+	buf = buf[:len(buf)+2]
+	offset := len(buf) - 2
+	binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(docid)))
+
+	e := secondaryIndexEntry(buf)
+	return e, nil
+}
+
 func BytesToSecondaryIndexEntry(b []byte) (*secondaryIndexEntry, error) {
 	e := secondaryIndexEntry(b)
 	return &e, nil
