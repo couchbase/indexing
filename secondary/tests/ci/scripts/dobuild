@@ -196,6 +196,12 @@ git checkout $BRANCH 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout $BR
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 note_version nitro $WORKSPACE/goproj/src/github.com/couchbase/nitro
 
+cd $WORKSPACE/goproj/src/github.com/couchbase/bhive
+echo "Switching bhive to main"
+git checkout main 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout main"
+git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
+note_version bhive $WORKSPACE/goproj/src/github.com/couchbase/bhive
+
 cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
 echo "Switching gometa to master"
 git checkout master 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout master"
@@ -231,6 +237,18 @@ if [ "$CIBOT" = "true" ]; then
     git fetch -q ssh://review.couchbase.org/plasma $revspec && git cherry-pick FETCH_HEAD
     test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >> ~/gerrit.list
   done
+
+  autolist="`ssh review.couchbase.org gerrit query \"project:bhive status:open branch:main reviewer:self\" | grep number: | awk '{print $2}' | sort -n`"
+  for patch_id in $GERRIT $autolist
+  do
+    cd $WORKSPACE/goproj/src/github.com/couchbase/bhive
+    revspec=`git ls-remote -q ssh://review.couchbase.org/bhive refs/changes/*/$patch_id/* | awk '{print $2}' | sort -n -t/ -k5 | tail -1`
+    if [ "$revspec" == "" ]; then continue; fi
+    echo "Pulling in <a href='http://review.couchbase.org/#/c/$patch_id'>uncommitted change $patch_id</a> at $revspec"
+    git fetch -q ssh://review.couchbase.org/bhive $revspec && git cherry-pick FETCH_HEAD
+    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >> ~/gerrit.list
+  done
+
   autolist="`ssh review.couchbase.org gerrit query \"project:gometa status:open branch:master reviewer:self\" | grep number: | awk '{print $2}' | sort -n`"
   for patch_id in $GERRIT $autolist
   do
