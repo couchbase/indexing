@@ -1361,7 +1361,7 @@ func getStateStr(instance *manager.IndexInstDistribution, state common.IndexStat
 			if vectorIndex {
 				stateStr = "Training"
 			} else {
-				stateStr = "Waiting for training completion"
+				stateStr = "Scheduled for build"
 			}
 		}
 	}
@@ -1512,8 +1512,8 @@ func (m *requestHandlerContext) consolideStateStr(str1 string, str2 string) stri
 		return "Training"
 	}
 
-	if strings.HasPrefix(str1, "Waiting for training completion") || strings.HasPrefix(str2, "Waiting for training completion") {
-		return "Waiting for training completion"
+	if strings.HasPrefix(str1, "Scheduled for build") || strings.HasPrefix(str2, "Scheduled for build") {
+		return "Scheduled for build"
 	}
 
 	if str1 == "Moving" || str2 == "Moving" {

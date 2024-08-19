@@ -5,9 +5,13 @@ import (
 	"time"
 )
 
-func genRandomVecs(dims int, n int) [][]float32 {
-	rand.Seed(time.Now().UnixNano())
-
+func genRandomVecs(dims int, n int, seed int64) [][]float32 {
+	if seed != 0 {
+		rand.Seed(seed)
+	} else {
+		rand.Seed(time.Now().UnixNano())
+	}
+	
 	vecs := make([][]float32, n)
 	for i := 0; i < n; i++ {
 		vecs[i] = make([]float32, dims)

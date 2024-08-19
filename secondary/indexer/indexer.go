@@ -6520,7 +6520,7 @@ func (idx *indexer) handleCodebookRecoveryError(indexInst common.IndexInst, part
 	}
 
 	if recoveryErr == errCodebookPathNotFound {
-		if indexInst.TrainingPhase == common.TRAININIG_NOT_STARTED || indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+		if indexInst.TrainingPhase == common.TRAINING_NOT_STARTED || indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
 			logging.Infof("Indexer::initPartnInstance: Ignoring err: %v as training phase is not started for instId: %v, partnId: %v",
 				recoveryErr, indexInst.InstId, partnId)
 			return nil
@@ -9284,7 +9284,7 @@ func (idx *indexer) initFromPersistedState() error {
 		// will skip training and update the metadata state to TRAINING_COMPLETED.
 		// Otherwise, slice will be trained and then the stat is updated
 		if inst.TrainingPhase == common.TRAINING_IN_PROGRESS {
-			inst.TrainingPhase = common.TRAININIG_NOT_STARTED
+			inst.TrainingPhase = common.TRAINING_NOT_STARTED
 		}
 
 		idx.updateTopologyOnShardIdChange(&inst, partnShardIdMap)
@@ -13250,7 +13250,7 @@ func (idx *indexer) resetTrainingPhaseForNonVectorInsts(instIdList []common.Inde
 		if inst.Defn.IsVectorIndex {
 			continue
 		}
-		inst.TrainingPhase = c.TRAININIG_NOT_STARTED
+		inst.TrainingPhase = c.TRAINING_NOT_STARTED
 		idx.indexInstMap[instId] = inst
 	}
 }
@@ -13271,12 +13271,13 @@ func getVectors(vectorMeta *c.VectorMetadata, nlist int) []float32 {
 }
 
 func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
-	indexPartnMap IndexPartnMap, config c.Config) (int64, []*c.IndexInst) {
-	var vectorInsts []*c.IndexInst
+	indexPartnMap IndexPartnMap, config c.Config) (int64, []*c.IndexInst, []*c.IndexInst) {
+	var vectorInsts, trainedOrNonVecInsts []*c.IndexInst
 	maxCentroids := 0
 	for _, instId := range instIds {
 		idxInst := indexInstMap[instId]
 		if idxInst.Defn.IsVectorIndex == false || idxInst.IsTrained() {
+			trainedOrNonVecInsts = append(trainedOrNonVecInsts, &idxInst)
 			continue
 		}
 
@@ -13297,7 +13298,7 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 		vecs_per_centroid = 1 // Minimum of one sample per centroid is required for training
 	}
 
-	return int64(maxCentroids * vecs_per_centroid), vectorInsts
+	return int64(maxCentroids * vecs_per_centroid), vectorInsts, trainedOrNonVecInsts
 }
 
 // [VECTOR_TODO]: Add a worker pool to take care of training
@@ -13333,7 +13334,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	clusterAddr := idx.config["clusterAddr"].String()
 
 	bucket, scope, collection := getBucketScopeAndCollFromKeyspaceId(keyspaceId)
-	maxSampleSize, vectorInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap, config)
+	maxSampleSize, vectorInsts, trainedOrNonVecInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap, config)
 
 	// Retrieve vectors from data service for training
 	vectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, vectorInsts, maxSampleSize)
@@ -13351,7 +13352,6 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		idx.internalRecvCh <- &MsgIndexTrainingDone{
 			keyspaceId: keyspaceId,
 			successMap: successMap,
-			reqCtx:     reqCtx,
 			errMap:     errMap,
 		}
 		return
@@ -13382,8 +13382,6 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				idx.internalRecvCh <- &MsgIndexTrainingDone{
 					keyspaceId: keyspaceId,
 					dropMap:    map[c.IndexInstId]MsgChannel{instId: clientCh},
-					reqCtx:     reqCtx,
-					errMap:     errMap,
 				}
 				continue
 			}
@@ -13473,12 +13471,22 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		}
 	}
 
+	// If instance is not dropped, add non-vector (or) trained instances
+	// to the successMap so that build can be triggered for all the indexes
+	// together in same batch
+	for _, idxInst := range trainedOrNonVecInsts {
+		if _, ok := droppedInsts[idxInst.InstId]; !ok {
+			successMap[idxInst.InstId] = true
+		}
+	}
+
 	if len(successMap) > 0 || len(errMap) > 0 {
 		idx.internalRecvCh <- &MsgIndexTrainingDone{
-			keyspaceId: keyspaceId,
-			successMap: successMap,
-			reqCtx:     reqCtx,
-			errMap:     errMap,
+			keyspaceId:   keyspaceId,
+			successMap:   successMap,
+			reqCtx:       reqCtx,
+			errMap:       errMap,
+			droppedInsts: droppedInsts,
 		}
 	}
 }
@@ -13496,34 +13504,41 @@ func (idx *indexer) handleTrainingAndCheckForDrop(keyspaceId string,
 		respCh <- slice.Train(vectors)
 	}()
 
+	checkForInstDrop := func() {
+		for _, instId := range allInsts {
+			if _, ok := droppedInsts[instId]; ok {
+				continue
+			}
+
+			// Do not process drop for current instance as training is on-going
+			// for this instance. Index will be dropped after training is done
+			if instId == currInstId {
+				continue
+			}
+
+			if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
+				droppedInsts[instId] = true
+
+				logging.Infof("Indexer::handleTrainingAndCheckForDrop Observed that inst: %v is dropped during training. "+
+					"Skip further processing", instId)
+
+				idx.internalRecvCh <- &MsgIndexTrainingDone{
+					keyspaceId: keyspaceId,
+					dropMap:    map[c.IndexInstId]MsgChannel{instId: clientCh},
+				}
+			}
+		}
+	}
+
 	for {
 		select {
 		case err := <-respCh:
+			// If training takes less than a second, then drop can be delayed. Hence,
+			// process drop once before returning err
+			checkForInstDrop()
 			return err
 		case <-ticker.C:
-			for _, instId := range allInsts {
-				if _, ok := droppedInsts[instId]; ok {
-					continue
-				}
-
-				// Do not process drop for current instance as training is on-going
-				// for this instance. Index will be dropped after training is done
-				if instId == currInstId {
-					continue
-				}
-
-				if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
-					droppedInsts[instId] = true
-
-					logging.Infof("Indexer::handleTrainingAndCheckForDrop Observed that inst: %v is dropped during training. "+
-						"Skip further processing", instId)
-
-					idx.internalRecvCh <- &MsgIndexTrainingDone{
-						keyspaceId: keyspaceId,
-						dropMap:    map[c.IndexInstId]MsgChannel{instId: clientCh},
-					}
-				}
-			}
+			checkForInstDrop()
 		}
 	}
 
@@ -13533,6 +13548,7 @@ func (idx *indexer) handleTrainingAndCheckForDrop(keyspaceId string,
 func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	msg := cmd.(*MsgIndexTrainingDone)
 	successMap := msg.GetSuccessMap()
+	droppedInsts := msg.GetDroppedInsts()
 	errMap := msg.GetErrMap()
 	keyspaceId := msg.GetKeyspaceId()
 	reqCtx := msg.GetReqCtx()
@@ -13549,16 +13565,22 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	// For failed instances, set isTrained to false
 	for instId := range successMap {
 
-		if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
-			dropMap[instId] = clientCh
-			continue
+		if _, ok := droppedInsts[instId]; ok {
+			// Instance was dropped and not yet deleted.
+			if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
+				dropMap[instId] = clientCh
+			} else {
+				// Instance was dropped after training and the deletion process
+				// finished as well. Do not process this instance further
+			}
+			continue // Instance was dropped. No need to process it further
 		}
 
 		inst := idx.indexInstMap[instId]
 		if inst.Defn.IsVectorIndex {
 			inst.TrainingPhase = c.TRAINING_COMPLETED
 		} else {
-			inst.TrainingPhase = c.TRAININIG_NOT_STARTED
+			inst.TrainingPhase = c.TRAINING_NOT_STARTED
 		}
 		idx.indexInstMap[instId] = inst
 		inst.Error = "" // Reset any error observed from earlier iterations
@@ -13568,16 +13590,22 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 
 	for instId, partnErrMap := range errMap {
 
-		if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
-			dropMap[instId] = clientCh
-			continue
+		if _, ok := droppedInsts[instId]; ok {
+			// Instance was dropped and not yet deleted.
+			if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
+				dropMap[instId] = clientCh
+			} else {
+				// Instance was dropped after training and the deletion process
+				// finished as well. Do not process this instance further
+			}
+			continue // Instance was dropped. No need to process it further
 		}
 
 		inst := idx.indexInstMap[instId]
 		// Even if one partition of an instance encounters error, reset training
 		// phase. Index build retry skip those partitions that are already trained
 		// and only train those partitions that are not trained
-		inst.TrainingPhase = c.TRAININIG_NOT_STARTED
+		inst.TrainingPhase = c.TRAINING_NOT_STARTED
 		errStr := ""
 		for partnId, err := range partnErrMap {
 			errStr += fmt.Sprintf("%v:%v ", partnId, err)

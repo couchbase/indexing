@@ -47,7 +47,7 @@ var vecPartnIndexCreated = false
 // missing   -> if (repitionCount % 10 != 0) "NotMissing"
 // docnum    -> overflow*10000 + vecnum
 // count     -> atomic int value of number of docs loaded
-func vectorSetup(t *testing.T) {
+func vectorSetup(t *testing.T, bucket, scope, coll string, numDocs int) {
 	skipIfNotPlasma(t)
 
 	// Drop all indexes from earlier tests
@@ -56,11 +56,30 @@ func vectorSetup(t *testing.T) {
 
 	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 
+	e = loadVectorData(t, bucket, scope, coll, numDocs)
+	FailTestIfError(e, "Error in loading vector data", t)
+
+	vectorsLoaded = true
+}
+
+func loadVectorData(t *testing.T, bucket, scope, coll string, numDocs int) error {
+	if scope == "" {
+		scope = c.DEFAULT_SCOPE
+	}
+	if coll == "" {
+		coll = c.DEFAULT_COLLECTION
+	}
+	if numDocs == 0 {
+		numDocs = 40000
+	}
+
 	// Load Data
 	cfg := randdocs.Config{
 		ClusterAddr:    "127.0.0.1:9000",
 		Bucket:         bucket,
-		NumDocs:        40000,
+		Scope:          scope,
+		Collection:     coll,
+		NumDocs:        numDocs,
 		Iterations:     1,
 		Threads:        8,
 		OpsPerSec:      100000,
@@ -68,16 +87,14 @@ func vectorSetup(t *testing.T) {
 		SkipNormalData: true,
 		SIFTFVecsFile:  "../../tools/randdocs/siftsmall/siftsmall_base.fvecs",
 	}
-	randdocs.Run(cfg)
-
-	vectorsLoaded = true
+	return randdocs.Run(cfg)
 }
 
 func TestVectorCreateIndex(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	// Create Index
@@ -113,7 +130,7 @@ func TestVectorCreateIndex(t *testing.T) {
 
 	limit := int64(5)
 	// Scan
-	scanResults, err := secondaryindex.Scan6(idx_sif10k, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	scanResults, err := secondaryindex.Scan6(idx_sif10k, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
 	vectorPosReturned := make([]uint32, 0)
@@ -146,7 +163,7 @@ func TestVectorIndexWithDesc(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	idx_sif10k_desc := "idx_sif10k_desc"
@@ -184,7 +201,7 @@ func TestVectorIndexWithDesc(t *testing.T) {
 
 	limit := int64(5)
 	// Scan
-	scanResults, err := secondaryindex.Scan6(idx_sif10k_desc, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	scanResults, err := secondaryindex.Scan6(idx_sif10k_desc, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
 	vectorPosReturned := make([]uint32, 0)
@@ -207,7 +224,7 @@ func TestVectorOnlyIndex(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	idx_vecOnly := "idx_vecOnly"
@@ -235,7 +252,7 @@ func TestVectorOnlyIndex(t *testing.T) {
 	}
 
 	// Scan
-	scanResults, err := secondaryindex.Scan6(idx_vecOnly, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	scanResults, err := secondaryindex.Scan6(idx_vecOnly, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
 	vectorPosReturned := make([]uint32, 0)
@@ -258,7 +275,7 @@ func TestIndexConfigs(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	var testIndexConfigs = []struct {
@@ -271,6 +288,11 @@ func TestIndexConfigs(t *testing.T) {
 		{"idx_sift10k_SQ6", "128", "IVF256,SQ6", "L2_SQUARED"},
 		{"idx_sift10k_SQ8", "128", "IVF256,SQ8", "L2_SQUARED"},
 		{"idx_sift10k_SQfp16", "128", "IVF256,SQfp16", "L2_SQUARED"},
+		{"idx_sift10k_SQ8_DOT", "128", "IVF256,SQ8", "DOT"},
+		{"idx_sift10k_SQ8_COSINE", "128", "IVF256,SQ8", "COSINE"},
+		{"idx_sift10k_PQFS", "128", "IVF256,PQ32x4FS", "L2_SQUARED"},
+		{"idx_sift10k_PQ_DOT", "128", "IVF256,PQ32x4", "DOT"},
+		{"idx_sift10k_PQ_COSINE", "128", "IVF256,PQ32x4", "COSINE"},
 	}
 
 	// Scan setting
@@ -306,7 +328,7 @@ func TestIndexConfigs(t *testing.T) {
 			err := createWithDeferAndBuild(tc.name, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
 			FailTestIfError(err, "Error in creating "+tc.name, t)
 			// Scan
-			scanResults, err := secondaryindex.Scan6(tc.name, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+			scanResults, err := secondaryindex.Scan6(tc.name, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 			FailTestIfError(err, "Error during secondary index scan", t)
 
 			vectorPosReturned := make([]uint32, 0)
@@ -331,7 +353,7 @@ func TestVectorPartialIndex(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	idx_partial := "idx_sift10k_partial"
@@ -364,7 +386,7 @@ func TestVectorPartialIndex(t *testing.T) {
 
 	limit := int64(5)
 	// Scan
-	scanResults, err := secondaryindex.Scan6(idx_partial, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	scanResults, err := secondaryindex.Scan6(idx_partial, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
 	vectorPosReturned := make([]uint32, 0)
@@ -387,7 +409,7 @@ func TestVectorIndexMissingTrailing(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	idx_missing_trailing := "idx_missing_trailing"
@@ -423,7 +445,7 @@ func TestVectorIndexMissingTrailing(t *testing.T) {
 
 	limit := int64(5)
 	// Scan
-	scanResults, err := secondaryindex.Scan6(idx_missing_trailing, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	scanResults, err := secondaryindex.Scan6(idx_missing_trailing, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
 	vectorPosReturned := make([]uint32, 0)
@@ -446,7 +468,7 @@ func TestVectorPartitionedIndex(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !vectorsLoaded {
-		vectorSetup(t)
+		vectorSetup(t, bucket, "", "", 40000)
 	}
 
 	// Drop all indexes from earlier tests
@@ -488,7 +510,7 @@ func TestVectorPartitionedIndex(t *testing.T) {
 	}
 
 	// Scan
-	scanResults, err := secondaryindex.Scan6(idx_sif10k_partn, bucket, kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	scanResults, err := secondaryindex.Scan6(idx_sif10k_partn, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
 	vectorPosReturned := make([]uint32, 0)
@@ -762,7 +784,7 @@ func testScalarPredicates(t *testing.T, idx string) {
 		t.Run(tt.name, func(t *testing.T) {
 			limit := int64(5)
 			// Scan
-			scanResults, err := secondaryindex.Scan6(idx, bucket, kvaddress, tt.scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+			scanResults, err := secondaryindex.Scan6(idx, bucket, "", "", kvaddress, tt.scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
 			FailTestIfError(err, "Error during secondary index scan", t)
 
 			vectorPosReturned := make([]uint32, 0)

@@ -34,7 +34,7 @@ var codebookIVFSQTestCases = []codebookIVFSQTestCase{
 
 // Tests for CodebookIVFSQ
 func TestCodebookIVFSQ(t *testing.T) {
-
+	seed := time.Now().UnixNano()
 	for _, tc := range codebookIVFSQTestCases {
 		t.Run(tc.name, func(t *testing.T) {
 
@@ -44,7 +44,7 @@ func TestCodebookIVFSQ(t *testing.T) {
 			}
 
 			//generate random vectors, train vectors and query vectors
-			vecs := genRandomVecs(tc.dim, tc.num_vecs)
+			vecs := genRandomVecs(tc.dim, tc.num_vecs, seed)
 
 			//train the codebook using 10000 vecs
 			train_vecs := convertTo1D(vecs[:tc.trainlist])

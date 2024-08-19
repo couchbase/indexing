@@ -442,12 +442,12 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	return results, garesults, err2
 }
 
-func N1QLScan6(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
+func N1QLScan6(indexName, bucketName, scope, coll, server string, scans qc.Scans, reverse, distinct bool,
 	projection *qc.IndexProjection, offset, limit int64, groupAggr *qc.GroupAggr, consistency c.Consistency,
 	vector *qc.TsConsistency, indexKeyNames []string, inlineFilter string, indexVector *datastore.IndexVector,
 	indexPartionSets datastore.IndexPartitionSets) (tc.ScanResponseActual, error) {
 
-	client, err := GetOrCreateN1QLClient(server, bucketName)
+	client, err := GetOrCreateN1QLClient2(server, bucketName, scope, coll)
 	if err != nil {
 		return nil, err
 	}

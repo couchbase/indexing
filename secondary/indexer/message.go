@@ -3297,12 +3297,13 @@ func (m *MsgPersistanceStatus) GetRespCh() chan bool {
 }
 
 type MsgIndexTrainingDone struct {
-	keyspaceId string
-	errMap     map[common.IndexInstId]map[common.PartitionId]error
-	successMap map[common.IndexInstId]bool
-	dropMap    map[common.IndexInstId]MsgChannel
-	reqCtx     *c.MetadataRequestContext
-	respCh     MsgChannel
+	keyspaceId   string
+	errMap       map[common.IndexInstId]map[common.PartitionId]error
+	successMap   map[common.IndexInstId]bool
+	droppedInsts map[common.IndexInstId]bool
+	dropMap      map[common.IndexInstId]MsgChannel
+	reqCtx       *c.MetadataRequestContext
+	respCh       MsgChannel
 }
 
 func (m *MsgIndexTrainingDone) GetMsgType() MsgType {
@@ -3323,6 +3324,10 @@ func (m *MsgIndexTrainingDone) GetSuccessMap() map[common.IndexInstId]bool {
 
 func (m *MsgIndexTrainingDone) GetDropMap() map[common.IndexInstId]MsgChannel {
 	return m.dropMap
+}
+
+func (m *MsgIndexTrainingDone) GetDroppedInsts() map[common.IndexInstId]bool {
+	return m.droppedInsts
 }
 
 func (m *MsgIndexTrainingDone) GetReqCtx() *c.MetadataRequestContext {

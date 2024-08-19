@@ -541,13 +541,20 @@ func datastoreIndexVectorToQc(indexVector *datastore.IndexVector) *qc.IndexVecto
 	return vec
 }
 
-func Scan6(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool, projection *qc.IndexProjection,
+func Scan6(indexName, bucketName, scope, collection, server string, scans qc.Scans, reverse, distinct bool, projection *qc.IndexProjection,
 	offset, limit int64, indexOrder *qc.IndexKeyOrder, consistency c.Consistency, tsVector *qc.TsConsistency,
 	indexVector *datastore.IndexVector) (tc.ScanResponseActual, error) {
 
+	if scope == "" {
+		scope = c.DEFAULT_SCOPE
+	}
+	if collection == "" {
+		collection = c.DEFAULT_COLLECTION
+	}
+
 	if UseClient == "n1ql" {
 		log.Printf("Using n1ql client")
-		res, err := N1QLScan6(indexName, bucketName, server, scans, reverse, distinct,
+		res, err := N1QLScan6(indexName, bucketName, scope, collection, server, scans, reverse, distinct,
 			projection, offset, limit, nil, consistency, nil, nil, "",
 			indexVector, nil)
 		return res, err
@@ -562,7 +569,7 @@ func Scan6(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 		return nil, e
 	}
 
-	defnID, _ := GetDefnID(client, bucketName, indexName)
+	defnID, _ := GetDefnID2(client, bucketName, scope, collection, indexName)
 	scanResults := make(tc.ScanResponseActual)
 
 	tmpbuf, tmpbufPoolIdx := qc.GetFromPools()

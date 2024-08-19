@@ -36,6 +36,7 @@ var codebookIVFPQTestCases = []codebookIVFPQTestCase{
 }
 
 func TestCodebookIVFPQ(t *testing.T) {
+	seed := time.Now().UnixNano()
 	for _, tc := range codebookIVFPQTestCases {
 		t.Run(tc.name, func(t *testing.T) {
 
@@ -45,7 +46,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 			}
 
 			//generate random vectors
-			vecs := genRandomVecs(tc.dim, tc.num_vecs)
+			vecs := genRandomVecs(tc.dim, tc.num_vecs, seed)
 
 			//train the codebook using 10000 vecs
 			train_vecs := convertTo1D(vecs[:tc.trainlist])
@@ -296,6 +297,7 @@ var pqTimingTestCases = []pqTimingTestCase{
 }
 
 func TestIVFPQTiming(t *testing.T) {
+	seed := time.Now().Unix()
 	for _, tc := range pqTimingTestCases {
 		t.Run(tc.name, func(t *testing.T) {
 
@@ -305,7 +307,7 @@ func TestIVFPQTiming(t *testing.T) {
 			}
 
 			//generate random vectors
-			vecs := genRandomVecs(tc.dim, tc.num_vecs)
+			vecs := genRandomVecs(tc.dim, tc.num_vecs, seed)
 
 			//train the codebook
 			train_vecs := convertTo1D(vecs[:tc.trainlist])
@@ -388,6 +390,7 @@ func TestIVFPQTiming(t *testing.T) {
 
 //concurrent encode/decode
 func TestIVFPQConcurrentTiming(t *testing.T) {
+	seed := time.Now().Unix()
 	for _, tc := range pqTimingTestCases {
 		t.Run(tc.name, func(t *testing.T) {
 
@@ -397,7 +400,7 @@ func TestIVFPQConcurrentTiming(t *testing.T) {
 			}
 
 			//generate random vectors
-			vecs := genRandomVecs(tc.dim, tc.num_vecs)
+			vecs := genRandomVecs(tc.dim, tc.num_vecs, seed)
 
 			//train the codebook
 			train_vecs := convertTo1D(vecs[:tc.trainlist])
