@@ -31,11 +31,12 @@ type allocator struct {
 }
 
 type Row struct {
-	key   []byte
-	value []byte
-	len   int
-	last  bool
-	dist  float32
+	key      []byte
+	value    []byte
+	len      int
+	last     bool
+	dist     float32
+	recordId uint64 // used in BHIVE scans for re-ranking
 
 	mem *allocator
 }

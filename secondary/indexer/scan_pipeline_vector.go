@@ -197,6 +197,9 @@ func (w *ScanWorker) Scanner() {
 		snap := job.snap.Snapshot()
 		ctx := job.ctx
 		handler := w.scanIteratorCallback
+		if w.r.isBhiveScan {
+			handler = w.bhiveIteratorCallback
+		}
 
 		// VECTOR_TODO: Check if we can move this logic to another goroutine so that
 		// this main goroutine is free for error handling and check if use of row.last
@@ -207,7 +210,7 @@ func (w *ScanWorker) Scanner() {
 		} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
 			err = snap.Range(ctx, scan.Low, scan.High, scan.Incl, handler)
 		} else {
-			err = fmt.Errorf("invalid scan type received at scan worker %v", scan.ScanType)
+			err = snap.Lookup(ctx, scan.Low, handler)
 		}
 
 		// Got error from storage layer or iterator callback
@@ -358,33 +361,66 @@ func (w *ScanWorker) Sender() {
 			// 2. when we are projecting all keys (projectVectorDist)
 			// 3. when vector field is being projected (projectVectorDist)
 			if w.r.ProjectVectorDist() {
-				distVal := n1qlval.NewValue(float64(dists[i]))
-				encodeBuf := make([]byte, 0, distVal.Size()*3)
-				codec1 := collatejson.NewCodec(16)
-				distCode, err := codec1.EncodeN1QLValue(distVal, encodeBuf)
-				if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
-					distCode, err = encodeN1qlVal(distVal)
-				}
-				if err != nil {
-					logging.Verbosef("%v Sender got error: %v from EncodeN1qlvalue", w.logPrefix, err)
-					w.senderErrCh <- err
-					return
-				}
 
-				// VECTOR_TODO: Use buffer pools for these buffer allocations
-				// VECTOR_TODO: Try to use fixed length encoding for float64 distance replacement with centroidID
-				// ReplaceEncodedFieldInArray encodes distCode and replaces centroidId in key so add more buffer
-				// for encoding of distCode incase it needs more space than centroidId => adding 3 * distCode size
-				newBuf := make([]byte, 0, len(rows[i].key)+(3*len(distCode)))
-				codec2 := collatejson.NewCodec(16)
-				newEntry, err := codec2.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
-				if err != nil {
-					logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
-						w.logPrefix, err, logging.TagStrUD(rows[i].key), vectorKeyPos, distCode)
-					w.senderErrCh <- err
-					return
+				if w.r.isBhiveScan == false {
+					distVal := n1qlval.NewValue(float64(dists[i]))
+					encodeBuf := make([]byte, 0, distVal.Size()*3)
+					codec1 := collatejson.NewCodec(16)
+					distCode, err := codec1.EncodeN1QLValue(distVal, encodeBuf)
+					if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
+						distCode, err = encodeN1qlVal(distVal)
+					}
+					if err != nil {
+						logging.Verbosef("%v Sender got error: %v from EncodeN1qlvalue", w.logPrefix, err)
+						w.senderErrCh <- err
+						return
+					}
+
+					// VECTOR_TODO: Use buffer pools for these buffer allocations
+					// VECTOR_TODO: Try to use fixed length encoding for float64 distance replacement with centroidID
+					// ReplaceEncodedFieldInArray encodes distCode and replaces centroidId in key so add more buffer
+					// for encoding of distCode incase it needs more space than centroidId => adding 3 * distCode size
+					newBuf := make([]byte, 0, len(rows[i].key)+(3*len(distCode)))
+					codec2 := collatejson.NewCodec(16)
+					newEntry, err := codec2.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
+					if err != nil {
+						logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
+							w.logPrefix, err, logging.TagStrUD(rows[i].key), vectorKeyPos, distCode)
+						w.senderErrCh <- err
+						return
+					}
+					rows[i].key = newEntry // Replace old entry with centoidId to new entry with distance
+				} else {
+
+					// BHIVE scan requires special treatment as the row.key would be docid unlike a composite
+					// vector index where row.key is CJSON encoded key + docID
+					// Hence, we need to construct a new code and build a secondary entry
+
+					docidLen := len(rows[i].key) + 2 // 2 bytes extra for length encoding
+					var distValArr []interface{}
+					distVal := n1qlval.NewValue(float64(dists[i]))
+					distValArr = append(distValArr, distVal)
+
+					encodeBuf := make([]byte, 0, distVal.Size()*3+uint64(docidLen))
+					codec := collatejson.NewCodec(16)
+					distCode, err := codec.EncodeN1QLValue(n1qlval.NewValue(distValArr), encodeBuf)
+
+					if err != nil {
+						distCode, err = encodeN1qlVal(n1qlval.NewValue(distValArr))
+					}
+
+					// VECTOR_TODO: This buffer is unnecessary and can be optimised out
+					encodeBuf2 := make([]byte, 0, len(distCode)+docidLen)
+					newEntry, err := NewSecondaryIndexEntry3(distCode, rows[i].key, encodeBuf2)
+
+					if err != nil {
+						logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
+							w.logPrefix, err, logging.TagStrUD(rows[i].key), vectorKeyPos, distCode)
+						w.senderErrCh <- err
+						return
+					}
+					rows[i].key = newEntry
 				}
-				rows[i].key = newEntry // Replace old entry with centoidId to new entry with distance
 			}
 
 			rows[i].dist = dists[i] // Add distance for sorting in heap
@@ -431,6 +467,39 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 	w.currJob.rowsScanned++
 	w.bytesRead += uint64(len(entry))
 	w.currJob.bytesRead += uint64(len(entry))
+	if value != nil {
+		w.bytesRead += uint64(len(value))
+		w.currJob.bytesRead += uint64(len(value))
+	}
+
+	return nil
+}
+
+func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
+
+	recordId, meta := w.currJob.snap.Snapshot().DecodeMeta(value)
+	// Replace value with meta for now. Once include column support is added,
+	// meta() has to be split into include column fields and quantized codes
+	value = meta
+
+	var r Row
+	r.key = entry
+	r.value = value
+	r.recordId = recordId
+
+	select {
+	case <-w.stopCh:
+		return ErrScanWorkerStopped
+	case err := <-w.senderErrCh:
+		logging.Tracef("%v scanIteratorCallback got error: %v from Sender", w.logPrefix, err)
+		return err
+	case w.senderCh <- &r:
+	}
+
+	w.rowsScanned++
+	w.currJob.rowsScanned++
+	w.bytesRead += uint64(len(entry) + 8) // 8 bytes for centroidId that are read and filtered out
+	w.currJob.bytesRead += uint64(len(entry) + 8)
 	if value != nil {
 		w.bytesRead += uint64(len(value))
 		w.currJob.bytesRead += uint64(len(value))
