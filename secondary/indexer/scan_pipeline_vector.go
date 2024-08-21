@@ -287,7 +287,7 @@ func (w *ScanWorker) Sender() {
 	for {
 		vecCount := 0
 		lastRowReceived := false
-		for vecCount < batchSize {
+		for ; vecCount < batchSize; vecCount++ {
 			rows[vecCount], ok = <-w.senderCh
 			if !ok {
 				return
@@ -296,23 +296,6 @@ func (w *ScanWorker) Sender() {
 			if rows[vecCount].last {
 				lastRowReceived = true
 				break // Finish the data gathered till ensemble
-			}
-
-			rows[vecCount].key, err = w.reverseCollate(rows[vecCount].key)
-			if err != nil {
-				logging.Verbosef("%v Sender got error: %v from reverseCollate", w.logPrefix, err)
-				w.senderErrCh <- err
-				return
-			}
-
-			skipRow, err := w.skipRow(rows[vecCount].key)
-			if err != nil {
-				logging.Verbosef("%v Sender got error: %v from skipRow", w.logPrefix, err)
-				w.senderErrCh <- err
-				return
-			}
-			if !skipRow {
-				vecCount++
 			}
 		}
 
@@ -442,12 +425,39 @@ func (w *ScanWorker) Sender() {
 }
 
 func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
-	entry1 := secondaryIndexEntry(entry)
 
 	var r Row
+	var err error
+	var skipRow bool
+
+	w.rowsScanned++
+	w.currJob.rowsScanned++
+	w.bytesRead += uint64(len(entry))
+	w.currJob.bytesRead += uint64(len(entry))
+	if value != nil {
+		w.bytesRead += uint64(len(value))
+		w.currJob.bytesRead += uint64(len(value))
+	}
+
+	entry, err = w.reverseCollate(entry)
+	if err != nil {
+		logging.Verbosef("%v Sender got error: %v from reverseCollate", w.logPrefix, err)
+		return err
+	}
+
+	skipRow, err = w.skipRow(entry)
+	if err != nil {
+		logging.Verbosef("%v Sender got error: %v from skipRow", w.logPrefix, err)
+		return err
+	}
+
+	if skipRow {
+		return nil
+	}
+
+	entry1 := secondaryIndexEntry(entry)
 	r.len = entry1.lenKey()
 
-	// VECTOR_TODO: Stop copying entry and value once MB-62901 and MB-62881 are resolved
 	r.key = make([]byte, len(entry))
 	copy(r.key, entry)
 
@@ -461,15 +471,6 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 		logging.Tracef("%v scanIteratorCallback got error: %v from Sender", w.logPrefix, err)
 		return err
 	case w.senderCh <- &r:
-	}
-
-	w.rowsScanned++
-	w.currJob.rowsScanned++
-	w.bytesRead += uint64(len(entry))
-	w.currJob.bytesRead += uint64(len(entry))
-	if value != nil {
-		w.bytesRead += uint64(len(value))
-		w.currJob.bytesRead += uint64(len(value))
 	}
 
 	return nil
