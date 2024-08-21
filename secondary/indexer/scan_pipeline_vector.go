@@ -336,76 +336,7 @@ func (w *ScanWorker) Sender() {
 		}
 
 		// Substitue distance in place centroidId and send to outCh
-		// VECTOR_TODO: Check if we can discard moving value to next stage
-		vectorKeyPos := w.r.getVectorKeyPos()
 		for i := 0; i < vecCount; i++ {
-			// Substitute distance in place of centroid ID
-			// 1. when projection is not pushed down (w.r.Indexprojection == nil )
-			// 2. when we are projecting all keys (projectVectorDist)
-			// 3. when vector field is being projected (projectVectorDist)
-			if w.r.ProjectVectorDist() {
-
-				if w.r.isBhiveScan == false {
-					distVal := n1qlval.NewValue(float64(dists[i]))
-					encodeBuf := make([]byte, 0, distVal.Size()*3)
-					codec1 := collatejson.NewCodec(16)
-					distCode, err := codec1.EncodeN1QLValue(distVal, encodeBuf)
-					if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
-						distCode, err = encodeN1qlVal(distVal)
-					}
-					if err != nil {
-						logging.Verbosef("%v Sender got error: %v from EncodeN1qlvalue", w.logPrefix, err)
-						w.senderErrCh <- err
-						return
-					}
-
-					// VECTOR_TODO: Use buffer pools for these buffer allocations
-					// VECTOR_TODO: Try to use fixed length encoding for float64 distance replacement with centroidID
-					// ReplaceEncodedFieldInArray encodes distCode and replaces centroidId in key so add more buffer
-					// for encoding of distCode incase it needs more space than centroidId => adding 3 * distCode size
-					newBuf := make([]byte, 0, len(rows[i].key)+(3*len(distCode)))
-					codec2 := collatejson.NewCodec(16)
-					newEntry, err := codec2.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
-					if err != nil {
-						logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
-							w.logPrefix, err, logging.TagStrUD(rows[i].key), vectorKeyPos, distCode)
-						w.senderErrCh <- err
-						return
-					}
-					rows[i].key = newEntry // Replace old entry with centoidId to new entry with distance
-				} else {
-
-					// BHIVE scan requires special treatment as the row.key would be docid unlike a composite
-					// vector index where row.key is CJSON encoded key + docID
-					// Hence, we need to construct a new code and build a secondary entry
-
-					docidLen := len(rows[i].key) + 2 // 2 bytes extra for length encoding
-					var distValArr []interface{}
-					distVal := n1qlval.NewValue(float64(dists[i]))
-					distValArr = append(distValArr, distVal)
-
-					encodeBuf := make([]byte, 0, distVal.Size()*3+uint64(docidLen))
-					codec := collatejson.NewCodec(16)
-					distCode, err := codec.EncodeN1QLValue(n1qlval.NewValue(distValArr), encodeBuf)
-
-					if err != nil {
-						distCode, err = encodeN1qlVal(n1qlval.NewValue(distValArr))
-					}
-
-					// VECTOR_TODO: This buffer is unnecessary and can be optimised out
-					encodeBuf2 := make([]byte, 0, len(distCode)+docidLen)
-					newEntry, err := NewSecondaryIndexEntry3(distCode, rows[i].key, encodeBuf2)
-
-					if err != nil {
-						logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
-							w.logPrefix, err, logging.TagStrUD(rows[i].key), vectorKeyPos, distCode)
-						w.senderErrCh <- err
-						return
-					}
-					rows[i].key = newEntry
-				}
-			}
-
 			rows[i].dist = dists[i] // Add distance for sorting in heap
 
 			select {
@@ -733,6 +664,77 @@ func (fio *MergeOperator) PrintStats() {
 	logging.LazyVerbosef("%v", getDebugStr)
 }
 
+func (fio *MergeOperator) substituteCentroidID(row *Row) error {
+
+	vectorKeyPos := fio.req.getVectorKeyPos()
+
+	// Substitute distance in place of centroid ID
+	// 1. when projection is not pushed down (w.r.Indexprojection == nil )
+	// 2. when we are projecting all keys (projectVectorDist)
+	// 3. when vector field is being projected (projectVectorDist)
+	if fio.req.isBhiveScan == false {
+		distVal := n1qlval.NewValue(float64(row.dist))
+		encodeBuf := make([]byte, 0, distVal.Size()*3)
+		codec1 := collatejson.NewCodec(16)
+		distCode, err := codec1.EncodeN1QLValue(distVal, encodeBuf)
+		if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
+			distCode, err = encodeN1qlVal(distVal)
+		}
+		if err != nil {
+			logging.Verbosef("%v Sender got error: %v from EncodeN1qlvalue", fio.logPrefix, err)
+			return err
+		}
+
+		// VECTOR_TODO: Use buffer pools for these buffer allocations
+		// VECTOR_TODO: Try to use fixed length encoding for float64 distance replacement with centroidID
+		// ReplaceEncodedFieldInArray encodes distCode and replaces centroidId in key so add more buffer
+		// for encoding of distCode incase it needs more space than centroidId => adding 3 * distCode size
+		newBuf := make([]byte, 0, len(row.key)+(3*len(distCode)))
+		codec2 := collatejson.NewCodec(16)
+		newEntry, err := codec2.ReplaceEncodedFieldInArray(row.key, vectorKeyPos, distCode, newBuf)
+		if err != nil {
+			logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
+				fio.logPrefix, err, logging.TagStrUD(row.key), vectorKeyPos, distCode)
+			return err
+		}
+		row.key = newEntry // Replace old entry with centoidId to new entry with distance
+	} else {
+
+		// BHIVE scan requires special treatment as the row.key would be docid unlike a composite
+		// vector index where row.key is CJSON encoded key + docID
+		// Hence, we need to construct a new code and build a secondary entry
+
+		docidLen := len(row.key) + 2 // 2 bytes extra for length encoding
+		var distValArr []interface{}
+		distVal := n1qlval.NewValue(float64(row.dist))
+		distValArr = append(distValArr, distVal)
+
+		encodeBuf := make([]byte, 0, distVal.Size()*3+uint64(docidLen))
+		codec := collatejson.NewCodec(16)
+		distCode, err := codec.EncodeN1QLValue(n1qlval.NewValue(distValArr), encodeBuf)
+		if err != nil {
+			distCode, err = encodeN1qlVal(n1qlval.NewValue(distValArr))
+		}
+		if err != nil {
+			logging.Verbosef("%v Sender got error: %v from EncodeN1qlvalue", fio.logPrefix, err)
+			return err
+		}
+
+		// VECTOR_TODO: This buffer is unnecessary and can be optimised out
+		encodeBuf2 := make([]byte, 0, len(distCode)+docidLen)
+		newEntry, err := NewSecondaryIndexEntry3(distCode, row.key, encodeBuf2)
+
+		if err != nil {
+			logging.Verbosef("%v Sender got error: %v from ReplaceEncodedFieldInArray key:%s pos:%v dist:%v",
+				fio.logPrefix, err, logging.TagStrUD(row.key), vectorKeyPos, distCode)
+			return err
+		}
+		row.key = newEntry
+	}
+
+	return nil
+}
+
 func (fio *MergeOperator) Collector() {
 	defer fio.mergerWg.Done()
 	fio.SetStartTime()
@@ -741,6 +743,8 @@ func (fio *MergeOperator) Collector() {
 	var row *Row
 	var ok bool
 	var err error
+
+	projectDistance := fio.req.ProjectVectorDist()
 
 	for {
 		row, ok = <-fio.recvCh
@@ -758,6 +762,15 @@ func (fio *MergeOperator) Collector() {
 		if fio.req.useHeapForVectorIndex() {
 			fio.heap.Push(row)
 			continue
+		}
+
+		// Substitue centroid ID
+		if projectDistance {
+			err := fio.substituteCentroidID(row)
+			if err != nil {
+				fio.errCh <- err
+				return
+			}
 		}
 
 		// If not get projected fields and send it down stream
@@ -799,6 +812,17 @@ func (fio *MergeOperator) Collector() {
 
 	// Read from Heap and get projected fields and send it down stream
 	for _, row := range sortedRows.rows {
+
+		// Substitue centroid ID
+		if projectDistance {
+			fio.substituteCentroidID(row)
+			if err != nil {
+				fio.heap.Destroy()
+				fio.errCh <- err
+				return
+			}
+		}
+
 		entry := row.key
 		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
 			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
