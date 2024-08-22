@@ -1629,7 +1629,7 @@ func formatInstances(instances []*protobuf.Instance) string {
 			defn.GetIsPrimary(), defn.GetName(), defn.GetUsing(), defn.GetExprType(),
 			logging.TagUD(defn.GetSecExpressions()), defn.GetPartitionScheme(),
 			logging.TagUD(defn.GetWhereExpression()))
-		instanceStr += fmt.Sprintf("singlePartn:%v", inst.GetSinglePartn())
+		instanceStr += fmt.Sprintf("partn:%v", inst.GetPartitionObject())
 		instanceStr += "> "
 	}
 	instanceStr += "]"
