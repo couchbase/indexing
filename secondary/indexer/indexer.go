@@ -7070,6 +7070,46 @@ func (idx *indexer) processPendingBuildDone(streamId common.StreamId,
 	}
 }
 
+// Given a proxy, this method will check all the indexes in indexInstMap for
+// other proxies that are in CATCHUP or ACTIVE state and add them to the
+// proxyInstMap. When the index list is sent to projector, kv_sender will
+// merge all the partitions into realInstId so that projector will stream
+// mutations for both proxy instance and real instance. After the merge,
+// proxy instance will be dropped. In order to ensure that the real instance
+// has all the required partitions, this method will check all the proxies
+// in index inst map
+func (idx *indexer) updateSimilarProxies(proxy c.IndexInst, proxyInstMap map[c.IndexInstId]c.IndexInst) []c.IndexInst {
+	realInstFound := false
+	similarProxies := make([]c.IndexInst, 0)
+	for _, inst := range idx.indexInstMap {
+		if inst.InstId == proxy.RealInstId { //real instance
+			realInstFound = true
+			if _, ok := proxyInstMap[inst.InstId]; !ok {
+				proxyInstMap[inst.InstId] = inst
+				similarProxies = append(similarProxies, inst)
+			}
+			continue
+		}
+
+		if inst.InstId != proxy.InstId &&
+			inst.RealInstId == proxy.RealInstId &&
+			(inst.State == c.INDEX_STATE_CATCHUP || inst.State == c.INDEX_STATE_ACTIVE) { // Proxy instance
+			if _, ok := proxyInstMap[inst.InstId]; !ok {
+				proxyInstMap[inst.InstId] = inst
+				similarProxies = append(similarProxies, inst)
+			}
+		}
+	}
+
+	if !realInstFound {
+		err := fmt.Errorf("Fail to find real index instance %v", proxy.RealInstId)
+		logging.Errorf("Indexer::processBuildDoneCatchup %v", err)
+		common.CrashOnError(err)
+	}
+
+	return similarProxies
+}
+
 func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 	keyspaceId string, sessionId uint64, flushTs *common.TsVbuuid) {
 
@@ -7118,20 +7158,23 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 	// collect progress stats after initial is done or transition to catchup phase. This must be done
 	// after updating metaInfo.
 	idx.sendProgressStats()
+	proxyInstMap := make(map[c.IndexInstId]c.IndexInst)
+	for _, inst := range indexList {
+		proxyInstMap[inst.InstId] = inst
+	}
 
-	// If index is a proxy, add the real index instance to the list.  This will
-	// also update the partition list of the real index instance in projector.
+	// If index is a proxy, add the real index and all the proxies related to the instance
+	// to the list. All the proxies are required as this will update the the partition list
+	// of the real index instance in projector.
 	// This will ensure that the projector will be sending partition mutations to the
 	// real inst in the MAINT stream, when the proxy has become active.
 	// Note that the real inst should be active or being built at the same time as the proxy.
 	for _, index := range indexList {
 		if common.IsPartitioned(index.Defn.PartitionScheme) && index.RealInstId != 0 && index.InstId != index.RealInstId {
-			if realInst, ok := idx.indexInstMap[index.RealInstId]; ok {
-				indexList = append(indexList, realInst)
-			} else {
-				err := fmt.Errorf("Fail to find real index instance %v", index.RealInstId)
-				logging.Errorf("Indexer::processBuildDoneCatchup %v", err)
-				common.CrashOnError(err)
+			similarProxies := idx.updateSimilarProxies(index, proxyInstMap)
+
+			if len(similarProxies) > 0 {
+				indexList = append(indexList, similarProxies...)
 			}
 		}
 	}
