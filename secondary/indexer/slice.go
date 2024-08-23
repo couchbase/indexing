@@ -60,6 +60,7 @@ type Slice interface {
 	SetNlist(int)
 	InitCodebook() error
 	ResetCodebook() error
+	InitCodebookFromSerialized([]byte) error
 	Train([]float32) error
 	GetCodebook() (codebook.Codebook, error)
 	IsTrained() bool
