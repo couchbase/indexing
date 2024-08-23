@@ -660,6 +660,7 @@ func (s *scanCoordinator) handleVectorScanRequest(req *ScanRequest, w ScanRespon
 		req.Stats.scanReqWaitLatDist.Add(waitTime.Nanoseconds())
 
 		req.Stats.Timings.vtDecode.Put(scanPipeline.AvgDecodeDur())
+		req.Stats.Timings.vtDistCmp.Put(scanPipeline.AvgDistCmpDur())
 
 		if req.GroupAggr != nil {
 			req.Stats.numRowsReturnedAggr.Add(int64(scanPipeline.RowsReturned()))

@@ -37,6 +37,9 @@ type ScanJob struct {
 	decodeDur int64
 	decodeCnt int64
 
+	distCmpDur int64
+	distCmpCnt int64
+
 	logPrefix string
 	startTime time.Time
 }
@@ -328,6 +331,7 @@ func (w *ScanWorker) Sender() {
 		atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
 
 		// Compute distance from query vector using codebook
+		t0 = time.Now()
 		qvec := w.r.queryVector
 		dists = dists[:vecCount]
 		err = w.currJob.codebook.ComputeDistance(qvec, fvecs[:vecCount*vectorDim], dists)
@@ -336,6 +340,8 @@ func (w *ScanWorker) Sender() {
 			w.senderErrCh <- err
 			return
 		}
+		atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
+		atomic.AddInt64(&w.currJob.distCmpCnt, int64(vecCount))
 
 		// Substitue distance in place centroidId and send to outCh
 		for i := 0; i < vecCount; i++ {
@@ -992,12 +998,14 @@ func (s *IndexScanSource2) Routine() error {
 	defer func() {
 		for i := 0; i <= maxBatchId; i++ {
 			for _, job := range jobMap[i] {
-				logging.Verbosef("%v dur %v, cnt %v, scanned %v", job.logPrefix,
-					job.decodeDur, job.decodeCnt, job.rowsScanned)
+				logging.Verbosef("%v decode %v, dist %v, cnt %v, scanned %v", job.logPrefix,
+					job.decodeDur, job.distCmpDur, job.decodeCnt, job.rowsScanned)
 				s.p.rowsScanned += job.rowsScanned
 				s.p.bytesRead += job.bytesRead
 				s.p.decodeDur += job.decodeDur
 				s.p.decodeCnt += job.decodeCnt
+				s.p.distCmpDur += job.distCmpDur
+				s.p.distCmpCnt += job.distCmpCnt
 			}
 		}
 	}()

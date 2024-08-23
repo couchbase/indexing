@@ -46,8 +46,10 @@ type ScanPipeline struct {
 	exprEvalNum   int64
 
 	//vector index specific
-	decodeDur int64
-	decodeCnt int64
+	decodeDur  int64
+	decodeCnt  int64
+	distCmpDur int64
+	distCmpCnt int64
 }
 
 func (p *ScanPipeline) Cancel(err error) {
@@ -87,6 +89,15 @@ func (p ScanPipeline) AvgDecodeDur() time.Duration {
 
 	if p.decodeCnt != 0 {
 		return time.Duration(p.decodeDur / p.decodeCnt)
+	}
+	return time.Duration(0)
+}
+
+// vector specific
+func (p ScanPipeline) AvgDistCmpDur() time.Duration {
+
+	if p.distCmpCnt != 0 {
+		return time.Duration(p.distCmpDur / p.distCmpCnt)
 	}
 	return time.Duration(0)
 }
