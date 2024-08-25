@@ -13749,15 +13749,136 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	if len(toBuildInstIds) > 0 {
 		logging.Infof("Indexer: handleIndexTrainingDone Starting build for instances: %v, keyspaceId: %v", toBuildInstIds, keyspaceId)
 
-		// Initiate build
+		// Initiate retryable build
+		idx.retryableBuildAfterTraining(toBuildInstIds, keyspaceId, reqCtx)
+
+	}
+}
+
+func (idx *indexer) retryableBuildAfterTraining(toBuildInstIds []common.IndexInstId, keyspaceId string, reqCtx *common.MetadataRequestContext) {
+
+	isDCPRebalorResume := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceResume)
+
+	getBuildIndexResponse := func(idxInstList []common.IndexInstId) map[common.IndexInstId]error {
+
+		logging.Infof("Indexer: retryableBuildAfterTraining Starting build for instances: %v, keyspaceId: %v", idxInstList, keyspaceId)
+
+		respCh := make(MsgChannel)
 		idx.handleBuildIndex(&MsgBuildIndex{
 			mType:            CLUST_MGR_BUILD_INDEX_DDL,
-			indexInstList:    toBuildInstIds,
+			indexInstList:    idxInstList,
+			respCh:           respCh,
 			bucketList:       []string{keyspaceId},
 			reqCtx:           reqCtx,
 			isEmptyNodeBatch: false,
 		})
+
+		if res, ok := <-respCh; ok {
+
+			switch res.GetMsgType() {
+
+			case CLUST_MGR_BUILD_INDEX_DDL_RESPONSE:
+				errMap := res.(*MsgBuildIndexResponse).GetErrorMap()
+				logging.Infof("Indexer::retryableBuildAfterTraining returns "+
+					"for Build Index %v", idxInstList)
+				return errMap
+
+			case MSG_ERROR:
+				logging.Errorf("Indexer::retryableBuildAfterTraining Error "+
+					"for Build Index %v. Error %v.", idxInstList, res)
+				err := res.(*MsgError).GetError()
+				errMap := make(map[common.IndexInstId]error)
+				for _, instId := range idxInstList {
+					errMap[instId] = &common.IndexerError{Reason: err.String(), Code: err.convertError()}
+				}
+				return errMap
+
+			default:
+				logging.Fatalf("Indexer::retryableBuildAfterTraining Unknown Response "+
+					"Received for Build Index %v. Response %v", idxInstList, res)
+				common.CrashOnError(errors.New("Unknown Response"))
+			}
+
+		} else {
+			logging.Fatalf("Indexer::retryableBuildAfterTraining Unexpected Channel Close "+
+				"for Create Index %v", idxInstList)
+			common.CrashOnError(errors.New("Unknown Response"))
+		}
+		return nil
 	}
+
+	// Same retry ticker duration as that of builder
+	ticker := time.NewTicker(time.Millisecond * 200)
+	defer ticker.Stop()
+
+	doRetry := true
+	errMap := make(map[common.IndexInstId]error)
+
+	for doRetry {
+
+		select {
+		case <-ticker.C:
+			errMap = getBuildIndexResponse(toBuildInstIds)
+
+			// If it is a non rebalance or resume scenario, after the first build request
+			// the builder will take care of retries
+			if !isDCPRebalorResume {
+				return
+			}
+
+			for instId, err := range errMap {
+				if !idx.isTransientErrorForVectorBuild(err, isDCPRebalorResume) {
+
+					for i, instId2 := range toBuildInstIds {
+						if instId == instId2 {
+							if i+1 < len(toBuildInstIds) {
+								toBuildInstIds = append(toBuildInstIds[:i], toBuildInstIds[i+1:]...)
+							} else {
+								toBuildInstIds = toBuildInstIds[:i]
+							}
+							break
+						}
+					}
+				}
+			}
+		}
+
+		// all Instance have non-transient error
+		if len(toBuildInstIds) == 0 {
+			break
+		}
+
+		doRetry = isDCPRebalorResume && (errMap != nil && len(errMap) != 0)
+	}
+
+}
+
+func (idx *indexer) isTransientErrorForVectorBuild(err error, isRebalOrResume bool) bool {
+
+	if !isRebalOrResume {
+		return false
+	}
+
+	if common.IsVectorTrainingError(err.Error()) {
+		return false
+	}
+
+	indexerErr, ok := err.(*common.IndexerError)
+	if !ok {
+		return true
+	}
+
+	if indexerErr.Code == common.IndexNotExist ||
+		indexerErr.Code == common.InvalidBucket ||
+		indexerErr.Code == common.BucketEphemeral ||
+		indexerErr.Code == common.IndexAlreadyExist ||
+		indexerErr.Code == common.IndexInvalidState ||
+		indexerErr.Code == common.BucketEphemeralStd {
+		return false
+	}
+
+	return true
 }
 
 func (idx *indexer) persistCodebookToDisk(storageDir string,
