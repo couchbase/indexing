@@ -875,6 +875,15 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 		testcode.TestActionAtTag(sr.config.Load(), testcode.MASTER_SHARDTOKEN_BEFORE_DROP_ON_SOURCE)
 		///////////////////////////////////////////////////////////////////
 
+		// Special case: dummy tokens are only issued for dest tokens so we should not issue
+		// drop on source tokens for it
+		if tt.IsDummy {
+			tt.ShardTransferTokenState = c.ShardTokenDeleted
+			setTransferTokenInMetakv(ttid, tt)
+
+			return true
+		}
+
 		if tt.SiblingExists() {
 			if sr.getSiblingState(tt) == c.ShardTokenReady {
 				dropOnSourceTokenId, dropOnSourceToken := genShardTokenDropOnSource(tt.RebalId, ttid, tt.SiblingTokenId)
@@ -906,6 +915,16 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 
 	case c.ShardTokenCommit:
 		sr.updateInMemToken(ttid, tt, "master")
+
+		// Special case: dummy tokens are only issued for dest tokens so we should not issue
+		// drop on source tokens for it
+		if tt.IsDummy {
+			tt.ShardTransferTokenState = c.ShardTokenDeleted
+			setTransferTokenInMetakv(ttid, tt)
+
+			return true
+		}
+
 		siblingState := sr.getSiblingState(tt)
 
 		if tt.SiblingExists() {
@@ -942,6 +961,10 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 		sr.updateInMemToken(ttid, tt, "master")
 
 		func() {
+			if tt.IsDummy {
+				return
+			}
+
 			sr.mu.Lock()
 			defer sr.mu.Unlock()
 			if sr.schedulingVersion >= common.PER_NODE_TRANSFER_LIMIT {
@@ -2788,7 +2811,6 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 	// Update state of the transfer token
 	tt.ShardTransferTokenState = c.ShardTokenReady
 	sr.acceptedTokens[ttid] = tt // Update accpeted tokens
-	setTransferTokenInMetakv(ttid, tt)
 
 	var allTokensReady = sr.allDestTokensReadyLOCKED()
 	sr.mu.Unlock()
@@ -2800,6 +2822,8 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 	if allTokensReady {
 		sr.updateRStateOfDCPTokens()
 	}
+
+	setTransferTokenInMetakv(ttid, tt)
 }
 
 func (sr *ShardRebalancer) allDestTokensReadyLOCKED() bool {
@@ -4272,17 +4296,47 @@ func (sr *ShardRebalancer) processRebalancerChange(rToken *RebalanceToken) {
 
 		if sr.isMaster {
 
-			logging.Infof("ShardRebalance::processRebalancerChange Waiting for DCP rebalance to finish")
+			logging.Infof("ShardRebalance::processRebalancerChange Waiting for DCP rebalance %v to finish",
+				sr.rebalToken.RebalId)
 			<-sr.dcpRebrCloseCh
-			logging.Infof("ShardRebalance::processRebalancerChange Done with DCP rebalance. Moving tokens to merge state")
+			logging.Infof("ShardRebalance::processRebalancerChange Done with DCP rebalance %v",
+				sr.rebalToken.RebalId)
 
 			func() {
 				sr.mu.Lock()
 				defer sr.mu.Unlock()
 
-				if sr.retErr != nil || len(sr.transferTokens) == 0 || len(sr.pendingReadyTokens) == 0 {
-					sr.cancelMetakv()
-					go sr.finishRebalance(sr.retErr)
+				// since DCP rebalance is finished at this point, we can calculate DCP tokens
+				// pending ready here. we are not processing retErr before we calculate these
+				// tokens. the only case when retErr is not nil and this processing will give errors
+				// is when metakv is unavailable. hence this should be fine
+				var allDcpTokens, err = getDcpTokens()
+				if err != nil {
+					logging.Warnf("ShardRebalancer::processRebalancerChange failed to get all DCP tokens with err - %v for rebalance id %v",
+						err, sr.rebalToken.RebalId)
+				}
+				var dcpTokensPendingReady = make(map[string]*c.TransferToken)
+				for tokenId, token := range allDcpTokens {
+					if token.IsEmptyNodeBatch {
+						dcpTokensPendingReady[tokenId] = token
+					}
+				}
+
+				if sr.retErr != nil || len(sr.transferTokens) == 0 ||
+					len(sr.pendingReadyTokens) == 0 {
+
+					if sr.retErr == nil && len(dcpTokensPendingReady) != 0 {
+						// SPECIAL CASE handling
+						// we post a fake dummy shard token here for all the nodes requiring
+						// only DCP token merge to trigger partition merge and move the tokens ahead
+						logging.Infof("ShardRebalancer::processRebalancerChange found DCP tokens pending ready. posting dummy tokens for rebal id %v",
+							sr.rebalToken.RebalId)
+						sr.postDummyTokenForDcpTokensPendingReady(dcpTokensPendingReady)
+					} else {
+						sr.cancelMetakv()
+						go sr.finishRebalance(sr.retErr)
+					}
+
 				} else {
 					sr.movePendingReadyTokensToMergeStateLocked()
 				}
@@ -4708,5 +4762,71 @@ func isRelevantNodeForTT(tt *common.TransferToken, nodeUUID string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// post dummy tokens for destination node only when there are no other shard tokens in the rebalance
+// this ensures all the DCP pending ready tokens move to the next phase in rebalance
+// ensure caller has sr.mu.lock
+// reason: it can happen once we posted a destination token, it moved the token state ahead
+// before master could post all tokens. in such a state without the lock, master could end the
+// rebalance before we post all tokens
+func (sr *ShardRebalancer) postDummyTokenForDcpTokensPendingReady(
+	dcpTokensPendingReady map[string]*c.TransferToken,
+) {
+	var destNodes = make(map[string]bool)
+
+	for _, token := range dcpTokensPendingReady {
+		destNodes[token.DestId] = true
+	}
+
+	for destNodeUUID := range destNodes {
+		var tokenId, dummyToken = sr.createDummyTokenForDest(destNodeUUID)
+		if dummyToken == nil {
+			break
+		}
+		logging.Infof("ShardRebalancer::postDummyTokensForDcpTokensPendingReady: posting DCP dummy DCP token %v %v",
+			tokenId, dummyToken.CompactString())
+		setTransferTokenInMetakv(tokenId, dummyToken)
+	}
+}
+
+func (sr *ShardRebalancer) createDummyTokenForDest(destNodeUUID string) (string, *c.TransferToken) {
+	var tokenId c.UUID
+	rh := c.NewRetryHelper(
+		10,
+		time.Millisecond,
+		2,
+		func(attempt int, lastErr error) error {
+			if attempt > 0 {
+				logging.Warnf("ShardRebalancer::createDummyTokenForDest failed to generate id with err")
+			}
+			var err error
+			tokenId, err = c.NewUUID()
+			if attempt > 0 && err == nil {
+				logging.Infof("ShardRebalancer::createDummyTokenForDest successful in generating new token id for %v node after %v attempts",
+					destNodeUUID, attempt)
+			} else if err != nil {
+				logging.Warnf("ShardRebalancer::createDummyTokenForDest failed to gen token id for %v node with err %v. attempts - %v",
+					destNodeUUID, err, attempt)
+			}
+			return err
+		},
+	)
+	var err = rh.Run()
+	if err != nil {
+		sr.cancelMetakv()
+		go sr.finishRebalance(err)
+		return "", nil
+	}
+	return fmt.Sprintf("ShardToken%s", tokenId.Str()), &c.TransferToken{
+		ShardTransferTokenState: c.ShardTokenMerge,
+		DestId:                  destNodeUUID,
+		MasterId:                sr.nodeUUID,
+		IsEmptyNodeBatch:        true,
+		IsPendingReady:          true,
+		IsDummy:                 true,
+		RebalId:                 sr.rebalToken.RebalId,
+		Version:                 c.MULTI_INST_SHARD_TRANSFER,
 	}
 }
