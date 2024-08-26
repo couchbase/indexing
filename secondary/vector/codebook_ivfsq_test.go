@@ -30,6 +30,7 @@ var codebookIVFSQTestCases = []codebookIVFSQTestCase{
 	{"SQFP16_L2", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000},
 	{"SQ8_DOT", 128, METRIC_INNER_PRODUCT, false, 1000, common.SQ_8BIT, 10000, 10000},
 	{"SQ8_COSINE", 128, METRIC_INNER_PRODUCT, true, 1000, common.SQ_8BIT, 10000, 10000},
+	{"SQ8_L2 No Clustering", 128, METRIC_L2, false, 10000, common.SQ_8BIT, 10000, 10000},
 }
 
 // Tests for CodebookIVFSQ
@@ -46,6 +47,10 @@ func TestCodebookIVFSQ(t *testing.T) {
 			//generate random vectors, train vectors and query vectors
 			vecs := genRandomVecs(tc.dim, tc.num_vecs, seed)
 
+			//set verbose log level
+			cb := codebook.(*codebookIVFSQ)
+			cb.index.SetVerbose(1)
+
 			//train the codebook using 10000 vecs
 			train_vecs := convertTo1D(vecs[:tc.trainlist])
 			t0 := time.Now()
@@ -58,7 +63,6 @@ func TestCodebookIVFSQ(t *testing.T) {
 			}
 
 			//sanity check quantizer
-			cb := codebook.(*codebookIVFSQ)
 			quantizer, err := cb.index.Quantizer()
 			if err != nil {
 				t.Errorf("Unable to get index quantizer. Err %v", err)
@@ -161,7 +165,7 @@ func TestCodebookIVFSQ(t *testing.T) {
 			t.Logf("EncodeAndAssign label %v", labels[0])
 
 			for _, l := range labels {
-				if l > int64(tc.nlist) || l == 0 {
+				if l > int64(tc.nlist) {
 					t.Errorf("Result label out of range. Total %v. Label %v", tc.nlist, l)
 				}
 			}
