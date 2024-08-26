@@ -175,7 +175,7 @@ func (cb *codebookIVFPQ) FindNearestCentroids(vec []float32, k int64) ([]int64, 
 	}
 	quantizer, err := cb.index.Quantizer()
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 
 	if cb.useCosine {
@@ -218,7 +218,7 @@ func (cb *codebookIVFPQ) ComputeDistance(qvec []float32, fvecs []float32, dist [
 			// Cosine similarity ranges from -1 (exactly opposite) to 1 (exactly the same),
 			// while cosine distance ranges from 0 (exactly the same) to 2 (exactly opposite).
 			if err == nil {
-				for i := range dist{
+				for i := range dist {
 					dist[i] = 1 - dist[i]
 				}
 			}
@@ -322,7 +322,6 @@ func recoverCodebookIVFPQ(data []byte) (c.Codebook, error) {
 	cb.isTrained = cbio.IsTrained
 	cb.metric = cbio.Metric
 	cb.useCosine = cbio.UseCosine
-
 
 	var err error
 	cb.index, err = faiss.ReadIndexFromBuffer(cbio.Index, faiss.IOFlagMmap)

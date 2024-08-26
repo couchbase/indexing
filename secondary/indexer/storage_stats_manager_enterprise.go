@@ -13,6 +13,7 @@ package indexer
 
 import (
 	"fmt"
+	"github.com/couchbase/bhive"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/plasma"
@@ -25,8 +26,11 @@ func populateAggregatedStorageMetrics(st []byte) []byte {
 
 	if common.GetStorageMode() == common.PLASMA {
 		aggregatedPlasmaStats := plasma.GetAggregatedStats(plasma.ListShards())
+		aggregatedBhiveStats := &bhive.GetAggregatedStats().SStats
+		aggregatedPlasmaStats.Merge(aggregatedBhiveStats)
 
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vcurrent_quota gauge\n", PLASMA_METRICS_PREFIX))...)
+		//TODO: Get Bhive memory quota
 		st = append(st, []byte(fmt.Sprintf("%vcurrent_quota %v\n", PLASMA_METRICS_PREFIX, plasma.GetMemQuota()))...)
 
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vheap_limit gauge\n", PLASMA_METRICS_PREFIX))...)

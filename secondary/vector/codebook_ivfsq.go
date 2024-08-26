@@ -28,8 +28,8 @@ type codebookIVFSQ struct {
 
 	isTrained bool
 
-	metric MetricType //metric
-	useCosine 	bool	//use cosine similarity
+	metric    MetricType //metric
+	useCosine bool       //use cosine similarity
 
 	index *faiss.IndexImpl
 }
@@ -41,7 +41,7 @@ type codebookIVFSQ_IO struct {
 
 	IsTrained bool       `json:"istrained,omitempty"`
 	Metric    MetricType `json:"metric,omitempty"`
-	UseCosine bool		 `json:"usecosine,omitempty"`
+	UseCosine bool       `json:"usecosine,omitempty"`
 
 	Checksum    uint32      `json:"checksum,omitempty"`
 	CodebookVer CodebookVer `json:"codebookver,omitempty"`
@@ -58,11 +58,11 @@ func NewCodebookIVFSQ(dim, nlist int, sqRange common.ScalarQuantizerRange, metri
 	}
 
 	codebook := &codebookIVFSQ{
-		dim:    	dim,
-		sqRange:	sqRange,
-		nlist:  	nlist,
-		metric: 	metric,
-		useCosine:  useCosine,
+		dim:       dim,
+		sqRange:   sqRange,
+		nlist:     nlist,
+		metric:    metric,
+		useCosine: useCosine,
 	}
 
 	faissMetric := convertToFaissMetric(metric)
@@ -168,7 +168,7 @@ func (cb *codebookIVFSQ) FindNearestCentroids(vec []float32, k int64) ([]int64, 
 	}
 	quantizer, err := cb.index.Quantizer()
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 
 	if cb.useCosine {
@@ -204,14 +204,14 @@ func (cb *codebookIVFSQ) DecodeVectors(n int, codes []byte, vecs []float32) erro
 func (cb *codebookIVFSQ) ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error {
 	if cb.metric == METRIC_L2 {
 		return faiss.L2sqrNy(dist, qvec, fvecs, cb.dim)
-	}  else if cb.metric == METRIC_INNER_PRODUCT {
+	} else if cb.metric == METRIC_INNER_PRODUCT {
 		if cb.useCosine {
 			err := faiss.CosineSimNy(dist, qvec, fvecs, cb.dim)
 			// Cosine distance is calculated as 1 - (cosine similarity).
 			// Cosine similarity ranges from -1 (exactly opposite) to 1 (exactly the same),
 			// while cosine distance ranges from 0 (exactly the same) to 2 (exactly opposite).
 			if err == nil {
-				for i := range dist{
+				for i := range dist {
 					dist[i] = 1 - dist[i]
 				}
 			}
