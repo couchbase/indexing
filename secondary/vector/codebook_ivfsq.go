@@ -90,6 +90,24 @@ func (cb *codebookIVFSQ) Train(vecs []float32) error {
 		faiss.RenormL2(cb.dim, nx, vecs)
 	}
 
+	//If number of centroids is equal to the number of input
+	//vectors for training, then clustering is not required.
+	//Add the centroids directly to the quantizer from the list
+	//of input vectors. Faiss considers this as a valid case to
+	//skip training the quantizer. The sub-quantizer training will
+	//still happen.
+	nvecs := len(vecs) / cb.dim
+	if cb.nlist == nvecs {
+		quantizer, err := cb.index.Quantizer()
+		if err != nil {
+			return err
+		}
+		err = quantizer.Add(vecs)
+		if err != nil {
+			return err
+		}
+	}
+
 	err := cb.index.Train(vecs)
 	if err == nil {
 		cb.isTrained = true
