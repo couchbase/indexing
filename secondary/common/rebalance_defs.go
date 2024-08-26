@@ -355,6 +355,9 @@ type TransferToken struct {
 	// instances being repaired - Not the alternate id of the source
 	// node
 	NewAlternateShardIds []string
+
+	// Special case handling
+	IsDummy bool
 }
 
 // TransferToken.Clone returns a copy of the transfer token it is called on. Since the type is
@@ -433,6 +436,7 @@ func (tt *TransferToken) String() string {
 		}
 		fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
 		fmt.Fprintf(sbp, "IsPendingReady: %v ", tt.IsPendingReady)
+		fmt.Fprintf(sbp, "IsDummy: %v ", tt.IsDummy)
 	} else {
 		fmt.Fprintf(sbp, "InstId: %v ", tt.InstId)
 		fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstId)
@@ -498,7 +502,8 @@ func (tt *TransferToken) LessVerboseString() string {
 			fmt.Fprintf(sbp, "%v, %v\n", tt.IndexInsts[i].Defn.Partitions, tt.IndexInsts[i].Defn.Versions)
 		}
 		fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
-		fmt.Fprintf(sbp, "IsPendingReady: %v", tt.IsPendingReady)
+		fmt.Fprintf(sbp, "IsPendingReady: %v ", tt.IsPendingReady)
+		fmt.Fprintf(sbp, "IsDummy: %v", tt.IsDummy)
 	} else {
 		fmt.Fprintf(sbp, "InstId: %v ", tt.InstId)
 		fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstId)
@@ -555,7 +560,8 @@ func (tt *TransferToken) CompactString() string {
 			fmt.Fprintf(sbp, "Region: %v, ", tt.Region)
 		}
 		fmt.Fprintf(sbp, "%v, ", tt.IsEmptyNodeBatch)
-		fmt.Fprintf(sbp, "%v)", tt.IsPendingReady)
+		fmt.Fprintf(sbp, "%v, ", tt.IsPendingReady)
+		fmt.Fprintf(sbp, "%v)", tt.IsDummy)
 	} else {
 		fmt.Fprintf(sbp, "(%v, ", tt.InstId)
 		fmt.Fprintf(sbp, "%v, ", tt.RealInstId)
