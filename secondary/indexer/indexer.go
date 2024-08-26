@@ -1763,6 +1763,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_INST_RECOVERY_RESPONSE:
 		idx.handleInstRecoveryResponse(msg)
 
+	case INDEXER_BULK_UPDATE_ERROR:
+		idx.handleBulkUpdateIndexError(msg)
+
 	case UPDATE_REBALANCE_PHASE:
 		bucketTransferPhase := idx.updateRebalancePhase(msg)
 		msg.(*MsgUpdateRebalancePhase).BucketTransferPhase = bucketTransferPhase
@@ -7091,6 +7094,44 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 	}
 
 	logging.Infof("handleUpdateIndexRState: Index instance %v rstate moved to ACTIVE", instId)
+}
+
+func (idx *indexer) handleBulkUpdateIndexError(msg Message) {
+
+	updateMsg := msg.(*MsgBulkUpdateIndexError)
+	receivedInstIds := updateMsg.GetInstIds()
+	errStr := updateMsg.GetErrStr()
+
+	updateInstIds := make([]common.IndexInstId, 0)
+
+	for _, instId := range receivedInstIds {
+
+		_, ok := idx.indexInstMap[instId]
+		if !ok {
+			if idx.canAllowDDLDuringRebalance() { // Index could be dropped during rebalance
+				logging.Errorf("Indexer::handleBulkUpdateIndexError Unable to find Index %v. Index could be deleted", instId)
+			} else {
+				logging.Errorf("Indexer::handleBulkUpdateIndexError Unable to find Index %v", instId)
+			}
+			continue
+		}
+
+		updateInstIds = append(updateInstIds, instId)
+	}
+
+	if len(updateInstIds) != 0 {
+		idx.bulkUpdateError(updateInstIds, errStr)
+
+		if err := idx.updateMetaInfoForIndexList(updateInstIds, false, false, true, false, false, false, false, false, nil, false, nil); err != nil {
+			common.CrashOnError(err)
+		}
+
+		logging.Infof("Indexer::handleBulkUpdateIndexError: Index instances %v updated with Err:%v", updateInstIds, errStr)
+		return
+	}
+
+	logging.Warnf("Indexer::handleBulkUpdateIndexError: No valid index found to update err: %v. received insts: %v", errStr, receivedInstIds)
+
 }
 
 func (idx *indexer) handleInitialBuildDone(msg Message) {
@@ -13749,8 +13790,8 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	if len(toBuildInstIds) > 0 {
 		logging.Infof("Indexer: handleIndexTrainingDone Starting build for instances: %v, keyspaceId: %v", toBuildInstIds, keyspaceId)
 
-		// Initiate retryable build
-		idx.retryableBuildAfterTraining(toBuildInstIds, keyspaceId, reqCtx)
+		// Initiate retryable build in a goroutine
+		go idx.retryableBuildAfterTraining(toBuildInstIds, keyspaceId, reqCtx)
 
 	}
 }
@@ -13762,17 +13803,17 @@ func (idx *indexer) retryableBuildAfterTraining(toBuildInstIds []common.IndexIns
 
 	getBuildIndexResponse := func(idxInstList []common.IndexInstId) map[common.IndexInstId]error {
 
-		logging.Infof("Indexer: retryableBuildAfterTraining Starting build for instances: %v, keyspaceId: %v", idxInstList, keyspaceId)
+		logging.Infof("Indexer::retryableBuildAfterTraining Starting build for instances: %v, keyspaceId: %v", idxInstList, keyspaceId)
 
 		respCh := make(MsgChannel)
-		idx.handleBuildIndex(&MsgBuildIndex{
+		idx.adminRecvCh <- &MsgBuildIndex{
 			mType:            CLUST_MGR_BUILD_INDEX_DDL,
 			indexInstList:    idxInstList,
 			respCh:           respCh,
 			bucketList:       []string{keyspaceId},
 			reqCtx:           reqCtx,
 			isEmptyNodeBatch: false,
-		})
+		}
 
 		if res, ok := <-respCh; ok {
 
@@ -13808,15 +13849,13 @@ func (idx *indexer) retryableBuildAfterTraining(toBuildInstIds []common.IndexIns
 		return nil
 	}
 
-	// Same retry ticker duration as that of builder
-	ticker := time.NewTicker(time.Millisecond * 200)
+	ticker := time.NewTicker(time.Second * 1)
 	defer ticker.Stop()
 
 	doRetry := true
 	errMap := make(map[common.IndexInstId]error)
 
 	for doRetry {
-
 		select {
 		case <-ticker.C:
 			errMap = getBuildIndexResponse(toBuildInstIds)
@@ -13827,31 +13866,23 @@ func (idx *indexer) retryableBuildAfterTraining(toBuildInstIds []common.IndexIns
 				return
 			}
 
+			toBuildInstIds = make([]common.IndexInstId, 0)
+
 			for instId, err := range errMap {
 				if !idx.isTransientErrorForVectorBuild(err, isDCPRebalorResume) {
-
-					for i, instId2 := range toBuildInstIds {
-						if instId == instId2 {
-							if i+1 < len(toBuildInstIds) {
-								toBuildInstIds = append(toBuildInstIds[:i], toBuildInstIds[i+1:]...)
-							} else {
-								toBuildInstIds = toBuildInstIds[:i]
-							}
-							break
-						}
+					logging.Errorf("Indexer::retryableBuildAfterTraining For InstId:%v encountered err: %v", instId, err.Error())
+					idx.internalRecvCh <- &MsgBulkUpdateIndexError{
+						instIds: []common.IndexInstId{instId},
+						errStr:  fmt.Sprintf("%verr:%v", common.ERR_BUILD_AFTER_TRAINING, err.Error()),
 					}
+					return
 				}
+				toBuildInstIds = append(toBuildInstIds, instId)
 			}
 		}
 
-		// all Instance have non-transient error
-		if len(toBuildInstIds) == 0 {
-			break
-		}
-
-		doRetry = isDCPRebalorResume && (errMap != nil && len(errMap) != 0)
+		doRetry = isDCPRebalorResume && len(toBuildInstIds) != 0
 	}
-
 }
 
 func (idx *indexer) isTransientErrorForVectorBuild(err error, isRebalOrResume bool) bool {

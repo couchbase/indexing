@@ -151,6 +151,7 @@ const (
 	INDEXER_RESET_INDEX_DONE
 	INDEXER_ACTIVE
 	INDEXER_INST_RECOVERY_RESPONSE
+	INDEXER_BULK_UPDATE_ERROR
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -2497,6 +2498,23 @@ func (m *MsgUpdateIndexRState) GetRespCh() chan error {
 
 func (m *MsgUpdateIndexRState) GetRState() common.RebalanceState {
 	return m.rstate
+}
+
+type MsgBulkUpdateIndexError struct {
+	instIds []common.IndexInstId
+	errStr  string
+}
+
+func (m *MsgBulkUpdateIndexError) GetMsgType() MsgType {
+	return INDEXER_BULK_UPDATE_ERROR
+}
+
+func (m *MsgBulkUpdateIndexError) GetInstIds() []common.IndexInstId {
+	return m.instIds
+}
+
+func (m *MsgBulkUpdateIndexError) GetErrStr() string {
+	return m.errStr
 }
 
 type MsgStorageWarmupDone struct {
