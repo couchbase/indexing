@@ -3529,6 +3529,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.scan.vector.rerank_factor": ConfigValue{
+		5,
+		"When reranking is enabled, the number of rows that will be scanned " +
+			"will be proportional to 'rerank_factor * limit' where limit comes with " +
+			"the scan request",
+		5,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.planner.timeout": ConfigValue{
 		300,
 		"timeout (sec) on planner",

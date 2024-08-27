@@ -933,7 +933,7 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 	fio.logPrefix = fmt.Sprintf("%v[%v]MergeOperator", r.LogPrefix, r.RequestId)
 
 	if r.useHeapForVectorIndex() {
-		heapSize := r.Limit
+		heapSize := r.getLimit()
 		if r.Offset != 0 {
 			heapSize += r.Offset
 		}

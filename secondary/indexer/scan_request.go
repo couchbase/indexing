@@ -136,6 +136,16 @@ type ScanRequest struct {
 	protoScans            []*protobuf.Scan
 	vectorScans           map[common.PartitionId]map[int64][]Scan
 	parallelCentroidScans int
+
+	// re-ranking support for BHIVE vector indexes
+	enableReranking bool // set to 'true' if re-ranking is enabled
+
+	// For re-ranking, the number of rows scanned will be typically "R" times
+	// greater than the actual limit in the scan. E.g., if "limit 10" is issued
+	// in the scan, then R * 10 will be the actual rows scanned. Re-ranking
+	// will be perfomed on these "R * 10" rows. The variable "rlimit" captures
+	// this limit
+	rlimit int64
 }
 
 type Projection struct {
@@ -473,6 +483,8 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			if err = r.setVectorIndexParamsFromDefn(); err != nil {
 				return
 			}
+
+			r.setRerankLimits()
 		} else {
 			if r.Scans, err = r.makeScans(req.GetScans()); err != nil {
 				return
@@ -567,6 +579,39 @@ func (r *ScanRequest) setVectorIndexParamsFromDefn() (err error) {
 	}
 
 	return nil
+}
+
+func (r *ScanRequest) setRerankLimits() {
+	// Re-ranking is supported only for BHIVE indexes
+	if !r.isBhiveScan {
+		r.enableReranking = false
+		return
+	}
+
+	// Disable re-ranking if limit is not specified or all the
+	// rows of index are getting scanned
+	if r.Limit == 0 || r.Limit == math.MaxInt64 {
+		r.enableReranking = false
+		return
+	}
+
+	cfg := r.sco.config.Load()
+	rfactor := cfg["rerank_factor"].Int()
+	if rfactor <= 1 {
+		r.enableReranking = false
+		return
+	}
+
+	// For all other cases, enable re-ranking for BHIVE indexes
+	r.enableReranking = true
+	r.rlimit = r.Limit * int64(rfactor)
+}
+
+func (r *ScanRequest) getLimit() int64 {
+	if r.enableReranking {
+		return r.rlimit
+	}
+	return r.Limit
 }
 
 func (r *ScanRequest) ProjectVectorDist() bool {
@@ -2190,7 +2235,7 @@ func (r *ScanRequest) getVectorKeyPos() int {
 	return r.vectorPos
 }
 
-//return the codeSize for vector index. 0 indicates unknown.
+// return the codeSize for vector index. 0 indicates unknown.
 func (r *ScanRequest) getVectorCodeSize() int {
 
 	if r.codebookMap != nil {
