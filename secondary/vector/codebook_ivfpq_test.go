@@ -12,13 +12,13 @@ import (
 type codebookIVFPQTestCase struct {
 	name string
 
-	dim    int
-	metric MetricType
+	dim       int
+	metric    MetricType
 	useCosine bool
 
-	nlist int
-	nsub  int
-	nbits int
+	nlist       int
+	nsub        int
+	nbits       int
 	useFastScan bool
 
 	num_vecs  int
@@ -33,6 +33,7 @@ var codebookIVFPQTestCases = []codebookIVFPQTestCase{
 	{"PQ32x8 COSINE", 128, METRIC_INNER_PRODUCT, true, 1000, 32, 8, false, 10000, 10000},
 	{"PQ32x4FS L2", 128, METRIC_L2, false, 1000, 32, 4, true, 10000, 10000},
 	//{"PQ8x10 L2", 128, METRIC_L2, 1000, 8, 10, 10000, 10000},
+	{"PQ32x8 L2 No Clustering", 128, METRIC_L2, false, 10000, 32, 8, false, 10000, 10000},
 }
 
 func TestCodebookIVFPQ(t *testing.T) {
@@ -48,6 +49,10 @@ func TestCodebookIVFPQ(t *testing.T) {
 			//generate random vectors
 			vecs := genRandomVecs(tc.dim, tc.num_vecs, seed)
 
+			//set verbose log level
+			cb := codebook.(*codebookIVFPQ)
+			cb.index.SetVerbose(1)
+
 			//train the codebook using 10000 vecs
 			train_vecs := convertTo1D(vecs[:tc.trainlist])
 			t0 := time.Now()
@@ -60,7 +65,6 @@ func TestCodebookIVFPQ(t *testing.T) {
 			}
 
 			//sanity check quantizer
-			cb := codebook.(*codebookIVFPQ)
 			quantizer, err := cb.index.Quantizer()
 			if err != nil {
 				t.Errorf("Unable to get index quantizer. Err %v", err)
@@ -163,7 +167,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 			t.Logf("EncodeAndAssign label %v", labels)
 
 			for _, l := range labels {
-				if l > int64(tc.nlist) || l == 0 {
+				if l > int64(tc.nlist) {
 					t.Errorf("Result label out of range. Total %v. Label %v", tc.nlist, l)
 				}
 			}
@@ -264,13 +268,13 @@ func TestCodebookIVFPQ(t *testing.T) {
 type pqTimingTestCase struct {
 	name string
 
-	dim    int
-	metric MetricType
+	dim       int
+	metric    MetricType
 	useCosine bool
 
-	nlist int
-	nsub  int
-	nbits int
+	nlist       int
+	nsub        int
+	nbits       int
 	useFastScan bool
 
 	num_vecs  int

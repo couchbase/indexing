@@ -13316,8 +13316,16 @@ func getVectors(vectorMeta *c.VectorMetadata, nlist int) []float32 {
 func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 	indexPartnMap IndexPartnMap, config c.Config) (int64, []*c.IndexInst, []*c.IndexInst) {
 	var vectorInsts, trainedOrNonVecInsts []*c.IndexInst
-	maxCentroids := 0
+
+	maxSampleSize := 0
+
+	vecs_per_centroid := config["vector.vecs_per_centroid"].Int()
+	if vecs_per_centroid <= 1 {
+		vecs_per_centroid = 1 // Minimum of one sample per centroid is required for training
+	}
+
 	for _, instId := range instIds {
+		maxCentroids := 0
 		idxInst := indexInstMap[instId]
 		if idxInst.Defn.IsVectorIndex == false || idxInst.IsTrained() {
 			trainedOrNonVecInsts = append(trainedOrNonVecInsts, &idxInst)
@@ -13326,22 +13334,24 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 
 		vectorInsts = append(vectorInsts, &idxInst)
 		partnInstMap := indexPartnMap[instId]
+		vm := idxInst.Defn.VectorMeta
 		for partnId := range partnInstMap {
-			vm := idxInst.Defn.VectorMeta
 			minCentroidsRequired := idxInst.Nlist[partnId]
 			if vm.Quantizer.Type == c.PQ {
 				minCentroidsRequired = max(1<<vm.Quantizer.Nbits, idxInst.Nlist[partnId])
 			}
 			maxCentroids = max(maxCentroids, minCentroidsRequired)
 		}
+
+		//override with user specified train_list
+		if vm.TrainList == 0 {
+			maxSampleSize = max(maxSampleSize, maxCentroids*vecs_per_centroid)
+		} else {
+			maxSampleSize = max(maxSampleSize, vm.TrainList)
+		}
 	}
 
-	vecs_per_centroid := config["vector.vecs_per_centroid"].Int()
-	if vecs_per_centroid <= 1 {
-		vecs_per_centroid = 1 // Minimum of one sample per centroid is required for training
-	}
-
-	return int64(maxCentroids * vecs_per_centroid), vectorInsts, trainedOrNonVecInsts
+	return int64(maxSampleSize), vectorInsts, trainedOrNonVecInsts
 }
 
 // [VECTOR_TODO]: Add a worker pool to take care of training

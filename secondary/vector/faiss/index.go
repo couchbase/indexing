@@ -52,6 +52,9 @@ type Index interface {
 	// consults the C++ side to get the size of the index
 	Size() uint64
 
+	// set verbose log level
+	SetVerbose(int)
+
 	cPtr() *C.FaissIndex
 }
 
@@ -162,6 +165,11 @@ func (idx *faissIndex) Reset() error {
 
 func (idx *faissIndex) Close() {
 	C.faiss_Index_free(idx.idx)
+}
+
+// set verbose log level. 0=false, 1=true.
+func (idx *faissIndex) SetVerbose(verbose int) {
+	C.faiss_Index_set_verbose(idx.idx, C.int(verbose))
 }
 
 // IndexImpl is an abstract structure for an index.
