@@ -298,6 +298,10 @@ func (s *fdbSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
 	return 0, nil
 }
 
+func (s *fdbSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
+	return nil, nil
+}
+
 func compareExact(k IndexKey, entry IndexEntry) int {
 	return k.Compare(entry)
 }

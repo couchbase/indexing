@@ -318,6 +318,10 @@ func (ms *mockSnapshot) Timestamp() *c.TsVbuuid                  { return ms.ts 
 func (ms *mockSnapshot) Info() SnapshotInfo                      { return &mockSnapshotInfo{} }
 func (ms *mockSnapshot) DecodeMeta(meta []byte) (uint64, []byte) { return 0, nil }
 
+func (ms *mockSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
+	return nil, nil
+}
+
 // -----------
 // IndexReader
 // -----------

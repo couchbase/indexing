@@ -2100,6 +2100,10 @@ func (s *memdbSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
 	return 0, nil
 }
 
+func (s *memdbSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
+	return nil, nil
+}
+
 // ==============================
 // Snapshot reader implementation
 // ==============================

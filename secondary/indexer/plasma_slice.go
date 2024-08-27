@@ -4568,6 +4568,10 @@ func (s *plasmaSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
 	return 0, nil
 }
 
+func (s *plasmaSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
+	return nil, nil
+}
+
 // TODO: Cleanup the leaky hack to reuse the buffer
 // Extract only secondary key
 func entry2BackEntry(entry secondaryIndexEntry) []byte {

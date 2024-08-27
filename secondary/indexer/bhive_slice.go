@@ -2639,6 +2639,19 @@ func (s *bhiveSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
 	return uint64(recordId), actualMeta
 }
 
+func (s *bhiveSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
+
+	// [VECTOR_TODO]: Add timings stats for FetchValue
+	reader := ctx.(*bhiveReaderCtx)
+	reader.r.Begin()
+	defer reader.r.End()
+
+	mainSnap := s.MainSnap
+	err := reader.r.FetchValue(bhive.CentroidID(cid), bhive.RecordId(recordId), mainSnap, buf)
+
+	return buf, err
+}
+
 // //////////////////////////////////////////////////////////
 // SnapshotInfo
 // //////////////////////////////////////////////////////////
