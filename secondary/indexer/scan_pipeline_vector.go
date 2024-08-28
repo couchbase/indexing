@@ -119,7 +119,9 @@ type ScanWorker struct {
 	jobsWg *sync.WaitGroup
 
 	// Buffers
-	buf *[]byte
+	buf    *[]byte
+	mem    *allocator
+	itrRow Row
 
 	// VECTOR_TODO: handle rollback
 	bytesRead    uint64
@@ -150,9 +152,23 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	w.SetStartTime()
 	w.buf = r.getFromSecKeyBufPool() //Composite element filtering
 
+	var m *allocator
+	if v := w.r.connCtx.Get(fmt.Sprintf("%v%v", VectorScanWorker, id)); v == nil {
+		bufPool := w.r.connCtx.GetVectorBufPool(id)
+		m = newAllocator(int64(senderBatchSize), bufPool)
+	} else {
+		m = v.(*allocator)
+	}
+	w.mem = m
+
 	go w.Scanner()
 
 	return w
+}
+
+func (w *ScanWorker) Close() {
+	w.r.connCtx.Put(fmt.Sprintf("%v%v", VectorScanWorker, w.id), w.mem)
+	w.mem = nil
 }
 
 func (w *ScanWorker) SetStartTime() {
@@ -370,7 +386,6 @@ func (w *ScanWorker) Sender() {
 
 func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 
-	var r Row
 	var err error
 	var skipRow bool
 
@@ -400,13 +415,17 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 	}
 
 	entry1 := secondaryIndexEntry(entry)
-	r.len = entry1.lenKey()
 
-	r.key = make([]byte, len(entry))
-	copy(r.key, entry)
+	w.itrRow.len = entry1.lenKey()
+	w.itrRow.key = entry
+	w.itrRow.value = value
 
-	r.value = make([]byte, len(value))
-	copy(r.value, value)
+	// VECTOR_TODO:
+	// 1. Check if adding a Queue/CirularBuffer of Rows here in place of senderCh will help
+	// 2. Check if having a sync.Pool of Row objects per connCtx will help
+	var newRow Row
+	newRow.init(w.mem)
+	newRow.copy(&w.itrRow)
 
 	select {
 	case <-w.stopCh:
@@ -414,8 +433,12 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 	case err := <-w.senderErrCh:
 		logging.Tracef("%v scanIteratorCallback got error: %v from Sender", w.logPrefix, err)
 		return err
-	case w.senderCh <- &r:
+	case w.senderCh <- &newRow:
 	}
+
+	w.itrRow.len = 0
+	w.itrRow.key = nil
+	w.itrRow.value = nil
 
 	return nil
 }
@@ -518,6 +541,12 @@ func NewWorkerPool(numWorkers int) *WorkerPool {
 	return wp
 }
 
+func (wp *WorkerPool) Close() {
+	for _, w := range wp.workers {
+		w.Close()
+	}
+}
+
 // Init starts the worker pool
 func (wp *WorkerPool) Init(r *ScanRequest, scanWorkerSenderChSize, scanWorkerBatchSize int) {
 	wp.sendCh = make(chan *Row, 20*wp.numWorkers)
@@ -525,7 +554,8 @@ func (wp *WorkerPool) Init(r *ScanRequest, scanWorkerSenderChSize, scanWorkerBat
 
 	for i := 0; i < wp.numWorkers; i++ {
 		wp.workers[i] = NewScanWorker(i, r, wp.jobs, wp.sendCh,
-			wp.stopCh, wp.errCh, &wp.jobsWg, scanWorkerSenderChSize, scanWorkerBatchSize)
+			wp.stopCh, wp.errCh, &wp.jobsWg, scanWorkerSenderChSize,
+			scanWorkerBatchSize)
 	}
 }
 
@@ -614,7 +644,7 @@ type MergeOperator struct {
 	errCh    chan error
 	mergerWg sync.WaitGroup
 
-	writeItem WriteItem
+	writeItem WriteItem // WriteItem is expected to copy data downstream
 
 	buf   *[]byte
 	cktmp [][]byte
@@ -804,6 +834,7 @@ func (fio *MergeOperator) Collector() {
 			return
 		}
 
+		row.free() // Free the memory after sending data downstream writeItem is expected to make copy
 	}
 
 	if !fio.req.useHeapForVectorIndex() {
@@ -860,6 +891,8 @@ func (fio *MergeOperator) Collector() {
 			return
 		}
 	}
+
+	fio.heap.Destroy()
 }
 
 func (fio *MergeOperator) Wait() error {
@@ -937,6 +970,8 @@ func (s *IndexScanSource2) Routine() error {
 	// Spawn Scan Workers
 	wp := NewWorkerPool(readersPerPartition * len(s.p.req.PartitionIds))
 	wp.Init(s.p.req, scanWorkerSenderChSize, scanWorkerBatchSize)
+	defer wp.Close()
+
 	wpOutCh := wp.GetOutCh() // Output of Workerpool is input of MergeOperator
 
 	writeItemAddStat := func(itm ...[]byte) error {

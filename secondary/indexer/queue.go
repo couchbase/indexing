@@ -394,3 +394,7 @@ func (r *Row) freeKeyBuf() {
 func (r *Row) init(mem *allocator) {
 	r.mem = mem
 }
+
+func (r *Row) free() {
+	r.freeKeyBuf()
+}
