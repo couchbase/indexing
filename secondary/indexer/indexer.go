@@ -822,7 +822,7 @@ func (idx *indexer) initFromConfig() {
 	// Read memquota setting
 	memQuota := int64(idx.config.GetIndexerMemoryQuota())
 	idx.stats.memoryQuota.Set(memQuota)
-	plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
+	// Memory quota is set for storage when Storage Manager is created in bootstrap1
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())
 	updateMOIWriters(idx.config["settings.moi.persistence_threads"].Int())
 	reclaimBlockSize := int64(idx.config["plasma.LSSReclaimBlockSize"].Int())
@@ -1873,7 +1873,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 
 		memQuota := int64(newConfig.GetIndexerMemoryQuota())
 		idx.stats.memoryQuota.Set(memQuota)
-		plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
+		// Memory quota is set for storage when new config is sent to Storage Manager
 
 		if common.GetStorageMode() == common.FORESTDB ||
 			common.GetStorageMode() == common.NOT_SET {
