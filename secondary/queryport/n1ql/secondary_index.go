@@ -1111,7 +1111,7 @@ func newSecondaryIndexFromMetaData(
 		}
 
 		si.isCompositeVector = indexDefn.VectorMeta.IsCompositeIndex
-		if val, ok := gsi2N1QLSimilarity[indexDefn.VectorMeta.Similarity]; !ok {
+		if val, ok := gsi2N1QLSimilarity[c.VectorSimilarity(strings.ToUpper(string(indexDefn.VectorMeta.Similarity)))]; !ok {
 			return nil, errors.NewError(nil, fmt.Sprintf("Invalid vector similarity seen for index with defnId: %v, defn's similarity: %v", indexDefn.DefnId, indexDefn.VectorMeta.Similarity))
 		} else {
 			si.vectorDistanceType = val
