@@ -13397,8 +13397,10 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	bucket, scope, collection := getBucketScopeAndCollFromKeyspaceId(keyspaceId)
 	maxSampleSize, vectorInsts, trainedOrNonVecInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap, config)
 
+	overSamplePercent := config["vector.over_sample_percent"].Int()
+
 	// Retrieve vectors from data service for training
-	vectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, vectorInsts, maxSampleSize)
+	vectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, vectorInsts, maxSampleSize, int64(overSamplePercent))
 	if err != nil {
 		logging.Errorf("Indexer::initiateTraining error observed while fetching training data for bucket: %v, scope: %v, coll: %v, cid: %v, err: %v",
 			bucket, scope, collection, cid, err)

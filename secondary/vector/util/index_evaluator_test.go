@@ -45,7 +45,7 @@ func SkipTestFetchSampleVectorsForIndexes(t *testing.T) {
 
 	indexInsts := []*c.IndexInst{indexInst}
 
-	vectors, err := FetchSampleVectorsForIndexes(cluster, pool, bucket, scope, collection, cid, indexInsts, 800)
+	vectors, err := FetchSampleVectorsForIndexes(cluster, pool, bucket, scope, collection, cid, indexInsts, 800, 1)
 
 	t.Logf("Vectors %v, Err %v", len(vectors[0])/dim, err)
 

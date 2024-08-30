@@ -4219,6 +4219,14 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.vector.over_sample_percent": ConfigValue{
+		1,
+		"Over sample percentage during training. Sampling can return less " +
+			"than the requested items from KV.",
+		1,
+		false,
+		false,
+	},
 }
 
 // NewConfig from another
