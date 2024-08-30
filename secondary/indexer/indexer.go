@@ -408,7 +408,15 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		throttleVal = idx.config["serverless.cpu.throttle.target"].Float64()
 	}
 	idx.cpuThrottle = NewCpuThrottle(throttleVal)
+
+	var bootstrapFinCh chan struct{} = make(chan struct{})
+
+	idx.masterMgr = NewMasterServiceManager2(bootstrapFinCh)
+
 	autofailoverMgr := NewAutofailoverServiceManager(httpAddr, idx.cpuThrottle)
+	idx.masterMgr.SetAutoFailoverManager(autofailoverMgr)
+
+	go idx.masterMgr.registerWithServer()
 
 	// Initialize auditing
 	err := audit.InitAuditService(clusterAddr)
@@ -624,12 +632,12 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		idx.wrkrRecvCh, idx.wrkrPrioRecvCh, idx.config, idx.nodeInfo, idx.rebalanceRunning,
 		idx.rebalanceToken, idx.pauseResumeRunningById, idx.pauseTokens, idx.statsMgr)
 
-	serverlessMgr := NewServerlessManager(clusterAddr)
+	idx.masterMgr.SetGenericServiceManager(genericMgr)
+	idx.masterMgr.SetPauseServiceManager(pauseMgr)
+	idx.masterMgr.SetRebalanceManager(rebalMgr)
+	idx.masterMgr.SetServerlessManager(NewServerlessManager(clusterAddr))
 
-	// Register service managers with ns_server for RCP callbacks. This returns a single
-	// MasterServiceManager object that implements all the interfaces we want callbacks for via
-	// delegation to the API-specific objects passed to it.
-	idx.masterMgr = NewMasterServiceManager(autofailoverMgr, genericMgr, pauseMgr, rebalMgr, serverlessMgr)
+	close(bootstrapFinCh)
 
 	go idx.monitorKVNodes()
 	go idx.destroyEmptyShards()
