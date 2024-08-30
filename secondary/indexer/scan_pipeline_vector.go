@@ -152,14 +152,16 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	w.SetStartTime()
 	w.buf = r.getFromSecKeyBufPool() //Composite element filtering
 
-	var m *allocator
-	if v := w.r.connCtx.Get(fmt.Sprintf("%v%v", VectorScanWorker, id)); v == nil {
-		bufPool := w.r.connCtx.GetVectorBufPool(id)
-		m = newAllocator(int64(senderBatchSize), bufPool)
-	} else {
-		m = v.(*allocator)
+	if w.r.connCtx != nil {
+		var m *allocator
+		if v := w.r.connCtx.Get(fmt.Sprintf("%v%v", VectorScanWorker, id)); v == nil {
+			bufPool := w.r.connCtx.GetVectorBufPool(id)
+			m = newAllocator(int64(senderBatchSize), bufPool)
+		} else {
+			m = v.(*allocator)
+		}
+		w.mem = m
 	}
-	w.mem = m
 
 	go w.Scanner()
 

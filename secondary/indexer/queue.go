@@ -332,7 +332,7 @@ func (r *Row) copyKey(key []byte) {
 		return
 	}
 
-	if r.key == nil {
+	if r.key == nil && r.mem != nil {
 		r.initKeyBuf()
 	}
 
@@ -354,7 +354,7 @@ func (r *Row) copyValue(val []byte) {
 		return
 	}
 
-	if r.value == nil {
+	if r.value == nil && r.mem != nil {
 		r.initValBuf()
 	}
 
@@ -396,5 +396,7 @@ func (r *Row) init(mem *allocator) {
 }
 
 func (r *Row) free() {
-	r.freeKeyBuf()
+	if r.mem != nil {
+		r.freeKeyBuf()
+	}
 }
