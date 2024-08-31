@@ -13327,9 +13327,9 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 
 	maxSampleSize := 0
 
-	vecs_per_centroid := config["vector.vecs_per_centroid"].Int()
-	if vecs_per_centroid <= 1 {
-		vecs_per_centroid = 1 // Minimum of one sample per centroid is required for training
+	train_vecs_per_centroid := config["vector.train_vecs_per_centroid"].Int()
+	if train_vecs_per_centroid <= 1 {
+		train_vecs_per_centroid = 1 // Minimum of one sample per centroid is required for training
 	}
 
 	for _, instId := range instIds {
@@ -13353,7 +13353,7 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 
 		//override with user specified train_list
 		if vm.TrainList == 0 {
-			maxSampleSize = max(maxSampleSize, maxCentroids*vecs_per_centroid)
+			maxSampleSize = max(maxSampleSize, maxCentroids*train_vecs_per_centroid)
 		} else {
 			maxSampleSize = max(maxSampleSize, vm.TrainList)
 		}
@@ -13397,8 +13397,10 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	bucket, scope, collection := getBucketScopeAndCollFromKeyspaceId(keyspaceId)
 	maxSampleSize, vectorInsts, trainedOrNonVecInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap, config)
 
+	overSamplePercent := config["vector.over_sample_percent"].Int()
+
 	// Retrieve vectors from data service for training
-	vectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, vectorInsts, maxSampleSize)
+	vectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, vectorInsts, maxSampleSize, int64(overSamplePercent))
 	if err != nil {
 		logging.Errorf("Indexer::initiateTraining error observed while fetching training data for bucket: %v, scope: %v, coll: %v, cid: %v, err: %v",
 			bucket, scope, collection, cid, err)

@@ -26,7 +26,8 @@ func FetchSampleVectorsForIndexes(cluster string,
 	collection string,
 	cid string,
 	idxInsts []*c.IndexInst,
-	sampleSize int64) ([][]float32, error) {
+	sampleSize int64,
+	overSamplePercent int64) ([][]float32, error) {
 
 	evaluators := make([]*protoProj.IndexEvaluator, len(idxInsts))
 
@@ -40,8 +41,10 @@ func FetchSampleVectorsForIndexes(cluster string,
 		}
 	}
 
+	reqSampleSize := sampleSize * (100 + overSamplePercent) / 100
+
 	donech := make(chan bool)
-	datach, errch, err := c.FetchRandomKVSample(cluster, pooln, bucketn, scope, collection, cid, sampleSize, donech)
+	datach, errch, err := c.FetchRandomKVSample(cluster, pooln, bucketn, scope, collection, cid, reqSampleSize, donech)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +73,11 @@ sampling:
 				if cap(newBuf) > cap(encodeBuf) {
 					encodeBuf = newBuf[:0]
 				}
+
 				sampleCnt++
+				if int64(sampleCnt) >= sampleSize {
+					break sampling
+				}
 			} else {
 				//doc sampling has finished
 				break sampling
@@ -86,7 +93,7 @@ sampling:
 		}
 	}
 	logging.Infof("FetchSampleVectorsForIndexes Total sampled %v for requested "+
-		"sampleSize %v", sampleCnt, sampleSize)
+		"sampleSize %v overSamplePercent %v", sampleCnt, sampleSize, overSamplePercent)
 	return vectors, nil
 }
 

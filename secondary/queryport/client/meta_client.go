@@ -734,6 +734,12 @@ func (b *metadataClient) equivalentIndex(
 		return false
 	}
 
+	if d1.IsVectorIndex != d2.IsVectorIndex {
+		return false
+	} else if d1.IsVectorIndex {
+		return d1.VectorMeta.IsEquivalent(d2.VectorMeta)
+	}
+
 	return true
 }
 

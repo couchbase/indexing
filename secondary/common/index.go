@@ -928,6 +928,12 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 		return false
 	}
 
+	if d1.IsVectorIndex != d2.IsVectorIndex {
+		return false
+	} else if d1.IsVectorIndex {
+		return d1.VectorMeta.IsEquivalent(d2.VectorMeta)
+	}
+
 	return true
 }
 
@@ -1046,6 +1052,26 @@ func (v *VectorMetadata) Clone() *VectorMetadata {
 	}
 
 	return newMeta
+}
+
+func (v *VectorMetadata) IsEquivalent(u *VectorMetadata) bool {
+	if v.IsCompositeIndex != u.IsCompositeIndex {
+		return false
+	}
+
+	if v.IsBhive != u.IsBhive {
+		return false
+	}
+
+	if v.Dimension != u.Dimension {
+		return false
+	}
+
+	if v.Similarity != u.Similarity {
+		return false
+	}
+
+	return v.Quantizer.IsEquivalent(u.Quantizer)
 }
 
 func (v *VectorMetadata) String() string {

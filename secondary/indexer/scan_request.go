@@ -2301,7 +2301,8 @@ const (
 )
 
 const (
-	ScanQueue = "ScanQueue"
+	ScanQueue        = "ScanQueue"
+	VectorScanWorker = "VectorScanWorker"
 )
 
 type ConCacheObj interface {
@@ -2309,15 +2310,17 @@ type ConCacheObj interface {
 }
 
 type ConnectionContext struct {
-	bufPool map[common.PartitionId]*common.BytesBufPool
-	cache   map[string]ConCacheObj
-	mutex   sync.RWMutex
+	bufPool    map[common.PartitionId]*common.BytesBufPool
+	vecBufPool map[int]*common.BytesBufPool
+	cache      map[string]ConCacheObj
+	mutex      sync.RWMutex
 }
 
 func createConnectionContext() interface{} {
 	return &ConnectionContext{
-		bufPool: make(map[common.PartitionId]*common.BytesBufPool),
-		cache:   make(map[string]ConCacheObj),
+		bufPool:    make(map[common.PartitionId]*common.BytesBufPool),
+		vecBufPool: make(map[int]*common.BytesBufPool),
+		cache:      make(map[string]ConCacheObj),
 	}
 }
 
@@ -2330,6 +2333,17 @@ func (c *ConnectionContext) GetBufPool(partitionId common.PartitionId) *common.B
 	}
 
 	return c.bufPool[partitionId]
+}
+
+func (c *ConnectionContext) GetVectorBufPool(workerId int) *common.BytesBufPool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if _, ok := c.vecBufPool[workerId]; !ok {
+		c.vecBufPool[workerId] = common.NewByteBufferPool(ScanBufPoolSize)
+	}
+
+	return c.vecBufPool[workerId]
 }
 
 func (c *ConnectionContext) Get(id string) ConCacheObj {

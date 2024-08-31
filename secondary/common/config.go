@@ -4212,10 +4212,18 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
-	"indexer.vector.vecs_per_centroid": ConfigValue{
+	"indexer.vector.train_vecs_per_centroid": ConfigValue{
 		50,
 		"For training the index, number of vectors to use per centroid",
 		50,
+		false,
+		false,
+	},
+	"indexer.vector.over_sample_percent": ConfigValue{
+		1,
+		"Over sample percentage during training. Sampling can return less " +
+			"than the requested items from KV.",
+		1,
 		false,
 		false,
 	},

@@ -68,6 +68,11 @@ func (h *RowHeap) GetRow(index int) (row *Row) {
 	return h.rows[index]
 }
 
+func (h *RowHeap) FreeRow(index int) {
+	h.rows[index].free()
+	h.rows[index] = nil
+}
+
 func (h *RowHeap) IsMin() bool {
 	return h.isMin
 }
@@ -110,6 +115,9 @@ func (h *TopKRowHeap) Push(row *Row) {
 			(!isMin && row.dist < row0.dist) {
 			h.heap.SetRow(0, row)
 			heap.Fix(&h.heap, 0)
+			row0.free() // row0 is replaces so free it
+		} else {
+			row.free() // not using the row so free it
 		}
 	}
 }
@@ -149,6 +157,6 @@ func (h *TopKRowHeap) Len() int {
 // of the user to manage memory for Rows
 func (h *TopKRowHeap) Destroy() {
 	for i := 0; i < h.heap.Len(); i++ {
-		h.heap.SetRow(i, nil)
+		h.heap.FreeRow(i)
 	}
 }
