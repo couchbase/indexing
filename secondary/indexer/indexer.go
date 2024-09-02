@@ -4370,8 +4370,14 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 
 	idx.stats.RemoveIndexStats(indexInst)
 
-	if indexInst.Defn.IsVectorIndex && indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
-		logging.Infof("Indexer::handleDropIndex Deferring drop for instId: %v as training is in progress", indexInstId)
+	if indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+		if indexInst.Defn.IsVectorIndex {
+			logging.Infof("Indexer::handleDropIndex Deferring drop for instId: %v as training is in progress",
+				indexInstId)
+		} else {
+			logging.Infof("Indexer::handleDropIndex Deferring drop for instId: %v as it is being built with vector insts under training",
+				indexInstId)
+		}
 		idx.updateDropInstsDuringTrainingMap(indexInstId, clientCh)
 		resp = &MsgSuccess{}
 		return
@@ -13612,6 +13618,14 @@ func (idx *indexer) handleTrainingAndCheckForDrop(keyspaceId string,
 	return nil
 }
 
+func getAllMapKeys[K comparable, V any](someMap map[K]V) []K {
+	var res = make([]K, 0, len(someMap))
+	for key := range someMap {
+		res = append(res, key)
+	}
+	return res
+}
+
 func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	msg := cmd.(*MsgIndexTrainingDone)
 	successMap := msg.GetSuccessMap()
@@ -13625,6 +13639,14 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		dropMap = make(map[c.IndexInstId]MsgChannel)
 	}
 
+	if len(successMap) > 0 || len(errMap) > 0 {
+		logging.Infof("Indexer::handleIndexTrainingDone: training finished.\n\tSuccessful insts - %v\n\tErrored insts - %v\n\tDropped Insts - %v",
+			getAllMapKeys(successMap),
+			getAllMapKeys(errMap),
+			getAllMapKeys(droppedInsts),
+		)
+	}
+
 	toBuildInstIds := make([]common.IndexInstId, 0)
 	allInsts := make([]common.IndexInstId, 0)
 
@@ -13635,14 +13657,26 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		// Instance was dropped and not yet deleted.
 		if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
 			dropMap[instId] = clientCh
+			logging.Infof("Indexer::handleIndexTrainingDone: index with inst id %v was dropped. deleting the same",
+				instId)
 			continue
 		}
 
 		if _, ok := droppedInsts[instId]; ok {
+			logging.Infof("Indexer::handleIndexTrainingDone: index with inst id %v was dropped. skipping...",
+				instId)
 			continue // Instance was dropped and deleted. No need to process it further
 		}
 
-		inst := idx.indexInstMap[instId]
+		inst, exists := idx.indexInstMap[instId]
+		if !exists {
+			// NOTE: after logging if we skip this inst from processing, we may not get a panic
+			// but that will only be preventive and we may not know where book keeping has gotten
+			// corrupt before this processing leading to bigger problems
+			logging.Errorf("Indexer::handleIndexTrainingDone: inst id %v not found. indexer book keeping mismatch",
+				instId)
+		}
+
 		if inst.Defn.IsVectorIndex {
 			inst.TrainingPhase = c.TRAINING_COMPLETED
 		} else {
@@ -13652,6 +13686,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		inst.Error = "" // Reset any error observed from earlier iterations
 		toBuildInstIds = append(toBuildInstIds, instId)
 		allInsts = append(allInsts, instId)
+
 	}
 
 	for instId, partnErrMap := range errMap {
@@ -13659,14 +13694,25 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		// Instance was dropped and not yet deleted.
 		if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
 			dropMap[instId] = clientCh
+			logging.Infof("Indexer::handleIndexTrainingDone: errored index with inst id %v was dropped. deleting the same",
+				instId)
 			continue
 		}
 
 		if _, ok := droppedInsts[instId]; ok {
+			logging.Infof("Indexer::handleIndexTrainingDone: errored index with inst id %v was dropped. skipping...",
+				instId)
 			continue // Instance was dropped and deleted. No need to process it further
 		}
 
-		inst := idx.indexInstMap[instId]
+		inst, exists := idx.indexInstMap[instId]
+		if !exists {
+			// NOTE: after logging if we skip this inst from processing, we may not get a panic
+			// but that will only be preventive and we may not know where book keeping has gotten
+			// corrupt before this processing leading to bigger problems
+			logging.Warnf("Indexer::handleIndexTrainingDone: errored inst id %v not found. indexer book keeping mismatch",
+				instId)
+		}
 		// Even if one partition of an instance encounters error, reset training
 		// phase. Index build retry skip those partitions that are already trained
 		// and only train those partitions that are not trained
