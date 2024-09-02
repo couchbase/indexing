@@ -708,6 +708,7 @@ func (o *IndexUsage) SetInitialNode() {
 	}
 
 	// Even if one index of the grouped instances has a non-nil initialNode,
+	// and initial alternate shardIds are non-nil, then
 	// it means that there exists a node in the cluster containing the
 	// alternateShardId relevant to this proxy usage. Hence, set the initialNode
 	// of that index as the initialNode of proxy usage.
@@ -716,7 +717,7 @@ func (o *IndexUsage) SetInitialNode() {
 	// that the entire shard has to be repaired. In such a case, leave the
 	// initialNode value as nil
 	for _, in := range o.GroupedIndexes {
-		if in.initialNode != nil {
+		if in.initialNode != nil && len(in.initialAlternateShardIds) > 0 {
 			o.initialNode = in.initialNode
 			break
 		}

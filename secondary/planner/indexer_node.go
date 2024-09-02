@@ -473,7 +473,7 @@ func (o *IndexerNode) SubtractDrainRate(s *Solution, drainRate uint64) {
 // This function returns whether the indexer node should exclude the given index
 func (o *IndexerNode) shouldExcludeIndex(s *Solution, n *IndexUsage) bool {
 	if o.ExcludeIn(s) {
-		return o.IsDeleted() || !(n.overrideExclude || n.initialNode.NodeId == o.NodeId)
+		return o.IsDeleted() || !(n.overrideExclude || (n.initialNode != nil && n.initialNode.NodeId == o.NodeId))
 	}
 	return false
 }
