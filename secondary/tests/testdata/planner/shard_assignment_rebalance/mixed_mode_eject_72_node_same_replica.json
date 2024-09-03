@@ -40,6 +40,10 @@
                     "alternateShardIds": [
                         "1234-1-0",
                         "1234-1-1"
+                    ],
+                    "initialAlternateShardIds": [
+                        "1234-1-0",
+                        "1234-1-1"
                     ]
                 },
                 {
@@ -63,6 +67,10 @@
                         "replicaId": 1
                     },
                     "alternateShardIds": [
+                        "1234-1-0",
+                        "1234-1-1"
+                    ],
+                    "initialAlternateShardIds": [
                         "1234-1-0",
                         "1234-1-1"
                     ]

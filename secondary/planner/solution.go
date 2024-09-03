@@ -584,7 +584,7 @@ func (s *Solution) PrintLayout() {
 					subIndex.GetDisplayName(), subIndex.Bucket, subIndex.Scope, subIndex.Collection, subIndex.DefnId, subIndex.InstId, subIndex.PartnId,
 					subIndex.initialNode == nil || subIndex.initialNode.NodeId != indexer.NodeId,
 					subIndex.IsShardProxy, subIndex.NumInstances, subIndex.AlternateShardIds,
-					subIndex.initialAlternateShardIds, subIndex.ShardIds, subIndex.Instance.Defn.ShardIdsForDest)
+					subIndex.InitialAlternateShardIds, subIndex.ShardIds, subIndex.Instance.Defn.ShardIdsForDest)
 				logging.Infof("\t\t\t Sub-Index total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 					subIndex.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemTotal(s.UseLiveData()))),
 					subIndex.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemUsage(s.UseLiveData()))),
@@ -659,7 +659,7 @@ func (s *Solution) PrintCompactLayout() {
 				logging.Infof("\t\t\t* %v, %v, %v, %v, %v, %v, %v, "+
 					"initASIs:%v, defnShardIds:%v",
 					subIndex.GetDisplayName(), subIndex.Bucket, subIndex.Scope, subIndex.Collection, subIndex.DefnId, subIndex.InstId, subIndex.PartnId,
-					subIndex.initialAlternateShardIds, subIndex.Instance.Defn.ShardIdsForDest)
+					subIndex.InitialAlternateShardIds, subIndex.Instance.Defn.ShardIdsForDest)
 			}
 		}
 	}

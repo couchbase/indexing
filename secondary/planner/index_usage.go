@@ -26,7 +26,7 @@ type IndexUsage struct {
 	// For all indexes created from 7.6+ version of planner and on
 	// 7.6+ version of indexer, alternateShardIds will be non-nil
 	AlternateShardIds        []string `json:"alternateShardIds,omitempty"`
-	initialAlternateShardIds []string
+	InitialAlternateShardIds []string `json:"initialAlternateShardIds,omitempty"`
 
 	// input: index sizing
 	IsPrimary     bool    `json:"isPrimary,omitempty"`
@@ -159,7 +159,7 @@ func (o *IndexUsage) clone() *IndexUsage {
 	r := *o
 	r.Hosts = nil
 	r.initialNode = nil // should set to nil
-	r.initialAlternateShardIds = nil
+	r.InitialAlternateShardIds = nil
 
 	if o.Instance != nil {
 		inst := *o.Instance
@@ -679,7 +679,7 @@ func (o *IndexUsage) Union(in *IndexUsage) {
 	// copying only one shardId. Hence, always copy until we see a secondary
 	// index which will have 2 shardIds. Also, use the shardIds only from
 	// indexes which have valid initialAlternateShardIds
-	if len(o.ShardIds) < 2 && len(in.initialAlternateShardIds) > 0 {
+	if len(o.ShardIds) < 2 && len(in.InitialAlternateShardIds) > 0 {
 		o.ShardIds = in.ShardIds
 	}
 }
@@ -717,11 +717,12 @@ func (o *IndexUsage) SetInitialNode() {
 	// that the entire shard has to be repaired. In such a case, leave the
 	// initialNode value as nil
 	for _, in := range o.GroupedIndexes {
-		if in.initialNode != nil && len(in.initialAlternateShardIds) > 0 {
+		if in.initialNode != nil && len(in.InitialAlternateShardIds) > 0 {
 			o.initialNode = in.initialNode
 			break
 		}
 	}
+
 }
 
 func (in *IndexUsage) updateProxyStats(shardStats *common.ShardStats) {

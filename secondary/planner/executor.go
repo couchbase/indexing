@@ -1030,15 +1030,15 @@ func getLiveAlternateShardIdsFromSolution(soln *Solution) map[common.IndexDefnId
 			return
 		}
 
-		if len(index.initialAlternateShardIds) > 0 {
+		if len(index.InitialAlternateShardIds) > 0 {
 			liveDefnId := index.DefnId
 			liveReplicaId := index.Instance.ReplicaId
 			livePartnId := index.PartnId
 
-			liveAsi, err := common.ParseAlternateId(index.initialAlternateShardIds[0])
+			liveAsi, err := common.ParseAlternateId(index.InitialAlternateShardIds[0])
 			if err != nil {
 				logging.Warnf("getLiveAlternateShardIdsFromSolution: failed to parse Alternate Shard Id %v with err %v",
-					index.initialAlternateShardIds[0], err)
+					index.InitialAlternateShardIds[0], err)
 				return
 			}
 
@@ -1102,9 +1102,9 @@ func alternateShardExistsInCluster(index *IndexUsage) bool {
 
 	// for move index
 	if index.initialNode != nil {
-		if len(index.initialAlternateShardIds) > 0 {
+		if len(index.InitialAlternateShardIds) > 0 {
 			newAsi, err1 := common.ParseAlternateId(index.AlternateShardIds[0])
-			oldAsi, err2 := common.ParseAlternateId(index.initialAlternateShardIds[0])
+			oldAsi, err2 := common.ParseAlternateId(index.InitialAlternateShardIds[0])
 			if err1 != nil {
 				logging.Warnf("genShardTransferToken2:alternateShardExistsInCluster invalid new Alternate Shard ID %v (err - %v). Fallback to DCP for index %v",
 					index.AlternateShardIds[0], err1, index)
@@ -1112,7 +1112,7 @@ func alternateShardExistsInCluster(index *IndexUsage) bool {
 			}
 			if err2 != nil {
 				logging.Warnf("genShardTransferToken2:alternateShardExistsInCluster invalid old Alternate Shard ID %v (err - %v). Fallback to DCP for index %v",
-					index.initialAlternateShardIds[0], err2, index)
+					index.InitialAlternateShardIds[0], err2, index)
 				return false
 			}
 			return newAsi.SlotId == oldAsi.SlotId
@@ -1122,9 +1122,9 @@ func alternateShardExistsInCluster(index *IndexUsage) bool {
 
 	// for shard/replica repair
 	if index.siblingIndex != nil {
-		if len(index.siblingIndex.initialAlternateShardIds) > 0 {
+		if len(index.siblingIndex.InitialAlternateShardIds) > 0 {
 			newAsi, err1 := common.ParseAlternateId(index.AlternateShardIds[0])
-			oldAsi, err2 := common.ParseAlternateId(index.siblingIndex.initialAlternateShardIds[0])
+			oldAsi, err2 := common.ParseAlternateId(index.siblingIndex.InitialAlternateShardIds[0])
 			if err1 != nil {
 				logging.Errorf("genShardTransferToken2:alternateSshardExistsInCluster invalid new Alternate Shard ID %v (err - %v). Fallback to DCP for index %v",
 					index.AlternateShardIds[0], err1, index)
@@ -1132,7 +1132,7 @@ func alternateShardExistsInCluster(index *IndexUsage) bool {
 			}
 			if err2 != nil {
 				logging.Errorf("genShardTransferToken2:alternateSshardExistsInCluster invalid old Alternate Shard ID %v (err - %v). Fallback to DCP for index %v",
-					index.siblingIndex.initialAlternateShardIds[0], err2, index)
+					index.siblingIndex.InitialAlternateShardIds[0], err2, index)
 				return false
 			}
 			return newAsi.SlotId == oldAsi.SlotId
