@@ -489,14 +489,11 @@ func (rs *randomScan) createAndSendDcpEvent(respBody []byte) {
 			event := &memcached.DcpEvent{}
 
 			event.Opcode = transport.DCP_MUTATION
-			event.Flags = binary.BigEndian.Uint32(respBody[i+4:])
-			event.Expiry = binary.BigEndian.Uint32(respBody[i+8:])
-			event.Seqno = binary.BigEndian.Uint64(respBody[i+16:])
-			event.Cas = binary.BigEndian.Uint64(respBody[i+24:])
-			event.Datatype = uint8(respBody[i+25])
-
-			//VECTOR_TODO Workaround till datatype issue is resolved (MB-62626)
-			event.TreatAsJSON()
+			event.Flags = binary.BigEndian.Uint32(respBody)
+			event.Expiry = binary.BigEndian.Uint32(respBody[i+4:])
+			event.Seqno = binary.BigEndian.Uint64(respBody[i+8:])
+			event.Cas = binary.BigEndian.Uint64(respBody[i+16:])
+			event.Datatype = uint8(respBody[i+24])
 
 			i += 25 //increment by fixed 25 bytes metadata length
 
