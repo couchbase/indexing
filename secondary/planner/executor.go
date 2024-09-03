@@ -2802,7 +2802,20 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 				return nil, nil, nil, err
 			}
 
-			PopulateAlternateShardIds(solution, needsNewAlteranteShardIds, config.binSize, false)
+			// After filtering, if any index movements are filtered out due to cyclic or redundant movememts,
+			// filter those indexes from populating alternate shardIds as those indexes are not moving.
+			// filterSolution() will take care of populating the correct destination node for such indexes
+			filteredNeedsNewAlternateShardIds := make([]*IndexUsage, 0)
+			for _, index := range needsNewAlteranteShardIds {
+				if index.IsShardProxy == false && index.initialNode != nil && index.initialNode.NodeId == index.destNode.NodeId {
+					logging.Infof("rebalance: Filtering index: (%v, %v, %v, %v, %v, %v) as index movement was filtered out",
+						index.Name, index.Bucket, index.Scope, index.Collection, index.Instance.ReplicaId, index.PartnId)
+					continue
+				}
+				filteredNeedsNewAlternateShardIds = append(filteredNeedsNewAlternateShardIds, index)
+			}
+
+			PopulateAlternateShardIds(solution, filteredNeedsNewAlternateShardIds, config.binSize, false)
 		}
 
 		// Re-group indexes
