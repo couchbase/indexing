@@ -95,7 +95,16 @@ func (c *clustMgrAgent) run() {
 
 	//main ClustMgrAgent loop
 
-	defer c.mgr.Close()
+	defer func() {
+		if rc := recover(); rc != nil {
+			panic(rc)
+		} else {
+			// if there is a panic, close can block the panic until it finishes and close may end
+			// up in a deadlock as the clusterMgrAgent loop will not be available and LifecycleMgr
+			// could be waiting on a response from the clusterMgrAgent for on-going requests
+			c.mgr.Close()
+		}
+	}()
 
 	defer c.panicHandler()
 
