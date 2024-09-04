@@ -148,6 +148,7 @@ const DEFAULT_SCOPE = "_default"
 const DEFAULT_COLLECTION = "_default"
 const DEFAULT_SCOPE_ID = "0"
 const DEFAULT_COLLECTION_ID = "0"
+const QUERY_COLLECTION = "_query"
 
 const SYSTEM_SCOPE = "_system"
 

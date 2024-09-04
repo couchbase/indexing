@@ -1481,6 +1481,10 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 			}
 		}
 
+		if idxDefn.IsPrimary && idxDefn.Scope == c.SYSTEM_SCOPE && idxDefn.Collection == c.QUERY_COLLECTION {
+			logging.Warnf("Fail to create index: %v, msg: %v", err, msg)
+			return fmt.Errorf("%v", msg)
+		}
 		logging.Errorf("Fail to create index: %v, msg: %v", err, msg)
 		return fmt.Errorf("%v", msg)
 	}
