@@ -449,6 +449,10 @@ func (sm *statsManager) doLogEvaluatorStats(evalStatsMap map[string]interface{},
 			if errSkipAll > 0 {
 				evalStatsKeyMap["skipCount"] = errSkipAll
 			}
+			vectorErrs := val.GetVectorErrs()
+			for k, v := range vectorErrs {
+				evalStatsKeyMap[k] = v
+			}
 
 			evalStats[key] = evalStatsKeyMap
 
