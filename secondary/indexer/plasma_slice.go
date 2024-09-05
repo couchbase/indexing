@@ -2789,6 +2789,11 @@ func (mdb *plasmaSlice) RollbackToZero(initialBuild bool) error {
 		atomic.StoreInt32(&mdb.isInitialBuild, 1)
 	}
 
+	// During rollback to zero, initialise the quantizedCodeBuf. Rest of the metadata is still valid
+	if mdb.idxDefn.IsVectorIndex {
+		mdb.initQuantizedCodeBuf()
+	}
+
 	return nil
 }
 
