@@ -9,6 +9,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/queryport/client"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	"github.com/couchbase/indexing/secondary/tools/randdocs"
@@ -18,6 +19,7 @@ import (
 var bucket = "default"
 var idx_sif10k = "idx_sift10k"
 var idx_sif10k_partn = "idx_sift10k_partn"
+var idx_base64 = "idx_base64"
 
 // Fist queryvector from SIFT10K
 var indexVector = &datastore.IndexVector{
@@ -461,6 +463,65 @@ func TestVectorIndexMissingTrailing(t *testing.T) {
 
 	recall := recallAtR(expectedVectorPosTop100[0:int(limit)], vectorPosReturned, int(limit))
 	log.Printf("Recall: %v expected: %v result: %v %+v", recall,
+		expectedVectorPosTop100[0:int(limit)], vectorPosReturned, scanResults)
+}
+
+
+func TestBase64VectorIndex(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	if !vectorsLoaded {
+		vectorSetup(t, bucket, "", "", 40000)
+	}
+
+	// Add base64 vector field first 10k docs
+	n1qlstatement := "UPDATE `default` SET siftbase = ENCODE_VECTOR(sift, false);"
+	_, err := tc.ExecuteN1QLStatement("127.0.0.1:9000", clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, nil)
+	FailTestIfError(err, "Error in adding base64 vector field", t)
+
+	// Create Index on encoded vector field
+	stmt := "CREATE INDEX " + idx_base64 +
+	" ON default(gender, DECODE_VECTOR(siftbase, false) VECTOR, docnum)" +
+	" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+	err = createWithDeferAndBuild(idx_base64, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_base64", t)
+
+	scans := qc.Scans{
+		&qc.Scan{
+			Filter: []*qc.CompositeElementFilter{
+				&qc.CompositeElementFilter{
+					Low:       "male",
+					High:      "male",
+					Inclusion: qc.Both,
+				},
+				&qc.CompositeElementFilter{},
+				&qc.CompositeElementFilter{
+					Low:       0,
+					High:      20000,
+					Inclusion: qc.Both,
+				},
+			},
+		},
+	}
+
+	limit := int64(5)
+	// Scan
+	scanResults, err := secondaryindex.Scan6(idx_base64, bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	FailTestIfError(err, "Error during secondary index scan", t)
+
+	vectorPosReturned := make([]uint32, 0)
+	for k, _ := range scanResults {
+		s := strings.Split(k, "_")
+		vps := s[1]
+		vp, err := strconv.Atoi(vps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		vectorPosReturned = append(vectorPosReturned, uint32(vp))
+	}
+
+	recall := recallAtR(expectedVectorPosTop100[0:int(limit)], vectorPosReturned, int(limit))
+	log.Printf("Recall: %v expected values: %v result: %v %+v", recall,
 		expectedVectorPosTop100[0:int(limit)], vectorPosReturned, scanResults)
 }
 
