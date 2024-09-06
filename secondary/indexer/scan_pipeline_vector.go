@@ -572,6 +572,10 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 
 func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 
+	if w.currJob.rowsScanned%SCAN_ROLLBACK_ERROR_BATCHSIZE == 0 && w.r.hasRollback != nil && w.r.hasRollback.Load() == true {
+		return ErrIndexRollback
+	}
+
 	var err error
 	var skipRow bool
 
