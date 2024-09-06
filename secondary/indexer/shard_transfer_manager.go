@@ -932,6 +932,7 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 	rebalCancelCh := msg.GetCancelCh()
 	rebalDoneCh := msg.GetDoneCh()
 	respCh := msg.GetRespCh()
+	instRenameMap := msg.GetInstRenameMap()
 	// if there are no relevant vectorIndex for the TT, sendResponse() will send a msg with empty errMap and codebookPaths
 	vectorIndexInsts := msg.GetVectorIndexInsts()
 	// TODO: Progress for Codebook Restore
@@ -947,7 +948,7 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 			destination: "",
 			keyPrefix:   CODEBOOK_COPY_PREFIX,
 		}
-		srcRoot = filepath.Join(REBALANCE_STAGING_DIR, getCodebookRootDir(meta))
+		srcRoot = filepath.Join(plasma.RPCRootDir, getCodebookRootDir(meta))
 	default:
 		// the function should never come here
 		logging.Errorf("ShardTransferManager::processCodebookRestore received an unsupported taskType for codebook restore", taskType)
@@ -1010,7 +1011,7 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 					return
 				default:
 					destCodebookFilePath := codebookMap[vectorIdxInst.InstId][partnId]
-					if err := stm.RestoreCodebook(vectorIdxInst, partnId, srcRoot, destCodebookFilePath); err != nil {
+					if err := stm.RestoreCodebook(instRenameMap, vectorIdxInst, partnId, srcRoot, destCodebookFilePath); err != nil {
 						errMap[destCodebookFilePath] = err
 						logging.Errorf("ShardTransferManager::processCodebookRestore Error when restoring codebook, %v", err)
 						return
@@ -1040,7 +1041,7 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 
 }
 
-func (stm *ShardTransferManager) RestoreCodebook(vectorInst c.IndexInst, partnId c.PartitionId, srcRoot, destFilePath string) error {
+func (stm *ShardTransferManager) RestoreCodebook(instRenameMap map[common.ShardId]map[string]string, vectorInst c.IndexInst, partnId c.PartitionId, srcRoot, destFilePath string) error {
 
 	storageDir := stm.config["storage_dir"].String()
 	relIdxPath := IndexPath(&vectorInst, partnId, SliceId(0))
@@ -1054,7 +1055,16 @@ func (stm *ShardTransferManager) RestoreCodebook(vectorInst c.IndexInst, partnId
 	}
 
 	// TODO: check for the sliceId information
-	srcFilePath := filepath.Join(storageDir, srcRoot, genCodebookFileStagingName(destFilePath))
+	srcFileName := genCodebookFileStagingName(destFilePath)
+	for _, renameMap := range instRenameMap {
+		currCodebookPath, _ := generateCodebookRenamePaths(renameMap, vectorInst.Defn.Bucket, vectorInst.Defn.Name, partnId, vectorInst.InstId)
+		if currCodebookPath != "" {
+			srcFileName = genCodebookFileStagingName(currCodebookPath)
+			break
+		}
+	}
+
+	srcFilePath := filepath.Join(storageDir, srcRoot, srcFileName)
 	if _, err := iowrap.Os_Stat(srcFilePath); err != nil {
 		err = fmt.Errorf("error encountered for codebook in staging directory. path: %v for"+
 			"instId: %v, realInstId:%v, partnId: %v, err: %v",

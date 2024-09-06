@@ -24,6 +24,8 @@ var VECTOR_INDEX_INDEXER_QUOTA = "512"
 var scope, coll = "s1", "c1"
 var idxDedicated = "idxCVI_dedicated_partn"
 var idxShared = "idxCVI_shared_partn"
+var idxDedicatedReplica = "idxCVI_dedicated_replica"
+var idxSharedReplica = "idxCVI_dedicated_replica"
 
 var limit int64 = 5
 
@@ -255,9 +257,58 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 	})
 
 	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index]
-	t.Run("TestRebalanceCancelIndexerAfterTransfer", func(subt *testing.T) {
+	t.Run("TestRebalanceReplicaRepair", func(subt *testing.T) {
+		log.Print("In TestRebalanceReplicaRepair")
 		// Due to previous cluster config, node[3] is still part of the cluster
 		swapRebalance(t, 2, 3)
+
+		status := getClusterStatus()
+		if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+			!isNodeIndex(status, clusterconfig.Nodes[2]) {
+			subt.Fatalf("%v Unexpected cluster configuration: %v", subt.Name(), status)
+		}
+
+		printClusterConfig(subt.Name(), "entry")
+
+		// Create Replicated Vector Instances - shared and dedicated
+		stmt := fmt.Sprintf("CREATE INDEX %v"+
+			" ON `%v`(sift VECTOR)"+
+			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_replica\":1, \"defer_build\":true};",
+			idxDedicatedReplica, BUCKET)
+		err := createWithDeferAndBuild(idxDedicatedReplica, BUCKET, "", "", stmt, defaultIndexActiveTimeout)
+		FailTestIfError(err, "Error in creating "+idxDedicatedReplica, t)
+
+		stmt = fmt.Sprintf("CREATE INDEX %v"+
+			" ON `%v`.`%v`.`%v`(sift VECTOR)"+
+			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_replica\":1, \"defer_build\":true};",
+			idxSharedReplica, BUCKET, scope, coll)
+		err = createWithDeferAndBuild(idxSharedReplica, BUCKET, scope, coll, stmt, defaultIndexActiveTimeout)
+		FailTestIfError(err, "Error in creating "+idxSharedReplica, t)
+
+		defer func() {
+			log.Printf("%v: dropping replicated indices:%v", subt.Name(), []string{idxDedicatedReplica, idxSharedReplica})
+			dropIndex(idxDedicatedReplica, BUCKET, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, subt)
+			dropIndex(idxSharedReplica, BUCKET, scope, coll, subt)
+		}()
+
+		// Failover Node 2 - Replica is lost
+		log.Printf("%v: Failing over index node %v", subt.Name(), clusterconfig.Nodes[2])
+		failoverNode(clusterconfig.Nodes[2], t)
+		log.Printf("%v: Rebalancing", subt.Name())
+		rebalance(t)
+
+		// Add Node 2 and Rebalance - Replica is repaired
+		log.Printf("%v: Add Node %v to the cluster for replica repair", subt.Name(), clusterconfig.Nodes[2])
+		addNodeAndRebalance(clusterconfig.Nodes[2], "index", t)
+
+		waitForRebalanceCleanup()
+
+		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		validateReplicatedVectorScan(subt)
+	})
+
+	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index]
+	t.Run("TestRebalanceCancelIndexerAfterTransfer", func(subt *testing.T) {
 
 		log.Print("In TestRebalanceCancelIndexerAfterTransfer")
 		status := getClusterStatus()
@@ -412,6 +463,11 @@ func swapAndCheckForCleanup(t *testing.T, nidIn, nidOut int) {
 
 	performCodebookTransferValidation(t, []string{idxDedicated, idxShared})
 	validateVectorScan(t)
+}
+
+func validateReplicatedVectorScan(t *testing.T) {
+	performVectorScanOnIndex(t, idxDedicatedReplica, "", "")
+	performVectorScanOnIndex(t, idxSharedReplica, scope, coll)
 }
 
 func validateVectorScan(t *testing.T) {

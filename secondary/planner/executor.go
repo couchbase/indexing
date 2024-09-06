@@ -1030,15 +1030,15 @@ func getLiveAlternateShardIdsFromSolution(soln *Solution) map[common.IndexDefnId
 			return
 		}
 
-		if len(index.initialAlternateShardIds) > 0 {
+		if len(index.InitialAlternateShardIds) > 0 {
 			liveDefnId := index.DefnId
 			liveReplicaId := index.Instance.ReplicaId
 			livePartnId := index.PartnId
 
-			liveAsi, err := common.ParseAlternateId(index.initialAlternateShardIds[0])
+			liveAsi, err := common.ParseAlternateId(index.InitialAlternateShardIds[0])
 			if err != nil {
 				logging.Warnf("getLiveAlternateShardIdsFromSolution: failed to parse Alternate Shard Id %v with err %v",
-					index.initialAlternateShardIds[0], err)
+					index.InitialAlternateShardIds[0], err)
 				return
 			}
 
@@ -1102,9 +1102,9 @@ func alternateShardExistsInCluster(index *IndexUsage) bool {
 
 	// for move index
 	if index.initialNode != nil {
-		if len(index.initialAlternateShardIds) > 0 {
+		if len(index.InitialAlternateShardIds) > 0 {
 			newAsi, err1 := common.ParseAlternateId(index.AlternateShardIds[0])
-			oldAsi, err2 := common.ParseAlternateId(index.initialAlternateShardIds[0])
+			oldAsi, err2 := common.ParseAlternateId(index.InitialAlternateShardIds[0])
 			if err1 != nil {
 				logging.Warnf("genShardTransferToken2:alternateShardExistsInCluster invalid new Alternate Shard ID %v (err - %v). Fallback to DCP for index %v",
 					index.AlternateShardIds[0], err1, index)
@@ -1112,7 +1112,7 @@ func alternateShardExistsInCluster(index *IndexUsage) bool {
 			}
 			if err2 != nil {
 				logging.Warnf("genShardTransferToken2:alternateShardExistsInCluster invalid old Alternate Shard ID %v (err - %v). Fallback to DCP for index %v",
-					index.initialAlternateShardIds[0], err2, index)
+					index.InitialAlternateShardIds[0], err2, index)
 				return false
 			}
 			return newAsi.SlotId == oldAsi.SlotId
@@ -1122,9 +1122,9 @@ func alternateShardExistsInCluster(index *IndexUsage) bool {
 
 	// for shard/replica repair
 	if index.siblingIndex != nil {
-		if len(index.siblingIndex.initialAlternateShardIds) > 0 {
+		if len(index.siblingIndex.InitialAlternateShardIds) > 0 {
 			newAsi, err1 := common.ParseAlternateId(index.AlternateShardIds[0])
-			oldAsi, err2 := common.ParseAlternateId(index.siblingIndex.initialAlternateShardIds[0])
+			oldAsi, err2 := common.ParseAlternateId(index.siblingIndex.InitialAlternateShardIds[0])
 			if err1 != nil {
 				logging.Errorf("genShardTransferToken2:alternateSshardExistsInCluster invalid new Alternate Shard ID %v (err - %v). Fallback to DCP for index %v",
 					index.AlternateShardIds[0], err1, index)
@@ -1132,7 +1132,7 @@ func alternateShardExistsInCluster(index *IndexUsage) bool {
 			}
 			if err2 != nil {
 				logging.Errorf("genShardTransferToken2:alternateSshardExistsInCluster invalid old Alternate Shard ID %v (err - %v). Fallback to DCP for index %v",
-					index.siblingIndex.initialAlternateShardIds[0], err2, index)
+					index.siblingIndex.InitialAlternateShardIds[0], err2, index)
 				return false
 			}
 			return newAsi.SlotId == oldAsi.SlotId
@@ -2802,7 +2802,20 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 				return nil, nil, nil, err
 			}
 
-			PopulateAlternateShardIds(solution, needsNewAlteranteShardIds, config.binSize, false)
+			// After filtering, if any index movements are filtered out due to cyclic or redundant movememts,
+			// filter those indexes from populating alternate shardIds as those indexes are not moving.
+			// filterSolution() will take care of populating the correct destination node for such indexes
+			filteredNeedsNewAlternateShardIds := make([]*IndexUsage, 0)
+			for _, index := range needsNewAlteranteShardIds {
+				if index.IsShardProxy == false && index.initialNode != nil && index.initialNode.NodeId == index.destNode.NodeId {
+					logging.Infof("rebalance: Filtering index: (%v, %v, %v, %v, %v, %v) as index movement was filtered out",
+						index.Name, index.Bucket, index.Scope, index.Collection, index.Instance.ReplicaId, index.PartnId)
+					continue
+				}
+				filteredNeedsNewAlternateShardIds = append(filteredNeedsNewAlternateShardIds, index)
+			}
+
+			PopulateAlternateShardIds(solution, filteredNeedsNewAlternateShardIds, config.binSize, false)
 		}
 
 		// Re-group indexes
