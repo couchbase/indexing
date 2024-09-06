@@ -105,6 +105,7 @@ type Command struct {
 	UseTools    bool
 	IndexerPort string
 	UseLogLevel string
+	isBhive     bool
 }
 
 type IndexCreate interface {
@@ -272,9 +273,9 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 
 		case *algebra.CreateIndex:
 			cmdOptions.IsPrimary = false
+			cmdOptions.isBhive = estmt.Vector()
 
 			err = PopulateCreateIndexOptions(estmt, cmdOptions)
-
 			if err != nil {
 				return nil, nil, fset, err
 			}
@@ -549,10 +550,10 @@ func HandleCommand(
 			var defnID uint64
 			defnID, err = client.CreateIndex6(iname, bucket, scope, collection, cmd.Using, cmd.ExprType,
 				cmd.WhereStr, cmd.SecStrs, cmd.Desc, cmd.VectorAttr, cmd.IndexMissingLeadingKey, cmd.IsPrimary, cmd.Scheme,
-				cmd.PartitionKeys, cmd.WithJson, nil, false)
+				cmd.PartitionKeys, cmd.WithJson, nil, cmd.isBhive)
 			if err == nil {
-				fmt.Fprintf(w, "Index created: name: %q, ID: %v, WITH clause used: %q\n",
-					iname, defnID, cmd.WithJson)
+				fmt.Fprintf(w, "Index created: name: %q, isBhive:%v, ID: %v, WITH clause used: %q\n",
+					iname, cmd.isBhive, defnID, cmd.WithJson)
 			}
 		}
 		//TODO: Handle Drop and Alter
