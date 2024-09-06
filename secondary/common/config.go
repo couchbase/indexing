@@ -4204,10 +4204,9 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.vector.centroids.sqrtThreshold": ConfigValue{
+	"indexer.vector.largeDataThreshold": ConfigValue{
 		1000000, // 1M
-		"Number of items after which centoids required are computed based on " +
-			"sqrt(itemsCount)",
+		"Number of items after which indexer uses a smaller train_vecs_per_centroid",
 		1000000, // 1M
 		false,
 		false,

@@ -13155,14 +13155,8 @@ func (idx *indexer) getPartnStats(indexInst *common.IndexInst) map[common.Partit
 
 func (idx *indexer) computeCentroidsFromItemsCount(keyspaceId string, itemsCount uint64) int {
 
-	var centroids uint64
-	sqrtThreshold := idx.config["vector.centroids.sqrtThreshold"].Int()
-	if itemsCount < uint64(sqrtThreshold) {
-		// There will be atleast one centroid incase the number of items are less than 1000
-		centroids = uint64(math.Ceil(float64(itemsCount) / 1000))
-	} else {
-		centroids = uint64(math.Sqrt(float64(itemsCount)))
-	}
+	// There will be atleast one centroid incase the number of items are less than 1000
+	centroids := uint64(math.Ceil(float64(itemsCount) / 1000))
 
 	logging.Infof("Indexer::computeCentroidsFromItemsCount Number of centroids for keyspaceId: %v "+
 		"with items_count: %v are: %v", keyspaceId, itemsCount, int(centroids))
@@ -13237,7 +13231,7 @@ func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c
 }
 
 func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
-	vecInstIdList []c.IndexInstId, errMap map[c.IndexInstId]error) []common.IndexInstId {
+	vecInstIdList []c.IndexInstId, errMap map[c.IndexInstId]error) ([]common.IndexInstId, uint64) {
 
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
 
@@ -13249,7 +13243,7 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 		for _, instId := range vecInstIdList {
 			errMap[instId] = err
 		}
-		return nil
+		return nil, 0
 	}
 
 	validVecInsts := make([]common.IndexInstId, 0)
@@ -13291,7 +13285,7 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 		validVecInsts = append(validVecInsts, instId)
 		logging.Infof("Indexer::computeCentroids Centroids for training inst: %v are: %v", instId, centroids)
 	}
-	return validVecInsts
+	return validVecInsts, itemsCount
 }
 
 func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
@@ -13299,6 +13293,8 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 
 	// Check if there are any vector indexes that need training
 	var vecInstIdList []common.IndexInstId
+	var itemsCount uint64
+
 	instIdList, vecInstIdList = idx.filterNeedsTrainingInsts(instIdList, errMap)
 
 	if len(vecInstIdList) > 0 {
@@ -13306,7 +13302,7 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 		// Compute centoids for the index instances that require training
 		// Discard those indexes if centoids can not be computed and continue
 		// with build for other indexes
-		vecInstIdList = idx.computeCentroids(cluster, keyspaceId, reqcid, vecInstIdList, errMap)
+		vecInstIdList, itemsCount = idx.computeCentroids(cluster, keyspaceId, reqcid, vecInstIdList, errMap)
 		if len(vecInstIdList) > 0 {
 			// Build all vector and non-vector instances in same batch
 			instIdList = append(instIdList, vecInstIdList...)
@@ -13318,7 +13314,7 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 			common.CrashOnError(err)
 
 			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap),
-				keyspaceId, idx.config.Clone(), reqcid, reqCtx)
+				keyspaceId, idx.config.Clone(), reqcid, reqCtx, itemsCount)
 
 			return nil // Return nil so that handleBuildIndex does not take the build further
 		}
@@ -13369,12 +13365,21 @@ func getVectors(vectorMeta *c.VectorMetadata, nlist int) []float32 {
 }
 
 func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
-	indexPartnMap IndexPartnMap, config c.Config) (int64, []*c.IndexInst, []*c.IndexInst) {
+	indexPartnMap IndexPartnMap, config c.Config, itemsCount uint64) (int64, []*c.IndexInst, []*c.IndexInst) {
 	var vectorInsts, trainedOrNonVecInsts []*c.IndexInst
 
 	maxSampleSize := 0
 
+	largeDataThreshold := config["vector.largeDataThreshold"].Int()
 	train_vecs_per_centroid := config["vector.train_vecs_per_centroid"].Int()
+
+	//For larger datasets, a large training set can lead to very high
+	//training time specially if large number of centroids are used.
+	//Reduce training vecs based on threshold for large data set.
+	if itemsCount > uint64(largeDataThreshold) {
+		train_vecs_per_centroid /= 5 //VECTOR_TODO change this to const/config once stable
+	}
+
 	if train_vecs_per_centroid <= 1 {
 		train_vecs_per_centroid = 1 // Minimum of one sample per centroid is required for training
 	}
@@ -13413,7 +13418,8 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 // It is not a good idea to spawn a go-routine for each build statement
 func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap,
-	keyspaceId string, config common.Config, cid string, reqCtx *c.MetadataRequestContext) {
+	keyspaceId string, config common.Config, cid string,
+	reqCtx *c.MetadataRequestContext, itemsCount uint64) {
 
 	errMap := make(map[common.IndexInstId]map[common.PartitionId]error)
 	successMap := make(map[common.IndexInstId]bool)
@@ -13442,7 +13448,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	clusterAddr := idx.config["clusterAddr"].String()
 
 	bucket, scope, collection := getBucketScopeAndCollFromKeyspaceId(keyspaceId)
-	maxSampleSize, vectorInsts, trainedOrNonVecInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap, config)
+	maxSampleSize, vectorInsts, trainedOrNonVecInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap, config, itemsCount)
 
 	overSamplePercent := config["vector.over_sample_percent"].Int()
 
