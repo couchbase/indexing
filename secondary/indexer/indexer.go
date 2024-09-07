@@ -1763,6 +1763,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_INST_RECOVERY_RESPONSE:
 		idx.handleInstRecoveryResponse(msg)
 
+	case INDEXER_BULK_UPDATE_ERROR:
+		idx.handleBulkUpdateIndexError(msg)
+
 	case UPDATE_REBALANCE_PHASE:
 		bucketTransferPhase := idx.updateRebalancePhase(msg)
 		msg.(*MsgUpdateRebalancePhase).BucketTransferPhase = bucketTransferPhase
@@ -7091,6 +7094,44 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 	}
 
 	logging.Infof("handleUpdateIndexRState: Index instance %v rstate moved to ACTIVE", instId)
+}
+
+func (idx *indexer) handleBulkUpdateIndexError(msg Message) {
+
+	updateMsg := msg.(*MsgBulkUpdateIndexError)
+	receivedInstIds := updateMsg.GetInstIds()
+	errStr := updateMsg.GetErrStr()
+
+	updateInstIds := make([]common.IndexInstId, 0)
+
+	for _, instId := range receivedInstIds {
+
+		_, ok := idx.indexInstMap[instId]
+		if !ok {
+			if idx.canAllowDDLDuringRebalance() { // Index could be dropped during rebalance
+				logging.Errorf("Indexer::handleBulkUpdateIndexError Unable to find Index %v. Index could be deleted", instId)
+			} else {
+				logging.Errorf("Indexer::handleBulkUpdateIndexError Unable to find Index %v", instId)
+			}
+			continue
+		}
+
+		updateInstIds = append(updateInstIds, instId)
+	}
+
+	if len(updateInstIds) != 0 {
+		idx.bulkUpdateError(updateInstIds, errStr)
+
+		if err := idx.updateMetaInfoForIndexList(updateInstIds, false, false, true, false, false, false, false, false, nil, false, nil); err != nil {
+			common.CrashOnError(err)
+		}
+
+		logging.Infof("Indexer::handleBulkUpdateIndexError: Index instances %v updated with Err:%v", updateInstIds, errStr)
+		return
+	}
+
+	logging.Warnf("Indexer::handleBulkUpdateIndexError: No valid index found to update err: %v. received insts: %v", errStr, receivedInstIds)
+
 }
 
 func (idx *indexer) handleInitialBuildDone(msg Message) {
@@ -13114,14 +13155,8 @@ func (idx *indexer) getPartnStats(indexInst *common.IndexInst) map[common.Partit
 
 func (idx *indexer) computeCentroidsFromItemsCount(keyspaceId string, itemsCount uint64) int {
 
-	var centroids uint64
-	sqrtThreshold := idx.config["vector.centroids.sqrtThreshold"].Int()
-	if itemsCount < uint64(sqrtThreshold) {
-		// There will be atleast one centroid incase the number of items are less than 1000
-		centroids = uint64(math.Ceil(float64(itemsCount) / 1000))
-	} else {
-		centroids = uint64(math.Sqrt(float64(itemsCount)))
-	}
+	// There will be atleast one centroid incase the number of items are less than 1000
+	centroids := uint64(math.Ceil(float64(itemsCount) / 1000))
 
 	logging.Infof("Indexer::computeCentroidsFromItemsCount Number of centroids for keyspaceId: %v "+
 		"with items_count: %v are: %v", keyspaceId, itemsCount, int(centroids))
@@ -13196,7 +13231,7 @@ func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c
 }
 
 func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
-	vecInstIdList []c.IndexInstId, errMap map[c.IndexInstId]error) []common.IndexInstId {
+	vecInstIdList []c.IndexInstId, errMap map[c.IndexInstId]error) ([]common.IndexInstId, uint64) {
 
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
 
@@ -13208,7 +13243,7 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 		for _, instId := range vecInstIdList {
 			errMap[instId] = err
 		}
-		return nil
+		return nil, 0
 	}
 
 	validVecInsts := make([]common.IndexInstId, 0)
@@ -13250,7 +13285,7 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 		validVecInsts = append(validVecInsts, instId)
 		logging.Infof("Indexer::computeCentroids Centroids for training inst: %v are: %v", instId, centroids)
 	}
-	return validVecInsts
+	return validVecInsts, itemsCount
 }
 
 func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
@@ -13258,6 +13293,8 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 
 	// Check if there are any vector indexes that need training
 	var vecInstIdList []common.IndexInstId
+	var itemsCount uint64
+
 	instIdList, vecInstIdList = idx.filterNeedsTrainingInsts(instIdList, errMap)
 
 	if len(vecInstIdList) > 0 {
@@ -13265,7 +13302,7 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 		// Compute centoids for the index instances that require training
 		// Discard those indexes if centoids can not be computed and continue
 		// with build for other indexes
-		vecInstIdList = idx.computeCentroids(cluster, keyspaceId, reqcid, vecInstIdList, errMap)
+		vecInstIdList, itemsCount = idx.computeCentroids(cluster, keyspaceId, reqcid, vecInstIdList, errMap)
 		if len(vecInstIdList) > 0 {
 			// Build all vector and non-vector instances in same batch
 			instIdList = append(instIdList, vecInstIdList...)
@@ -13277,7 +13314,7 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 			common.CrashOnError(err)
 
 			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap),
-				keyspaceId, idx.config.Clone(), reqcid, reqCtx)
+				keyspaceId, idx.config.Clone(), reqcid, reqCtx, itemsCount)
 
 			return nil // Return nil so that handleBuildIndex does not take the build further
 		}
@@ -13328,12 +13365,21 @@ func getVectors(vectorMeta *c.VectorMetadata, nlist int) []float32 {
 }
 
 func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
-	indexPartnMap IndexPartnMap, config c.Config) (int64, []*c.IndexInst, []*c.IndexInst) {
+	indexPartnMap IndexPartnMap, config c.Config, itemsCount uint64) (int64, []*c.IndexInst, []*c.IndexInst) {
 	var vectorInsts, trainedOrNonVecInsts []*c.IndexInst
 
 	maxSampleSize := 0
 
+	largeDataThreshold := config["vector.largeDataThreshold"].Int()
 	train_vecs_per_centroid := config["vector.train_vecs_per_centroid"].Int()
+
+	//For larger datasets, a large training set can lead to very high
+	//training time specially if large number of centroids are used.
+	//Reduce training vecs based on threshold for large data set.
+	if itemsCount > uint64(largeDataThreshold) {
+		train_vecs_per_centroid /= 5 //VECTOR_TODO change this to const/config once stable
+	}
+
 	if train_vecs_per_centroid <= 1 {
 		train_vecs_per_centroid = 1 // Minimum of one sample per centroid is required for training
 	}
@@ -13372,7 +13418,8 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 // It is not a good idea to spawn a go-routine for each build statement
 func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap,
-	keyspaceId string, config common.Config, cid string, reqCtx *c.MetadataRequestContext) {
+	keyspaceId string, config common.Config, cid string,
+	reqCtx *c.MetadataRequestContext, itemsCount uint64) {
 
 	errMap := make(map[common.IndexInstId]map[common.PartitionId]error)
 	successMap := make(map[common.IndexInstId]bool)
@@ -13401,7 +13448,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	clusterAddr := idx.config["clusterAddr"].String()
 
 	bucket, scope, collection := getBucketScopeAndCollFromKeyspaceId(keyspaceId)
-	maxSampleSize, vectorInsts, trainedOrNonVecInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap, config)
+	maxSampleSize, vectorInsts, trainedOrNonVecInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap, config, itemsCount)
 
 	overSamplePercent := config["vector.over_sample_percent"].Int()
 
@@ -13749,15 +13796,126 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	if len(toBuildInstIds) > 0 {
 		logging.Infof("Indexer: handleIndexTrainingDone Starting build for instances: %v, keyspaceId: %v", toBuildInstIds, keyspaceId)
 
-		// Initiate build
-		idx.handleBuildIndex(&MsgBuildIndex{
+		// Initiate retryable build in a goroutine
+		go idx.retryableBuildAfterTraining(toBuildInstIds, keyspaceId, reqCtx)
+
+	}
+}
+
+func (idx *indexer) retryableBuildAfterTraining(toBuildInstIds []common.IndexInstId, keyspaceId string, reqCtx *common.MetadataRequestContext) {
+
+	isDCPRebalorResume := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceResume)
+
+	getBuildIndexResponse := func(idxInstList []common.IndexInstId) map[common.IndexInstId]error {
+
+		logging.Infof("Indexer::retryableBuildAfterTraining Starting build for instances: %v, keyspaceId: %v", idxInstList, keyspaceId)
+
+		respCh := make(MsgChannel)
+		idx.adminRecvCh <- &MsgBuildIndex{
 			mType:            CLUST_MGR_BUILD_INDEX_DDL,
-			indexInstList:    toBuildInstIds,
+			indexInstList:    idxInstList,
+			respCh:           respCh,
 			bucketList:       []string{keyspaceId},
 			reqCtx:           reqCtx,
 			isEmptyNodeBatch: false,
-		})
+		}
+
+		if res, ok := <-respCh; ok {
+
+			switch res.GetMsgType() {
+
+			case CLUST_MGR_BUILD_INDEX_DDL_RESPONSE:
+				errMap := res.(*MsgBuildIndexResponse).GetErrorMap()
+				logging.Infof("Indexer::retryableBuildAfterTraining returns "+
+					"for Build Index %v", idxInstList)
+				return errMap
+
+			case MSG_ERROR:
+				logging.Errorf("Indexer::retryableBuildAfterTraining Error "+
+					"for Build Index %v. Error %v.", idxInstList, res)
+				err := res.(*MsgError).GetError()
+				errMap := make(map[common.IndexInstId]error)
+				for _, instId := range idxInstList {
+					errMap[instId] = &common.IndexerError{Reason: err.String(), Code: err.convertError()}
+				}
+				return errMap
+
+			default:
+				logging.Fatalf("Indexer::retryableBuildAfterTraining Unknown Response "+
+					"Received for Build Index %v. Response %v", idxInstList, res)
+				common.CrashOnError(errors.New("Unknown Response"))
+			}
+
+		} else {
+			logging.Fatalf("Indexer::retryableBuildAfterTraining Unexpected Channel Close "+
+				"for Create Index %v", idxInstList)
+			common.CrashOnError(errors.New("Unknown Response"))
+		}
+		return nil
 	}
+
+	ticker := time.NewTicker(time.Second * 1)
+	defer ticker.Stop()
+
+	doRetry := true
+	errMap := make(map[common.IndexInstId]error)
+
+	for doRetry {
+		select {
+		case <-ticker.C:
+			errMap = getBuildIndexResponse(toBuildInstIds)
+
+			// If it is a non rebalance or resume scenario, after the first build request
+			// the builder will take care of retries
+			if !isDCPRebalorResume {
+				return
+			}
+
+			toBuildInstIds = make([]common.IndexInstId, 0)
+
+			for instId, err := range errMap {
+				if !idx.isTransientErrorForVectorBuild(err, isDCPRebalorResume) {
+					logging.Errorf("Indexer::retryableBuildAfterTraining For InstId:%v encountered err: %v", instId, err.Error())
+					idx.internalRecvCh <- &MsgBulkUpdateIndexError{
+						instIds: []common.IndexInstId{instId},
+						errStr:  fmt.Sprintf("%verr:%v", common.ERR_BUILD_AFTER_TRAINING, err.Error()),
+					}
+					return
+				}
+				toBuildInstIds = append(toBuildInstIds, instId)
+			}
+		}
+
+		doRetry = isDCPRebalorResume && len(toBuildInstIds) != 0
+	}
+}
+
+func (idx *indexer) isTransientErrorForVectorBuild(err error, isRebalOrResume bool) bool {
+
+	if !isRebalOrResume {
+		return false
+	}
+
+	if common.IsVectorTrainingError(err.Error()) {
+		return false
+	}
+
+	indexerErr, ok := err.(*common.IndexerError)
+	if !ok {
+		return true
+	}
+
+	if indexerErr.Code == common.IndexNotExist ||
+		indexerErr.Code == common.InvalidBucket ||
+		indexerErr.Code == common.BucketEphemeral ||
+		indexerErr.Code == common.IndexAlreadyExist ||
+		indexerErr.Code == common.IndexInvalidState ||
+		indexerErr.Code == common.BucketEphemeralStd {
+		return false
+	}
+
+	return true
 }
 
 func (idx *indexer) persistCodebookToDisk(storageDir string,

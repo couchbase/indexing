@@ -7,6 +7,7 @@ import (
 )
 
 const ERR_TRAINING string = "ErrTraining: "
+const ERR_BUILD_AFTER_TRAINING string = "ErrInBuildAfterTraining: "
 
 // error codes
 
@@ -165,6 +166,7 @@ const DEFAULT_SCOPE = "_default"
 const DEFAULT_COLLECTION = "_default"
 const DEFAULT_SCOPE_ID = "0"
 const DEFAULT_COLLECTION_ID = "0"
+const QUERY_COLLECTION = "_query"
 
 const SYSTEM_SCOPE = "_system"
 
@@ -214,4 +216,8 @@ const STAT_LOG_TS_FORMAT = "2006-01-02T15:04:05.000-07:00"
 
 func IsVectorTrainingError(errStr string) bool {
 	return len(errStr) > len(ERR_TRAINING) && errStr[0:len(ERR_TRAINING)] == ERR_TRAINING
+}
+
+func IsBuildErrAfterTraining(errStr string) bool {
+	return len(errStr) > len(ERR_BUILD_AFTER_TRAINING) && errStr[0:len(ERR_BUILD_AFTER_TRAINING)] == ERR_BUILD_AFTER_TRAINING
 }

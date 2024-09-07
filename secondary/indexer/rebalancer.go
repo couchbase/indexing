@@ -2426,6 +2426,7 @@ func (r *Rebalancer) waitForIndexBuild(buildTokens map[string]*common.TransferTo
 	maxRemainingBuildTime := cfg["rebalance.maxRemainingBuildTime"].Uint64()
 
 	lastLogTime := time.Now() // last time we logged generic loop msg; init to now to delay 1st msg
+	var errStr string
 loop:
 	for {
 		select {
@@ -2471,12 +2472,20 @@ loop:
 
 				indexState, err := getIndexStatusFromMeta(tt, localMeta)
 				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
+					if err != "" && common.IsBuildErrAfterTraining(err) {
+						errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
+						goto cleanup
+					}
 					l.Infof("%v Could not get index status; bucket/scope/collection likely dropped."+
 						" Skipping. indexState %v, err %v, tt %v.", _waitForIndexBuild, indexState, err, tt)
 					tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
 					setTransferTokenInMetakv(ttid, tt)
 				} else if err != "" {
 					l.Errorf("%v Error Fetching Index Status %v %v", _waitForIndexBuild, r.localaddr, err)
+					if err != "" && common.IsBuildErrAfterTraining(err) {
+						errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
+						goto cleanup
+					}
 					break
 				}
 
@@ -2533,6 +2542,16 @@ loop:
 		} // select
 		time.Sleep(1 * time.Second)
 	} // for
+	return
+
+cleanup: // fail the rebalance; mark all accepted transfer tokens with error
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "4 bigMutex", _waitForIndexBuild, "")
+	for ttid, tt := range r.acceptedTokens {
+		r.setTransferTokenError(ttid, tt, errStr)
+	}
+	c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "4 bigMutex", _waitForIndexBuild, "")
+	return
+
 }
 
 // waitForIndexBuildBatch waits for all the indexes in the input token list to finish
@@ -2549,6 +2568,7 @@ func (r *Rebalancer) waitForIndexBuildBatch(buildTokens map[string]*common.Trans
 	lastLogTime := time.Now() // last time we logged generic loop msg; init to now to delay 1st msg
 
 	cancelled := false
+	var errStr string
 loop:
 	for {
 		select {
@@ -2604,12 +2624,20 @@ loop:
 
 				indexState, err := getIndexStatusFromMeta(tt, localMeta)
 				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
+					if err != "" && common.IsBuildErrAfterTraining(err) {
+						errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
+						goto cleanup
+					}
 					l.Infof("%v Could not get index status; bucket/scope/collection likely dropped."+
 						" Skipping. indexState %v, err %v, tt %v.", _waitForIndexBuildBatch, indexState, err, tt)
 					tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
 					setTransferTokenInMetakv(ttid, tt)
 				} else if err != "" {
 					l.Errorf("%v Error Fetching Index Status %v %v", _waitForIndexBuildBatch, r.localaddr, err)
+					if err != "" && common.IsBuildErrAfterTraining(err) {
+						errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
+						goto cleanup
+					}
 					break
 				}
 
@@ -2676,6 +2704,14 @@ loop:
 		} // select
 		time.Sleep(1 * time.Second)
 	} // for
+	return cancelled
+
+cleanup: // fail the rebalance; mark all accepted transfer tokens with error
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "4 bigMutex", _waitForIndexBuildBatch, "")
+	for ttid, tt := range r.acceptedTokens {
+		r.setTransferTokenError(ttid, tt, errStr)
+	}
+	c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "4 bigMutex", _waitForIndexBuildBatch, "")
 	return cancelled
 }
 
