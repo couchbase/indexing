@@ -98,6 +98,7 @@ var ErrInsufficientItemsForTraining = errors.New(ERR_TRAINING + "Number of items
 var ErrUnsupportedQuantisationScheme = errors.New(ERR_TRAINING + "Quantisation scheme is currently not supported")
 
 var ErrSliceClosed = errors.New("Encountered slice operation after its closed")
+var ErrBhiveInDeveloperPreview = errors.New("Fail to create index with developer preview disabled. Bhive Index can be created only in developer preview mode.")
 
 var NonRetryableErrorsInCreate = []error{
 	ErrDuplicateIndex,
@@ -113,6 +114,7 @@ var NonRetryableErrorsInCreate = []error{
 	ErrIndexBucketLimitReached,
 	ErrDiskLimitReached,
 	ErrPartitionsLimitReached,
+	ErrBhiveInDeveloperPreview,
 }
 
 var RetryableErrorsInCreate = []error{

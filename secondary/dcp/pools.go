@@ -69,6 +69,7 @@ type Pools struct {
 	UUID                  string            `json:"uuid"`
 	Pools                 []RestPool        `json:"pools"`
 	IsIPv6                bool              `json:"isIPv6,omitempty"`
+	IsDeveloperPreview    bool              `json:"isDeveloperPreview"`
 }
 
 // A Node is a computer in a cluster running the couchbase software.
@@ -334,6 +335,10 @@ type Client struct {
 	ah        AuthHandler
 	Info      Pools
 	UserAgent string
+}
+
+func (c *Client) IsDeveloperPreview() bool {
+	return c.Info.IsDeveloperPreview
 }
 
 func (c *Client) SetUserAgent(userAgent string) {

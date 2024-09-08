@@ -208,6 +208,10 @@ func (c *ClusterInfoCache) Connect() (err error) {
 	return nil
 }
 
+func (c *ClusterInfoCache) IsDeveloperPreview() bool {
+	return c.client.IsDeveloperPreview()
+}
+
 // Note: This function does not fetch BucketMap and Manifest data in c.pool
 func (c *ClusterInfoCache) FetchNodesData() (err error) {
 	p, err := c.client.GetPoolWithoutRefresh(c.poolName)
@@ -536,6 +540,24 @@ func (c *ClusterInfoCache) FetchNodesAndSvsInfoWithLock() (err error) {
 	defer c.Unlock()
 
 	return c.FetchNodesAndSvsInfo()
+}
+
+func (c *ClusterInfoCache) ConnectWithRetry() (err error) {
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Infof("%vError occurred while connecting couchbase client (%v) .. Retrying(%d)",
+				c.logPrefix, err, r)
+		}
+
+		if err = c.Connect(); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	rh := NewRetryHelper(10, time.Second, c.retryFactor, fn)
+	return rh.Run()
 }
 
 func (c *ClusterInfoCache) FetchNodesAndSvsInfo() (err error) {
