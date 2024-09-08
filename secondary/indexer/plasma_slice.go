@@ -490,6 +490,10 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		cfg.AutoTuneFlushBufferRebalInterval =
 			time.Duration(slice.sysconf["plasma.fbtuner.rebalInterval"].Int()) * time.Second
 		cfg.AutoTuneFlushBufferDebug = slice.sysconf["plasma.fbtuner.debug"].Bool()
+		//turn off iterator refresh for vector index
+		if slice.idxDefn.IsVectorIndex {
+			cfg.IteratorRefreshRate = -1
+		}
 
 		// shard transfer
 		// note: server config is set in shard transfer manager during spawn
@@ -4191,7 +4195,7 @@ func (s *plasmaSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, 
 		return nil
 	}
 
-	err := s.Range(ctx, low, high, inclusion, callb)
+	err := s.Range(ctx, low, high, inclusion, callb, nil)
 	return count, err
 }
 
@@ -4276,7 +4280,7 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 		}
 		return nil
 	}
-	e := s.Range(ctx, low, high, inclusion, callb)
+	e := s.Range(ctx, low, high, inclusion, callb, nil)
 	return scancount, e
 }
 
@@ -4296,7 +4300,7 @@ func (s *plasmaSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, st
 	}
 
 	for _, k := range keys {
-		if err = s.Lookup(ctx, k, callb); err != nil {
+		if err = s.Lookup(ctx, k, callb, nil); err != nil {
 			break
 		}
 	}
@@ -4317,16 +4321,17 @@ func (s *plasmaSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch Sto
 		return nil
 	}
 
-	err := s.Lookup(ctx, key, callb)
+	err := s.Lookup(ctx, key, callb, nil)
 	return count != 0, err
 }
 
-func (s *plasmaSnapshot) Lookup(ctx IndexReaderContext, key IndexKey, callb EntryCallback) error {
-	return s.Iterate(ctx, key, key, Both, compareExact, callb)
+func (s *plasmaSnapshot) Lookup(ctx IndexReaderContext, key IndexKey,
+	callb EntryCallback, fincb FinishCallback) error {
+	return s.Iterate(ctx, key, key, Both, compareExact, callb, fincb)
 }
 
-func (s *plasmaSnapshot) Range(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
-	callb EntryCallback) error {
+func (s *plasmaSnapshot) Range(ctx IndexReaderContext, low, high IndexKey,
+	inclusion Inclusion, callb EntryCallback, fincb FinishCallback) error {
 
 	var cmpFn CmpEntry
 	if s.isPrimary() {
@@ -4335,15 +4340,15 @@ func (s *plasmaSnapshot) Range(ctx IndexReaderContext, low, high IndexKey, inclu
 		cmpFn = comparePrefix
 	}
 
-	return s.Iterate(ctx, low, high, inclusion, cmpFn, callb)
+	return s.Iterate(ctx, low, high, inclusion, cmpFn, callb, fincb)
 }
 
-func (s *plasmaSnapshot) All(ctx IndexReaderContext, callb EntryCallback) error {
-	return s.Range(ctx, MinIndexKey, MaxIndexKey, Both, callb)
+func (s *plasmaSnapshot) All(ctx IndexReaderContext, callb EntryCallback, fincb FinishCallback) error {
+	return s.Range(ctx, MinIndexKey, MaxIndexKey, Both, callb, fincb)
 }
 
 func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
-	cmpFn CmpEntry, callback EntryCallback) error {
+	cmpFn CmpEntry, callback EntryCallback, fincb FinishCallback) error {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -4370,6 +4375,11 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 	}
 
 	defer it.Close()
+	//call fincb before iterator close. This allows caller to do
+	//any final actions before iterator resources get freed up.
+	if fincb != nil {
+		defer fincb()
+	}
 
 	var ar *AggregateRecorderWithCtx
 	loopCount := uint64(0)

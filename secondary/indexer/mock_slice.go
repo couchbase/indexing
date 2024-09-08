@@ -323,7 +323,7 @@ func (ms *mockSnapshot) DecodeMeta(meta []byte) (uint64, []byte) { return 0, nil
 // -----------
 
 func (ms *mockSnapshot) Range(ctx IndexReaderContext, start IndexKey, end IndexKey, incl Inclusion,
-	cb EntryCallback) error {
+	cb EntryCallback, fincb FinishCallback) error {
 
 	if ms.feeder != nil {
 		ms.datach = make(chan Row)
@@ -356,7 +356,9 @@ func (ms *mockSnapshot) StatCountTotal() (uint64, error) { return 0, nil }
 func (ms *mockSnapshot) Exists(ctx IndexReaderContext, Indexkey IndexKey, stopch StopChannel) (bool, error) {
 	return ms.exists, ms.err
 }
-func (ms *mockSnapshot) Lookup(IndexReaderContext, IndexKey, EntryCallback) error { return nil }
+func (ms *mockSnapshot) Lookup(IndexReaderContext, IndexKey, EntryCallback, FinishCallback) error {
+	return nil
+}
 
 func (ms *mockSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	stopch StopChannel) (uint64, error) {
@@ -390,7 +392,7 @@ func (ms *mockSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 	return 0, nil
 }
 
-func (ms *mockSnapshot) All(IndexReaderContext, EntryCallback) error { return nil }
+func (ms *mockSnapshot) All(IndexReaderContext, EntryCallback, FinishCallback) error { return nil }
 
 func (ms *mockSnapshot) FindNearestCentroids(vec []float32, k int64) ([]int64, error) {
 	return nil, nil

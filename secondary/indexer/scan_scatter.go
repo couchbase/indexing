@@ -200,11 +200,11 @@ func scanSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, sn
 
 	var err error
 	if scan.ScanType == AllReq {
-		err = snap.Snapshot().All(ctx, handler)
+		err = snap.Snapshot().All(ctx, handler, nil)
 	} else if scan.ScanType == LookupReq {
-		err = snap.Snapshot().Range(ctx, scan.Equals, scan.Equals, Both, handler)
+		err = snap.Snapshot().Range(ctx, scan.Equals, scan.Equals, Both, handler, nil)
 	} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
-		err = snap.Snapshot().Range(ctx, scan.Low, scan.High, scan.Incl, handler)
+		err = snap.Snapshot().Range(ctx, scan.Low, scan.High, scan.Incl, handler, nil)
 	}
 
 	if err != nil {

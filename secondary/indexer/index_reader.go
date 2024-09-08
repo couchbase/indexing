@@ -45,15 +45,15 @@ type Exister interface {
 // too, and so that is introduced here as well.
 type Looker interface {
 	Exister
-	Lookup(IndexReaderContext, IndexKey, EntryCallback) error
-	All(IndexReaderContext, EntryCallback) error
+	Lookup(IndexReaderContext, IndexKey, EntryCallback, FinishCallback) error
+	All(IndexReaderContext, EntryCallback, FinishCallback) error
 }
 
 // Ranger is a class of algorithms that can extract a range of keys from the
 // index.
 type Ranger interface {
 	Looker
-	Range(IndexReaderContext, IndexKey, IndexKey, Inclusion, EntryCallback) error
+	Range(IndexReaderContext, IndexKey, IndexKey, Inclusion, EntryCallback, FinishCallback) error
 }
 
 // RangeCounter is a class of algorithms that can count a range efficiently

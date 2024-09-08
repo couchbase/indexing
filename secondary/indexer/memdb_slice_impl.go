@@ -2132,7 +2132,7 @@ func (s *memdbSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, i
 		return nil
 	}
 
-	err := s.Range(ctx, low, high, inclusion, callb)
+	err := s.Range(ctx, low, high, inclusion, callb, nil)
 	return count, err
 }
 
@@ -2217,7 +2217,7 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 		return nil
 	}
 
-	e := s.Range(ctx, low, high, inclusion, callb)
+	e := s.Range(ctx, low, high, inclusion, callb, nil)
 	return scancount, e
 }
 
@@ -2237,7 +2237,7 @@ func (s *memdbSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, sto
 	}
 
 	for _, k := range keys {
-		if err = s.Lookup(ctx, k, callb); err != nil {
+		if err = s.Lookup(ctx, k, callb, nil); err != nil {
 			break
 		}
 	}
@@ -2258,16 +2258,17 @@ func (s *memdbSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch Stop
 		return nil
 	}
 
-	err := s.Lookup(ctx, key, callb)
+	err := s.Lookup(ctx, key, callb, nil)
 	return count != 0, err
 }
 
-func (s *memdbSnapshot) Lookup(ctx IndexReaderContext, key IndexKey, callb EntryCallback) error {
+func (s *memdbSnapshot) Lookup(ctx IndexReaderContext, key IndexKey,
+	callb EntryCallback, fincb FinishCallback) error {
 	return s.Iterate(ctx, key, key, Both, compareExact, callb)
 }
 
 func (s *memdbSnapshot) Range(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
-	callb EntryCallback) error {
+	callb EntryCallback, fincb FinishCallback) error {
 
 	var cmpFn CmpEntry
 	if s.isPrimary() {
@@ -2279,8 +2280,8 @@ func (s *memdbSnapshot) Range(ctx IndexReaderContext, low, high IndexKey, inclus
 	return s.Iterate(ctx, low, high, inclusion, cmpFn, callb)
 }
 
-func (s *memdbSnapshot) All(ctx IndexReaderContext, callb EntryCallback) error {
-	return s.Range(ctx, MinIndexKey, MaxIndexKey, Both, callb)
+func (s *memdbSnapshot) All(ctx IndexReaderContext, callb EntryCallback, fincb FinishCallback) error {
+	return s.Range(ctx, MinIndexKey, MaxIndexKey, Both, callb, fincb)
 }
 
 func (s *memdbSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
