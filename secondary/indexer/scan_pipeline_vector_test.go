@@ -402,7 +402,9 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 
 		wpErr := wp.Wait()
 		if wpErr != testErr {
+			wp.StopOutCh() // On Err from wait close down stream
 			t.Fatal(wpErr)
+			return
 		}
 
 		if stopPostWait {
@@ -410,7 +412,8 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 		}
 
 		if stopPostWait || testErr != nil {
-			logging.Infof("Waiting for recv channel to get closed")
+			wp.StopOutCh()
+			logging.Infof("Waiting for recv channel to get closed 1")
 			<-lastCh
 		}
 
@@ -426,8 +429,9 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 			}
 
 			wp.Stop()
+			wp.StopOutCh()
 
-			logging.Infof("Waiting for recv channel to get closed")
+			logging.Infof("Waiting for recv channel to get closed 2")
 			<-lastCh
 		}
 	}
@@ -442,7 +446,7 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 		logging.Infof("gCount: %v", gCount)
 	})
 
-	t.Run("sorageerror", func(t *testing.T) {
+	t.Run("storageerror", func(t *testing.T) {
 		gCount = 0
 		testErr := fmt.Errorf("test injected storage error")
 		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(true, 70, testErr,
@@ -622,7 +626,9 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 
 		wpErr := wp.Wait()
 		if wpErr != testErr {
+			wp.StopOutCh()
 			t.Fatal(wpErr)
+			return
 		}
 		if wpErr != nil {
 			<-fioDone
@@ -634,7 +640,9 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 
 		wpErr = wp.Wait()
 		if wpErr != testErr {
+			wp.StopOutCh()
 			t.Fatal(wpErr)
+			return
 		}
 		if wpErr != nil {
 			<-fioDone
@@ -642,6 +650,7 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 		}
 
 		wp.Stop()
+		wp.StopOutCh()
 		logging.Infof("WorkerPool Stopped")
 		<-fioDone
 		logging.Infof("FIO Stopped")
