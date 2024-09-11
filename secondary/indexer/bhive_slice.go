@@ -2266,6 +2266,17 @@ func (mdb *bhiveSlice) GetCommittedCount() uint64 {
 	return atomic.LoadUint64(&mdb.committedCount)
 }
 
+func (mdb *bhiveSlice) String() string {
+
+	str := fmt.Sprintf("SliceId: %v ", mdb.id)
+	str += fmt.Sprintf("File: %v ", mdb.path)
+	str += fmt.Sprintf("Index: %v ", mdb.idxInstId)
+	str += fmt.Sprintf("Partition: %v ", mdb.idxPartnId)
+
+	return str
+
+}
+
 // //////////////////////////////////////////////////////////
 // lifecycle
 // //////////////////////////////////////////////////////////
