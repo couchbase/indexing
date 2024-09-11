@@ -797,7 +797,7 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 			mut.uuid = common.IndexInstId(kv.GetUuids()[i])
 			mut.key = append(mut.key, kv.GetKeys()[i]...)
 			mut.command = byte(kv.GetCommands()[i])
-			if kv.GetVectors()[i] != nil {
+			if kv.GetVectors() != nil && kv.GetVectors()[i] != nil {
 				protoVectors := kv.GetVectors()[i]
 				if cap(mut.vectors) < len(protoVectors.Vectors) {
 					mut.vectors = make([][]float32, 0, len(protoVectors.Vectors))
@@ -810,7 +810,7 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 				mut.vectors = nil
 			}
 
-			if kv.GetCentroidPos()[i] != nil {
+			if kv.GetCentroidPos() != nil && kv.GetCentroidPos()[i] != nil {
 				protoPos := kv.GetCentroidPos()[i]
 				mut.centroidPos = protoPos.GetFieldPos()
 			} else {
