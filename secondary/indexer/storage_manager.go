@@ -23,6 +23,8 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/stubs/nitro/bhive"
+	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 )
 
 var (
@@ -86,6 +88,11 @@ type storageMgr struct {
 	// A shard is added to the list when transfer is initiated and
 	// cleared when transfer is done
 	shardsInTransfer map[common.ShardId][]chan bool
+
+	// used to send a signal to the quota distributor
+	// - sending true in the channel will cause the go routine to stop
+	// - sending false in the channel will force a memory quota distribution
+	quotaDistCh chan bool
 }
 
 type snapshotWaiter struct {
@@ -138,6 +145,8 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 
 		wrkrCh:           make(chan Message, 100),
 		shardsInTransfer: make(map[common.ShardId][]chan bool),
+
+		quotaDistCh: make(chan bool),
 	}
 	s.indexInstMap.Init()
 	s.indexPartnMap.Init()
@@ -175,6 +184,9 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	//start Storage Manager loop which listens to commands from its supervisor
 	go s.run()
 
+	s.redistributeMemoryQuota(int64(config.GetIndexerMemoryQuota()))
+	go s.runMemoryQuotaDistributor()
+
 	return s, &MsgSuccess{}
 
 }
@@ -198,6 +210,10 @@ loop:
 					if s.stm != nil {
 						s.stm.ProcessCommand(cmd) // Shutdown storage manager cmdCh
 					}
+
+					s.quotaDistCh <- true
+					<-s.quotaDistCh
+
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -2001,8 +2017,21 @@ func (s *storageMgr) handleRecoveryDone() {
 }
 
 func (s *storageMgr) handleConfigUpdate(cmd Message) {
+	oldConfig := s.config
+
 	cfgUpdate := cmd.(*MsgConfigUpdate)
-	s.config = cfgUpdate.GetConfig()
+	newConfig := cfgUpdate.GetConfig()
+	s.config = newConfig
+
+	if (newConfig["settings.memory_quota"].Uint64() !=
+		oldConfig["settings.memory_quota"].Uint64()) ||
+		(newConfig["settings.percentage_memory_quota"].Uint64() !=
+			oldConfig["settings.percentage_memory_quota"].Uint64()) {
+
+		// memory quota setting has changed, need to redistribute
+		s.quotaDistCh <- false
+		<-s.quotaDistCh
+	}
 
 	isShardAffinityEnabled := common.CanMaintanShardAffinity(s.config)
 	if isShardAffinityEnabled && s.stm == nil {
@@ -2843,4 +2872,75 @@ func (sm *storageMgr) handlePersistanceStatus(msg Message) {
 		}
 		respCh <- false
 	}()
+}
+
+//////////////////////////////////////////////////
+// STORAGE MEMORY QUOTA DISTRIBUTOR
+//////////////////////////////////////////////////
+
+func (s *storageMgr) runMemoryQuotaDistributor() {
+	logging.Infof("storageMgr:runMemoryQuotaDistributor: Start")
+	defer logging.Infof("storageMgr:runMemoryQuotaDistributor: Stop")
+
+	ticker := time.NewTicker(time.Duration(10) * time.Second)
+	defer ticker.Stop()
+
+	var newMemQuota int64
+
+	for {
+		select {
+
+		case <-ticker.C:
+			newMemQuota = int64(s.config.GetIndexerMemoryQuota())
+
+			s.redistributeMemoryQuota(newMemQuota)
+
+		case stop := <-s.quotaDistCh:
+
+			if stop {
+				// was signalled to stop the goroutine
+				s.quotaDistCh <- false
+				return
+			}
+
+			newMemQuota = int64(s.config.GetIndexerMemoryQuota())
+			logging.Infof("storageMgr:runMemoryQuotaDistributor: Distributing quota [%d] due to request", newMemQuota)
+
+			s.redistributeMemoryQuota(newMemQuota)
+			s.quotaDistCh <- false
+
+		}
+	}
+}
+
+func (s *storageMgr) redistributeMemoryQuota(memQuota int64) {
+	// Storage takes 90% of the quota
+	storageQuota := int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC)
+
+	// TODO: replace below with GetMandatoryQuota and GetUsageRate based distribution
+
+	// Find the proportion of bhive indexes to total indexes
+	var numIdxs, numBhives int64
+	for _, inst := range s.indexInstMap.Get() {
+
+		numIdxs++
+
+		if inst.Defn.VectorMeta != nil && inst.Defn.VectorMeta.IsBhive {
+			numBhives++
+		}
+	}
+
+	var plasmaQuota, bhiveQuota int64
+	if numIdxs > 0 {
+		bhiveQuota = (storageQuota * numBhives) / numIdxs
+	} else {
+		bhiveQuota = storageQuota / 2
+	}
+	plasmaQuota = storageQuota - bhiveQuota
+
+	logging.Infof("storageMgr:redistributeMemoryQuota: bhiveQuota[%d] plasmaQuota[%d] numBhives[%d] numIdxs[%d]",
+		bhiveQuota, plasmaQuota, numBhives, numIdxs)
+
+	bhive.SetMemoryQuota(bhiveQuota)
+	plasma.SetMemoryQuota(plasmaQuota)
 }

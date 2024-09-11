@@ -1,6 +1,7 @@
 package vector
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -258,4 +259,128 @@ func TestCodebookIVFSQ(t *testing.T) {
 			//compute distance
 		})
 	}
+}
+
+type sqTimingTestCase struct {
+	name string
+
+	dim       int
+	metric    MetricType
+	useCosine bool
+
+	nlist    int
+	sqRanges common.ScalarQuantizerRange
+
+	num_vecs  int
+	trainlist int
+
+	batchSize int
+	concur    int
+	iters     int
+}
+
+var sqTimingTestCases = []sqTimingTestCase{
+
+	{"SQ8 Batch 1 Concur 1", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 1, 1, 10000},
+	{"SQ8 Batch 1 Concur 10", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 1, 10, 10000},
+	{"SQ8 Batch 10 Concur 1", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 10, 1, 10000},
+	{"SQ8 Batch 10 Concur 10", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 10, 10, 10000},
+	{"SQ8 Batch 50 Concur 10", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 50, 10, 10000},
+	{"SQfp16 Batch 1 Concur 1", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 1, 1, 10000},
+	{"SQfp16 Batch 1 Concur 10", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 1, 10, 10000},
+	{"SQfp16 Batch 10 Concur 1", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 10, 1, 10000},
+	{"SQfp16 Batch 10 Concur 10", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 10, 10, 10000},
+	{"SQfp16 Batch 50 Concur 10", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 50, 10, 10000},
+}
+
+func TestIVFSQTiming(t *testing.T) {
+	seed := time.Now().Unix()
+	for _, tc := range sqTimingTestCases {
+		t.Run(tc.name, func(t *testing.T) {
+
+			codebook, err := NewCodebookIVFSQ(tc.dim, tc.nlist, tc.sqRanges, tc.metric, tc.useCosine)
+			if err != nil || codebook == nil {
+				t.Errorf("Unable to create index. Err %v", err)
+			}
+
+			//generate random vectors
+			vecs := genRandomVecs(tc.dim, tc.num_vecs, seed)
+
+			//train the codebook
+			train_vecs := convertTo1D(vecs[:tc.trainlist])
+			err = codebook.Train(train_vecs)
+			if err != nil || !codebook.IsTrained() {
+				t.Errorf("Unable to train index. Err %v", err)
+			}
+
+			codeSize, err := codebook.CodeSize()
+			if err != nil {
+				t.Errorf("Error fetching code size %v", err)
+			}
+
+			encode_batch := convertTo1D(vecs[:tc.batchSize])
+
+			pqcodes := make([][]byte, tc.concur)
+			var encodeTimings time.Duration
+
+			for i := range pqcodes {
+				pqcodes[i] = make([]byte, tc.batchSize*codeSize)
+			}
+			for j := 0; j < tc.iters; j++ {
+				var wg sync.WaitGroup
+				for i := 0; i < tc.concur; i++ {
+					wg.Add(1)
+					go func(wg *sync.WaitGroup, pos int) {
+						defer wg.Done()
+						t0 := time.Now()
+						err = codebook.EncodeVectors(encode_batch, pqcodes[pos])
+						delta := time.Now().Sub(t0)
+						encodeTimings += delta
+						//		t.Logf("Encode %v parallel timing %v", concur, delta)
+						if err != nil {
+							t.Errorf("Error encoding vector %v", err)
+						}
+					}(&wg, i)
+				}
+				wg.Wait()
+				var pqcodes1D []byte
+				for _, pqcode := range pqcodes {
+					pqcodes1D = append(pqcodes1D, pqcode...)
+				}
+				validate_code_size(t, pqcodes1D, codeSize, tc.concur*tc.batchSize)
+			}
+
+			dvecs := make([][]float32, tc.concur)
+			var decodeTimings time.Duration
+
+			for i := range pqcodes {
+				dvecs[i] = make([]float32, tc.batchSize*tc.dim)
+			}
+
+			for j := 0; j < tc.iters; j++ {
+				var wg sync.WaitGroup
+				for i := 0; i < tc.concur; i++ {
+					wg.Add(1)
+					go func(wg *sync.WaitGroup, pos int) {
+						defer wg.Done()
+						t0 := time.Now()
+						err = codebook.DecodeVectors(tc.batchSize, pqcodes[pos], dvecs[pos])
+						delta := time.Now().Sub(t0)
+						decodeTimings += delta
+						//		t.Logf("Encode %v parallel timing %v", concur, delta)
+						if err != nil {
+							t.Errorf("Error decoding vector %v", err)
+						}
+					}(&wg, i)
+				}
+				wg.Wait()
+			}
+
+			total_ops := time.Duration(tc.iters * tc.concur * tc.batchSize)
+			t.Logf("Encode average for iter %v concurrency %v batch %v is %v per op", tc.iters, tc.concur, tc.batchSize, encodeTimings/total_ops)
+			t.Logf("Decode average for iter %v concurrency %v batch %v is %v per op", tc.iters, tc.concur, tc.batchSize, decodeTimings/total_ops)
+
+		})
+	}
+
 }
