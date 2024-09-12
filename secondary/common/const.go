@@ -139,7 +139,7 @@ const INDEXER_75_VERSION = 8
 const INDEXER_76_VERSION = 9
 const INDEXER_CUR_VERSION = INDEXER_76_VERSION
 
-const INDEXER_PRIORITY = ServerPriority("7.6.0")
+const INDEXER_PRIORITY = ServerPriority("7.6.4")
 
 // ##### IMPORTANT ##### When updating the above, also update util.go func GetVersion.
 
