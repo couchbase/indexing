@@ -237,8 +237,7 @@ func N1QLTransformForVectorIndex(
 					vector, err = validateVector(key, ie.dimension)
 
 					if err != nil { // invalid vector entry
-						// [VECTOR_TODO] - Add stats when rejecting incoming documents
-
+						ie.stats.updateErrCount(err)
 						// If vector is missing/null, then skip indexing the document
 						// irrespective of expression with VECTOR attribute being leading
 						// key or not

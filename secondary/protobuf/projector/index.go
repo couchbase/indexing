@@ -748,6 +748,11 @@ type IndexEvaluatorStats struct {
 	// Total number of mutations skipped since this stat object was initialized.
 	ErrSkipAll stats.Int64Val
 
+	ErrInvalidVectorDimension stats.Int64Val
+	ErrHeterogenousVectorData stats.Int64Val
+	ErrDataOutOfBounds        stats.Int64Val
+	ErrInvalidVectorType      stats.Int64Val
+
 	InstId     common.IndexInstId
 	Topic      string
 	KeyspaceId string
@@ -761,6 +766,11 @@ func (ie *IndexEvaluatorStats) Init() {
 	ie.SMA.Init()
 	ie.ErrSkip.Init()
 	ie.ErrSkipAll.Init()
+
+	ie.ErrInvalidVectorType.Init()
+	ie.ErrDataOutOfBounds.Init()
+	ie.ErrInvalidVectorDimension.Init()
+	ie.ErrDataOutOfBounds.Init()
 }
 
 func (ies *IndexEvaluatorStats) add(duration time.Duration) {
@@ -797,4 +807,43 @@ func (ies *IndexEvaluatorStats) GetAndResetErrorSkip() int64 {
 
 func (ies *IndexEvaluatorStats) GetErrorSkipAll() int64 {
 	return ies.ErrSkipAll.Value()
+}
+
+func (ies *IndexEvaluatorStats) GetVectorErrs() map[string]int64 {
+	out := make(map[string]int64)
+	if ies.ErrDataOutOfBounds.Value() > 0 {
+		out[ErrDataOutOfBounds.Error()] = ies.ErrDataOutOfBounds.Value()
+	}
+
+	if ies.ErrInvalidVectorDimension.Value() > 0 {
+		out[ErrInvalidVectorDimension.Error()] = ies.ErrInvalidVectorDimension.Value()
+	}
+
+	if ies.ErrHeterogenousVectorData.Value() > 0 {
+		out[ErrHeterogenousVectorData.Error()] = ies.ErrHeterogenousVectorData.Value()
+	}
+
+	if ies.ErrInvalidVectorType.Value() > 0 {
+		out[ErrInvalidVectorType.Error()] = ies.ErrInvalidVectorType.Value()
+	}
+
+	return out
+
+}
+
+func (ies *IndexEvaluatorStats) updateErrCount(err error) {
+	switch err {
+	case ErrDataOutOfBounds:
+		ies.ErrDataOutOfBounds.Add(1)
+		return
+	case ErrInvalidVectorDimension:
+		ies.ErrInvalidVectorDimension.Add(1)
+		return
+	case ErrInvalidVectorType:
+		ies.ErrInvalidVectorType.Add(1)
+		return
+	case ErrHeterogenousVectorData:
+		ies.ErrHeterogenousVectorData.Add(1)
+		return
+	}
 }

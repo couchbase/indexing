@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/couchbase/bhive"
+	bc "github.com/couchbase/bhive/common"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -40,8 +41,9 @@ import (
 ////////////////////////////////////////////////
 
 const (
-	NumKVStore   = 10
-	MaxBatchSize = 256
+	NumKVStore                    = 10
+	MaxBatchSize                  = 256
+	SNAPSHOT_META_VERSION_BHIVE_1 = 1
 )
 
 ////////////////////////////////////////////////
@@ -148,6 +150,9 @@ type bhiveSlice struct {
 	persistorQueue    *bhiveSnapshot
 	snapCount         uint64
 
+	// rollback
+	lastRollbackTs *common.TsVbuuid
+
 	// error
 	fatalDbErr error // TODO
 }
@@ -157,8 +162,7 @@ type bhiveSnapshotInfo struct {
 	Committed bool
 	Count     int64
 
-	// TBD
-	//mRP, bRP *bhive.RecoveryPoint
+	mRP, bRP *bhive.RecoveryPoint
 
 	IndexStats map[string]interface{}
 	Version    int
@@ -185,7 +189,7 @@ type bhiveSnapshot struct {
 }
 
 ////////////////////////////////////////////////
-// Bhive
+// BhiveSlice
 ////////////////////////////////////////////////
 
 func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
@@ -247,8 +251,7 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 				"fatal error occured: %v", sliceId, idxInstId, partitionId, isNew, err)
 		}
 		if isNew {
-			// TODO
-			// destroyBhiveSlice(storage_dir, path)
+			destroyBhiveSlice(storage_dir, path)
 		}
 		return nil, err
 	}
@@ -259,6 +262,8 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 
 	// intiialize and start the writers
 	slice.setupWriters()
+
+	slice.UpdateConfig(sysconf)
 
 	logging.Infof("bhiveSlice:NewBhiveSlice Created New Slice Id %v IndexInstId %v partitionId %v "+
 		"WriterThreads %v", sliceId, idxInstId, partitionId, slice.numWriters)
@@ -290,11 +295,8 @@ func createBhiveSliceDir(storageDir string, path string, isNew bool) error {
 			return nil
 		}
 	} else if isNew {
-		// TODO
-		/*
-			// if we expect a new instance but there is residual file, destroy old data.
-			err = bhive.DestroyInstance(storageDir, path)
-		*/
+		// if we expect a new instance but there is residual file, destroy old data.
+		err = bhive.DestroyInstance(storageDir, path)
 	}
 
 	return err
@@ -353,6 +355,7 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 
 	var wg sync.WaitGroup
 	var mErr, bErr error
+	t0 := time.Now()
 
 	// Recover mainindex
 	wg.Add(1)
@@ -385,7 +388,7 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 			alternateShardId = slice.idxDefn.AlternateShardIds[slice.idxPartnId][BACK_INDEX-1] // "-1" because MAIN_INDEX is "1" and back-index is "2"
 		}
 
-		slice.backstore, mErr = bhive.New(
+		slice.backstore, bErr = bhive.New(
 			alternateShardId, // AlternateId
 			bCfg,             // config bhive.Config
 			slice.newBorn,    // new bool
@@ -455,12 +458,47 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 		return err
 	}
 
+	if !slice.newBorn {
+
+		logging.Infof("bhiveSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Recovering from recovery point ..",
+			slice.id, slice.idxInstId, slice.idxPartnId)
+		err = slice.doRecovery(isInitialBuild)
+		dur := time.Since(t0)
+		if err == nil {
+			slice.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
+			logging.Infof("bhiveSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Warmup took %v",
+				slice.id, slice.idxInstId, slice.idxPartnId, dur)
+		} else {
+			return err
+		}
+	}
+
 	// Initialize readers
 	for i := 0; i < cap(slice.readers); i++ {
 		slice.readers <- slice.mainstore.NewReader()
 	}
 
 	return err
+}
+
+func (mdb *bhiveSlice) doRecovery(initBuild bool) error {
+	snaps, err := mdb.GetSnapshots()
+	if err != nil {
+		return err
+	}
+
+	if len(snaps) == 0 {
+		logging.Infof("bhiveSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Unable to find recovery point. Resetting store ..",
+			mdb.id, mdb.idxInstId, mdb.idxPartnId)
+		if err := mdb.resetStores(initBuild); err != nil {
+			return err
+		}
+	} else {
+		err := mdb.restore(snaps[0])
+		return err
+	}
+
+	return nil
 }
 
 ////////////////////////////////////////////////
@@ -518,8 +556,19 @@ func (mdb *bhiveSlice) IsCleanupDone() bool {
 // Settings
 ////////////////////////////////////////////////
 
-func (slice *bhiveSlice) UpdateConfig(common.Config) {
+func (mdb *bhiveSlice) UpdateConfig(cfg common.Config) {
 
+	mdb.confLock.Lock()
+	defer mdb.confLock.Unlock()
+
+	mdb.sysconf = cfg
+
+	logLevel := cfg["settings.log_level"].String()
+	bc.SetLogLevel(bc.Level(logLevel))
+	logging.Infof("Set bhive log level to %v", logLevel)
+
+	mdb.maxRollbacks = cfg["settings.plasma.recovery.max_rollbacks"].Int()
+	mdb.maxDiskSnaps = cfg["recovery.max_disksnaps"].Int()
 }
 
 ////////////////////////////////////////////////
@@ -750,7 +799,7 @@ loop:
 				mdb.totalFlushTime += elapsed
 
 			default:
-				logging.Errorf("plasmaSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v PartitionId %v Received "+
+				logging.Errorf("bhiveSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v PartitionId %v Received "+
 					"Unknown Command %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagUD(icmd))
 			}
 
@@ -820,6 +869,14 @@ func (mdb *bhiveSlice) checkAllWorkersDone() bool {
 func (mdb *bhiveSlice) getCmdsCount() int {
 	qc := atomic.LoadInt64(&mdb.qCount)
 	return int(qc)
+}
+
+func (slice *bhiveSlice) freeAllWriters() {
+	// Stop all command workers
+	for _, stopCh := range slice.stopCh {
+		stopCh <- true
+		<-stopCh
+	}
 }
 
 ////////////////////////////////////////////////
@@ -1092,7 +1149,7 @@ func (mdb *bhiveSlice) ResetCodebook() error {
 		err := mdb.codebook.Close()
 		mdb.codebook = nil
 		if err != nil {
-			logging.Errorf("plasmaSlice::ResetCodebook Error observed while closing codebook for instId: %v, partnId: %v",
+			logging.Errorf("bhiveSlice::ResetCodebook Error observed while closing codebook for instId: %v, partnId: %v",
 				mdb.IndexInstId(), mdb.IndexPartnId())
 			return err
 		}
@@ -1219,22 +1276,22 @@ func (mdb *bhiveSlice) recoverCodebook(codebookPath string) error {
 	newFilePath := filepath.Join(mdb.storageDir, codebookPath)
 	_, err := iowrap.Os_Stat(newFilePath)
 	if os.IsNotExist(err) {
-		logging.Warnf("plasmaSlice::recoverCodebook error observed while recovering from codebookPath: %v, err: %v", newFilePath, err)
+		logging.Warnf("bhiveSlice::recoverCodebook error observed while recovering from codebookPath: %v, err: %v", newFilePath, err)
 		return errCodebookPathNotFound
 	}
 
 	// Codebook path exists. Recover codebook from disk
 	content, err := iowrap.Ioutil_ReadFile(newFilePath)
 	if err != nil {
-		logging.Errorf("plasmaSlice::recoverCodebook: Error observed while reading from disk for path: %v, err: %v", newFilePath, err)
+		logging.Errorf("bhiveSlice::recoverCodebook: Error observed while reading from disk for path: %v, err: %v", newFilePath, err)
 		return errCodebookCorrupted
 	}
 
-	logging.Infof("plasmaSlice::recoverCodebook: reading from disk is successful for path: %v", newFilePath)
+	logging.Infof("bhiveSlice::recoverCodebook: reading from disk is successful for path: %v", newFilePath)
 
 	codebook, err := vector.RecoverCodebook(content, string(mdb.idxDefn.VectorMeta.Quantizer.Type))
 	if err != nil {
-		logging.Errorf("plasmaSlice::recoverCodebook: Error observed while deserializing codebook at path: %v, err: %v", newFilePath, err)
+		logging.Errorf("bhiveSlice::recoverCodebook: Error observed while deserializing codebook at path: %v, err: %v", newFilePath, err)
 		return errCodebookCorrupted
 	}
 
@@ -1401,9 +1458,73 @@ func (mdb *bhiveSlice) FlushDone() {
 	}
 }
 
-// TODO - Get Persistent Snapshots from recovery points
 func (mdb *bhiveSlice) GetSnapshots() ([]SnapshotInfo, error) {
-	return nil, nil
+	var mRPs, bRPs []*bhive.RecoveryPoint
+	var minRP, maxRP []byte
+
+	getRPs := func(rpts []*bhive.RecoveryPoint) []*bhive.RecoveryPoint {
+		var newRpts []*bhive.RecoveryPoint
+		for _, rp := range rpts {
+			if mdb.cmpRPMeta(rp.GetMeta(), minRP) < 0 {
+				continue
+			}
+
+			if mdb.cmpRPMeta(rp.GetMeta(), maxRP) > 0 {
+				break
+			}
+
+			newRpts = append(newRpts, rp)
+		}
+
+		return newRpts
+	}
+
+	// Find out the common recovery points between mainIndex and backIndex
+	mRPs = mdb.mainstore.GetRecoveryPoints()
+	if len(mRPs) > 0 {
+		minRP = mRPs[0].GetMeta()
+		maxRP = mRPs[len(mRPs)-1].GetMeta()
+	} else {
+		return nil, nil
+	}
+
+	bRPs = mdb.backstore.GetRecoveryPoints()
+	if len(bRPs) > 0 {
+		if mdb.cmpRPMeta(bRPs[0].GetMeta(), minRP) > 0 {
+			minRP = bRPs[0].GetMeta()
+		}
+
+		if mdb.cmpRPMeta(bRPs[len(bRPs)-1].GetMeta(), maxRP) < 0 {
+			maxRP = bRPs[len(bRPs)-1].GetMeta()
+		}
+	}
+
+	bRPs = getRPs(bRPs)
+	mRPs = getRPs(mRPs)
+
+	if len(mRPs) != len(bRPs) {
+		return nil, nil
+	}
+
+	var infos []SnapshotInfo
+	for i := len(mRPs) - 1; i >= 0; i-- {
+		info, err := mdb.getRPSnapInfo(mRPs[i])
+		if err != nil {
+			return nil, err
+		}
+
+		info.bRP = bRPs[i]
+		infos = append(infos, info)
+	}
+
+	return infos, nil
+}
+
+// comparing wall clock time in RP meta
+func (mdb *bhiveSlice) cmpRPMeta(a, b []byte) int {
+	av := binary.BigEndian.Uint64(a[:8])
+	bv := binary.BigEndian.Uint64(b[:8])
+	return int(av - bv)
 }
 
 func (mdb *bhiveSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
@@ -1419,36 +1540,40 @@ func (mdb *bhiveSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		idxPartnId: mdb.idxPartnId,
 		info:       snapInfo,
 		ts:         snapInfo.Timestamp(),
-		committed:  info.IsCommitted(),
+		committed:  snapInfo.IsCommitted(),
 		codec:      mdb.mainstore.GetCodec(),
 	}
-
 	s.Open()
+
+	// increment slice ref count
 	if !s.slice.CheckAndIncrRef() {
 		return nil, common.ErrSliceClosed
 	}
+
+	// increment snapCount
 	mdb.snapCount++
 	s.id = mdb.snapCount
 	s.slice.idxStats.numOpenSnapshots.Add(1)
 
 	var err error
 	if s.MainSnap, err = mdb.mainstore.NewSnapshot(); err != nil {
+		s.slice.DecrRef()
+		mdb.snapCount--
+		s.slice.idxStats.numOpenSnapshots.Add(-1)
 		return nil, err
 	}
 	s.info.Count = int64(mdb.mainstore.ItemCount())
 
 	if s.BackSnap, err = mdb.backstore.NewSnapshot(); err != nil {
+		s.slice.DecrRef()
+		mdb.snapCount--
+		s.slice.idxStats.numOpenSnapshots.Add(-1)
 		s.MainSnap.Close()
 		return nil, err
 	}
 
 	if s.committed {
-		mdb.mainstore.Sync()
-		mdb.backstore.Sync()
-
-		// TODO - Persistent Snapshot
-		// mdb.doPersistSnapshot(s)
-		// mdb.updateUsageStatsOnCommit()
+		mdb.doPersistSnapshot(s)
 	}
 
 	if info.IsCommitted() {
@@ -1461,24 +1586,488 @@ func (mdb *bhiveSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	return s, nil
 }
 
+func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
+	if mdb.CheckCmdChStopped() {
+		return
+	}
+
+	snapshotStats := make(map[string]interface{})
+	snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
+	snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
+	snapshotStats[SNAP_STATS_RAW_DATA_SIZE] = mdb.idxStats.rawDataSize.Value()
+	snapshotStats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE] = mdb.idxStats.backstoreRawDataSize.Value()
+	s.info.IndexStats = snapshotStats
+
+	mdb.persistorLock.Lock()
+	defer mdb.persistorLock.Unlock()
+
+	s.MainSnap.Open() // close in CreateRecoveryPoint
+	s.BackSnap.Open() // close in CreateRecoveryPoint
+
+	if !mdb.isPersistorActive {
+		mdb.isPersistorActive = true
+		go mdb.persistSnapshot(s)
+	} else {
+		logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v EnQueuing SnapshotId %v ondisk"+
+			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id)
+
+		mdb.closeQueuedSnapNoLock()
+		mdb.persistorQueue = s
+	}
+}
+
+func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
+	if mdb.CheckCmdChStopped() {
+		mdb.persistorLock.Lock()
+		defer mdb.persistorLock.Unlock()
+
+		mdb.isPersistorActive = false
+		return
+	}
+
+	logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v "+
+		"Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id)
+	t0 := time.Now()
+
+	s.info.Version = SNAPSHOT_META_VERSION_BHIVE_1
+	s.info.InstId = mdb.idxInstId
+	s.info.PartnId = mdb.idxPartnId
+
+	meta, err := json.Marshal(s.info)
+	common.CrashOnError(err)
+	timeHdr := make([]byte, 8)
+	binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
+	meta = append(timeHdr, meta...)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		// use plasmaPersistenceMutex to serialize persistence for co-existence
+		plasmaPersistenceMutex.Lock()
+		defer plasmaPersistenceMutex.Unlock()
+
+		mErr := mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta)
+		if mErr != nil {
+			logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v: "+
+				"Failed to create mainstore recovery point: %v",
+				mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, mErr)
+			// panic to let recovery to kick in to keep checkpoint consistent
+			// TODO: remove panic after making recovery more resilient
+			panic(err.Error())
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		// use plasmaPersistenceMutex to serialize persistence for co-existence
+		plasmaPersistenceMutex.Lock()
+		defer plasmaPersistenceMutex.Unlock()
+
+		bErr := mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta)
+		if bErr != nil {
+			logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v: "+
+				"Failed to create backstore recovery point: %v",
+				mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, bErr)
+			// panic to let recovery to kick in to keep checkpoint consistent
+			// TODO: remove panic after making recovery more resilient
+			panic(err.Error())
+		}
+	}()
+
+	wg.Wait()
+
+	dur := time.Since(t0)
+	logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v "+
+		"Created recovery point (took %v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, dur)
+
+	mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
+
+	// In case there is an error creating one of recovery
+	// points, the successful one has to be cleaned up.
+	mdb.removeNotCommonRecoveryPoints()
+
+	mdb.cleanupOldRecoveryPoints(s.info)
+
+	mdb.persistorLock.Lock()
+	defer mdb.persistorLock.Unlock()
+
+	queuedS := mdb.persistorQueue
+	if !mdb.stopPersistor && queuedS != nil {
+		mdb.persistorQueue = nil
+		go mdb.persistSnapshot(queuedS)
+		return
+	}
+	if queuedS != nil {
+		mdb.closeQueuedSnapNoLock()
+	}
+
+	mdb.stopPersistor = false
+	mdb.isPersistorActive = false
+}
+
+// Find rps that are present in only one of mainstore and
+// backstore and remove them.
+func (mdb *bhiveSlice) removeNotCommonRecoveryPoints() {
+	mRPs := mdb.mainstore.GetRecoveryPoints()
+	bRPs := mdb.backstore.GetRecoveryPoints()
+
+	for _, rp := range mdb.setDifferenceRPs(mRPs, bRPs) {
+		mdb.mainstore.RemoveRecoveryPoint(rp)
+	}
+
+	for _, rp := range mdb.setDifferenceRPs(bRPs, mRPs) {
+		mdb.backstore.RemoveRecoveryPoint(rp)
+	}
+}
+
+// Find xRPs - yRPs: rps that are in xRPs, but not in yRPs.
+func (mdb *bhiveSlice) setDifferenceRPs(xRPs, yRPs []*bhive.RecoveryPoint) []*bhive.RecoveryPoint {
+	var onlyInX []*bhive.RecoveryPoint
+
+	for _, xRP := range xRPs {
+		isInY := false
+		for _, yRP := range yRPs {
+			if cmpRPMeta(xRP.GetMeta(), yRP.GetMeta()) == 0 {
+				isInY = true
+				break
+			}
+		}
+
+		if !isInY {
+			onlyInX = append(onlyInX, xRP)
+		}
+	}
+
+	return onlyInX
+}
+
+// cleanupOldRecoveryPoints deletes old disk snapshots.
+func (mdb *bhiveSlice) cleanupOldRecoveryPoints(sinfo *bhiveSnapshotInfo) {
+
+	var seqTs Timestamp
+
+	if !sinfo.IsOSOSnap() {
+
+		seqTs = NewTimestamp(mdb.numVbuckets)
+		for i := 0; i < MAX_GETSEQS_RETRIES; i++ {
+
+			seqnos, err := common.BucketMinSeqnos(mdb.clusterAddr, "default", mdb.idxDefn.Bucket)
+			if err != nil {
+				logging.Errorf("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Error collecting cluster seqnos %v",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
+				time.Sleep(time.Second)
+				continue
+			}
+
+			for i := 0; i < mdb.numVbuckets; i++ {
+				seqTs[i] = seqnos[i]
+			}
+			break
+
+		}
+	}
+
+	//discard old disk snapshots for OSO as those cannot be
+	//used for recovery
+	maxRollbacks := mdb.maxRollbacks
+	maxDiskSnaps := mdb.maxDiskSnaps
+	if sinfo.IsOSOSnap() {
+		maxRollbacks = 1
+		maxDiskSnaps = 1
+	}
+
+	// Cleanup old mainstore recovery points
+	mRPs := mdb.mainstore.GetRecoveryPoints()
+	numDiskSnapshots := len(mRPs)
+
+	if len(mRPs) > maxRollbacks {
+		for i := 0; i < len(mRPs)-maxRollbacks; i++ {
+			snapInfo, err := mdb.getRPSnapInfo(mRPs[i])
+			if err != nil {
+				logging.Errorf("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Skipped recovery point cleanup. err %v",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
+				continue
+			}
+			snapTsVbuuid := snapInfo.Timestamp()
+			snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
+
+			if (seqTs.GreaterThanEqual(snapTs) && //min cluster seqno is greater than snap ts
+				mdb.lastRollbackTs == nil) || //last rollback was successful
+				len(mRPs)-i > maxDiskSnaps { //num RPs is more than max disk snapshots
+				logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Cleanup mainstore recovery point %v. num RPs %v.", mdb.id, mdb.idxInstId,
+					mdb.idxPartnId, snapInfo, len(mRPs)-i)
+				if err := mdb.mainstore.RemoveRecoveryPoint(mRPs[i]); err != nil {
+					// panic to let recovery to kick in to keep checkpoint consistent
+					// TODO: remove panic after making recovery more resilient
+					panic(err.Error())
+				}
+				numDiskSnapshots--
+			} else {
+				logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Skipped mainstore recovery point cleanup. num RPs %v ",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, len(mRPs)-i)
+				break
+			}
+		}
+	}
+	mdb.idxStats.numDiskSnapshots.Set(int64(numDiskSnapshots))
+
+	// Cleanup old backstore recovery points
+	bRPs := mdb.backstore.GetRecoveryPoints()
+	if len(bRPs) > maxRollbacks {
+		for i := 0; i < len(bRPs)-maxRollbacks; i++ {
+			snapInfo, err := mdb.getRPSnapInfo(bRPs[i])
+			if err != nil {
+				logging.Errorf("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Skipped recovery point cleanup. err %v",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
+				continue
+			}
+			snapTsVbuuid := snapInfo.Timestamp()
+			snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
+			if (seqTs.GreaterThanEqual(snapTs) && //min cluster seqno is greater than snap ts
+				mdb.lastRollbackTs == nil) || //last rollback was successful
+				len(bRPs)-i > maxDiskSnaps { //num RPs is more than max disk snapshots
+				logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Cleanup backstore recovery point %v. num RPs %v.", mdb.id, mdb.idxInstId,
+					mdb.idxPartnId, snapInfo, len(bRPs)-i)
+				if err := mdb.backstore.RemoveRecoveryPoint(bRPs[i]); err != nil {
+					// panic to let recovery to kick in to keep checkpoint consistent
+					// TODO: remove panic after making recovery more resilient
+					panic(err.Error())
+				}
+			} else {
+				logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Skipped backstore recovery point cleanup. num RPs %v ",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, len(bRPs)-i)
+				break
+			}
+		}
+	}
+}
+
+func (mdb *bhiveSlice) getRPSnapInfo(rp *bhive.RecoveryPoint) (*bhiveSnapshotInfo, error) {
+
+	info := &bhiveSnapshotInfo{
+		mRP:   rp,
+		Count: int64(rp.ItemsCount()),
+	}
+
+	var err error
+	var snapInfo bhiveSnapshotInfo
+	if err = json.Unmarshal(info.mRP.GetMeta()[8:], &snapInfo); err != nil {
+		return nil, fmt.Errorf("Unable to decode snapshot info from meta. err %v", err)
+	}
+	info.Ts = snapInfo.Ts
+	info.IndexStats = snapInfo.IndexStats
+
+	return info, nil
+}
+
+func (mdb *bhiveSlice) closeQueuedSnapNoLock() {
+	deQueuedS := mdb.persistorQueue
+	if deQueuedS != nil {
+		deQueuedS.MainSnap.Close()
+		deQueuedS.BackSnap.Close()
+		logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v DeQueuing SnapshotId %v ondisk"+
+			" snapshot.", mdb.id, mdb.idxInstId, mdb.idxPartnId, deQueuedS.id)
+	}
+	mdb.persistorQueue = nil
+}
+
+// Wait for persistence snapshot to finish.
+// Note the indexer storage manager is a singleton which
+// process one command at at time. So if this function is
+// called, then storage mgr will not create another persistent
+// snapshot in parallel.
+func (mdb *bhiveSlice) waitForPersistorThread() {
+	persistorActive := func() bool {
+		mdb.persistorLock.Lock()
+		defer mdb.persistorLock.Unlock()
+		if mdb.isPersistorActive {
+			mdb.stopPersistor = true
+		}
+		return mdb.isPersistorActive
+	}()
+
+	for persistorActive {
+		time.Sleep(time.Second)
+		persistorActive = mdb.isPersistorRunning()
+	}
+}
+
+func (mdb *bhiveSlice) isPersistorRunning() bool {
+	mdb.persistorLock.Lock()
+	defer mdb.persistorLock.Unlock()
+
+	return mdb.isPersistorActive
+}
+
 // //////////////////////////////////////////////////////////
 // rollback
 // //////////////////////////////////////////////////////////
 
 func (mdb *bhiveSlice) Rollback(s SnapshotInfo) error {
-	return nil
+	mdb.waitPersist()
+	mdb.waitForPersistorThread()
+
+	qc := atomic.LoadInt64(&mdb.qCount)
+	if qc > 0 {
+		common.CrashOnError(fmt.Errorf("Slice Invariant Violation - rollback with pending mutations"))
+	}
+
+	// Block all scan requests
+	var readers []*bhive.Reader
+	for i := 0; i < cap(mdb.readers); i++ {
+		readers = append(readers, <-mdb.readers)
+	}
+
+	err := mdb.restore(s)
+	for i := 0; i < cap(mdb.readers); i++ {
+		mdb.readers <- readers[i]
+	}
+
+	return err
 }
 
-func (mdb *bhiveSlice) RollbackToZero(bool) error {
+func (mdb *bhiveSlice) RollbackToZero(initialBuild bool) error {
+	mdb.waitPersist()
+	mdb.waitForPersistorThread()
+
+	if err := mdb.resetStores(initialBuild); err != nil {
+		return err
+	}
+
+	mdb.lastRollbackTs = nil
+	if initialBuild {
+		atomic.StoreInt32(&mdb.isInitialBuild, 1)
+	}
+
 	return nil
 }
 
 func (mdb *bhiveSlice) LastRollbackTs() *common.TsVbuuid {
-	return nil
+	return mdb.lastRollbackTs
 }
 
 func (mdb *bhiveSlice) SetLastRollbackTs(ts *common.TsVbuuid) {
+	mdb.lastRollbackTs = ts
+}
 
+func (mdb *bhiveSlice) restore(o SnapshotInfo) error {
+	var wg sync.WaitGroup
+	var mErr, bErr error
+	info := o.(*bhiveSnapshotInfo)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var s bhive.Snapshot
+		if s, mErr = mdb.mainstore.Rollback(info.mRP); mErr == nil {
+			s.Close()
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var s bhive.Snapshot
+		if s, bErr = mdb.backstore.Rollback(info.bRP); bErr == nil {
+			s.Close()
+		}
+	}()
+
+	wg.Wait()
+
+	if mErr != nil || bErr != nil {
+		return fmt.Errorf("Rollback error %v %v", mErr, bErr)
+	}
+
+	// Update stats available in snapshot info
+	mdb.updateStatsFromSnapshotMeta(o)
+	return nil
+}
+
+// updateStatsFromSnapshotMeta updates the slice stats from those available in SnapshotInfo.
+func (mdb *bhiveSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
+
+	// Update stats *if* available in snapshot info
+	// In case of upgrade, older snapshots will not have stats
+	// in which case, do not update index stats
+	// Older snapshots may have only subset of stats persisted
+	// For stats not available through persistence, set default values
+	stats := o.Stats()
+	if stats != nil {
+		keySizes := stats[SNAP_STATS_KEY_SIZES].([]interface{})
+
+		if keySizes != nil && len(keySizes) == 6 {
+			mdb.idxStats.numKeySize64.Set(safeGetInt64(keySizes[0]))
+			mdb.idxStats.numKeySize256.Set(safeGetInt64(keySizes[1]))
+			mdb.idxStats.numKeySize1K.Set(safeGetInt64(keySizes[2]))
+			mdb.idxStats.numKeySize4K.Set(safeGetInt64(keySizes[3]))
+			mdb.idxStats.numKeySize100K.Set(safeGetInt64(keySizes[4]))
+			mdb.idxStats.numKeySizeGt100K.Set(safeGetInt64(keySizes[5]))
+		}
+
+		mdb.idxStats.rawDataSize.Set(safeGetInt64(stats[SNAP_STATS_RAW_DATA_SIZE]))
+		mdb.idxStats.backstoreRawDataSize.Set(safeGetInt64(stats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE]))
+
+		mdb.idxStats.keySizeStatsSince.Set(safeGetInt64(stats[SNAP_STATS_KEY_SIZES_SINCE]))
+	} else {
+		// Since stats are not available, update keySizeStatsSince to current time
+		// to indicate we start tracking the stat since now.
+		mdb.idxStats.keySizeStatsSince.Set(time.Now().UnixNano())
+	}
+}
+
+func (mdb *bhiveSlice) resetStores(initBuild bool) error {
+	// Clear all readers
+	for i := 0; i < cap(mdb.readers); i++ {
+		<-mdb.readers
+	}
+
+	numWriters := mdb.numWriters
+	mdb.freeAllWriters()
+
+	mdb.mainstore.Close()
+	mdb.backstore.Close()
+
+	if err := bhive.DestroyInstance(mdb.storageDir, mdb.path); err != nil {
+		return err
+	}
+
+	mdb.newBorn = true
+	if err := mdb.initStores(initBuild, nil); err != nil {
+		return err
+	}
+
+	mdb.startWriters(numWriters)
+	mdb.setCommittedCount()
+
+	mdb.resetStats()
+	return nil
+}
+
+func (mdb *bhiveSlice) resetStats() {
+
+	mdb.idxStats.itemsCount.Set(0)
+
+	resetKeySizeStats(mdb.idxStats)
+	// Slice is rolling back to zero, but there is no need to update keySizeStatsSince
+
+	mdb.idxStats.backstoreRawDataSize.Set(0)
+	mdb.idxStats.rawDataSize.Set(0)
+
+	mdb.idxStats.lastDiskBytes.Set(0)
+	mdb.idxStats.lastNumItemsFlushed.Set(0)
+	mdb.idxStats.lastNumDocsIndexed.Set(0)
+	mdb.idxStats.lastNumFlushQueued.Set(0)
 }
 
 // //////////////////////////////////////////////////////////
@@ -1643,7 +2232,7 @@ func (mdb *bhiveSlice) ShardStatistics(partnId common.PartitionId) *common.Shard
 		bsAlternateShardId := mdb.idxDefn.AlternateShardIds[partnId][1]
 		val, err := bhive.GetShardInfo(bsAlternateShardId)
 		if err != nil {
-			logging.Infof("plasmaSlice::ShardStatistics ShardInfo is not available for shard: %v", bsAlternateShardId)
+			logging.Infof("bhiveSlice::ShardStatistics ShardInfo is not available for shard: %v", bsAlternateShardId)
 			return nil
 		}
 		ss.MemSz += val.MemSz
@@ -1675,6 +2264,17 @@ func (mdb *bhiveSlice) setCommittedCount() {
 
 func (mdb *bhiveSlice) GetCommittedCount() uint64 {
 	return atomic.LoadUint64(&mdb.committedCount)
+}
+
+func (mdb *bhiveSlice) String() string {
+
+	str := fmt.Sprintf("SliceId: %v ", mdb.id)
+	str += fmt.Sprintf("File: %v ", mdb.path)
+	str += fmt.Sprintf("Index: %v ", mdb.idxInstId)
+	str += fmt.Sprintf("Partition: %v ", mdb.idxPartnId)
+
+	return str
+
 }
 
 // //////////////////////////////////////////////////////////
@@ -1749,7 +2349,19 @@ func (mdb *bhiveSlice) DecrRef() {
 }
 
 func (mdb *bhiveSlice) Destroy() {
+	mdb.lock.Lock()
+	defer mdb.lock.Unlock()
 
+	if mdb.refCount > 0 {
+		openSnaps := mdb.idxStats.numOpenSnapshots.Value()
+		logging.Infof("bhiveSlice::Destroy Soft deleted Slice Id %v, IndexInstId %v, PartitionId %v "+
+			"IndexDefnId %v RefCount %v NumOpenSnapshots %v", mdb.id, mdb.idxInstId, mdb.idxPartnId,
+			mdb.idxDefnId, mdb.refCount, openSnaps)
+		mdb.isSoftDeleted = true
+	} else {
+		mdb.isDeleted = true
+		tryDeleteBhiveSlice(mdb)
+	}
 }
 
 func tryDeleteBhiveSlice(mdb *bhiveSlice) {
@@ -1772,18 +2384,18 @@ func tryCloseBhiveSlice(mdb *bhiveSlice) {
 		"IndexInstId %v, PartitionId %v, IndexDefnId %v.", mdb.id,
 		mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 
-	// FIXME -- persistent snapshot
-	//mdb.waitForPersistorThread()
+	mdb.waitForPersistorThread()
 	mdb.mainstore.Close()
 	mdb.backstore.Close()
 }
 
 func destroyBhiveSlice(storageDir string, path string) error {
-	//TODO
-	//if err := bhive.DestroyInstance(storageDir, path); err != nil {
-	//	return err
-	//}
-	return nil
+	if err := bhive.DestroyInstance(storageDir, path); err != nil {
+		return err
+	}
+
+	// remove directory created in newBhiveSlice()
+	return iowrap.Os_RemoveAll(path)
 }
 
 // //////////////////////////////////////////////////////////
