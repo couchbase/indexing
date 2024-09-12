@@ -921,16 +921,21 @@ type MergeOperator struct {
 
 	logPrefix string
 	startTime time.Time
+
+	numRerankWorkers int
+	rerankCh         chan *Row
 }
 
 func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 	fio *MergeOperator, err error) {
 
 	fio = &MergeOperator{
-		recvCh:    recvCh,
-		writeItem: writeItem,
-		req:       r,
-		errCh:     make(chan error),
+		recvCh:           recvCh,
+		writeItem:        writeItem,
+		req:              r,
+		errCh:            make(chan error),
+		numRerankWorkers: r.readersPerPartition,
+		rerankCh:         make(chan *Row, r.readersPerPartition),
 	}
 
 	fio.logPrefix = fmt.Sprintf("%v[%v]MergeOperator", r.LogPrefix, r.RequestId)
@@ -1168,46 +1173,99 @@ func (fio *MergeOperator) Collector() {
 	fio.heap.Destroy()
 }
 
+func (fio *MergeOperator) rerankOnRow(row *Row, ctx IndexReaderContext, buf []byte) error {
+	var err error
+
+	partnId := row.partnId
+	snap := fio.req.perPartnSnaps[c.PartitionId(partnId)]
+
+	buf, err = snap.Snapshot().FetchValue(ctx, row.recordId, row.cid, buf)
+	if err != nil {
+		logging.Errorf("%v observed error while fetching value for recordId: %v, cid: %s, partnId: %v, err: %v", fio.logPrefix, row.recordId, row.cid, row.partnId, err)
+		return err
+	}
+
+	// Convert the buffer to []float and compute distance
+	value := unsafe.Slice((*float32)(unsafe.Pointer(&buf[0])), len(buf)/4)
+	dists := make([]float32, 1)
+	err = fio.req.codebookMap[c.PartitionId(partnId)].ComputeDistance(fio.req.queryVector, value, dists)
+	if err != nil {
+		logging.Errorf("%v observed error while computing distance for recordId: %v, cid: %s, partnId: %v, err: %v", fio.logPrefix, row.recordId, row.cid, row.partnId, err)
+		return err
+	}
+
+	row.dist = dists[0]
+	return nil
+}
+
+func (fio *MergeOperator) rerankWorker(wg *sync.WaitGroup, ctxCh map[c.PartitionId]chan IndexReaderContext, errCh chan error) {
+	defer wg.Done()
+
+	buf := make([]byte, 4*fio.req.IndexInst.Defn.VectorMeta.Dimension)
+	for {
+		select {
+		case row, ok := <-fio.rerankCh:
+			if !ok {
+				return
+			}
+
+			ctx := <-ctxCh[c.PartitionId(row.partnId)]
+
+			err := fio.rerankOnRow(row, ctx, buf)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			ctxCh[c.PartitionId(row.partnId)] <- ctx
+		}
+	}
+}
+
 func (fio *MergeOperator) rerankOnHeap() {
 	defer fio.mergerWg.Done()
 
 	allRows := fio.heap.List()
 	var err error
 
-	projectDistance := fio.req.ProjectVectorDist()
-
-	valueBuffer := make([]byte, 4*fio.req.IndexInst.Defn.VectorMeta.Dimension)
-	for _, row := range allRows {
-		partnId := row.partnId
-		snap := fio.req.perPartnSnaps[c.PartitionId(partnId)]
-		ctxs := fio.req.perPartnReaderCtx[c.PartitionId(partnId)]
-
-		// Add value buffer
-		valueBuffer, err = snap.Snapshot().FetchValue(ctxs[0], row.recordId, row.cid, valueBuffer)
-		if err != nil {
-			logging.Errorf("%v observed error while fetching value for recordId: %v, cid: %s, partnId: %v, err: %v", fio.logPrefix, row.recordId, row.cid, row.partnId, err)
-			fio.errCh <- err
-			return
+	ctxCh := make(map[c.PartitionId]chan IndexReaderContext)
+	for partnId, readerContexts := range fio.req.perPartnReaderCtx {
+		if _, ok := ctxCh[partnId]; !ok {
+			ctxCh[partnId] = make(chan IndexReaderContext, len(readerContexts))
 		}
-
-		// Convert the buffer to []float and compute distance
-		value := unsafe.Slice((*float32)(unsafe.Pointer(&valueBuffer[0])), len(valueBuffer)/4)
-		dists := make([]float32, 1)
-		err = fio.req.codebookMap[c.PartitionId(partnId)].ComputeDistance(fio.req.queryVector, value, dists)
-		if err != nil {
-			logging.Errorf("%v observed error while computing distance for recordId: %v, cid: %s, partnId: %v, err: %v", fio.logPrefix, row.recordId, row.cid, row.partnId, err)
-			fio.errCh <- err
-			return
+		for _, reader := range readerContexts {
+			ctxCh[partnId] <- reader
 		}
-
-		row.dist = dists[0]
 	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, fio.req.readersPerPartition)
+	for i := 0; i < fio.req.readersPerPartition; i++ {
+		wg.Add(1)
+		go fio.rerankWorker(&wg, ctxCh, errCh)
+	}
+
+	for _, row := range allRows {
+		select {
+		case fio.rerankCh <- row:
+		case err := <-errCh:
+			if err != nil {
+				close(fio.rerankCh)
+				wg.Wait()        // Wait for all workers to exit
+				fio.errCh <- err // Write the error to collector operator
+				return
+			}
+		}
+	}
+
+	close(fio.rerankCh)
+	wg.Wait()
 
 	// sort the rows based on distance
 	sort.Slice(allRows, func(i, j int) bool {
 		return allRows[i].dist < allRows[j].dist
 	})
 
+	projectDistance := fio.req.ProjectVectorDist()
 	// write the top-k items to next phase in the pipeline. "k" is
 	// the limit on the number of rows that are requested in query
 	for i := int64(0); i < min(fio.req.Limit, int64(len(allRows))); i++ {
@@ -1309,6 +1367,7 @@ func (s *IndexScanSource2) Routine() error {
 	if s.p.req.nprobes < s.p.req.parallelCentroidScans {
 		readersPerPartition = s.p.req.nprobes
 	}
+	s.p.req.readersPerPartition = readersPerPartition
 
 	// Make map of parition to reader contexts i.e. readers per parition
 	ctxs := make(map[common.PartitionId][]IndexReaderContext)

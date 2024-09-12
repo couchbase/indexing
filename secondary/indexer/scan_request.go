@@ -147,8 +147,9 @@ type ScanRequest struct {
 	// this limit
 	rlimit int64
 
-	perPartnSnaps     map[common.PartitionId]SliceSnapshot
-	perPartnReaderCtx map[common.PartitionId][]IndexReaderContext
+	perPartnSnaps       map[common.PartitionId]SliceSnapshot
+	perPartnReaderCtx   map[common.PartitionId][]IndexReaderContext
+	readersPerPartition int
 }
 
 type Projection struct {
