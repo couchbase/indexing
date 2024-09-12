@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
@@ -662,6 +663,8 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	copy(r.value, value)
 
 	r.recordId = recordId
+	r.partnId = int(w.currJob.pid)
+	r.cid = w.currJob.scan.Low.Bytes()
 
 	select {
 	case <-w.stopCh:
@@ -1109,6 +1112,12 @@ func (fio *MergeOperator) Collector() {
 		fio.heap.PrintHeap()
 	}
 
+	if fio.req.enableReranking {
+		fio.mergerWg.Add(1)
+		go fio.rerankOnHeap()
+		return // return from here as rerank logic will take care of substituing centroidID and writing items
+	}
+
 	// Read all elements from heap
 	rowList := fio.heap.List()
 	sortedRows := RowHeap{
@@ -1159,6 +1168,92 @@ func (fio *MergeOperator) Collector() {
 	fio.heap.Destroy()
 }
 
+func (fio *MergeOperator) rerankOnHeap() {
+	defer fio.mergerWg.Done()
+
+	allRows := fio.heap.List()
+	var err error
+
+	projectDistance := fio.req.ProjectVectorDist()
+
+	valueBuffer := make([]byte, 4*fio.req.IndexInst.Defn.VectorMeta.Dimension)
+	for _, row := range allRows {
+		partnId := row.partnId
+		snap := fio.req.perPartnSnaps[c.PartitionId(partnId)]
+		ctxs := fio.req.perPartnReaderCtx[c.PartitionId(partnId)]
+
+		// Add value buffer
+		valueBuffer, err = snap.Snapshot().FetchValue(ctxs[0], row.recordId, row.cid, valueBuffer)
+		if err != nil {
+			logging.Errorf("%v observed error while fetching value for recordId: %v, cid: %s, partnId: %v, err: %v", fio.logPrefix, row.recordId, row.cid, row.partnId, err)
+			fio.errCh <- err
+			return
+		}
+
+		// Convert the buffer to []float and compute distance
+		value := unsafe.Slice((*float32)(unsafe.Pointer(&valueBuffer[0])), len(valueBuffer)/4)
+		dists := make([]float32, 1)
+		err = fio.req.codebookMap[c.PartitionId(partnId)].ComputeDistance(fio.req.queryVector, value, dists)
+		if err != nil {
+			logging.Errorf("%v observed error while computing distance for recordId: %v, cid: %s, partnId: %v, err: %v", fio.logPrefix, row.recordId, row.cid, row.partnId, err)
+			fio.errCh <- err
+			return
+		}
+
+		row.dist = dists[0]
+	}
+
+	// sort the rows based on distance
+	sort.Slice(allRows, func(i, j int) bool {
+		return allRows[i].dist < allRows[j].dist
+	})
+
+	// write the top-k items to next phase in the pipeline. "k" is
+	// the limit on the number of rows that are requested in query
+	for i := int64(0); i < min(fio.req.Limit, int64(len(allRows))); i++ {
+		row := allRows[i]
+
+		// Substitue centroid ID
+		if projectDistance {
+			fio.substituteCentroidID(row)
+			if err != nil {
+				fio.heap.Destroy()
+				fio.errCh <- err
+				return
+			}
+		}
+		entry := row.key
+
+		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
+			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
+			if err != nil {
+				logging.Verbosef("%v Collector got error: %v from projectKeys from heap", fio.logPrefix, err)
+				fio.heap.Destroy()
+				fio.errCh <- err
+				return
+			}
+		}
+
+		if fio.req.Offset != 0 && fio.rowsOffsetCount < uint64(fio.req.Offset) {
+			fio.rowsOffsetCount++
+			continue
+		}
+
+		err = fio.writeItem(entry)
+		if err != nil {
+			logging.Verbosef("%v Collector got error: %v from writeItem from heap", fio.logPrefix, err)
+			fio.heap.Destroy()
+			fio.errCh <- err
+			return
+		}
+	}
+
+	// If everything went fine, then destroy the heap
+	fio.heap.Destroy()
+
+	return
+}
+
 func (fio *MergeOperator) Wait() error {
 	doneCh := make(chan struct{})
 	go func() {
@@ -1207,6 +1302,7 @@ func (s *IndexScanSource2) Routine() error {
 		s.CloseWithError(err)
 		return err
 	}
+	s.p.req.perPartnSnaps = snaps
 
 	// How many readers per partition are configured and how may are needed
 	readersPerPartition := s.p.req.parallelCentroidScans
@@ -1222,6 +1318,7 @@ func (s *IndexScanSource2) Routine() error {
 			ctxs[pid] = append(ctxs[pid], s.p.req.Ctxs[i*readersPerPartition+j])
 		}
 	}
+	s.p.req.perPartnReaderCtx = ctxs
 
 	// Scans and codebooks
 	scans := s.p.req.vectorScans

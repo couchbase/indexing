@@ -146,6 +146,9 @@ type ScanRequest struct {
 	// will be perfomed on these "R * 10" rows. The variable "rlimit" captures
 	// this limit
 	rlimit int64
+
+	perPartnSnaps     map[common.PartitionId]SliceSnapshot
+	perPartnReaderCtx map[common.PartitionId][]IndexReaderContext
 }
 
 type Projection struct {
@@ -596,7 +599,7 @@ func (r *ScanRequest) setRerankLimits() {
 	}
 
 	cfg := r.sco.config.Load()
-	rfactor := cfg["rerank_factor"].Int()
+	rfactor := cfg["scan.vector.rerank_factor"].Int()
 	if rfactor <= 1 {
 		r.enableReranking = false
 		return

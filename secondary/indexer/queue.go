@@ -38,6 +38,9 @@ type Row struct {
 	dist     float32
 	recordId uint64 // used in BHIVE scans for re-ranking
 
+	partnId int    // Used to identify snapshot and reader context for partitioned indexes
+	cid     []byte // CentroidID used for the scan
+
 	mem *allocator
 }
 
