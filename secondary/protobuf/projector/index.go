@@ -770,7 +770,7 @@ func (ie *IndexEvaluatorStats) Init() {
 	ie.ErrInvalidVectorType.Init()
 	ie.ErrDataOutOfBounds.Init()
 	ie.ErrInvalidVectorDimension.Init()
-	ie.ErrDataOutOfBounds.Init()
+	ie.ErrHeterogenousVectorData.Init()
 }
 
 func (ies *IndexEvaluatorStats) add(duration time.Duration) {
