@@ -37,6 +37,7 @@ var dialFun = net.Dial
 
 var ErrorEnableJSON = errors.New("dcp.EnableJSON")
 var ErrorJSONNotEnabled = errors.New("dcp.ErrorJSONNotEnabled")
+var ErrorRangeScanIncludeXattrNotEnabled = errors.New("dcp.ErrorRangeScanIncludeXattrNotEnabled")
 
 const opaqueRandomScan = 0xBEAF0002
 
@@ -746,6 +747,53 @@ func (c *Client) sendEnableJSON(name string) (resp *transport.MCResponse, err er
 	return c.Send(req)
 }
 
+func (c *Client) EnableRangeScanIncludeXattr(clientName string) error {
+	if resp, err := c.sendEnableRangeScanIncludeXattr(clientName); err != nil {
+		return err
+	} else {
+		opcode := resp.Opcode
+		body := resp.Body
+		if opcode != transport.HELO {
+			logging.Errorf("Memcached HELO for %v (feature_collections, feature_json, feature_xattr, feature_range_scan_include_xattr) opcode = %v. Expecting opcode = 0x1f", clientName, opcode)
+			return ErrorRangeScanIncludeXattrNotEnabled
+		} else if len(body) != 8 {
+			logging.Errorf("Memcached HELO for %v (feature_collections, feature_json, feature_xattr, feature_range_scan_include_xattr) body = %v. Expected bodylen: 8.", clientName, body)
+			return ErrorRangeScanIncludeXattrNotEnabled
+		} else {
+			// In response to HELO, for response body 0x00 is followed by byte denoting feature.
+			// Ex:- Response body format if JSON enabled is {0x00, 0x0b}
+			// Ex:- Response body format if JSON,XATTR,RangeScanIncludeXattr enabled is {0x00, 0x0b, 0x00, 0x06, 0x00, 0x22}
+			// Order of features may not be same as that of request.
+
+			if body[0] != 0x00 || body[2] != 0x00 || body[4] != 0x00 || body[6] != 0x00 {
+				logging.Errorf("Memcached HELO for %v (feature_collections, feature_json, feature_xattr, feature_range_scan_include_xattr) body = %v. Invalid response, first bytes are non-zero.", clientName, body)
+				return ErrorRangeScanIncludeXattrNotEnabled
+			}
+			featureMap := make(map[byte]bool)
+			featureMap[body[1]] = true
+			featureMap[body[3]] = true
+			featureMap[body[5]] = true
+			featureMap[body[7]] = true
+
+			if !featureMap[transport.FEATURE_COLLECTIONS] || !featureMap[transport.FEATURE_JSON] || !featureMap[transport.FEATURE_XATTR] || !featureMap[transport.FEATURE_RANGE_SCAN_INCLUDE_XATTR] {
+				logging.Errorf("Memcached HELO for %v (feature_collections, feature_json, feature_xattr, feature_range_scan_include_xattr) body = %v. Features enabled Collections:%v JSON:%v XATTR:%v RangeScanIncludeXattr:%v", clientName, body, featureMap[transport.FEATURE_COLLECTIONS], featureMap[transport.FEATURE_JSON], featureMap[transport.FEATURE_XATTR], featureMap[transport.FEATURE_RANGE_SCAN_INCLUDE_XATTR])
+				return ErrorRangeScanIncludeXattrNotEnabled
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Client) sendEnableRangeScanIncludeXattr(name string) (resp *transport.MCResponse, err error) {
+	req := &transport.MCRequest{
+		Opcode: transport.HELO,
+		Key:    ([]byte)(name),
+		Body:   []byte{0x00, transport.FEATURE_COLLECTIONS, 0x00, transport.FEATURE_JSON, 0x00, transport.FEATURE_XATTR, 0x00, transport.FEATURE_RANGE_SCAN_INCLUDE_XATTR},
+	}
+
+	return c.Send(req)
+}
+
 func (c *Client) CreateRandomScan(vb uint16, collId string, sampleSize int64) (
 	*transport.MCResponse, error) {
 
@@ -765,6 +813,7 @@ func (c *Client) CreateRandomScan(vb uint16, collId string, sampleSize int64) (
 	m["collection"] = collId
 	m["sampling"] = s
 	m["key_only"] = false
+	m["include_xattrs"] = true
 	req.Body, _ = json.Marshal(m)
 
 	return c.Send(req)
@@ -801,3 +850,4 @@ func (c *Client) CancelRangeScan(vb uint16, uuid []byte) (
 	copy(req.Extras, uuid)
 	return c.Send(req)
 }
+

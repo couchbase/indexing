@@ -99,6 +99,8 @@ const (
 
 const FEATURE_COLLECTIONS byte = 0x12
 const FEATURE_JSON byte = 0x0b
+const FEATURE_XATTR byte = 0x06
+const FEATURE_RANGE_SCAN_INCLUDE_XATTR byte = 0x22
 
 type CollectionEvent uint32
 

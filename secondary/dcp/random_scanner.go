@@ -290,6 +290,7 @@ func (rs *randomScan) doScanPerServer(addr string, vblist []int, wg *sync.WaitGr
 		if r := recover(); r != nil {
 			logging.Errorf("RandomScanner::doScanPerServer crashed %v KV:%v", rs, addr)
 			logging.Errorf("%s", logging.StackTrace())
+			logging.Errorf("recover: %v", r)
 		}
 
 		wg.Done()
@@ -354,6 +355,7 @@ func (rs *randomScan) doSingleVbScan(addr string, vb int, wg *sync.WaitGroup) {
 		if r := recover(); r != nil {
 			logging.Errorf("RandomScanner::doSingleVbScan crashed %v vb:%v KV:%v", rs, vb, addr)
 			logging.Errorf("%s", logging.StackTrace())
+			logging.Errorf("recover: %s", r)
 		}
 
 		rs.b.Return(conn, addr)
@@ -370,7 +372,7 @@ func (rs *randomScan) doSingleVbScan(addr string, vb int, wg *sync.WaitGroup) {
 		return
 	}
 
-	err = tryEnableCollectionAndJson(conn)
+	err = tryEnableRangeScanFeatures(conn)
 	if err != nil {
 		logging.Errorf("RandomScanner::doSingleVbScan Error enable collections %v. Err %v", addr, err)
 		rs.errch <- err
@@ -495,6 +497,7 @@ func (rs *randomScan) createAndSendDcpEvent(respBody []byte) {
 			event.Cas = binary.BigEndian.Uint64(respBody[i+16:])
 			event.Datatype = uint8(respBody[i+24])
 
+			isXATTR := event.HasXATTR()
 			i += 25 //increment by fixed 25 bytes metadata length
 
 			readLen := func() uint32 {
@@ -527,9 +530,24 @@ func (rs *randomScan) createAndSendDcpEvent(respBody []byte) {
 			//read value
 			l = readLen()
 			logging.Tracef("RandomScanner::doSingleVbScan start %v end %v, value %s", i, i+int(l), respBody[i:i+int(l)])
-			event.Value = make([]byte, int(l))
-			copy(event.Value, respBody[i:i+int(l)])
-
+			if isXATTR {
+				xattrLen := int(binary.BigEndian.Uint32(respBody[i:]))
+				xattrData := respBody[i+4 : i+4+xattrLen]
+				event.RawXATTR = make(map[string][]byte)
+				for len(xattrData) > 0 {
+					pairLen := binary.BigEndian.Uint32(xattrData[0:])
+					xattrData = xattrData[4:]
+					binaryPair := xattrData[:pairLen-1]
+					xattrData = xattrData[pairLen:]
+					kvPair := bytes.Split(binaryPair, []byte{0x00})
+					event.RawXATTR[string(kvPair[0])] = kvPair[1]
+				}
+				event.Value = make([]byte, len(respBody)-i-(4+xattrLen))
+				copy(event.Value, respBody[i+4+xattrLen:])
+			} else {
+				event.Value = make([]byte, int(l))
+				copy(event.Value, respBody[i:i+int(l)])
+			}
 			i += int(l)
 			rs.datach <- event
 			num_docs++
@@ -551,27 +569,22 @@ func (rs *randomScan) String() string {
 	return b.String()
 }
 
-func tryEnableCollectionAndJson(conn *memcached.Client) error {
-	if !conn.IsCollectionsEnabled() {
+// This step enables Collections, JSON, XATTR & RangeScanIncludeXattr in single HELO call.
+func tryEnableRangeScanFeatures(conn *memcached.Client) error {
 
-		connName, err := getConnName()
-		if err != nil {
-			return err
-		}
-
-		conn.SetMcdConnectionDeadline()
-		defer conn.ResetMcdConnectionDeadline()
-
-		err = conn.EnableCollections(connName)
-		if err != nil {
-			return err
-		}
-
-		err = conn.EnableJSON(connName)
-		if err != nil {
-			return err
-		}
+	connName, err := getConnName()
+	if err != nil {
+		return err
 	}
+
+	conn.SetMcdConnectionDeadline()
+	defer conn.ResetMcdConnectionDeadline()
+
+	err = conn.EnableRangeScanIncludeXattr(connName)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
