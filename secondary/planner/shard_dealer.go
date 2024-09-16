@@ -32,7 +32,7 @@ func (ic ShardCategory) String() string {
 	case VECTOR_SHARD_CATEGORY:
 		return "VectorShardCategory"
 	case BHIVE_SHARD_CATEGORY:
-		return "BHiveShardCategory"
+		return "BhiveShardCategory"
 	case INVALID_SHARD_CATEGORY:
 		return "InvalidShardCategory"
 	default:
@@ -144,8 +144,14 @@ func NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity uint6
 // for as it can be either destination node or initial node record always happen using initialASIs
 // as they are not expected to change.
 // if index, or initialASI is nil, this func does not return an error but node cannot be nil
-func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode) error {
-	if index == nil || len(index.InitialAlternateShardIds) == 0 {
+func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, isInit bool) error {
+	if index == nil {
+		return nil
+	}
+
+	if isInit && len(index.InitialAlternateShardIds) == 0 {
+		return nil
+	} else if !isInit && len(index.AlternateShardIds) == 0 {
 		return nil
 	}
 
@@ -160,8 +166,13 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode) er
 		return fmt.Errorf("invalid shard category for index defn %v", index.DefnId)
 	}
 
+	var inputAlternateShardIDs = index.AlternateShardIds
+	if isInit {
+		inputAlternateShardIDs = index.InitialAlternateShardIds
+	}
+
 	// calculate alternate shard id of main index
-	var alternateShardId, err = c.ParseAlternateId(index.InitialAlternateShardIds[0])
+	var alternateShardId, err = c.ParseAlternateId(inputAlternateShardIDs[0])
 	if err != nil {
 		return err
 	}
@@ -221,4 +232,126 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode) er
 	sd.nodeToSlotMap[node.NodeUUID][slotId] = alternateShardId.GetReplicaId()
 
 	return nil
+}
+
+// GetSlot - returns an appropriate Slot to place the indexes of the defn `defnId` into
+// This could be a new slot or it could be an old slot being re-used
+// GetSlot is the implementation of the 3 pass shard distribution
+func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId,
+	replicaMap map[int]map[*IndexerNode]*IndexUsage) c.AlternateShard_SlotId {
+
+	var mainstoreShard, backstoreShard *c.AlternateShardId
+
+	// setStoreAnAllUsages is util func to set mainstoreShard, backstoreShard on all
+	// index usages in replica map. only call once mainstore and backstore have the SlotID and
+	// GroupID initialised. This func will set the ReplicaID to the shards. It does *not* update
+	// internal book keeping of the Shard Dealer
+	var setStoreOnAllUsages = func() {
+		for replicaID, nodeMap := range replicaMap {
+			for idxrNode, indexUsage := range nodeMap {
+				if indexUsage == nil {
+					logging.Warnf("ShardDealer::GetShard: nil index {defnID: %v, replicaID: %v, partnID: %v, nodeUUID: %v}. skipping",
+						defnID, replicaID, "-", idxrNode.NodeUUID)
+					continue
+				}
+
+				var shardIDs = make([]string, 0, 2)
+				mainstoreShard.SetReplicaId(c.AlternateShard_ReplicaId(replicaID))
+				shardIDs = append(shardIDs, mainstoreShard.String())
+				if !indexUsage.IsPrimary {
+					backstoreShard.SetReplicaId(c.AlternateShard_ReplicaId(replicaID))
+					shardIDs = append(shardIDs, backstoreShard.String())
+				}
+
+				if len(indexUsage.AlternateShardIds) != 0 {
+					if indexUsage.AlternateShardIds[0] == shardIDs[0] {
+						continue
+					}
+
+					// Index Usage existing shard ID does not match with ShardDealer book
+					// keeping slot. force update the same
+					logging.Fatalf("ShardDealer::GetShard: index {defnID: %v, replicaID: %v, partnID: %v, nodeUUID: %v} curr shards %v does not match shard dealer book keeping. Forcing new Alternate Shards",
+						defnID, replicaID, indexUsage.PartnId, idxrNode.NodeUUID,
+						indexUsage.AlternateShardIds)
+				}
+
+				indexUsage.AlternateShardIds = shardIDs
+				logging.Infof("ShardDealer::GetShard: assiging AlternateShardIDs %v to index {defnID: %v, replicaID: %v, partnID: %v, nodeUUID: %v}",
+					shardIDs, defnID, replicaID, indexUsage.PartnId, idxrNode.NodeUUID)
+			}
+		}
+	}
+
+	// updateShardDealerRecords is a util func which updates shard dealer book keeping. if there are
+	// no updates then this func is a no-op
+	var updateShardDealerRecords = func() []error {
+		var errSlice []error = nil
+		for replicaID, nodeMap := range replicaMap {
+			for idxrNode, indexUsage := range nodeMap {
+				var err = sd.RecordIndexUsage(indexUsage, idxrNode, false)
+				if err != nil {
+					logging.Warnf("ShardDealer::GetSlot failed to update book keeping with err %v for index {defnID: %v, replicaID: %v, partnID: %v, nodeUUID: %v}",
+						err, defnID, replicaID, indexUsage.PartnId, idxrNode.NodeUUID)
+
+					indexUsage.AlternateShardIds = nil
+					// TODO: delete book keeping updates if any
+
+					errSlice = append(errSlice, err)
+				}
+			}
+		}
+		return errSlice
+	}
+
+	// Check if defnID already has a slot assigned. If that is the case, use the same slot to
+	// maintain consistency
+	if alternateShard, exists := sd.indexSlots[defnID]; exists {
+		mainstoreShard, backstoreShard = &c.AlternateShardId{}, &c.AlternateShardId{}
+		mainstoreShard.SetSlotId(alternateShard)
+		backstoreShard.SetSlotId(alternateShard)
+
+		mainstoreShard.SetGroupId(0)
+		backstoreShard.SetGroupId(1)
+
+		setStoreOnAllUsages()
+
+		return mainstoreShard.GetSlotId()
+	}
+
+	var nodesForShard = make(map[string]bool, 0)
+	for _, nodeMap := range replicaMap {
+		for idxrNode := range nodeMap {
+			nodesForShard[idxrNode.NodeUUID] = true
+		}
+	}
+
+	// Pass 0: are all the indexer nodes under minShardsPerNode?
+	var nodesUnderMinShards = make([]string, 0, len(nodesForShard))
+	for nodeUUID := range nodesForShard {
+		if sd.nodeToSlotCountMap[nodeUUID] < sd.minShardsPerNode {
+			nodesUnderMinShards = append(nodesUnderMinShards, nodeUUID)
+		}
+	}
+
+	if len(nodesUnderMinShards) == len(nodesForShard) {
+		// all nodes under min shard. create new alternate shards and return
+		mainstoreShard, _ = c.NewAlternateId()
+		backstoreShard = mainstoreShard.Clone()
+
+		mainstoreShard.SetGroupId(0)
+		backstoreShard.SetGroupId(1)
+
+		// update index usages
+		setStoreOnAllUsages()
+
+		// update book keeping
+		var errSlice = updateShardDealerRecords()
+		if len(errSlice) != 0 {
+			return 0
+		}
+
+		return mainstoreShard.GetSlotId()
+	}
+
+	return 0
 }
