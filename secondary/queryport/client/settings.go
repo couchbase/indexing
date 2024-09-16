@@ -63,6 +63,11 @@ type ClientSettings struct {
 
 	allowNodesClause uint32
 	deferBuild       atomic.Bool
+
+	// shard dealer settings
+	useShardDealer        atomic.Bool
+	minShardsPerNode      uint64
+	minPartitionsPerShard atomic.Pointer[map[uint64]uint64]
 }
 
 func NewClientSettings(needRefresh bool, toolsConfig common.Config) *ClientSettings {
@@ -413,6 +418,8 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Warnf("ClientSettings: missing indexer.planner.honourNodesInDefn. considering it to be false")
 		atomic.StoreUint32(&s.allowNodesClause, 0)
 	}
+
+	setShardDealerConfig(s, config)
 }
 
 func (s *ClientSettings) NumReplica() int32 {
@@ -525,4 +532,66 @@ func (s *ClientSettings) AllowDDLDuringScaleUp() bool {
 
 func (s *ClientSettings) ShouldHonourNodesClause() bool {
 	return atomic.LoadUint32(&s.allowNodesClause) == 1
+}
+
+func (s *ClientSettings) UseShardDealer() bool {
+	return s.useShardDealer.Load()
+}
+
+func (s *ClientSettings) MinShardsPerNode() uint64 {
+	return atomic.LoadUint64(&s.minShardsPerNode)
+}
+
+func (s *ClientSettings) MinPartitionsPerShard() map[uint64]uint64 {
+	return *s.minPartitionsPerShard.Load()
+}
+
+func setShardDealerConfig(s *ClientSettings, config common.Config) {
+	useShardDealer, ok := config["indexer.planner.use_shard_dealer"]
+	if ok {
+		s.useShardDealer.Store(useShardDealer.Bool())
+	} else {
+		logging.Warnf("ClientSettings: missing indexer.planner.use_shard_dealer. considering it to be false")
+		s.useShardDealer.Store(false)
+		atomic.StoreUint64(&s.minShardsPerNode, 0)
+		s.minPartitionsPerShard.Store(nil)
+
+		return
+	}
+
+	minShardsPerNode, ok := config["indexer.planner.internal.min_shards_per_node"]
+	if ok {
+		atomic.StoreUint64(&s.minShardsPerNode, minShardsPerNode.Uint64())
+	} else {
+		logging.Warnf("ClientSettings: missing indexer.planner.internal.min_shards_per_node. disabling shard dealer")
+		s.useShardDealer.Store(false)
+		atomic.StoreUint64(&s.minShardsPerNode, 0)
+		s.minPartitionsPerShard.Store(nil)
+
+		return
+	}
+
+	minPartitionPerShardCv, ok := config["indexer.planner.internal.min_partitions_per_shard"]
+	if ok {
+		var minPartnPerShardMap = common.ComputeMinPartitionMapFromConfig(minPartitionPerShardCv)
+		if minPartnPerShardMap == nil {
+			logging.Warnf("ClientSettings: failed to compute minPartitionPerShard map. disabling shard dealer")
+
+			s.useShardDealer.Store(false)
+			atomic.StoreUint64(&s.minShardsPerNode, 0)
+			s.minPartitionsPerShard.Store(nil)
+
+			return
+		}
+
+		s.minPartitionsPerShard.Store(&minPartnPerShardMap)
+	} else {
+		logging.Warnf("ClientSettings: missing indexer.planner.internal.min_partitions_per_shard. disabling shard dealer")
+		s.useShardDealer.Store(false)
+		atomic.StoreUint64(&s.minShardsPerNode, 0)
+		s.minPartitionsPerShard.Store(nil)
+
+		return
+	}
+
 }

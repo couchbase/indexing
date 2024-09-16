@@ -74,6 +74,9 @@ type Settings interface {
 	AllowDDLDuringScaleUp() bool
 	GetBinSize() uint64
 	DeferBuild() bool
+	UseShardDealer() bool
+	MinShardsPerNode() uint64
+	MinPartitionsPerShard() map[uint64]uint64
 }
 
 ///////////////////////////////////////////////////////
