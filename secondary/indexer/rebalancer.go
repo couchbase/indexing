@@ -416,7 +416,7 @@ func (r *Rebalancer) initRebalAsync() {
 					} else {
 						r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.topologyChange,
 							r.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
-							minIterPerTemp, maxIterPerTemp, binSize, false)
+							minIterPerTemp, maxIterPerTemp, binSize, false, false)
 
 						r.resetAlternateShardIds()
 					}

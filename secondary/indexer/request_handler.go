@@ -2413,7 +2413,7 @@ func (m *requestHandlerContext) getIndexPlan(r *http.Request) (string, error) {
 		return "", fmt.Errorf("%v: Fail to read index spec from request. err: %v", method, err)
 	}
 
-	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false, true, m.useGreedyPlanner, m.allowDDLDuringScaleUp, binSize, m.enableShardAffinity, false)
+	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false, true, m.useGreedyPlanner, m.allowDDLDuringScaleUp, binSize, m.enableShardAffinity, false, false)
 	if err != nil {
 		return "", fmt.Errorf("%v: Fail to plan index. err: %v", method, err)
 	}

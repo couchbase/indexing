@@ -2178,3 +2178,70 @@ func UngroupIndexes(solution *Solution) {
 		}
 	}
 }
+
+// createShardDealerForIndexers inits the ShardDealer on each indexer from config
+// if shard affinity is enabled. ONLY call this if indexer node has all the stats set
+// as these stats will be used for the shard dealer initialisation
+func createShardDealerForIndexers(indexers []*IndexerNode, config common.Config) *ShardDealer {
+	if config == nil {
+		var err error
+		config, err = common.GetSettingsConfig(common.SystemConfig)
+		if err != nil {
+			logging.Warnf("planner::createShardDealerForIndexers: failed to read system config with error - %v", err)
+			return nil
+		}
+	}
+
+	if !config.GetDeploymentAwareShardAffinity() {
+		return nil
+	}
+
+	var useShardDealer = config.GetDeploymentModelAwareCfg("planner.use_shard_dealer").Bool()
+	if !useShardDealer {
+		return nil
+	}
+
+	var minShardsPerNode = config.
+		GetDeploymentModelAwareCfg("planner.internal.min_shards_per_node").
+		Uint64()
+	var minPartitionsPerShardMap = common.ComputeMinPartitionMapFromConfig(
+		config.GetDeploymentModelAwareCfg("planner.internal.min_partitions_per_shard"),
+	)
+	if len(minPartitionsPerShardMap) == 0 {
+		logging.Warnf("planner::createShardDealerForIndexers: failed to parse `min_partitions_per_shard`. Disabling shard_dealer")
+		return nil
+	}
+
+	var minPartitionsPerShard = common.GetMinPartnsPerShardFromMap(
+		config.GetIndexerMemoryQuota(), // memQuota uint64
+		minPartitionsPerShardMap,       // minPartnsPerShardMap map[uint64]uint64
+	)
+
+	if minPartitionsPerShard == 0 {
+		logging.Warnf("planner::createShardDealerForIndexers: failed to calculate minPartnsPerShard for quota %v. shard dealer init skipped",
+			config.GetIndexerMemoryQuota())
+		return nil
+	}
+
+	var dealer = NewShardDealer(minShardsPerNode, minPartitionsPerShard, 0)
+
+	for _, indexer := range indexers {
+		populateShardDealerWithNode(dealer, indexer)
+	}
+
+	return dealer
+}
+
+func populateShardDealerWithNode(dealer *ShardDealer, node *IndexerNode) {
+	if node == nil {
+		return
+	}
+
+	// classify indices and assign them
+	for _, index := range node.Indexes {
+		if err := dealer.RecordIndexUsage(index, node); err != nil {
+			logging.Warnf("planner::populateShardDealerWithNode: failed to record index (%v-%v) for indexer %v with shard dealer on err - %v",
+				index.InstId, index.PartnId, node.NodeUUID, err)
+		}
+	}
+}
