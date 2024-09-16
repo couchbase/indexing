@@ -110,3 +110,11 @@ func (asi *AlternateShardId) GetGroupId() AlternateShard_GroupId {
 func (asi *AlternateShardId) SetGroupId(gId AlternateShard_GroupId) {
 	asi.GroupId = uint8(gId)
 }
+
+func (asi *AlternateShardId) Clone() *AlternateShardId {
+	return &AlternateShardId{
+		SlotId:    asi.SlotId,
+		ReplicaId: asi.ReplicaId,
+		GroupId:   asi.GroupId,
+	}
+}

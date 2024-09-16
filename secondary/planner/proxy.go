@@ -2239,7 +2239,7 @@ func populateShardDealerWithNode(dealer *ShardDealer, node *IndexerNode) {
 
 	// classify indices and assign them
 	for _, index := range node.Indexes {
-		if err := dealer.RecordIndexUsage(index, node); err != nil {
+		if err := dealer.RecordIndexUsage(index, node, true); err != nil {
 			logging.Warnf("planner::populateShardDealerWithNode: failed to record index (%v-%v) for indexer %v with shard dealer on err - %v",
 				index.InstId, index.PartnId, node.NodeUUID, err)
 		}
