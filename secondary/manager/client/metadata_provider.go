@@ -2780,6 +2780,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 	allowDDLDuringScaleUp := o.settings.AllowDDLDuringScaleUp()
 	enableShardAffinity := o.ShouldMaintainShardAffinity()
 	binSize := o.settings.GetBinSize()
+	useShardDealer := o.settings.UseShardDealer()
 
 	var solution *planner.Solution
 
@@ -2792,7 +2793,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 		}
 	} else {
 		solution, err = planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes,
-			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits, allowDDLDuringScaleUp, binSize, enableShardAffinity)
+			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits, allowDDLDuringScaleUp, binSize, enableShardAffinity, useShardDealer)
 		if err != nil {
 			return nil, nil, false, err
 		}
