@@ -3607,6 +3607,43 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.planner.use_shard_dealer": ConfigValue{
+		false,
+		"Enable planner to use the shard dealer for assigning shards to indexes. The shard dealer uses " +
+			"3 pass algorithm to assign shards on a node. Use false to disable the shard dealer",
+		false,
+		false,
+		false,
+	},
+	"indexer.planner.internal.min_shards_per_node": ConfigValue{
+		uint64(3),
+		"Minimum shards per node (uint64) for the shard dealer. Planner will not re-use shards until it " +
+			"creates atleast these many shards. This is ignored if the shard dealer is disabled.",
+		uint64(0),
+		false,
+		false,
+	},
+	"indexer.planner.internal.min_partitions_per_shard": ConfigValue{
+		map[string]interface{}{
+			"256":   5, // 256 MB
+			"1024":  4, // 1GB
+			"2048":  3, // 2GB
+			"6144":  2, // 6GB
+			"16384": 1, // 16GB
+		},
+		"Minimum partitions per shard beyond which a shard is considered to be above soft limit for the " +
+			"shard dealer. It is a map of memory quota (in MBs) to min partitions per shard. " +
+			"This is ignored if the shard dealer is disabled",
+		map[string]interface{}{
+			"256":   5, // 256 MB
+			"1024":  4, // 1GB
+			"2048":  3, // 2GB
+			"6144":  2, // 6GB
+			"16384": 1, // 16GB
+		},
+		false,
+		false,
+	},
 	"indexer.stream_reader.markFirstSnap": ConfigValue{
 		true,
 		"Identify mutations from first DCP snapshot. Used for back index lookup optimization.",
@@ -4359,7 +4396,8 @@ func (config Config) Diff(other Config) (Config, Config) {
 		if config[key].Immutable {
 			continue
 		}
-		if config[key] != other[key] {
+
+		if !reflect.DeepEqual(config[key], other[key]) {
 			diffThis[key] = config[key]
 			diffOther[key] = other[key]
 		}
