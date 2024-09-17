@@ -423,6 +423,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		cfg.NumEvictorThreads = int(float32(runtime.GOMAXPROCS(0))*
 			float32(slice.sysconf["plasma.evictionCPUPercent"].Int())/(100) + 0.5)
 		cfg.DisableReadCaching = slice.sysconf["plasma.disableReadCaching"].Bool()
+		cfg.EnableReadDelayedFree = slice.sysconf["plasma.enableReadDelayedFree"].Bool()
 		cfg.AutoMVCCPurging = slice.sysconf["plasma.purger.enabled"].Bool()
 		cfg.PurgerInterval = time.Duration(slice.sysconf["plasma.purger.interval"].Int()) * time.Second
 		cfg.PurgeThreshold = slice.sysconf["plasma.purger.highThreshold"].Float64()
@@ -493,6 +494,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		//turn off iterator refresh for vector index
 		if slice.idxDefn.IsVectorIndex {
 			cfg.IteratorRefreshRate = -1
+			cfg.EnableReadDelayedFree = true
 		}
 
 		// shard transfer
@@ -3427,6 +3429,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.LSSCleanerFlushInterval = time.Duration(mdb.sysconf["plasma.LSSCleanerFlushInterval"].Int()) * time.Minute
 	mdb.mainstore.LSSCleanerMinReclaimSize = int64(mdb.sysconf["plasma.LSSCleanerMinReclaimSize"].Int())
 	mdb.mainstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
+	mdb.mainstore.EnableReadDelayedFree = mdb.sysconf["plasma.enableReadDelayedFree"].Bool()
 	mdb.mainstore.EnablePeriodicEvict = mdb.sysconf["plasma.mainIndex.enablePeriodicEvict"].Bool()
 	mdb.mainstore.EvictMinThreshold = mdb.sysconf["plasma.mainIndex.evictMinThreshold"].Float64()
 	mdb.mainstore.EvictMaxThreshold = mdb.sysconf["plasma.mainIndex.evictMaxThreshold"].Float64()
@@ -3548,6 +3551,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.LSSCleanerFlushInterval = time.Duration(mdb.sysconf["plasma.LSSCleanerFlushInterval"].Int()) * time.Minute
 		mdb.backstore.LSSCleanerMinReclaimSize = int64(mdb.sysconf["plasma.LSSCleanerMinReclaimSize"].Int())
 		mdb.backstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
+		mdb.backstore.EnableReadDelayedFree = mdb.sysconf["plasma.enableReadDelayedFree"].Bool()
 		mdb.backstore.EnablePeriodicEvict = mdb.sysconf["plasma.backIndex.enablePeriodicEvict"].Bool()
 		mdb.backstore.EvictMinThreshold = mdb.sysconf["plasma.backIndex.evictMinThreshold"].Float64()
 		mdb.backstore.EvictMaxThreshold = mdb.sysconf["plasma.backIndex.evictMaxThreshold"].Float64()

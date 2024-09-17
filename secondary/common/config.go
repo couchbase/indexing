@@ -1914,6 +1914,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.enableReadDelayedFree": ConfigValue{
+		false,
+		"Enable delayed free for scans",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.UseQuotaTuner": ConfigValue{
 		true,
 		"Enable memquota tuner",
