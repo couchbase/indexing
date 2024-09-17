@@ -1869,6 +1869,10 @@ func (mdb *memdbSlice) SerializeCodebook() ([]byte, error) {
 	return nil, nil
 }
 
+func (ms *memdbSlice) InitCodebookFromSerialized(content []byte) error {
+	return nil
+}
+
 func (mdb *memdbSlice) handleN1QLStorageStatistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 	internalData := fmt.Sprintf("{\n"+

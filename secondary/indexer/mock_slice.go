@@ -233,10 +233,11 @@ func (ms *mockSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	return nil, nil
 }
 
-func (ms *mockSlice) SetNlist(int)          {}
-func (ms *mockSlice) InitCodebook() error   { return nil }
-func (ms *mockSlice) ResetCodebook() error  { return nil }
-func (ms *mockSlice) Train([]float32) error { return nil }
+func (ms *mockSlice) SetNlist(int)                                       {}
+func (ms *mockSlice) InitCodebook() error                                { return nil }
+func (ms *mockSlice) ResetCodebook() error                               { return nil }
+func (ms *mockSlice) Train([]float32) error                              { return nil }
+func (ms *mockSlice) InitCodebookFromSerialized(content []byte) error { return nil }
 
 // -------------
 // SliceSnapshot

@@ -5313,7 +5313,27 @@ func (mdb *plasmaSlice) ResetCodebook() error {
 				mdb.IndexInstId(), mdb.IndexPartnId())
 			return err
 		}
+		logging.Infof("plasmaSlice::ResetCodebook closed codebook for instId: %v, partnId: %v", mdb.IndexInstId(), mdb.IndexPartnId())
 	}
+	return nil
+}
+
+func (mdb *plasmaSlice) InitCodebookFromSerialized(content []byte) error {
+
+	codebook, err := vector.RecoverCodebook(content, string(mdb.idxDefn.VectorMeta.Quantizer.Type))
+	if err != nil {
+		logging.Errorf("plasmaSlice::InitCodebookFromSerialized: Error observed while recovering codebook, err: %v", err)
+		return errCodebookCorrupted
+	}
+
+	mdb.codebook = codebook
+	mdb.codeSize, err = mdb.codebook.CodeSize()
+	if err != nil {
+		mdb.ResetCodebook()
+		return err
+	}
+
+	mdb.initQuantizedCodeBuf()
 	return nil
 }
 

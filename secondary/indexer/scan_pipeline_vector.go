@@ -563,6 +563,8 @@ func (wp *WorkerPool) Init(r *ScanRequest, scanWorkerSenderChSize, scanWorkerBat
 
 // Submit adds a job to the pool
 // Note: Submit and Wait cannot run concurrently but Stop can be run asynchronously
+// If err is seen while submitting, Submit will stop the workerpool and user is expected to
+// Wait till previous submitted jobs are stopped
 func (wp *WorkerPool) Submit(job *ScanJob) error {
 	wp.jobsWg.Add(1) // If we are adding in case w.jobs <- job and if job is done before jobsWg.Add we will have negative counter
 	select {
@@ -579,6 +581,8 @@ func (wp *WorkerPool) Submit(job *ScanJob) error {
 }
 
 // Wait waits for submitted jobs to finish or an error to occur
+// If error is seen while waiting, Wait Stops the workerpool and waits for all the workers to
+// exit. Sends last message to down stream to indicate early closure
 func (wp *WorkerPool) Wait() error {
 	doneCh := make(chan struct{})
 	go func() {
@@ -589,12 +593,9 @@ func (wp *WorkerPool) Wait() error {
 	case err := <-wp.errCh: // If any worker errors out
 		if err != nil {
 			logging.Verbosef("%v Wait: got error: %v", wp.logPrefix, err)
-			wp.stopOnce.Do(func() {
-				close(wp.stopCh)
-			})
+			wp.Stop()
 			<-doneCh         // Wait for running jobs to stop
 			wp.sendLastRow() // Indicate downstream of early closure
-			close(wp.sendCh) // Close downstream
 			return err
 		}
 	case <-doneCh: // If current submitted jobs are done
@@ -606,6 +607,15 @@ func (wp *WorkerPool) Wait() error {
 	return nil
 }
 
+func (wp *WorkerPool) GetOutCh() <-chan *Row {
+	return wp.sendCh
+}
+
+// StopOutCh will stop the downstream send channel
+func (wp *WorkerPool) StopOutCh() {
+	close(wp.sendCh)
+}
+
 // sendLastRow to indicate early closure to downstream i.e. to
 // differentiate between closure on error and end
 func (wp *WorkerPool) sendLastRow() {
@@ -613,19 +623,12 @@ func (wp *WorkerPool) sendLastRow() {
 	wp.sendCh <- row
 }
 
-// Stop signals all workers to stop and waits for workers to halt and closes
-// downstream. Use Wait to wait till submitted jobs are done. Stop will halt
-// the workers
+// Stop signals all workers to stop. Use Wait to wait till submitted jobs are done.
+// Stop will halt the workers
 func (wp *WorkerPool) Stop() {
 	wp.stopOnce.Do(func() {
 		close(wp.stopCh)
-		wp.jobsWg.Wait()
-		close(wp.sendCh)
 	})
-}
-
-func (wp *WorkerPool) GetOutCh() <-chan *Row {
-	return wp.sendCh
 }
 
 // -------------
@@ -984,7 +987,7 @@ func (s *IndexScanSource2) Routine() error {
 	// Spawn Merge Operator
 	fanIn, err := NewMergeOperator(wpOutCh, s.p.req, writeItemAddStat)
 	if err != nil { // Stop worker pool and return
-		wp.Stop()
+		wp.Stop() // Stop the workers
 		s.CloseWithError(err)
 		return err
 	}
@@ -1047,18 +1050,25 @@ func (s *IndexScanSource2) Routine() error {
 		}
 	}()
 
+	doneCh := make(chan struct{})
 	var wpErr, fanInErr error
 	go func() {
-		defer wp.Stop()
+		defer func() {
+			wp.Stop()      // Stop the workers in non error cases, no-op on error
+			wp.StopOutCh() // Close downstream channel, even in error case
+			close(doneCh)  // Indicate finish of this goroutine
+		}()
+		stopped := false
 		for i := 0; i <= maxBatchId; i++ {
 			for _, job := range jobMap[i] {
 				wpErr := wp.Submit(job)
 				if wpErr != nil {
-					return
+					stopped = true
+					break
 				}
 			}
 			wpErr = wp.Wait()
-			if wpErr != nil {
+			if stopped || wpErr != nil {
 				return
 			}
 		}
@@ -1068,11 +1078,13 @@ func (s *IndexScanSource2) Routine() error {
 	fanInErr = fanIn.Wait()
 	if fanInErr != nil { // If there is an error in FanIn stop worker pool
 		wp.Stop()
+		<-doneCh
 		s.CloseWithError(fanInErr)
 		return fanInErr
 	}
 
 	// If there was workerpool error causing early closure of Merger return error from worker pool
+	<-doneCh
 	if wpErr != nil {
 		s.CloseWithError(wpErr)
 		return wpErr

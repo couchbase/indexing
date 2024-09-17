@@ -69,6 +69,7 @@ type KeyspaceIdCurrRequest map[string]*currRequest
 type KeyspaceIdRollbackTs map[string]*common.TsVbuuid
 type KeyspaceIdRetryTs map[string]*common.TsVbuuid
 type KeyspaceIdMinMergeTs map[string]*common.TsVbuuid
+type IndexDefnCodebookMap map[common.IndexDefnId][]byte
 
 // mem stats
 var (
@@ -13414,6 +13415,23 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 	return int64(maxSampleSize), vectorInsts, trainedOrNonVecInsts
 }
 
+// Returns codebook for index defn in IndexDefnCodebookMap
+func getDefnCodebook(indexDefnCodebookMap IndexDefnCodebookMap, defnId common.IndexDefnId) []byte {
+	cb, ok := indexDefnCodebookMap[defnId]
+	if !ok {
+		return nil
+	}
+	return cb
+}
+
+// Set codebook in IndexDefnCodebookMap if not present.
+func setDefnCodebook(indexDefnCodebookMap IndexDefnCodebookMap, defnId common.IndexDefnId, cb []byte) {
+	_, ok := indexDefnCodebookMap[defnId]
+	if !ok {
+		indexDefnCodebookMap[defnId] = cb
+	}
+}
+
 // [VECTOR_TODO]: Add a worker pool to take care of training
 // It is not a good idea to spawn a go-routine for each build statement
 func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
@@ -13473,9 +13491,16 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		return
 	}
 
+	// This map will hold serialized codebook of current training
+	// attempt for sharing on partitions of definition including replicas
+	indexDefnCodebookMap := make(map[common.IndexDefnId][]byte)
+
 	for i, idxInst := range vectorInsts {
 		instId := idxInst.InstId
 		partnInstMap := indexPartnMap[instId]
+
+		// Check for using already created codebook of other instances of definition
+		defnCodebook := getDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId)
 
 		for partnId, partnInst := range partnInstMap {
 			slices := partnInst.Sc.GetAllSlices()
@@ -13528,38 +13553,53 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				start := time.Now()
 				slice.SetNlist(idxInst.Nlist[partnId])
 
-				if err := slice.InitCodebook(); err != nil {
-					slice.ResetCodebook()
-					logging.Errorf("Indexer::initiateTraining error observed while initialising codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
-					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
-					continue
-				}
+				if defnCodebook == nil {
 
-				if err := idx.handleTrainingAndCheckForDrop(keyspaceId, instId, slice, vectors[i], droppedInsts, allInsts); err != nil {
-					slice.ResetCodebook()
-					logging.Errorf("Indexer::initiateTraining error observed during training phase of codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
-					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
-					continue
-				}
+					if err := slice.InitCodebook(); err != nil {
+						slice.ResetCodebook()
+						logging.Errorf("Indexer::initiateTraining error observed while initialising codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+						updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
+						continue
+					}
 
-				if _, ok := droppedInsts[instId]; ok {
-					continue
-				}
+					if err := idx.handleTrainingAndCheckForDrop(keyspaceId, instId, slice, vectors[i], droppedInsts, allInsts); err != nil {
+						slice.ResetCodebook()
+						logging.Errorf("Indexer::initiateTraining error observed during training phase of codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+						updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
+						continue
+					}
 
-				logging.Infof("Indexer::initiateTraining Training completed for vector index instance: %v, "+
-					"partnId: %v, elapsed: %v", instId, partnId, time.Since(start))
+					if _, ok := droppedInsts[instId]; ok {
+						continue
+					}
 
-				// Serialize codebook for persistance
-				codebook, err := slice.SerializeCodebook()
-				if err != nil {
-					logging.Errorf("Indexer::initiateTraining error observed while serializing codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
-					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
-					slice.ResetCodebook() // Reset codebook as build retry will initiate training again
-					continue
+					logging.Infof("Indexer::initiateTraining Training completed for vector index instance: %v, "+
+						"partnId: %v, elapsed: %v", instId, partnId, time.Since(start))
+
+					// Serialize codebook for persistance
+					codebook, err := slice.SerializeCodebook()
+					if err != nil {
+						logging.Errorf("Indexer::initiateTraining error observed while serializing codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+						updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
+						slice.ResetCodebook() // Reset codebook as build retry will initiate training again
+						continue
+					}
+
+					// Reaching here implies that new codebook serialized for partition, ready to be shared
+					defnCodebook = codebook
+					setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, defnCodebook)
+
+				} else {
+					err := slice.InitCodebookFromSerialized(defnCodebook)
+					if err != nil {
+						updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
+						continue
+					}
+					logging.Infof("Indexer::initiateTraining using serialized codebook for instId: %v, partnId: %v, elapsed: %v", instId, partnId, time.Since(start))
 				}
 
 				// Persist codebook to disk
-				err = idx.persistCodebookToDisk(storageDir, idxInst, partnId, slice.Id(), codebook)
+				err = idx.persistCodebookToDisk(storageDir, idxInst, partnId, slice.Id(), defnCodebook)
 				if err != nil {
 					logging.Errorf("Indexer::initiateTraining error observed while persisting codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
 					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
