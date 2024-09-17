@@ -453,8 +453,17 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	value = meta
 
 	var r Row
-	r.key = entry
-	r.value = value
+
+	// VECTOR_TODO: This is a temporary solution to avoid panic where
+	// BHIVE iterator would free the memory while scan is running
+	// Once the finishCb changes are merged, this copy is no longer
+	// required
+	r.key = make([]byte, len(entry))
+	copy(r.key, entry)
+
+	r.value = make([]byte, len(value))
+	copy(r.value, value)
+
 	r.recordId = recordId
 
 	select {
