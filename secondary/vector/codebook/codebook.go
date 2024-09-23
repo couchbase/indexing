@@ -34,7 +34,7 @@ type Codebook interface {
 	EncodeAndAssignVectors(vecs []float32, codes []byte, labels []int64) error
 
 	//Size returns the memory size in bytes.
-	Size() uint64
+	Size() int64
 
 	//Find the nearest k centroidIDs for a given vector.
 	//Must be run on a trained codebook.

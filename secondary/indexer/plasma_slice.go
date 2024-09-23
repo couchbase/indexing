@@ -5323,6 +5323,9 @@ func (mdb *plasmaSlice) ResetCodebook() error {
 	// reset codebookSize
 	mdb.codeSize = 0
 
+	// reset codebook mem stat
+	mdb.idxStats.codebookSize.Set(0)
+
 	if mdb.codebook != nil {
 		err := mdb.codebook.Close()
 		mdb.codebook = nil
@@ -5351,6 +5354,8 @@ func (mdb *plasmaSlice) InitCodebookFromSerialized(content []byte) error {
 		return err
 	}
 
+	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
+
 	mdb.initQuantizedCodeBuf()
 	return nil
 }
@@ -5370,6 +5375,9 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 		mdb.codeSize = 0
 		return err
 	}
+
+	// Update codebook mem stat
+	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
 	return nil
@@ -5552,6 +5560,8 @@ func (mdb *plasmaSlice) recoverCodebook(codebookPath string) error {
 		mdb.ResetCodebook() // Ignore error for now
 		return err
 	}
+
+	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
 	return nil

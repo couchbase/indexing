@@ -259,14 +259,36 @@ func (cb *codebookIVFSQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) 
 }
 
 // Size returns the memory size in bytes.
-func (cb *codebookIVFSQ) Size() uint64 {
+// Size() should be used after codebook is trained.
+func (cb *codebookIVFSQ) Size() int64 {
+	var totalSize int64
 
-	var size uint64
 	if cb.index != nil {
-		//TODO the memory size is not correct
-		size = cb.index.Size()
+		const float32Size = 4
+		// Size of storage_idx_t, used for internal storage of vectors (32 bits)
+		const hnswIndexStorageSize = 4
+		// Number of connections per point (set to 32 by default)
+		const numConnection = 32
+
+		var sqCbSize int64
+
+		coarseCbSize := int64(cb.nlist * cb.dim * float32Size)
+
+		// No quantization codebook is stored for fp16.
+		if cb.sqRange != common.SQ_FP16 {
+			// Memory usage for Scalar Quantization (SQ) codebook.
+			// Each dimension requires two float32 values (min and max) for range.
+			sqCbSize = int64(2 * cb.dim * float32Size)
+		}
+
+		// Memory usage for HNSW graph as IVF_HNSW is used
+		// This memory is used for maintaing centroids' HNSW structure.
+		// ref: https://github.com/facebookresearch/faiss/wiki/Guidelines-to-choose-an-index#if-not-hnswm-or-ivf1024pqnx4fsrflat
+		hnswGraphSize := int64(cb.nlist * numConnection * hnswIndexStorageSize * 2)
+
+		totalSize = coarseCbSize + sqCbSize + hnswGraphSize
 	}
-	return size
+	return totalSize
 }
 
 // Close frees the memory used by codebook.

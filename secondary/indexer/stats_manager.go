@@ -333,6 +333,9 @@ type IndexStats struct {
 	avgUnitsUsage      stats.Int64Val //normalized units usage moving average
 	max20minUnitsUsage stats.Int64Val //max normalized units usage in the last 20mins(highest among current usage vs both disk snapshots max)
 	lastUnitsStatTime  stats.Int64Val //last time when units usage stats were calculated
+
+	//vector stats
+	codebookSize	   stats.Int64Val
 }
 
 type IndexerStatsHolder struct {
@@ -604,6 +607,8 @@ func (s *IndexStats) Init() {
 	s.avgUnitsUsage.Init()
 	s.max20minUnitsUsage.Init()
 	s.lastUnitsStatTime.Init()
+
+	s.codebookSize.Init()
 
 	// Set filters
 	// Note that the filters will be set on both: instance level stats and
@@ -2092,6 +2097,15 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			},
 			&s.max20minUnitsUsage, s.partnInt64Stats)
 	}
+
+	if s.isVectorIndex {
+		statMap.AddAggrStatFiltered("codebook_mem_usage",
+			func(ss *IndexStats) int64 {
+				return ss.codebookSize.Value()
+			},
+			&s.codebookSize, s.partnInt64Stats)
+	}
+
 	// -------------------------------
 	// All partition and index stats
 	// -------------------------------
@@ -2540,6 +2554,12 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	residentPercent := s.partnAvgInt64Stats(func(ss *IndexStats) int64 { return ss.residentPercent.Value() })
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "resident_percent", s.bucket, collectionLabels, s.dispName, residentPercent)
 	st = append(st, []byte(str)...)
+
+	if s.isVectorIndex {
+		codebookSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.codebookSize.Value() })
+		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "codebook_mem_usage", s.bucket, collectionLabels, s.dispName, codebookSize)
+		st = append(st, []byte(str)...)
+	}
 
 	return st
 }
