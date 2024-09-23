@@ -136,6 +136,20 @@ type ScanRequest struct {
 	protoScans            []*protobuf.Scan
 	vectorScans           map[common.PartitionId]map[int64][]Scan
 	parallelCentroidScans int
+
+	// re-ranking support for BHIVE vector indexes
+	enableReranking bool // set to 'true' if re-ranking is enabled
+
+	// For re-ranking, the number of rows scanned will be typically "R" times
+	// greater than the actual limit in the scan. E.g., if "limit 10" is issued
+	// in the scan, then R * 10 will be the actual rows scanned. Re-ranking
+	// will be perfomed on these "R * 10" rows. The variable "rlimit" captures
+	// this limit
+	rlimit int64
+
+	perPartnSnaps       map[common.PartitionId]SliceSnapshot
+	perPartnReaderCtx   map[common.PartitionId][]IndexReaderContext
+	readersPerPartition int
 }
 
 type Projection struct {
@@ -322,12 +336,6 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 
 	cfg := s.config.Load()
 	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
-
-	if timeout != 0 {
-		r.ExpiredTime = time.Now().Add(timeout)
-		r.Timeout = time.NewTimer(timeout)
-	}
-
 	r.CancelCh = cancelCh
 
 	r.projectPrimaryKey = true
@@ -344,8 +352,10 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
+		setTimeoutTimer(timeout, r)
 		r.ScanType = HeloReq
 	case *protobuf.StatisticsRequest:
+		setTimeoutTimer(timeout, r)
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.ScanType = StatsReq
@@ -364,6 +374,11 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 
 	case *protobuf.CountRequest:
+		if req.GetReqTimeout() != 0 {
+			timeout = time.Millisecond * time.Duration(req.GetReqTimeout())
+		}
+		setTimeoutTimer(timeout, r)
+
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.User = req.GetUser()
@@ -403,6 +418,11 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 
 	case *protobuf.ScanRequest:
+		if req.GetReqTimeout() != 0 {
+			timeout = time.Millisecond * time.Duration(req.GetReqTimeout())
+		}
+		setTimeoutTimer(timeout, r)
+
 		r.isVectorScan = (req.GetIndexVector() != nil)
 		if r.isVectorScan {
 			ivec := req.GetIndexVector()
@@ -467,6 +487,8 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			if err = r.setVectorIndexParamsFromDefn(); err != nil {
 				return
 			}
+
+			r.setRerankLimits()
 		} else {
 			if r.Scans, err = r.makeScans(req.GetScans()); err != nil {
 				return
@@ -479,6 +501,11 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.setExplodePositions()
 
 	case *protobuf.ScanAllRequest:
+		if req.GetReqTimeout() != 0 {
+			timeout = time.Millisecond * time.Duration(req.GetReqTimeout())
+		}
+		setTimeoutTimer(timeout, r)
+
 		r.isVectorScan = (req.GetIndexVector() != nil)
 		if r.isVectorScan {
 			ivec := req.GetIndexVector()
@@ -556,6 +583,39 @@ func (r *ScanRequest) setVectorIndexParamsFromDefn() (err error) {
 	}
 
 	return nil
+}
+
+func (r *ScanRequest) setRerankLimits() {
+	// Re-ranking is supported only for BHIVE indexes
+	if !r.isBhiveScan {
+		r.enableReranking = false
+		return
+	}
+
+	// Disable re-ranking if limit is not specified or all the
+	// rows of index are getting scanned
+	if r.Limit == 0 || r.Limit == math.MaxInt64 {
+		r.enableReranking = false
+		return
+	}
+
+	cfg := r.sco.config.Load()
+	rfactor := cfg["scan.vector.rerank_factor"].Int()
+	if rfactor <= 1 {
+		r.enableReranking = false
+		return
+	}
+
+	// For all other cases, enable re-ranking for BHIVE indexes
+	r.enableReranking = true
+	r.rlimit = r.Limit * int64(rfactor)
+}
+
+func (r *ScanRequest) getLimit() int64 {
+	if r.enableReranking {
+		return r.rlimit
+	}
+	return r.Limit
 }
 
 func (r *ScanRequest) ProjectVectorDist() bool {
@@ -2069,6 +2129,13 @@ func IndexKeyLessThan(a, b IndexKey) bool {
 	return (bytes.Compare(a.Bytes(), b.Bytes()) < 0)
 }
 
+func setTimeoutTimer(timeout time.Duration, r *ScanRequest) {
+	if timeout != 0 {
+		r.ExpiredTime = time.Now().Add(timeout)
+		r.Timeout = time.NewTimer(timeout)
+	}
+}
+
 func (r ScanRequest) String() string {
 	str := fmt.Sprintf("defnId:%v, instId:%v, index:%v/%v, type:%v, partitions:%v user:%v",
 		r.DefnID, r.IndexInstId, r.Bucket, r.IndexName, r.ScanType, r.PartitionIds, r.User)
@@ -2172,7 +2239,7 @@ func (r *ScanRequest) getVectorKeyPos() int {
 	return r.vectorPos
 }
 
-//return the codeSize for vector index. 0 indicates unknown.
+// return the codeSize for vector index. 0 indicates unknown.
 func (r *ScanRequest) getVectorCodeSize() int {
 
 	if r.codebookMap != nil {

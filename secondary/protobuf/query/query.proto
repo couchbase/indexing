@@ -86,6 +86,7 @@ message ScanRequest {
     optional string             user            = 17;
     optional bool               skipReadMetering    = 18;
     optional IndexVector        indexVector     = 19;
+    optional int64              ReqTimeout      = 20;
 }
 
 // Full table scan request from indexer.
@@ -101,6 +102,7 @@ message ScanAllRequest {
     optional string        user          = 9;
     optional bool          skipReadMetering  = 10;
     optional IndexVector   indexVector   = 11;
+    optional int64         ReqTimeout    = 12;
 }
 
 // Request by client to stop streaming the query results.
@@ -131,6 +133,7 @@ message CountRequest {
     repeated uint64        partitionIds     = 9;
     optional bool          skipReadMetering = 10;
     optional string        user             = 11;
+    optional int64         ReqTimeout       = 12;
 }
 
 // total number of entries in index.

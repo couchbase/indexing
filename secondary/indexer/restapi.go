@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/couchbase/indexing/secondary/audit"
 	json "github.com/couchbase/indexing/secondary/common/json"
@@ -1110,7 +1111,7 @@ func (api *testServer) doMultiScanCount(w http.ResponseWriter, request *http.Req
 
 	count, _, err := api.client.MultiScanCount(
 		uint64(index.Definition.DefnId), "", scans,
-		distinct, cons, ts, scanParams)
+		distinct, cons, ts, scanParams, time.Time{}, 0)
 	if err != nil {
 		w.Write([]byte(api.makeError(err)))
 		return

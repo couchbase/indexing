@@ -58,10 +58,6 @@ var DcpFeedNamePrefix = "secidx:"
 var DcpFeedNameCompPrefix = "proj-"
 var DcpFeedPrefix = DcpFeedNamePrefix + DcpFeedNameCompPrefix
 
-// 0-2ms, 2-10ms, 10-100ms, 100-500ms, 500ms-1s, 1-10s, 10-30s, 30s-Inf
-var projBlockedDur = []int64{0, 2, 10, 100, 500, 1000, 10000, 30000}
-var blockdThresholdDur = time.Duration(projBlockedDur[len(projBlockedDur)-1]) * time.Millisecond
-
 // DcpFeed represents an DCP feed. A feed contains a connection to a single
 // host and multiple vBuckets
 type DcpFeed struct {
@@ -1564,9 +1560,6 @@ type DcpStats struct {
 	OsoSnapshotStart  stats.Uint64Val
 	OsoSnapshotEnd    stats.Uint64Val
 
-	TotalBlockedDur stats.Uint64Val
-	BlockedDurHist  stats.Histogram
-
 	rcvch      chan []interface{}
 	Dcplatency stats.Average
 	// This stat help to determine the drain rate of dcp feed
@@ -1607,9 +1600,6 @@ func (dcpStats *DcpStats) Init() {
 	dcpStats.SeqnoAdvanced.Init()
 	dcpStats.OsoSnapshotStart.Init()
 	dcpStats.OsoSnapshotEnd.Init()
-
-	dcpStats.TotalBlockedDur.Init()
-	dcpStats.BlockedDurHist.InitLatency(projBlockedDur, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 }
 
 func (stats *DcpStats) IsClosed() bool {
@@ -1625,7 +1615,7 @@ func (stats *DcpStats) String() (string, string) {
 		return now.Sub(time.Unix(0, t))
 	}
 
-	var stitems [30]string
+	var stitems [28]string
 	stitems[0] = `"bytes":` + strconv.FormatUint(stats.TotalBytes.Value(), 10)
 	stitems[1] = `"bufferacks":` + strconv.FormatUint(stats.TotalBufferAckSent.Value(), 10)
 	stitems[2] = `"toAckBytes":` + strconv.FormatUint(stats.ToAckBytes.Value(), 10)
@@ -1656,8 +1646,6 @@ func (stats *DcpStats) String() (string, string) {
 	stitems[25] = `"queueSize":` + strconv.FormatUint(uint64(stats.mutationQueue.GetSize()), 10)
 	stitems[26] = `"totalEnq":` + strconv.FormatUint(uint64(stats.mutationQueue.GetTotalEnq()), 10)
 	stitems[27] = `"totalDeq":` + strconv.FormatUint(uint64(stats.mutationQueue.GetTotalDeq()), 10)
-	stitems[28] = `"totalBlockedDur":` + strconv.FormatUint(stats.TotalBlockedDur.Value(), 10)
-	stitems[29] = `"projBlockedHist":` + stats.BlockedDurHist.String()
 	statjson := strings.Join(stitems[:], ",")
 
 	statsStr := fmt.Sprintf("{%v}", statjson)
@@ -1666,7 +1654,7 @@ func (stats *DcpStats) String() (string, string) {
 }
 
 func (stats *DcpStats) Map() (map[string]interface{}, map[string]interface{}) {
-	var statMap = make(map[string]interface{}, 30)
+	var statMap = make(map[string]interface{}, 28)
 
 	statMap["bytes"] = stats.TotalBytes.Value()
 	statMap["bufferacks"] = stats.TotalBufferAckSent.Value()
@@ -1708,9 +1696,6 @@ func (stats *DcpStats) Map() (map[string]interface{}, map[string]interface{}) {
 	statMap["queueSize"] = uint64(stats.mutationQueue.GetSize())
 	statMap["totalEnq"] = uint64(stats.mutationQueue.GetTotalEnq())
 	statMap["totalDeq"] = uint64(stats.mutationQueue.GetTotalDeq())
-
-	statMap["totBlckd"] = stats.TotalBlockedDur.Value()
-	statMap["projBlckdHist"] = stats.BlockedDurHist.GetValue()
 
 	return statMap, stats.Dcplatency.Json()
 }
@@ -1843,6 +1828,10 @@ func (feed *DcpFeed) doReceive(
 	var blocked bool
 
 	epoc := time.Now()
+	tick := time.NewTicker(time.Second * 5) // log every 5 second, if blocked.
+	defer func() {
+		tick.Stop()
+	}()
 
 	var bytes int
 	var err error
@@ -1961,14 +1950,12 @@ loop:
 			blockedTs := time.Since(start)
 			duration += blockedTs
 			blocked = false
-
-			feed.stats.TotalBlockedDur.Add(uint64(blockedTs))
-			feed.stats.BlockedDurHist.Add(int64(blockedTs))
-
-			if blockedTs > blockdThresholdDur {
+			select {
+			case <-tick.C:
 				percent := float64(duration) / float64(time.Since(epoc))
 				fmsg := "%v DCP-socket -> projector blocked %v (%f%%)"
 				logging.Infof(fmsg, feed.logPrefix, blockedTs, percent)
+			default:
 			}
 		}
 	}

@@ -23,6 +23,7 @@ var (
 
 type CmpEntry func(IndexKey, IndexEntry) int
 type EntryCallback func(key, value []byte) error
+type FinishCallback func()
 
 // Approximate items count
 func (s *fdbSnapshot) StatCountTotal() (uint64, error) {
@@ -49,7 +50,7 @@ func (s *fdbSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, inc
 		return nil
 	}
 
-	err := s.Range(ctx, low, high, inclusion, callb)
+	err := s.Range(ctx, low, high, inclusion, callb, nil)
 	return count, err
 }
 
@@ -124,7 +125,7 @@ func (s *fdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey,
 		return nil
 	}
 
-	e := s.Range(ctx, low, high, inclusion, callb)
+	e := s.Range(ctx, low, high, inclusion, callb, nil)
 	return scancount, e
 }
 
@@ -144,7 +145,7 @@ func (s *fdbSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, stopc
 	}
 
 	for _, k := range keys {
-		if err = s.Lookup(ctx, k, callb); err != nil {
+		if err = s.Lookup(ctx, k, callb, nil); err != nil {
 			break
 		}
 	}
@@ -165,16 +166,17 @@ func (s *fdbSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch StopCh
 		return nil
 	}
 
-	err := s.Lookup(ctx, key, callb)
+	err := s.Lookup(ctx, key, callb, nil)
 	return count != 0, err
 }
 
-func (s *fdbSnapshot) Lookup(ctx IndexReaderContext, key IndexKey, callb EntryCallback) error {
+func (s *fdbSnapshot) Lookup(ctx IndexReaderContext, key IndexKey,
+	callb EntryCallback, fincb FinishCallback) error {
 	return s.Iterate(ctx, key, key, Both, compareExact, callb)
 }
 
-func (s *fdbSnapshot) Range(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
-	callb EntryCallback) error {
+func (s *fdbSnapshot) Range(ctx IndexReaderContext, low, high IndexKey,
+	inclusion Inclusion, callb EntryCallback, fincb FinishCallback) error {
 
 	var cmpFn CmpEntry
 	if s.isPrimary() {
@@ -186,8 +188,8 @@ func (s *fdbSnapshot) Range(ctx IndexReaderContext, low, high IndexKey, inclusio
 	return s.Iterate(ctx, low, high, inclusion, cmpFn, callb)
 }
 
-func (s *fdbSnapshot) All(ctx IndexReaderContext, callb EntryCallback) error {
-	return s.Range(ctx, MinIndexKey, MaxIndexKey, Both, callb)
+func (s *fdbSnapshot) All(ctx IndexReaderContext, callb EntryCallback, fincb FinishCallback) error {
+	return s.Range(ctx, MinIndexKey, MaxIndexKey, Both, callb, fincb)
 }
 
 func (s *fdbSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
@@ -294,6 +296,10 @@ func (s *fdbSnapshot) iterEqualKeys(k IndexKey, it *ForestDBIterator,
 
 func (s *fdbSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
 	return 0, nil
+}
+
+func (s *fdbSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
+	return nil, nil
 }
 
 func compareExact(k IndexKey, entry IndexEntry) int {

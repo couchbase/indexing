@@ -2551,7 +2551,8 @@ func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, cal
 	return nil
 }
 
-func (s *bhiveSnapshot) Range(ctx IndexReaderContext, low IndexKey, high IndexKey, incl Inclusion, callb EntryCallback) error {
+func (s *bhiveSnapshot) Range(ctx IndexReaderContext, low IndexKey, high IndexKey,
+	incl Inclusion, callb EntryCallback, fincb FinishCallback) error {
 	if low.CompareIndexKey(high) != 0 || incl != Both {
 		panic(fmt.Errorf("bhiveSnapshot::Range low: %v and high: %v should be same for Range on bhive snapshot with inclusion: %v being Both", low, high, incl))
 	}
@@ -2572,11 +2573,12 @@ func (s *bhiveSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, i
 		return nil
 	}
 
-	err := s.Range(ctx, low, high, inclusion, callb)
+	err := s.Range(ctx, low, high, inclusion, callb, nil)
 	return count, err
 }
 
-func (s *bhiveSnapshot) Lookup(ctx IndexReaderContext, centroidId IndexKey, callb EntryCallback) error {
+func (s *bhiveSnapshot) Lookup(ctx IndexReaderContext, centroidId IndexKey,
+	callb EntryCallback, fincb FinishCallback) error {
 	return s.Iterate(ctx, centroidId, callb)
 }
 
@@ -2596,7 +2598,7 @@ func (s *bhiveSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, sto
 	}
 
 	for _, k := range keys {
-		if err = s.Lookup(ctx, k, callb); err != nil {
+		if err = s.Lookup(ctx, k, callb, nil); err != nil {
 			break
 		}
 	}
@@ -2617,7 +2619,7 @@ func (s *bhiveSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch Stop
 		return nil
 	}
 
-	err := s.Lookup(ctx, key, callb)
+	err := s.Lookup(ctx, key, callb, nil)
 	return count != 0, err
 }
 
@@ -2628,13 +2630,26 @@ func (s *bhiveSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 }
 
 // VECTOR_TODO: All can be implemented using KeyIterator by scanning the entire storage
-func (s *bhiveSnapshot) All(IndexReaderContext, EntryCallback) error {
+func (s *bhiveSnapshot) All(IndexReaderContext, EntryCallback, FinishCallback) error {
 	panic("bhiveSnapshot::All - Currently not supported")
 }
 
 func (s *bhiveSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
 	recordId, actualMeta := s.codec.DecodeMeta(meta)
 	return uint64(recordId), actualMeta
+}
+
+func (s *bhiveSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
+
+	// [VECTOR_TODO]: Add timings stats for FetchValue
+	reader := ctx.(*bhiveReaderCtx)
+	reader.r.Begin()
+	defer reader.r.End()
+
+	mainSnap := s.MainSnap
+	err := reader.r.FetchValue(bhive.CentroidID(cid), bhive.RecordId(recordId), mainSnap, buf)
+
+	return buf, err
 }
 
 // //////////////////////////////////////////////////////////

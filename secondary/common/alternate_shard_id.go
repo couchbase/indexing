@@ -8,7 +8,12 @@ import (
 	"strings"
 )
 
+type AlternateShard_SlotId uint64
+type AlternateShard_ReplicaId uint8
+type AlternateShard_GroupId uint8
+
 type AlternateShardId struct {
+	// TODO: move uints to respective types so code is easy to read in future
 	SlotId    uint64
 	ReplicaId uint8
 	GroupId   uint8
@@ -72,10 +77,36 @@ func (s *AlternateShardId) IsPair(other *AlternateShardId) bool {
 	return other != nil && s.SlotId == other.SlotId && s.ReplicaId == other.ReplicaId && s.GroupId != other.GroupId
 }
 
+// DEPRECATED: use SetReplicaId
 func (asi *AlternateShardId) SetReplicaGroup(rg uint8) {
 	asi.ReplicaId = rg
 }
 
+// DEPRECATED: use SetGroupId
 func (asi *AlternateShardId) SetInstaceGroup(ig uint8) {
 	asi.GroupId = ig
+}
+
+func (asi *AlternateShardId) GetSlotId() AlternateShard_SlotId {
+	return AlternateShard_SlotId(asi.SlotId)
+}
+
+func (asi *AlternateShardId) SetSlotId(slotId AlternateShard_SlotId) {
+	asi.SlotId = uint64(slotId)
+}
+
+func (asi *AlternateShardId) GetReplicaId() AlternateShard_ReplicaId {
+	return AlternateShard_ReplicaId(asi.ReplicaId)
+}
+
+func (asi *AlternateShardId) SetReplicaId(rId AlternateShard_ReplicaId) {
+	asi.ReplicaId = uint8(rId)
+}
+
+func (asi *AlternateShardId) GetGroupId() AlternateShard_GroupId {
+	return AlternateShard_GroupId(asi.GroupId)
+}
+
+func (asi *AlternateShardId) SetGroupId(gId AlternateShard_GroupId) {
+	asi.GroupId = uint8(gId)
 }

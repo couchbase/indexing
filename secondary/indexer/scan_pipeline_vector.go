@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
@@ -130,6 +131,20 @@ type ScanWorker struct {
 
 	logPrefix string
 	startTime time.Time
+
+	vectorDim int
+	heapSize  int
+
+	//local heap for each worker
+	heap *TopKRowHeap
+
+	//reference to the current batch rows
+	currBatchRows []*Row
+
+	//temporary buffers to process each batch
+	codes []byte
+	fvecs []float32
+	dists []float32
 }
 
 func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- *Row,
@@ -146,6 +161,31 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		errCh:           errCh,
 		senderChSize:    senderChSize,
 		senderBatchSize: senderBatchSize,
+	}
+
+	//init temp buffers
+	w.vectorDim = r.getVectorDim()
+	if w.r.isBhiveScan {
+		w.currBatchRows = make([]*Row, senderBatchSize)
+	} else {
+		w.currBatchRows = make([]*Row, 0, senderBatchSize)
+	}
+	w.codes = make([]byte, 0, senderBatchSize*r.getVectorCodeSize())
+	w.fvecs = make([]float32, senderBatchSize*r.getVectorDim())
+	w.dists = make([]float32, senderBatchSize)
+
+	//Use local heap for limit pushdown case. Each scan worker maintains
+	//its own local heap as only limit(topK) number of rows are required to be
+	//evaluated for final aggregation of results. Rest of the rows can be
+	//discarded.
+	if r.useHeapForVectorIndex() {
+		//VECTOR_TODO add safety check to not init heap if limit is too high
+		//VECTOR_TODO handle error
+		w.heapSize = int(r.Limit)
+		if r.Offset != 0 {
+			w.heapSize += int(r.Offset)
+		}
+		w.heap, _ = NewTopKRowHeap(w.heapSize, false)
 	}
 
 	w.logPrefix = fmt.Sprintf("%v[%v]ScanWorker[%v]", r.LogPrefix, r.RequestId, id)
@@ -212,74 +252,94 @@ func (w *ScanWorker) Scanner() {
 
 		w.senderCh = make(chan *Row, w.senderChSize)
 		w.senderErrCh = make(chan error)
-		go w.Sender()
+		w.heap, _ = NewTopKRowHeap(w.heapSize, false)
 
 		scan := job.scan
 		snap := job.snap.Snapshot()
 		ctx := job.ctx
 		handler := w.scanIteratorCallback
 		if w.r.isBhiveScan {
+			go w.Sender()
 			handler = w.bhiveIteratorCallback
 		}
+
+		fincb := w.finishCallback
 
 		// VECTOR_TODO: Check if we can move this logic to another goroutine so that
 		// this main goroutine is free for error handling and check if use of row.last
 		// can be avoided
 		var err error
 		if scan.ScanType == AllReq {
-			err = snap.All(ctx, handler)
+			err = snap.All(ctx, handler, fincb)
 		} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
-			err = snap.Range(ctx, scan.Low, scan.High, scan.Incl, handler)
+			err = snap.Range(ctx, scan.Low, scan.High, scan.Incl, handler, fincb)
 		} else {
-			err = snap.Lookup(ctx, scan.Low, handler)
+			err = snap.Lookup(ctx, scan.Low, handler, fincb)
 		}
 
-		// Got error from storage layer or iterator callback
-		if err != nil {
-			// Send error out if we did not stop the worker
-			if err != ErrScanWorkerStopped {
+		if w.r.isBhiveScan {
+			// Got error from storage layer or iterator callback
+			if err != nil {
+				// Send error out if we did not stop the worker
+				if err != ErrScanWorkerStopped {
+					select {
+					case <-w.stopCh:
+					case w.errCh <- err:
+					}
+				}
+
+				close(w.senderCh) // Stop sender
+				<-w.senderErrCh   // Wait for sender to finish
+				w.finishJob(job)
+				return
+			}
+
+			// Send last row and wait for sender
+			var r Row
+			r.last = true
+
+			// If senderCh is blocked keep checking for error from sender
+			var senderErr error
+			select {
+			case w.senderCh <- &r:
+				// If last row is sent keep waiting for sender to get closed
+				senderErr = <-w.senderErrCh
+			case senderErr = <-w.senderErrCh:
+			}
+
+			if senderErr != nil {
 				select {
 				case <-w.stopCh:
-				case w.errCh <- err:
+				case w.errCh <- senderErr:
+				}
+				w.finishJob(job)
+				close(w.senderCh)
+				return
+			}
+
+			w.finishJob(job)
+			close(w.senderCh)
+		} else {
+			// Got error from storage layer or iterator callback
+			if err != nil {
+				// Send error out if we did not stop the worker
+				if err != ErrScanWorkerStopped {
+					select {
+					case <-w.stopCh:
+					case w.errCh <- err:
+					}
 				}
 			}
-			close(w.senderCh) // Stop sender
-			<-w.senderErrCh   // Wait for sender to finish
-			w.unblockJobSender(job.doneCh)
-			return
+			w.finishJob(job)
 		}
-
-		// Send last row and wait for sender
-		var r Row
-		r.last = true
-
-		// If senderCh is blocked keep checking for error from sender
-		var senderErr error
-		select {
-		case w.senderCh <- &r:
-			// If last row is sent keep waiting for sender to get closed
-			senderErr = <-w.senderErrCh
-		case senderErr = <-w.senderErrCh:
-		}
-
-		if senderErr != nil {
-			select {
-			case <-w.stopCh:
-			case w.errCh <- senderErr:
-			}
-			w.unblockJobSender(job.doneCh)
-			close(w.senderCh)
-			return
-		}
-
-		w.unblockJobSender(job.doneCh)
-		close(w.senderCh)
 	}
 }
 
-func (w *ScanWorker) unblockJobSender(doneCh chan<- struct{}) {
-	if doneCh != nil {
-		close(doneCh) // Mark the job done
+//finishJob marks the job as finished. There are currently 2 mechanisms to
+//track a job completion - a. job.doneCh b. jobsWg.
+func (w *ScanWorker) finishJob(job *ScanJob) {
+	if job.doneCh != nil {
+		close(job.doneCh) // Mark the job done
 	}
 	if w.jobsWg != nil {
 		w.jobsWg.Done()
@@ -299,14 +359,7 @@ func (w *ScanWorker) Sender() {
 	}()
 
 	batchSize := w.senderBatchSize
-	rows := make([]*Row, batchSize)
 	logging.Verbosef("%v ChannelSize: %v BatchSize: %v", w.logPrefix, cap(w.senderCh), batchSize)
-
-	vectorDim := w.r.getVectorDim()
-
-	codes := make([]byte, 0, batchSize*w.r.getVectorCodeSize())
-	fvecs := make([]float32, batchSize*vectorDim)
-	dists := make([]float32, batchSize)
 
 	var err error
 	var ok bool
@@ -315,12 +368,12 @@ func (w *ScanWorker) Sender() {
 		vecCount := 0
 		lastRowReceived := false
 		for ; vecCount < batchSize; vecCount++ {
-			rows[vecCount], ok = <-w.senderCh
+			w.currBatchRows[vecCount], ok = <-w.senderCh
 			if !ok {
 				return
 			}
 
-			if rows[vecCount].last {
+			if w.currBatchRows[vecCount].last {
 				lastRowReceived = true
 				break // Finish the data gathered till ensemble
 			}
@@ -333,13 +386,13 @@ func (w *ScanWorker) Sender() {
 
 		// Make list of vectors to calculate distance
 		for i := 0; i < vecCount; i++ {
-			codei := rows[i].value
-			codes = append(codes, codei...)
+			codei := w.currBatchRows[i].value
+			w.codes = append(w.codes, codei...)
 		}
 
 		// Decode vectors
 		t0 := time.Now()
-		err = w.currJob.codebook.DecodeVectors(vecCount, codes, fvecs[:vecCount*vectorDim])
+		err = w.currJob.codebook.DecodeVectors(vecCount, w.codes, w.fvecs[:vecCount*w.vectorDim])
 		if err != nil {
 			logging.Verbosef("%v Sender got error: %v from DecodeVectors", w.logPrefix, err)
 			w.senderErrCh <- err
@@ -351,8 +404,8 @@ func (w *ScanWorker) Sender() {
 		// Compute distance from query vector using codebook
 		t0 = time.Now()
 		qvec := w.r.queryVector
-		dists = dists[:vecCount]
-		err = w.currJob.codebook.ComputeDistance(qvec, fvecs[:vecCount*vectorDim], dists)
+		w.dists = w.dists[:vecCount]
+		err = w.currJob.codebook.ComputeDistance(qvec, w.fvecs[:vecCount*w.vectorDim], w.dists)
 		if err != nil {
 			logging.Verbosef("%v Sender got error: %v from ComputeDistance", w.logPrefix, err)
 			w.senderErrCh <- err
@@ -363,27 +416,155 @@ func (w *ScanWorker) Sender() {
 
 		// Substitue distance in place centroidId and send to outCh
 		for i := 0; i < vecCount; i++ {
-			rows[i].dist = dists[i] // Add distance for sorting in heap
-
+			w.currBatchRows[i].dist = w.dists[i] // Add distance for sorting in heap
 			select {
 			case <-w.stopCh:
-			case w.outCh <- rows[i]:
+			case w.outCh <- w.currBatchRows[i]:
 				w.rowsReturned++
 				w.currJob.rowsReturned++
 			}
 
-			rows[i] = nil
+			w.currBatchRows[i] = nil
 		}
 
 		if lastRowReceived {
 			return
 		}
+
 		//re-init for the next batch
-		codes = codes[:0]
-		fvecs = fvecs[:0]
-		dists = dists[:0]
+		w.codes = w.codes[:0]
+		w.fvecs = w.fvecs[:0]
+		w.dists = w.dists[:0]
 
 	}
+}
+
+//flushLocalHeap makes a copy of the rows in the local heap and
+//sends it to the next stage of the scan pipeline.
+func (w *ScanWorker) flushLocalHeap() {
+
+	logging.Verbosef("%v flushLocalHeap %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid)
+	rowList := w.heap.List()
+
+	for _, row := range rowList {
+
+		//create a copy of row before sending it out
+		var newRow Row
+
+		newRow.init(w.mem)
+		newRow.copy(row)
+
+		entry1 := secondaryIndexEntry(row.key)
+		newRow.len = entry1.lenKey()
+
+		select {
+		case <-w.stopCh:
+		case w.outCh <- &newRow:
+			w.rowsReturned++
+			w.currJob.rowsReturned++
+		}
+	}
+
+}
+
+//finishCallback is called by storage before iterator gets closed. After
+//this point, any allocation related to iterator could get freed up.
+//This callback allows the caller to do any final processing before iterator
+//close. This is useful in case where scan pipeline is not making copy of
+//the rows returned by storage iterator. During the callback, any rows
+//which are required for downstream processing can be copied or any remaining
+//rows in a batch can be processed.
+func (w *ScanWorker) finishCallback() {
+
+	logging.Verbosef("%v finishCallback %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid)
+	err := w.processCurrentBatch()
+	if err != nil {
+		select {
+		case <-w.stopCh:
+		case w.errCh <- err:
+		}
+	}
+	//flush the local heap once done
+	if w.r.useHeapForVectorIndex() {
+		w.flushLocalHeap()
+		w.heap.Destroy()
+	}
+
+}
+
+//processCurrentBatch decodes current batch of rows, computes
+//the distance from query vector and either stores in local heap(limit pushdown)
+//or sends it to the next stage of scan pipeline.
+func (w *ScanWorker) processCurrentBatch() (err error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			l.Fatalf("%v - panic(%v) detected while processing %s", w.logPrefix, r, w.r)
+			l.Fatalf("%s", l.StackTraceAll())
+			err = fmt.Errorf("processCurrentBatch panic occurred: %v", r)
+		}
+	}()
+
+	logging.Verbosef("%v processCurrentBatch %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid)
+
+	if len(w.currBatchRows) == 0 {
+		return
+	}
+
+	vecCount := len(w.currBatchRows)
+
+	// Make list of vectors to calculate distance
+	for i := 0; i < vecCount; i++ {
+		codei := w.currBatchRows[i].value
+		w.codes = append(w.codes, codei...)
+	}
+
+	// Decode vectors
+	t0 := time.Now()
+	err = w.currJob.codebook.DecodeVectors(vecCount, w.codes, w.fvecs[:vecCount*w.vectorDim])
+	if err != nil {
+		logging.Verbosef("%v Sender got error: %v from DecodeVectors", w.logPrefix, err)
+		return
+	}
+	atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
+	atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
+
+	// Compute distance from query vector using codebook
+	t0 = time.Now()
+	qvec := w.r.queryVector
+	w.dists = w.dists[:vecCount]
+	err = w.currJob.codebook.ComputeDistance(qvec, w.fvecs[:vecCount*w.vectorDim], w.dists)
+	if err != nil {
+		logging.Verbosef("%v Sender got error: %v from ComputeDistance", w.logPrefix, err)
+		return
+	}
+
+	atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
+	atomic.AddInt64(&w.currJob.distCmpCnt, int64(vecCount))
+
+	// Substitue distance in place centroidId and send to outCh or store in local heap
+	for i := 0; i < vecCount; i++ {
+		w.currBatchRows[i].dist = w.dists[i] // Add distance for sorting in heap
+
+		if w.r.useHeapForVectorIndex() {
+			w.heap.Push(w.currBatchRows[i])
+		} else {
+			select {
+			case <-w.stopCh:
+			case w.outCh <- w.currBatchRows[i]:
+				w.rowsReturned++
+				w.currJob.rowsReturned++
+			}
+		}
+		w.currBatchRows[i] = nil
+	}
+
+	//re-init for the next batch
+	w.currBatchRows = w.currBatchRows[:0]
+	w.codes = w.codes[:0]
+	w.fvecs = w.fvecs[:0]
+	w.dists = w.dists[:0]
+	return
 }
 
 func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
@@ -416,31 +597,48 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 		return nil
 	}
 
-	entry1 := secondaryIndexEntry(entry)
-
-	w.itrRow.len = entry1.lenKey()
-	w.itrRow.key = entry
-	w.itrRow.value = value
-
-	// VECTOR_TODO:
-	// 1. Check if adding a Queue/CirularBuffer of Rows here in place of senderCh will help
-	// 2. Check if having a sync.Pool of Row objects per connCtx will help
 	var newRow Row
-	newRow.init(w.mem)
-	newRow.copy(&w.itrRow)
 
-	select {
-	case <-w.stopCh:
-		return ErrScanWorkerStopped
-	case err := <-w.senderErrCh:
-		logging.Tracef("%v scanIteratorCallback got error: %v from Sender", w.logPrefix, err)
-		return err
-	case w.senderCh <- &newRow:
+	if w.r.useHeapForVectorIndex() {
+		//Store reference to entry, value in the row struct.
+		//processCurrentBatch will process and maintain a TopK local heap for these.
+		//Before iterator close, these will be copied and sent down the pipeline.
+		newRow.key = entry
+		newRow.value = value
+	} else {
+
+		//For non limit pushdown cases, all the entries need to be sent to query.
+		//Copy the row as scan pipeline needs to access these after iterator close.
+		entry1 := secondaryIndexEntry(entry)
+		w.itrRow.len = entry1.lenKey()
+		w.itrRow.key = entry
+		w.itrRow.value = value
+
+		// VECTOR_TODO:
+		// 1. Check if adding a Queue/CirularBuffer of Rows here in place of senderCh will help
+		// 2. Check if having a sync.Pool of Row objects per connCtx will help
+		newRow.init(w.mem)
+		newRow.copy(&w.itrRow)
 	}
 
-	w.itrRow.len = 0
-	w.itrRow.key = nil
-	w.itrRow.value = nil
+	//store rows in the current batch buffer
+	w.currBatchRows = append(w.currBatchRows, &newRow)
+
+	//once batch size number of rows are available, process the current batch
+	if len(w.currBatchRows) == w.senderBatchSize {
+		err := w.processCurrentBatch()
+		if err != nil {
+			logging.Tracef("%v scanIteratorCallback got error while processing batch: %v", w.logPrefix, err)
+		}
+		return err
+	}
+
+	//reset itrRow only if not using limit pushdown
+	if !w.r.useHeapForVectorIndex() {
+		w.itrRow.len = 0
+		w.itrRow.key = nil
+		w.itrRow.value = nil
+	}
 
 	return nil
 }
@@ -465,6 +663,8 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	copy(r.value, value)
 
 	r.recordId = recordId
+	r.partnId = int(w.currJob.pid)
+	r.cid = w.currJob.scan.Low.Bytes()
 
 	select {
 	case <-w.stopCh:
@@ -520,6 +720,59 @@ func (w *ScanWorker) skipRow(entry []byte) (skipRow bool, err error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+//Additional scan worker methods for debugging
+
+func (w *ScanWorker) validateRow(row *Row, debugStr string, pos int) bool {
+
+	if row.value == nil {
+		logging.Fatalf("%v %v Detected null value at pos %v Row - %v", w.logPrefix, debugStr, pos, row)
+		return false
+	}
+
+	if len(row.value) != w.r.getVectorCodeSize() {
+		logging.Fatalf("%v %v Detected incorrect code size at pos %v Row - %v", w.logPrefix, debugStr, pos, row)
+		return false
+	}
+
+	listNo := decodeListNo(row.value[:3])
+	if !(listNo >= 0 && listNo < 100000) {
+		logging.Fatalf("%v %v Detected listno %v out of range at pos %v Row - %v", w.logPrefix, debugStr, listNo, pos, row)
+		return false
+	}
+
+	return true
+
+}
+
+//decodeListNo decodes the listno encoded
+//as little-endian []byte to an int64
+func decodeListNo(code []byte) int64 {
+	var listNo int64
+	nbit := 0
+
+	for i := 0; i < len(code); i++ {
+		listNo |= int64(code[i]) << nbit
+		nbit += 8
+	}
+
+	return listNo
+}
+
+func (w *ScanWorker) printCurrentBatch() {
+
+	for i, row := range w.currBatchRows {
+		logging.Infof("%v Row %v Key %v Value %v", w.logPrefix, i, row.key, row.value)
+	}
+
+}
+
+func (w *ScanWorker) printCurrentHeap() {
+	rowList := w.heap.List()
+	for i, row := range rowList {
+		logging.Infof("%v Row %v Key %v Value %v", w.logPrefix, i, row.key, row.value)
+	}
 }
 
 // -----------
@@ -668,22 +921,27 @@ type MergeOperator struct {
 
 	logPrefix string
 	startTime time.Time
+
+	numRerankWorkers int
+	rerankCh         chan *Row
 }
 
 func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 	fio *MergeOperator, err error) {
 
 	fio = &MergeOperator{
-		recvCh:    recvCh,
-		writeItem: writeItem,
-		req:       r,
-		errCh:     make(chan error),
+		recvCh:           recvCh,
+		writeItem:        writeItem,
+		req:              r,
+		errCh:            make(chan error),
+		numRerankWorkers: r.readersPerPartition,
+		rerankCh:         make(chan *Row, r.readersPerPartition),
 	}
 
 	fio.logPrefix = fmt.Sprintf("%v[%v]MergeOperator", r.LogPrefix, r.RequestId)
 
 	if r.useHeapForVectorIndex() {
-		heapSize := r.Limit
+		heapSize := r.getLimit()
 		if r.Offset != 0 {
 			heapSize += r.Offset
 		}
@@ -859,6 +1117,12 @@ func (fio *MergeOperator) Collector() {
 		fio.heap.PrintHeap()
 	}
 
+	if fio.req.enableReranking {
+		fio.mergerWg.Add(1)
+		go fio.rerankOnHeap()
+		return // return from here as rerank logic will take care of substituing centroidID and writing items
+	}
+
 	// Read all elements from heap
 	rowList := fio.heap.List()
 	sortedRows := RowHeap{
@@ -909,6 +1173,145 @@ func (fio *MergeOperator) Collector() {
 	fio.heap.Destroy()
 }
 
+func (fio *MergeOperator) rerankOnRow(row *Row, ctx IndexReaderContext, buf []byte) error {
+	var err error
+
+	partnId := row.partnId
+	snap := fio.req.perPartnSnaps[c.PartitionId(partnId)]
+
+	buf, err = snap.Snapshot().FetchValue(ctx, row.recordId, row.cid, buf)
+	if err != nil {
+		logging.Errorf("%v observed error while fetching value for recordId: %v, cid: %s, partnId: %v, err: %v", fio.logPrefix, row.recordId, row.cid, row.partnId, err)
+		return err
+	}
+
+	// Convert the buffer to []float and compute distance
+	value := unsafe.Slice((*float32)(unsafe.Pointer(&buf[0])), len(buf)/4)
+	dists := make([]float32, 1)
+	err = fio.req.codebookMap[c.PartitionId(partnId)].ComputeDistance(fio.req.queryVector, value, dists)
+	if err != nil {
+		logging.Errorf("%v observed error while computing distance for recordId: %v, cid: %s, partnId: %v, err: %v", fio.logPrefix, row.recordId, row.cid, row.partnId, err)
+		return err
+	}
+
+	row.dist = dists[0]
+	return nil
+}
+
+func (fio *MergeOperator) rerankWorker(wg *sync.WaitGroup, ctxCh map[c.PartitionId]chan IndexReaderContext, errCh chan error) {
+	defer wg.Done()
+
+	buf := make([]byte, 4*fio.req.IndexInst.Defn.VectorMeta.Dimension)
+	for {
+		select {
+		case row, ok := <-fio.rerankCh:
+			if !ok {
+				return
+			}
+
+			ctx := <-ctxCh[c.PartitionId(row.partnId)]
+
+			err := fio.rerankOnRow(row, ctx, buf)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			ctxCh[c.PartitionId(row.partnId)] <- ctx
+		}
+	}
+}
+
+func (fio *MergeOperator) rerankOnHeap() {
+	defer fio.mergerWg.Done()
+
+	allRows := fio.heap.List()
+	var err error
+
+	ctxCh := make(map[c.PartitionId]chan IndexReaderContext)
+	for partnId, readerContexts := range fio.req.perPartnReaderCtx {
+		if _, ok := ctxCh[partnId]; !ok {
+			ctxCh[partnId] = make(chan IndexReaderContext, len(readerContexts))
+		}
+		for _, reader := range readerContexts {
+			ctxCh[partnId] <- reader
+		}
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, fio.req.readersPerPartition)
+	for i := 0; i < fio.req.readersPerPartition; i++ {
+		wg.Add(1)
+		go fio.rerankWorker(&wg, ctxCh, errCh)
+	}
+
+	for _, row := range allRows {
+		select {
+		case fio.rerankCh <- row:
+		case err := <-errCh:
+			if err != nil {
+				close(fio.rerankCh)
+				wg.Wait()        // Wait for all workers to exit
+				fio.errCh <- err // Write the error to collector operator
+				return
+			}
+		}
+	}
+
+	close(fio.rerankCh)
+	wg.Wait()
+
+	// sort the rows based on distance
+	sort.Slice(allRows, func(i, j int) bool {
+		return allRows[i].dist < allRows[j].dist
+	})
+
+	projectDistance := fio.req.ProjectVectorDist()
+	// write the top-k items to next phase in the pipeline. "k" is
+	// the limit on the number of rows that are requested in query
+	for i := int64(0); i < min(fio.req.Limit, int64(len(allRows))); i++ {
+		row := allRows[i]
+
+		// Substitue centroid ID
+		if projectDistance {
+			fio.substituteCentroidID(row)
+			if err != nil {
+				fio.heap.Destroy()
+				fio.errCh <- err
+				return
+			}
+		}
+		entry := row.key
+
+		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
+			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
+			if err != nil {
+				logging.Verbosef("%v Collector got error: %v from projectKeys from heap", fio.logPrefix, err)
+				fio.heap.Destroy()
+				fio.errCh <- err
+				return
+			}
+		}
+
+		if fio.req.Offset != 0 && fio.rowsOffsetCount < uint64(fio.req.Offset) {
+			fio.rowsOffsetCount++
+			continue
+		}
+
+		err = fio.writeItem(entry)
+		if err != nil {
+			logging.Verbosef("%v Collector got error: %v from writeItem from heap", fio.logPrefix, err)
+			fio.heap.Destroy()
+			fio.errCh <- err
+			return
+		}
+	}
+
+	// If everything went fine, then destroy the heap
+	fio.heap.Destroy()
+
+	return
+}
+
 func (fio *MergeOperator) Wait() error {
 	doneCh := make(chan struct{})
 	go func() {
@@ -957,12 +1360,14 @@ func (s *IndexScanSource2) Routine() error {
 		s.CloseWithError(err)
 		return err
 	}
+	s.p.req.perPartnSnaps = snaps
 
 	// How many readers per partition are configured and how may are needed
 	readersPerPartition := s.p.req.parallelCentroidScans
 	if s.p.req.nprobes < s.p.req.parallelCentroidScans {
 		readersPerPartition = s.p.req.nprobes
 	}
+	s.p.req.readersPerPartition = readersPerPartition
 
 	// Make map of parition to reader contexts i.e. readers per parition
 	ctxs := make(map[common.PartitionId][]IndexReaderContext)
@@ -972,6 +1377,7 @@ func (s *IndexScanSource2) Routine() error {
 			ctxs[pid] = append(ctxs[pid], s.p.req.Ctxs[i*readersPerPartition+j])
 		}
 	}
+	s.p.req.perPartnReaderCtx = ctxs
 
 	// Scans and codebooks
 	scans := s.p.req.vectorScans

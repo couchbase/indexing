@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -2004,4 +2005,76 @@ func ComputeSHA256ForByteArray(bytes []byte) []byte {
 		sum := sha256.Sum256(bytes)
 		return sum[:]
 	}
+}
+
+// Convert ConfigValue to map[uint64]uint64 map
+// Pass the ConfigValue of indexer.planner.internal.min_parititions_per_shard
+func ComputeMinPartitionMapFromConfig(cv ConfigValue) map[uint64]uint64 {
+	cvJson, ok := cv.Value.(map[string]interface{})
+	if !ok {
+		cvJson, ok = cv.DefaultVal.(map[string]interface{})
+	}
+
+	if !ok {
+		return nil
+	}
+
+	// map of memory quota to min partitions per shard
+	var minPartitionsPerShard = make(map[uint64]uint64)
+
+	for quotaStr, minPartitionsIntf := range cvJson {
+		quota, err := strconv.ParseUint(quotaStr, 10, 64)
+		if err != nil {
+			logging.Warnf("ComputeMinPartitionMapFromConfig:: err in converting quota `%v` to uint64 (%v). compute failed",
+				quotaStr, err)
+			return nil
+		}
+
+		switch minPartitions := minPartitionsIntf.(type) {
+		case int64:
+			minPartitionsPerShard[quota] = uint64(minPartitions)
+		case int:
+			minPartitionsPerShard[quota] = uint64(minPartitions)
+		case uint:
+			minPartitionsPerShard[quota] = uint64(minPartitions)
+		case uint64:
+			minPartitionsPerShard[quota] = minPartitions
+		default:
+			logging.Warnf("ComputeMinPartitionMapFromConfig:: value `%v` for quota `%v` not int/uint but %T. compute failed",
+				minPartitionsIntf, quota, minPartitionsIntf)
+			return nil
+		}
+	}
+
+	return minPartitionsPerShard
+}
+
+func GetMinPartnsPerShardFromMap(memQuota uint64, minPartnsPerShardMap map[uint64]uint64) uint64 {
+	logging.Tracef("planner::getMinPartnsPerShardFromMap: trying to get minPartns for quota %v from config %v",
+		memQuota, minPartnsPerShardMap)
+	if len(minPartnsPerShardMap) == 0 {
+		logging.Warnf("planner::getMinPartnsPerShardFromMap: got invalid (empty or nil) minPartnsPerShard config for calcalation")
+		return 0
+	}
+	var memQuotaBins = make([]uint64, 0, len(minPartnsPerShardMap))
+	for quota := range minPartnsPerShardMap {
+		memQuotaBins = append(memQuotaBins, quota*1024*1024) // since minPartnsPerShardMap is in MBs
+	}
+	slices.Sort(memQuotaBins)
+	var binIndex, exactMatch = slices.BinarySearch(memQuotaBins, memQuota)
+	if !exactMatch {
+		// for eg - bins: [256Mb, 1GB, ...], for a quota of 512MB, we will get binIndex 1 so we need
+		// to go back an index and use the minPartn from that bin
+		// else we can use the bin which is matching exactly
+		binIndex--
+
+		if binIndex < 0 {
+			binIndex = 0
+		}
+	}
+	var result = minPartnsPerShardMap[(memQuotaBins[binIndex])/(1024*1024)]
+
+	logging.Tracef("planner::getMinPartnsPerShardFromMap: minPartsPerShard for given quota %v is %v",
+		memQuota, result)
+	return result
 }

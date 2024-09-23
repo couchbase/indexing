@@ -1335,6 +1335,9 @@ func (si *secondaryIndex) Scan(
 	var waitGroup sync.WaitGroup
 	var broker *qclient.RequestBroker
 
+	reqDeadlineSlack := time.Duration(si.gsi.config["reqTimeoutSlack"].Int()) * time.Millisecond
+	reqDeadline := conn.GetReqDeadline()
+
 	defer sender.Close()
 	defer func() { // cleanup tmpfile
 		waitGroup.Wait()
@@ -1358,7 +1361,7 @@ func (si *secondaryIndex) Scan(
 		broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
 		err := client.LookupInternal(
 			si.defnID, requestId, []c.SecondaryKey{seek}, distinct, limit,
-			n1ql2GsiConsistency[cons], vector2ts(vector), broker, scanParams)
+			n1ql2GsiConsistency[cons], vector2ts(vector), broker, scanParams, reqDeadline, reqDeadlineSlack)
 		if err != nil {
 			conn.Error(n1qlError(client, err))
 		}
@@ -1368,7 +1371,7 @@ func (si *secondaryIndex) Scan(
 		broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
 		err := client.RangeInternal(
 			si.defnID, requestId, low, high, incl, distinct, limit,
-			n1ql2GsiConsistency[cons], vector2ts(vector), broker, scanParams)
+			n1ql2GsiConsistency[cons], vector2ts(vector), broker, scanParams, reqDeadline, reqDeadlineSlack)
 		if err != nil {
 			conn.Error(n1qlError(client, err))
 		}
@@ -1391,6 +1394,9 @@ func (si *secondaryIndex) ScanEntries(
 	var waitGroup sync.WaitGroup
 	var broker *qclient.RequestBroker
 
+	reqDeadlineSlack := time.Duration(si.gsi.config["reqTimeoutSlack"].Int()) * time.Millisecond
+	reqDeadline := conn.GetReqDeadline()
+
 	defer sender.Close()
 	defer func() {
 		waitGroup.Wait()
@@ -1412,7 +1418,7 @@ func (si *secondaryIndex) ScanEntries(
 	broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
 	err := client.ScanAllInternal(
 		si.defnID, requestId, limit,
-		n1ql2GsiConsistency[cons], vector2ts(vector), broker, scanParams)
+		n1ql2GsiConsistency[cons], vector2ts(vector), broker, scanParams, reqDeadline, reqDeadlineSlack)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
 	}
@@ -1456,6 +1462,9 @@ func (si *secondaryIndex2) Scan2(
 	var waitGroup sync.WaitGroup
 	var broker *qclient.RequestBroker
 
+	reqDeadlineSlack := time.Duration(si.gsi.config["reqTimeoutSlack"].Int()) * time.Millisecond
+	reqDeadline := conn.GetReqDeadline()
+
 	defer sender.Close()
 	defer func() {
 		if broker != nil {
@@ -1487,7 +1496,7 @@ func (si *secondaryIndex2) Scan2(
 		si.defnID, requestId, gsiscans, reverse, distinct,
 		gsiprojection, offset, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		broker, scanParams)
+		broker, scanParams, reqDeadline, reqDeadlineSlack)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
 	}
@@ -1553,14 +1562,18 @@ func (si *secondaryIndex2) countInternal(requestId string, spans datastore.Spans
 	gsiscans := n1qlspanstogsi(spans)
 	skipReadMetering := false
 	user := ""
+	reqDeadline := time.Time{}
+	var reqDeadlineSlack time.Duration 
 	if conn != nil {
 		skipReadMetering = conn.SkipMetering()
 		user = conn.User()
+		reqDeadlineSlack = time.Duration(si.gsi.config["reqTimeoutSlack"].Int()) * time.Millisecond
+		reqDeadline = conn.GetReqDeadline()
 	}
 	var scanParams = map[string]interface{}{"skipReadMetering": skipReadMetering, "user": user}
 
 	count, readUnits, e := client.MultiScanCount(si.defnID, requestId, gsiscans, distinct,
-		n1ql2GsiConsistency[cons], vector2ts(vector), scanParams)
+		n1ql2GsiConsistency[cons], vector2ts(vector), scanParams, reqDeadline, reqDeadlineSlack)
 	if e != nil {
 		return 0, n1qlError(client, e)
 	}
@@ -1672,6 +1685,9 @@ func (si *secondaryIndex3) Scan3(
 	var waitGroup sync.WaitGroup
 	var broker *qclient.RequestBroker
 
+	reqDeadlineSlack := time.Duration(si.gsi.config["reqTimeoutSlack"].Int()) * time.Millisecond
+	reqDeadline := conn.GetReqDeadline()
+
 	defer sender.Close()
 	defer func() {
 		if broker != nil {
@@ -1705,7 +1721,7 @@ func (si *secondaryIndex3) Scan3(
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
 		gsiprojection, offset, limit, gsigroupaggr, indexorder,
 		n1ql2GsiConsistency[cons], vector2ts(tsvector),
-		broker, scanParams, nil)
+		broker, scanParams, nil, reqDeadline, reqDeadlineSlack)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
 	}
@@ -1911,6 +1927,9 @@ func (si *secondaryIndex6) Scan6(
 	var waitGroup sync.WaitGroup
 	var broker *qclient.RequestBroker
 
+	reqDeadlineSlack := time.Duration(si.gsi.config["reqTimeoutSlack"].Int()) * time.Millisecond
+	reqDeadline := conn.GetReqDeadline()
+
 	defer sender.Close()
 	defer func() {
 		if broker != nil {
@@ -1946,7 +1965,7 @@ func (si *secondaryIndex6) Scan6(
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
 		gsiprojection, offset, limit, gsigroupaggr, indexorder,
 		n1ql2GsiConsistency[cons], vector2ts(tsvector),
-		broker, scanParams, gsiIndexVector)
+		broker, scanParams, gsiIndexVector, reqDeadline, reqDeadlineSlack)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
 	}
@@ -2299,6 +2318,7 @@ func n1qlError(client *qclient.GsiClient, err error) errors.Error {
 
 	return errors.NewError(err, client.DescribeError(err))
 }
+
 
 //-----------------------
 // datastore.Statistics{}

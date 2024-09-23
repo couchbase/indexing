@@ -90,6 +90,11 @@ type ddlSettings struct {
 
 	allowNodesClause uint32
 	deferBuild       atomic.Bool
+
+	// shard dealer settings
+	useShardDealer        atomic.Bool
+	minShardsPerNode      uint64
+	minPartitionsPerShard atomic.Pointer[map[uint64]uint64]
 }
 
 //////////////////////////////////////////////////////////////
@@ -2240,6 +2245,20 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 		logging.Errorf("DDLServiceMgr: missing indexer.planner.honourNodesInDefn, setting to false")
 		atomic.StoreUint32(&s.allowNodesClause, 0)
 	}
+
+	setShardDealerConfig(s, config)
+}
+
+func (s *ddlSettings) UseShardDealer() bool {
+	return s.useShardDealer.Load()
+}
+
+func (s *ddlSettings) MinShardsPerNode() uint64 {
+	return atomic.LoadUint64(&s.minShardsPerNode)
+}
+
+func (s *ddlSettings) MinPartitionsPerShard() map[uint64]uint64 {
+	return *s.minPartitionsPerShard.Load()
 }
 
 // Utilityfunctions used for trasferring scheduled create tokens.
@@ -2492,4 +2511,54 @@ func resetNodesParam(token *mc.ScheduleCreateToken) {
 	if _, ok := token.Plan["nodes"]; ok {
 		delete(token.Plan, "nodes")
 	}
+}
+
+func setShardDealerConfig(s *ddlSettings, config common.Config) {
+	useShardDealer, ok := config["planner.use_shard_dealer"]
+	if ok {
+		s.useShardDealer.Store(useShardDealer.Bool())
+	} else {
+		logging.Warnf("ddlServiceMgr:setShardDealerConfig:: missing indexer.planner.use_shard_dealer. considering it to be false")
+		s.useShardDealer.Store(false)
+		atomic.StoreUint64(&s.minShardsPerNode, 0)
+		s.minPartitionsPerShard.Store(nil)
+
+		return
+	}
+
+	minShardsPerNode, ok := config["planner.internal.min_shards_per_node"]
+	if ok {
+		atomic.StoreUint64(&s.minShardsPerNode, minShardsPerNode.Uint64())
+	} else {
+		logging.Warnf("ddlServiceMgr:setShardDealerConfig:: missing indexer.planner.internal.min_shards_per_node. disabling shard dealer")
+		s.useShardDealer.Store(false)
+		atomic.StoreUint64(&s.minShardsPerNode, 0)
+		s.minPartitionsPerShard.Store(nil)
+
+		return
+	}
+
+	minPartitionPerShardCv, ok := config["planner.internal.min_partitions_per_shard"]
+	if ok {
+		var minPartnPerShardMap = common.ComputeMinPartitionMapFromConfig(minPartitionPerShardCv)
+		if minPartnPerShardMap == nil {
+			logging.Warnf("ddlServiceMgr:setShardDealerConfig:: failed to compute minPartitionPerShard map. disabling shard dealer")
+
+			s.useShardDealer.Store(false)
+			atomic.StoreUint64(&s.minShardsPerNode, 0)
+			s.minPartitionsPerShard.Store(nil)
+
+			return
+		}
+
+		s.minPartitionsPerShard.Store(&minPartnPerShardMap)
+	} else {
+		logging.Warnf("ddlServiceMgr:setShardDealerConfig:: missing indexer.planner.internal.min_partitions_per_shard. disabling shard dealer")
+		s.useShardDealer.Store(false)
+		atomic.StoreUint64(&s.minShardsPerNode, 0)
+		s.minPartitionsPerShard.Store(nil)
+
+		return
+	}
+
 }
