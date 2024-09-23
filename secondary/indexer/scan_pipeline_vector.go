@@ -178,7 +178,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	if r.useHeapForVectorIndex() {
 		//VECTOR_TODO add safety check to not init heap if limit is too high
 		//VECTOR_TODO handle error
-		w.heapSize = int(r.Limit)
+		w.heapSize = int(r.getLimit())
 		if r.Offset != 0 {
 			w.heapSize += int(r.Offset)
 		}
