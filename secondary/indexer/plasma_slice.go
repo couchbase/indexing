@@ -3402,6 +3402,8 @@ func updatePlasmaConfig(cfg common.Config) {
 	numHoleCleanerThreads := int(math.Ceil(float64(runtime.GOMAXPROCS(0)) *
 		(float64(cfg["plasma.holecleaner.cpuPercent"].Int()) / 100)))
 	plasma.SetHoleCleanerMaxThreads(int64(numHoleCleanerThreads))
+
+	plasma.SetupArenaSeparationOnce(cfg["plasma.enableArenaSeparation"].Bool() )
 }
 
 func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
