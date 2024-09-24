@@ -5771,7 +5771,7 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 	// real index inst, this function will not be called (since the proxy
 	// will no longer hold real data).
 	if indexInst.RealInstId != 0 && indexInst.RealInstId != indexInst.InstId {
-		// Proxy is in CATCHUP or ACTIVe state.   This means index build is done.
+		// Proxy is in CATCHUP or ACTIVE state.   This means index build is done.
 		// The projector could be sending mutations to the real index inst on those partitions from the proxy.
 		// We have to remove those proxy partitions from the real index inst when the proxy is deleted.
 		if indexInst.State == common.INDEX_STATE_CATCHUP || indexInst.State == common.INDEX_STATE_ACTIVE {
@@ -5797,6 +5797,23 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 	}
 }
 
+// Given a realInst, this method will find all the proxies that are caught up and
+// waiting to be merged
+func (idx *indexer) findAllCaughtUpProxies(realInst c.IndexInst) []c.IndexInst {
+
+	allProxies := make([]c.IndexInst, 0)
+	for _, inst := range idx.indexInstMap {
+
+		if inst.InstId != realInst.InstId &&
+			inst.RealInstId == realInst.InstId && // Proxy instance
+			(inst.State == c.INDEX_STATE_CATCHUP || inst.State == c.INDEX_STATE_ACTIVE) {
+			allProxies = append(allProxies, inst)
+		}
+	}
+
+	return allProxies
+}
+
 func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 	keyspaceId string, bucketUUID string, streamId common.StreamId) {
 
@@ -5804,6 +5821,22 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
+
+	// For real index instance, if any build is done and the partitions are added at
+	// projector but merge is pending, then add those proxies as well to the indexInstList
+	// Otherwise, the partitions present in the addInstance request sent to projector
+	// at the time of merge to MAINT_STREAM will be overwritten by the partitions
+	// present in new list that is being sent now. This leads to a case where few partitions
+	// can miss mutations from indexer
+	for _, index := range indexInstList {
+		if common.IsPartitioned(index.Defn.PartitionScheme) && index.RealInstId == 0 {
+			proxyInsts := idx.findAllCaughtUpProxies(index)
+
+			if len(proxyInsts) > 0 {
+				indexInstList = append(indexInstList, proxyInsts...)
+			}
+		}
+	}
 
 	cmd := &MsgStreamUpdate{
 		mType:      ADD_INDEX_LIST_TO_STREAM,
