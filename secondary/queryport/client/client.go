@@ -1223,8 +1223,8 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
 				projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 				broker.GetSorted(), cons, tsvector, handler, rollbackTime,
-				partitions, dataEncFmt, broker.DoRetry(), scanParams, indexVector,
-				reqDeadline, reqDeadlineSlack)
+				partitions, dataEncFmt, broker.DoRetry(), scanParams, reqDeadline,
+				reqDeadlineSlack)
 		}
 
 		return qc.Scan(

@@ -1188,7 +1188,7 @@ func (c *GsiScanClient) ScanPrimary(
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
-	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration) (error, bool) {
+	reqDeadline time.Time, reqDeadlineSlack time.Duration) (error, bool) {
 
 	var what string
 	// serialize scans
@@ -1300,18 +1300,6 @@ func (c *GsiScanClient) ScanPrimary(
 		partnIds[i] = uint64(partnId)
 	}
 
-	// IndexVector
-	var protoIndexVector *protobuf.IndexVector
-	if indexVector != nil {
-		protoIndexVector = &protobuf.IndexVector{
-			QueryVector:  make([]float32, len(indexVector.QueryVector)),
-			IndexKeyPos:  proto.Int32(int32(indexVector.IndexKeyPos)),
-			Probes:       proto.Int32(int32(indexVector.Probes)),
-			ActualVector: proto.Bool(indexVector.ActualVector),
-		}
-		copy(protoIndexVector.QueryVector, indexVector.QueryVector)
-	}
-
 	req := &protobuf.ScanRequest{
 		DefnID: proto.Uint64(defnID),
 		Span: &protobuf.Span{
@@ -1332,7 +1320,6 @@ func (c *GsiScanClient) ScanPrimary(
 		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
 		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
 		User:             proto.String(scanParams["user"].(string)),
-		IndexVector:      protoIndexVector,
 		ReqTimeout:       proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
 	}
 	if tsvector != nil {
