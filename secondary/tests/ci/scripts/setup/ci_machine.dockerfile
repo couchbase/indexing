@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.4
-FROM ubuntu:jammy
+FROM ubuntu:noble
 
 RUN apt-get update && \
 	DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y build-essential lsof lshw sysstat net-tools numactl bzip2 runit ca-certificates gpg wget curl git locales locales-all vim gdb nano
 
 RUN wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null && \
-	echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' | tee /etc/apt/sources.list.d/kitware.list >/dev/null && \
+	echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' | tee /etc/apt/sources.list.d/kitware.list >/dev/null && \
 	apt-get update &&  rm /usr/share/keyrings/kitware-archive-keyring.gpg && \
 	apt-get install kitware-archive-keyring && \
 	DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install cmake -y
@@ -78,8 +78,8 @@ VOLUME [ "/var/www/" ]
 ARG WORKSPACE=/home/bot/build
 ARG CINAME=ci2i-unstable
 ARG CIBOT=false
-ARG RELEASE=8.0.0
-ARG MANIFEST="couchbase-server/morpheus/8.0.0.xml"
+ARG RELEASE=7.7.0
+ARG MANIFEST="couchbase-server/cypher/7.7.0.xml"
 ARG MODE="sanity,unit,functional,integration"
 ARG BRANCH="unstable"
 ARG STORAGE="plasma"
