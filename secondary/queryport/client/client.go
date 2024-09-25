@@ -1232,7 +1232,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 			projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 			broker.GetSorted(), cons, tsvector, handler, rollbackTime,
 			partitions, dataEncFmt, broker.DoRetry(), scanParams, indexVector,
-			reqDeadline, reqDeadlineSlack)
+			reqDeadline, reqDeadlineSlack, indexOrder)
 	}
 
 	broker.SetScanRequestHandler(handler)

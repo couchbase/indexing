@@ -712,7 +712,7 @@ func (c *GsiScanClient) CountLookupPrimary(
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
 		PartitionIds: partnIds,
-		ReqTimeout:	  proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
+		ReqTimeout:   proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
 	}
 	if tsvector != nil {
 		req.TsVector = protobuf.NewTsConsistency(
@@ -900,7 +900,7 @@ func (c *GsiScanClient) MultiScanCount(
 		PartitionIds:     partnIds,
 		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
 		User:             proto.String(scanParams["user"].(string)),
-		ReqTimeout:		  proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
+		ReqTimeout:       proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
 	}
 
 	if tsvector != nil {
@@ -1003,7 +1003,7 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 		PartitionIds:     partnIds,
 		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
 		User:             proto.String(scanParams["user"].(string)),
-		ReqTimeout:		  proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
+		ReqTimeout:       proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
 	}
 
 	if tsvector != nil {
@@ -1030,7 +1030,8 @@ func (c *GsiScanClient) Scan(
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
-	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration) (error, bool) {
+	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration,
+	indexOrderForVector *IndexKeyOrder) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -1150,6 +1151,19 @@ func (c *GsiScanClient) Scan(
 		copy(protoIndexVector.QueryVector, indexVector.QueryVector)
 	}
 
+	// IndexKeyOrder - Send only for vector index scans when orderby is pushed down
+	var protoIndexKeyOrder *protobuf.IndexKeyOrder
+	if indexVector != nil && indexOrderForVector != nil {
+		protoIndexKeyOrder = &protobuf.IndexKeyOrder{
+			KeyPos: make([]int32, len(indexOrderForVector.KeyPos)),
+			Desc:   make([]bool, len(indexOrderForVector.Desc)),
+		}
+		for i, kp := range indexOrderForVector.KeyPos {
+			protoIndexKeyOrder.KeyPos[i] = int32(kp)
+		}
+		copy(protoIndexKeyOrder.Desc, indexOrderForVector.Desc)
+	}
+
 	req := &protobuf.ScanRequest{
 		DefnID: proto.Uint64(defnID),
 		Span: &protobuf.Span{
@@ -1172,6 +1186,7 @@ func (c *GsiScanClient) Scan(
 		User:             proto.String(scanParams["user"].(string)),
 		IndexVector:      protoIndexVector,
 		ReqTimeout:       proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
+		IndexOrder:       protoIndexKeyOrder,
 	}
 	if tsvector != nil {
 		req.TsVector = protobuf.NewTsConsistency(
