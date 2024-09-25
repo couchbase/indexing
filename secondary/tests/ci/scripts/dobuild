@@ -202,6 +202,12 @@ git checkout main 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout main"
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 note_version bhive $WORKSPACE/goproj/src/github.com/couchbase/bhive
 
+cd $WORKSPACE/goproj/src/github.com/couchbase/magma
+echo "Switching magma to cypher"
+git checkout cypher 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout cypher"
+git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
+note_version magma $WORKSPACE/goproj/src/github.com/couchbase/magma
+
 cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
 echo "Switching gometa to master"
 git checkout master 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout master"
