@@ -2012,6 +2012,13 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		},
 		&s.numItemsFlushed, s.partnInt64Stats)
 
+
+	statMap.AddAggrStatFiltered("disk_bytes",
+		func(ss *IndexStats) int64 {
+			return ss.lastDiskBytes.Value()
+		},
+		&s.lastDiskBytes, s.partnInt64Stats)
+
 	statMap.AddAggrStatFiltered("num_flush_queued",
 		func(ss *IndexStats) int64 {
 			return ss.numDocsFlushQueued.Value()
@@ -2553,6 +2560,14 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 
 	residentPercent := s.partnAvgInt64Stats(func(ss *IndexStats) int64 { return ss.residentPercent.Value() })
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "resident_percent", s.bucket, collectionLabels, s.dispName, residentPercent)
+	st = append(st, []byte(str)...)
+
+	diskBytes := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.lastDiskBytes.Value() })
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "disk_bytes", s.bucket, collectionLabels, s.dispName, diskBytes)
+	st = append(st, []byte(str)...)
+
+	itemsFlushed := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numItemsFlushed.Value() })
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_items_flushed", s.bucket, collectionLabels, s.dispName, itemsFlushed)
 	st = append(st, []byte(str)...)
 
 	if s.isVectorIndex {
