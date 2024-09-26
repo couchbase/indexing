@@ -2482,17 +2482,15 @@ func (s *bhiveSnapshot) Destroy() {
 // Snapshot Reader - Placeholder (to be implemented by Varun)
 // //////////////////////////////////////////////////////////
 
-// [VECTOR_TODO] The Count logic needs support from snapshot. Currently,
-// implement dummy methods for IndexReader compatibility
 func (s *bhiveSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error) {
-	return 0, nil
+	return s.MainSnap.Count(), nil
 }
 
-// [VECTOR_TODO] The Count logic needs support from snapshot. Currently,
-// implement dummy methods for IndexReader compatibility
 func (s *bhiveSnapshot) StatCountTotal() (uint64, error) {
-	return 0, nil
+	c := s.slice.GetCommittedCount()
+	return c, nil
 }
+
 func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, callb EntryCallback, fincb FinishCallback) error {
 
 	defer func() {
