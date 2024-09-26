@@ -595,7 +595,7 @@ func (t *IndexTopology) RemovePartitionsFromTombstone(defnId common.IndexDefnId,
 
 			validInsts := make([]IndexInstDistribution, 0)
 			for j, _ := range t.Definitions[i].Instances {
-				if t.Definitions[i].Instances[j].Partitions != nil || t.Definitions[i].Instances[j].InstId == uint64(realInstId) {
+				if t.Definitions[i].Instances[j].Partitions != nil || t.Definitions[i].Instances[j].RealInstId == 0 {
 					validInsts = append(validInsts, t.Definitions[i].Instances[j])
 				} else {
 					// no-op since instances with nil partitions should be removed from topology
