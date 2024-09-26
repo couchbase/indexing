@@ -3891,6 +3891,28 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			continue
 		}
 
+		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, reqcid, numVBuckets)
+		if err != nil {
+			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
+				idx.config["clusterAddr"].String(), err)
+			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
+			if idx.enableManager {
+				idx.bulkUpdateError(instIdList, errStr)
+				for _, instId := range instIdList {
+					errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.TransientError}
+				}
+				delete(keyspaceIdIndexList, keyspaceId)
+				continue
+			} else if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_IN_RECOVERY,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+				return
+			}
+		}
+
 		idx.bulkUpdateStream(instIdList, buildStream)
 		idx.resetTrainingPhaseForNonVectorInsts(instIdList)
 
@@ -3917,28 +3939,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 						category: INDEXER}}
 			}
 			common.CrashOnError(err)
-		}
-
-		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, reqcid, numVBuckets)
-		if err != nil {
-			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
-				idx.config["clusterAddr"].String(), err)
-			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
-			if idx.enableManager {
-				idx.bulkUpdateError(instIdList, errStr)
-				for _, instId := range instIdList {
-					errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.TransientError}
-				}
-				delete(keyspaceIdIndexList, keyspaceId)
-				continue
-			} else if clientCh != nil {
-				clientCh <- &MsgError{
-					err: Error{code: ERROR_INDEXER_IN_RECOVERY,
-						severity: FATAL,
-						cause:    errors.New(errStr),
-						category: INDEXER}}
-				return
-			}
 		}
 
 		//send Stream Update to workers
