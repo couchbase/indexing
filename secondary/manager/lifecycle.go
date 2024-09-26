@@ -1660,6 +1660,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 
 			if err := m.notifier.OnIndexRecover(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx, cancelCh); err != nil {
 				logging.Errorf("LifecycleMgr.CreateIndex() : recoverIndex fails. Reason = %v", err)
+				delete(m.instsInAsyncRecovery, instId)
 				m.DeleteIndex(defn.DefnId, false, false, reqCtx)
 				return err
 			}
@@ -3491,6 +3492,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 
 			if err := m.notifier.OnIndexRecover(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, reqCtx, cancelCh); err != nil {
 				logging.Errorf("LifecycleMgr.CreateIndex() : recoverIndex fails. Reason = %v", err)
+				delete(m.instsInAsyncRecovery, instId)
 				m.DeleteIndex(defn.DefnId, false, false, reqCtx)
 				return err
 			}
