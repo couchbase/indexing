@@ -233,10 +233,10 @@ func (ms *mockSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	return nil, nil
 }
 
-func (ms *mockSlice) SetNlist(int)                                       {}
-func (ms *mockSlice) InitCodebook() error                                { return nil }
-func (ms *mockSlice) ResetCodebook() error                               { return nil }
-func (ms *mockSlice) Train([]float32) error                              { return nil }
+func (ms *mockSlice) SetNlist(int)                                    {}
+func (ms *mockSlice) InitCodebook() error                             { return nil }
+func (ms *mockSlice) ResetCodebook() error                            { return nil }
+func (ms *mockSlice) Train([]float32) error                           { return nil }
 func (ms *mockSlice) InitCodebookFromSerialized(content []byte) error { return nil }
 
 // -------------
@@ -308,17 +308,17 @@ type mockSnapshot struct {
 	feeder snapshotFeeder
 }
 
-func (ms *mockSnapshot) Open() error                             { return nil }
-func (ms *mockSnapshot) Close() error                            { return nil }
-func (ms *mockSnapshot) IsOpen() bool                            { return true }
-func (ms *mockSnapshot) Id() SliceId                             { return ms.id }
-func (ms *mockSnapshot) IndexInstId() c.IndexInstId              { return ms.indInstid }
-func (ms *mockSnapshot) IndexDefnId() c.IndexDefnId              { return ms.indDefId }
-func (ms *mockSnapshot) Timestamp() *c.TsVbuuid                  { return ms.ts }
-func (ms *mockSnapshot) Info() SnapshotInfo                      { return &mockSnapshotInfo{} }
-func (ms *mockSnapshot) DecodeMeta(meta []byte) (uint64, []byte) { return 0, nil }
+func (ms *mockSnapshot) Open() error                                     { return nil }
+func (ms *mockSnapshot) Close() error                                    { return nil }
+func (ms *mockSnapshot) IsOpen() bool                                    { return true }
+func (ms *mockSnapshot) Id() SliceId                                     { return ms.id }
+func (ms *mockSnapshot) IndexInstId() c.IndexInstId                      { return ms.indInstid }
+func (ms *mockSnapshot) IndexDefnId() c.IndexDefnId                      { return ms.indDefId }
+func (ms *mockSnapshot) Timestamp() *c.TsVbuuid                          { return ms.ts }
+func (ms *mockSnapshot) Info() SnapshotInfo                              { return &mockSnapshotInfo{} }
+func (ms *mockSnapshot) DecodeMeta(meta []byte) (uint64, uint64, []byte) { return 0, 0, nil }
 
-func (ms *mockSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
+func (ms *mockSnapshot) FetchValue(ctx IndexReaderContext, storeId uint64, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
 	return nil, nil
 }
 

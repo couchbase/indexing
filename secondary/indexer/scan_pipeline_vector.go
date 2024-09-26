@@ -293,6 +293,8 @@ func (w *ScanWorker) Scanner() {
 			err = snap.All(ctx, handler, fincb)
 		} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
 			err = snap.Range(ctx, scan.Low, scan.High, scan.Incl, handler, fincb)
+		} else if w.r.isBhiveScan {
+			err = snap.Range(ctx, scan.Low, scan.High, scan.Incl, handler, fincb)
 		} else {
 			err = snap.Lookup(ctx, scan.Low, handler, fincb)
 		}
@@ -687,7 +689,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 		w.currJob.bytesRead += uint64(len(value))
 	}
 
-	recordId, meta := w.currJob.snap.Snapshot().DecodeMeta(value)
+	storeId, recordId, meta := w.currJob.snap.Snapshot().DecodeMeta(value)
 	// Replace value with meta for now. Once include column support is added,
 	// meta() has to be split into include column fields and quantized codes
 	value = meta
@@ -703,6 +705,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 		newRow.value = value
 		newRow.partnId = int(w.currJob.pid)
 		newRow.recordId = recordId
+		newRow.storeId = storeId
 		newRow.cid = w.currJob.scan.Low.Bytes()
 
 	} else {
@@ -1244,9 +1247,10 @@ func (fio *MergeOperator) rerankOnRow(row *Row, ctx IndexReaderContext, buf []by
 	partnId := row.partnId
 	snap := fio.req.perPartnSnaps[c.PartitionId(partnId)]
 
-	buf, err = snap.Snapshot().FetchValue(ctx, row.recordId, row.cid, buf)
+	buf, err = snap.Snapshot().FetchValue(ctx, row.storeId, row.recordId, row.cid, buf)
 	if err != nil {
-		logging.Errorf("%v observed error while fetching value for recordId: %v, cid: %s, partnId: %v, err: %v", fio.logPrefix, row.recordId, row.cid, row.partnId, err)
+		logging.Errorf("%v observed error while fetching value for storeId: %v recordId: %v, cid: %s, partnId: %v, err: %v",
+			fio.logPrefix, row.storeId, row.recordId, row.cid, row.partnId, err)
 		return err
 	}
 
@@ -1255,7 +1259,8 @@ func (fio *MergeOperator) rerankOnRow(row *Row, ctx IndexReaderContext, buf []by
 	dists := make([]float32, 1)
 	err = fio.req.codebookMap[c.PartitionId(partnId)].ComputeDistance(fio.req.queryVector, value, dists)
 	if err != nil {
-		logging.Errorf("%v observed error while computing distance for recordId: %v, cid: %s, partnId: %v, err: %v", fio.logPrefix, row.recordId, row.cid, row.partnId, err)
+		logging.Errorf("%v observed error while computing distance for storeId: %v recordId: %v, cid: %s, partnId: %v, err: %v",
+			fio.logPrefix, row.storeId, row.recordId, row.cid, row.partnId, err)
 		return err
 	}
 

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/bhive"
 	"math"
 	"sort"
 	"strings"
@@ -714,8 +715,9 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 		for partnId, centroidIdList := range r.centroidMap {
 			scansForCentroids := make(map[int64][]Scan)
 			for _, cid := range centroidIdList {
-				bhiveCentroidId := NewBhiveCentroidId(uint64(cid))
-				scan := Scan{Low: bhiveCentroidId, High: bhiveCentroidId, Incl: Both, ScanType: LookupReq}
+				bcid := NewBhiveCentroidId(uint64(cid))
+				qv := bhiveCentroidId(((bhive.Vector)(r.queryVector)).Bytes())
+				scan := Scan{Low: bcid, High: qv, Incl: Both, ScanType: LookupReq}
 				scansForCentroids[cid] = append(scansForCentroids[cid], scan)
 			}
 			scansForPartns[partnId] = scansForCentroids

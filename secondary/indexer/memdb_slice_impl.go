@@ -2100,11 +2100,11 @@ func (s *memdbSnapshot) Info() SnapshotInfo {
 	return s.info
 }
 
-func (s *memdbSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
-	return 0, nil
+func (s *memdbSnapshot) DecodeMeta(meta []byte) (uint64, uint64, []byte) {
+	return 0, 0, nil
 }
 
-func (s *memdbSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
+func (s *memdbSnapshot) FetchValue(ctx IndexReaderContext, storeId uint64, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
 	return nil, nil
 }
 
