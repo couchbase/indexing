@@ -165,11 +165,8 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 
 	//init temp buffers
 	w.vectorDim = r.getVectorDim()
-	if w.r.isBhiveScan {
-		w.currBatchRows = make([]*Row, senderBatchSize)
-	} else {
-		w.currBatchRows = make([]*Row, 0, senderBatchSize)
-	}
+
+	w.currBatchRows = make([]*Row, 0, senderBatchSize)
 	w.codes = make([]byte, 0, senderBatchSize*r.getVectorCodeSize())
 	w.fvecs = make([]float32, senderBatchSize*r.getVectorDim())
 	w.dists = make([]float32, senderBatchSize)
@@ -181,7 +178,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	if r.useHeapForVectorIndex() {
 		//VECTOR_TODO add safety check to not init heap if limit is too high
 		//VECTOR_TODO handle error
-		w.heapSize = int(r.Limit)
+		w.heapSize = int(r.getLimit())
 		if r.Offset != 0 {
 			w.heapSize += int(r.Offset)
 		}
@@ -259,7 +256,6 @@ func (w *ScanWorker) Scanner() {
 		ctx := job.ctx
 		handler := w.scanIteratorCallback
 		if w.r.isBhiveScan {
-			go w.Sender()
 			handler = w.bhiveIteratorCallback
 		}
 
@@ -277,66 +273,22 @@ func (w *ScanWorker) Scanner() {
 			err = snap.Lookup(ctx, scan.Low, handler, fincb)
 		}
 
-		if w.r.isBhiveScan {
-			// Got error from storage layer or iterator callback
-			if err != nil {
-				// Send error out if we did not stop the worker
-				if err != ErrScanWorkerStopped {
-					select {
-					case <-w.stopCh:
-					case w.errCh <- err:
-					}
-				}
-
-				close(w.senderCh) // Stop sender
-				<-w.senderErrCh   // Wait for sender to finish
-				w.finishJob(job)
-				return
-			}
-
-			// Send last row and wait for sender
-			var r Row
-			r.last = true
-
-			// If senderCh is blocked keep checking for error from sender
-			var senderErr error
-			select {
-			case w.senderCh <- &r:
-				// If last row is sent keep waiting for sender to get closed
-				senderErr = <-w.senderErrCh
-			case senderErr = <-w.senderErrCh:
-			}
-
-			if senderErr != nil {
+		// Got error from storage layer or iterator callback
+		if err != nil {
+			// Send error out if we did not stop the worker
+			if err != ErrScanWorkerStopped {
 				select {
 				case <-w.stopCh:
-				case w.errCh <- senderErr:
-				}
-				w.finishJob(job)
-				close(w.senderCh)
-				return
-			}
-
-			w.finishJob(job)
-			close(w.senderCh)
-		} else {
-			// Got error from storage layer or iterator callback
-			if err != nil {
-				// Send error out if we did not stop the worker
-				if err != ErrScanWorkerStopped {
-					select {
-					case <-w.stopCh:
-					case w.errCh <- err:
-					}
+				case w.errCh <- err:
 				}
 			}
-			w.finishJob(job)
 		}
+		w.finishJob(job)
 	}
 }
 
-//finishJob marks the job as finished. There are currently 2 mechanisms to
-//track a job completion - a. job.doneCh b. jobsWg.
+// finishJob marks the job as finished. There are currently 2 mechanisms to
+// track a job completion - a. job.doneCh b. jobsWg.
 func (w *ScanWorker) finishJob(job *ScanJob) {
 	if job.doneCh != nil {
 		close(job.doneCh) // Mark the job done
@@ -439,8 +391,8 @@ func (w *ScanWorker) Sender() {
 	}
 }
 
-//flushLocalHeap makes a copy of the rows in the local heap and
-//sends it to the next stage of the scan pipeline.
+// flushLocalHeap makes a copy of the rows in the local heap and
+// sends it to the next stage of the scan pipeline.
 func (w *ScanWorker) flushLocalHeap() {
 
 	logging.Verbosef("%v flushLocalHeap %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid)
@@ -452,10 +404,14 @@ func (w *ScanWorker) flushLocalHeap() {
 		var newRow Row
 
 		newRow.init(w.mem)
-		newRow.copy(row)
+		if w.r.isBhiveScan {
+			newRow.copyForBhive(row)
+		} else {
+			newRow.copy(row)
 
-		entry1 := secondaryIndexEntry(row.key)
-		newRow.len = entry1.lenKey()
+			entry1 := secondaryIndexEntry(row.key)
+			newRow.len = entry1.lenKey()
+		}
 
 		select {
 		case <-w.stopCh:
@@ -467,13 +423,13 @@ func (w *ScanWorker) flushLocalHeap() {
 
 }
 
-//finishCallback is called by storage before iterator gets closed. After
-//this point, any allocation related to iterator could get freed up.
-//This callback allows the caller to do any final processing before iterator
-//close. This is useful in case where scan pipeline is not making copy of
-//the rows returned by storage iterator. During the callback, any rows
-//which are required for downstream processing can be copied or any remaining
-//rows in a batch can be processed.
+// finishCallback is called by storage before iterator gets closed. After
+// this point, any allocation related to iterator could get freed up.
+// This callback allows the caller to do any final processing before iterator
+// close. This is useful in case where scan pipeline is not making copy of
+// the rows returned by storage iterator. During the callback, any rows
+// which are required for downstream processing can be copied or any remaining
+// rows in a batch can be processed.
 func (w *ScanWorker) finishCallback() {
 
 	logging.Verbosef("%v finishCallback %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid)
@@ -492,9 +448,9 @@ func (w *ScanWorker) finishCallback() {
 
 }
 
-//processCurrentBatch decodes current batch of rows, computes
-//the distance from query vector and either stores in local heap(limit pushdown)
-//or sends it to the next stage of scan pipeline.
+// processCurrentBatch decodes current batch of rows, computes
+// the distance from query vector and either stores in local heap(limit pushdown)
+// or sends it to the next stage of scan pipeline.
 func (w *ScanWorker) processCurrentBatch() (err error) {
 
 	defer func() {
@@ -645,36 +601,6 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 
 func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 
-	recordId, meta := w.currJob.snap.Snapshot().DecodeMeta(value)
-	// Replace value with meta for now. Once include column support is added,
-	// meta() has to be split into include column fields and quantized codes
-	value = meta
-
-	var r Row
-
-	// VECTOR_TODO: This is a temporary solution to avoid panic where
-	// BHIVE iterator would free the memory while scan is running
-	// Once the finishCb changes are merged, this copy is no longer
-	// required
-	r.key = make([]byte, len(entry))
-	copy(r.key, entry)
-
-	r.value = make([]byte, len(value))
-	copy(r.value, value)
-
-	r.recordId = recordId
-	r.partnId = int(w.currJob.pid)
-	r.cid = w.currJob.scan.Low.Bytes()
-
-	select {
-	case <-w.stopCh:
-		return ErrScanWorkerStopped
-	case err := <-w.senderErrCh:
-		logging.Tracef("%v scanIteratorCallback got error: %v from Sender", w.logPrefix, err)
-		return err
-	case w.senderCh <- &r:
-	}
-
 	w.rowsScanned++
 	w.currJob.rowsScanned++
 	w.bytesRead += uint64(len(entry) + 8) // 8 bytes for centroidId that are read and filtered out
@@ -682,6 +608,64 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	if value != nil {
 		w.bytesRead += uint64(len(value))
 		w.currJob.bytesRead += uint64(len(value))
+	}
+
+	recordId, meta := w.currJob.snap.Snapshot().DecodeMeta(value)
+	// Replace value with meta for now. Once include column support is added,
+	// meta() has to be split into include column fields and quantized codes
+	value = meta
+
+	var newRow Row
+	if w.r.useHeapForVectorIndex() {
+		//Store reference to entry, value in the row struct.
+		//processCurrentBatch will process and maintain a TopK local heap for these.
+		//Before iterator close, these will be copied and sent down the pipeline.
+		newRow.key = entry
+		newRow.value = value
+		newRow.partnId = int(w.currJob.pid)
+		newRow.recordId = recordId
+		newRow.cid = w.currJob.scan.Low.Bytes()
+
+	} else {
+
+		//For non limit pushdown cases, all the entries need to be sent to query.
+		//Copy the row as scan pipeline needs to access these after iterator close.
+		//
+		// As this is a non-limit push down case, indexer need not re-rank on
+		// the rows. Therefore, no need to populate other fields like partnId,
+		// recordId etc.
+		w.itrRow.len = len(entry)
+		w.itrRow.key = entry
+		w.itrRow.value = value
+
+		// VECTOR_TODO:
+		// 1. Check if adding a Queue/CirularBuffer of Rows here in place of senderCh will help
+		// 2. Check if having a sync.Pool of Row objects per connCtx will help
+		newRow.init(w.mem)
+		newRow.copy(&w.itrRow)
+	}
+
+	select {
+	case <-w.stopCh:
+		return ErrScanWorkerStopped
+	default:
+		w.currBatchRows = append(w.currBatchRows, &newRow)
+	}
+
+	//once batch size number of rows are available, process the current batch
+	if len(w.currBatchRows) == w.senderBatchSize {
+		err := w.processCurrentBatch()
+		if err != nil {
+			logging.Tracef("%v bhiveIteratorCallback got error while processing batch: %v", w.logPrefix, err)
+		}
+		return err
+	}
+
+	//reset itrRow only if not using limit pushdown
+	if !w.r.useHeapForVectorIndex() {
+		w.itrRow.len = 0
+		w.itrRow.key = nil
+		w.itrRow.value = nil
 	}
 
 	return nil
@@ -746,8 +730,8 @@ func (w *ScanWorker) validateRow(row *Row, debugStr string, pos int) bool {
 
 }
 
-//decodeListNo decodes the listno encoded
-//as little-endian []byte to an int64
+// decodeListNo decodes the listno encoded
+// as little-endian []byte to an int64
 func decodeListNo(code []byte) int64 {
 	var listNo int64
 	nbit := 0

@@ -327,6 +327,26 @@ func (r *Row) copy(source *Row) {
 	}
 }
 
+func (r *Row) copyForBhive(source *Row) {
+	r.len = source.len
+	r.last = source.last
+	r.dist = source.dist
+	r.copyKey(source.key)
+	if source.value != nil {
+		r.copyValue(source.value)
+	}
+
+	r.partnId = source.partnId
+	r.recordId = source.recordId
+
+	// cid is a read-only value derived from the scan request spans
+	// for BHIVE indexes only. The memory should be valid until the
+	// scan request is alive - as the scan request holds a reference
+	// to this memory.
+	// Hence, avoid making unnecessary copy here
+	r.cid = source.cid
+}
+
 func (r *Row) copyKey(key []byte) {
 	if len(key) == 0 {
 		if r.key != nil {

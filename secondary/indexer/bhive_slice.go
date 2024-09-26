@@ -2493,7 +2493,7 @@ func (s *bhiveSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (
 func (s *bhiveSnapshot) StatCountTotal() (uint64, error) {
 	return 0, nil
 }
-func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, callb EntryCallback) error {
+func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, callb EntryCallback, fincb FinishCallback) error {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -2519,6 +2519,12 @@ func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, cal
 	}
 
 	defer iter.Close()
+
+	//call fincb before iterator close. This allows caller to do
+	//any final actions before iterator resources get freed up.
+	if fincb != nil {
+		defer fincb()
+	}
 
 	// Capture the time taken to initialize new iterator
 	s.slice.idxStats.Timings.stNewIterator.Put(time.Since(t0))
@@ -2556,7 +2562,7 @@ func (s *bhiveSnapshot) Range(ctx IndexReaderContext, low IndexKey, high IndexKe
 	if low.CompareIndexKey(high) != 0 || incl != Both {
 		panic(fmt.Errorf("bhiveSnapshot::Range low: %v and high: %v should be same for Range on bhive snapshot with inclusion: %v being Both", low, high, incl))
 	}
-	return s.Iterate(ctx, low, callb)
+	return s.Iterate(ctx, low, callb, fincb)
 }
 
 func (s *bhiveSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion, stopch StopChannel) (uint64, error) {
@@ -2579,7 +2585,7 @@ func (s *bhiveSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, i
 
 func (s *bhiveSnapshot) Lookup(ctx IndexReaderContext, centroidId IndexKey,
 	callb EntryCallback, fincb FinishCallback) error {
-	return s.Iterate(ctx, centroidId, callb)
+	return s.Iterate(ctx, centroidId, callb, fincb)
 }
 
 func (s *bhiveSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, stopch StopChannel) (uint64, error) {
