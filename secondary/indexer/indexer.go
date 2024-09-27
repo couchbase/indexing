@@ -3891,6 +3891,28 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			continue
 		}
 
+		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, reqcid, numVBuckets)
+		if err != nil {
+			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
+				idx.config["clusterAddr"].String(), err)
+			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
+			if idx.enableManager {
+				idx.bulkUpdateError(instIdList, errStr)
+				for _, instId := range instIdList {
+					errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.TransientError}
+				}
+				delete(keyspaceIdIndexList, keyspaceId)
+				continue
+			} else if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_IN_RECOVERY,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+				return
+			}
+		}
+
 		idx.bulkUpdateStream(instIdList, buildStream)
 		idx.resetTrainingPhaseForNonVectorInsts(instIdList)
 
@@ -3917,28 +3939,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 						category: INDEXER}}
 			}
 			common.CrashOnError(err)
-		}
-
-		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, reqcid, numVBuckets)
-		if err != nil {
-			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
-				idx.config["clusterAddr"].String(), err)
-			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
-			if idx.enableManager {
-				idx.bulkUpdateError(instIdList, errStr)
-				for _, instId := range instIdList {
-					errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.TransientError}
-				}
-				delete(keyspaceIdIndexList, keyspaceId)
-				continue
-			} else if clientCh != nil {
-				clientCh <- &MsgError{
-					err: Error{code: ERROR_INDEXER_IN_RECOVERY,
-						severity: FATAL,
-						cause:    errors.New(errStr),
-						category: INDEXER}}
-				return
-			}
 		}
 
 		//send Stream Update to workers
@@ -5862,7 +5862,7 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 	// real index inst, this function will not be called (since the proxy
 	// will no longer hold real data).
 	if indexInst.RealInstId != 0 && indexInst.RealInstId != indexInst.InstId {
-		// Proxy is in CATCHUP or ACTIVe state.   This means index build is done.
+		// Proxy is in CATCHUP or ACTIVE state.   This means index build is done.
 		// The projector could be sending mutations to the real index inst on those partitions from the proxy.
 		// We have to remove those proxy partitions from the real index inst when the proxy is deleted.
 		if indexInst.State == common.INDEX_STATE_CATCHUP || indexInst.State == common.INDEX_STATE_ACTIVE {
@@ -5888,6 +5888,23 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 	}
 }
 
+// Given a realInst, this method will find all the proxies that are caught up and
+// waiting to be merged
+func (idx *indexer) findAllCaughtUpProxies(realInst c.IndexInst) []c.IndexInst {
+
+	allProxies := make([]c.IndexInst, 0)
+	for _, inst := range idx.indexInstMap {
+
+		if inst.InstId != realInst.InstId &&
+			inst.RealInstId == realInst.InstId && // Proxy instance
+			(inst.State == c.INDEX_STATE_CATCHUP || inst.State == c.INDEX_STATE_ACTIVE) {
+			allProxies = append(allProxies, inst)
+		}
+	}
+
+	return allProxies
+}
+
 func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 	keyspaceId string, bucketUUID string, streamId common.StreamId) {
 
@@ -5895,6 +5912,22 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
+
+	// For real index instance, if any build is done and the partitions are added at
+	// projector but merge is pending, then add those proxies as well to the indexInstList
+	// Otherwise, the partitions present in the addInstance request sent to projector
+	// at the time of merge to MAINT_STREAM will be overwritten by the partitions
+	// present in new list that is being sent now. This leads to a case where few partitions
+	// can miss mutations from indexer
+	for _, index := range indexInstList {
+		if common.IsPartitioned(index.Defn.PartitionScheme) && index.RealInstId == 0 {
+			proxyInsts := idx.findAllCaughtUpProxies(index)
+
+			if len(proxyInsts) > 0 {
+				indexInstList = append(indexInstList, proxyInsts...)
+			}
+		}
+	}
 
 	cmd := &MsgStreamUpdate{
 		mType:      ADD_INDEX_LIST_TO_STREAM,
