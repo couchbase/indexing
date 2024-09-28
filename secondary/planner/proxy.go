@@ -2223,7 +2223,7 @@ func createShardDealerForIndexers(indexers []*IndexerNode, config common.Config)
 		return nil
 	}
 
-	var dealer = NewShardDealer(minShardsPerNode, minPartitionsPerShard, 0)
+	var dealer = NewShardDealer(minShardsPerNode, minPartitionsPerShard, 0, 0)
 
 	for _, indexer := range indexers {
 		populateShardDealerWithNode(dealer, indexer)
