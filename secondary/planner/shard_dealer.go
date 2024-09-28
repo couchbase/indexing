@@ -2,10 +2,14 @@ package planner
 
 import (
 	"fmt"
+	"slices"
 
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
+
+const maxDataUsageOfShard = 250 * 1024 * 1024 * 1024      // 250GB
+const softLimitDataUsageOfShard = maxDataUsageOfShard / 2 // 150 GB
 
 type ShardCategory uint8
 
@@ -110,8 +114,8 @@ type ShardDealer struct {
 	indexSlots map[c.IndexDefnId]c.AlternateShard_SlotId
 
 	// per node pic of which shard pair belongs to which node
-	nodeToSlotMap      map[string]map[c.AlternateShard_SlotId]c.AlternateShard_ReplicaId
-	nodeToSlotCountMap map[string]uint64
+	nodeToSlotMap       map[string]map[c.AlternateShard_SlotId]c.AlternateShard_ReplicaId
+	nodeToShardCountMap map[string]uint64
 
 	// config
 	minShardsPerNode      uint64
@@ -131,11 +135,11 @@ func NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity uint6
 		minPartitionsPerShard: minPartitionsPerShard,
 		shardCapacityPerNode:  shardCapacity,
 
-		slotsPerCategory:   make(map[ShardCategory]map[c.AlternateShard_SlotId]bool),
-		slotsMap:           make(map[c.AlternateShard_SlotId]map[c.AlternateShard_ReplicaId]map[c.AlternateShard_GroupId]*pseudoShardContainer),
-		indexSlots:         make(map[c.IndexDefnId]c.AlternateShard_SlotId),
-		nodeToSlotMap:      make(map[string]map[c.AlternateShard_SlotId]c.AlternateShard_ReplicaId),
-		nodeToSlotCountMap: make(map[string]uint64),
+		slotsPerCategory:    make(map[ShardCategory]map[c.AlternateShard_SlotId]bool),
+		slotsMap:            make(map[c.AlternateShard_SlotId]map[c.AlternateShard_ReplicaId]map[c.AlternateShard_GroupId]*pseudoShardContainer),
+		indexSlots:          make(map[c.IndexDefnId]c.AlternateShard_SlotId),
+		nodeToSlotMap:       make(map[string]map[c.AlternateShard_SlotId]c.AlternateShard_ReplicaId),
+		nodeToShardCountMap: make(map[string]uint64),
 	}
 }
 
@@ -203,23 +207,20 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, is
 	if sd.slotsMap[slotId][alternateShardId.GetReplicaId()] == nil {
 		sd.slotsMap[slotId][alternateShardId.GetReplicaId()] = make(map[c.AlternateShard_GroupId]*pseudoShardContainer)
 	}
+	var newShardCount uint64
 	if sd.slotsMap[slotId][alternateShardId.GetReplicaId()][alternateShardId.GetGroupId()] == nil {
 		sd.slotsMap[slotId][alternateShardId.GetReplicaId()][alternateShardId.GetGroupId()] = newPseudoShardContainer()
+		newShardCount++
 	}
 	var isNewPartn = sd.slotsMap[slotId][alternateShardId.GetReplicaId()][alternateShardId.GetGroupId()].addInstToShardContainer(index)
 
-	// record new partn in a shard count only if the partn is new to the shard container
-	if isNewPartn {
-		if sd.nodeToSlotCountMap == nil {
-			sd.nodeToSlotCountMap = make(map[string]uint64)
+	if len(inputAlternateShardIDs) > 1 {
+		backstoreShardId, _ := c.ParseAlternateId(inputAlternateShardIDs[1])
+		if sd.slotsMap[slotId][alternateShardId.GetReplicaId()][backstoreShardId.GetGroupId()] == nil {
+			sd.slotsMap[slotId][alternateShardId.GetReplicaId()][backstoreShardId.GetGroupId()] = newPseudoShardContainer()
+			newShardCount++
 		}
-		if _, exists := sd.nodeToSlotCountMap[node.NodeUUID]; !exists {
-			sd.nodeToSlotCountMap[node.NodeUUID] = 0
-		}
-		sd.nodeToSlotCountMap[node.NodeUUID]++
-		if !index.IsPrimary {
-			sd.nodeToSlotCountMap[node.NodeUUID]++
-		}
+		sd.slotsMap[slotId][alternateShardId.GetReplicaId()][backstoreShardId.GetGroupId()].addInstToShardContainer(index)
 	}
 
 	// record what slot ids are present on which node
@@ -231,6 +232,17 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, is
 	}
 	sd.nodeToSlotMap[node.NodeUUID][slotId] = alternateShardId.GetReplicaId()
 
+	// record new partn in a shard count only if the partn is new to the shard container
+	if isNewPartn {
+		if sd.nodeToShardCountMap == nil {
+			sd.nodeToShardCountMap = make(map[string]uint64)
+		}
+		if _, exists := sd.nodeToShardCountMap[node.NodeUUID]; !exists {
+			sd.nodeToShardCountMap[node.NodeUUID] = 0
+		}
+		sd.nodeToShardCountMap[node.NodeUUID] += newShardCount
+	}
+
 	return nil
 }
 
@@ -239,6 +251,10 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, is
 // GetSlot is the implementation of the 3 pass shard distribution
 func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId,
 	replicaMap map[int]map[*IndexerNode]*IndexUsage) c.AlternateShard_SlotId {
+
+	logging.Tracef("ShardDealer::GetSlot called for defnID %v with replica map %v",
+		defnID, replicaMap)
+	defer logging.Tracef("ShardDealer::GetSlot done for defnID %v", defnID)
 
 	var mainstoreShard, backstoreShard *c.AlternateShardId
 
@@ -303,40 +319,22 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId,
 		return errSlice
 	}
 
-	// Check if defnID already has a slot assigned. If that is the case, use the same slot to
-	// maintain consistency
-	if alternateShard, exists := sd.indexSlots[defnID]; exists {
-		mainstoreShard, backstoreShard = &c.AlternateShardId{}, &c.AlternateShardId{}
-		mainstoreShard.SetSlotId(alternateShard)
-		backstoreShard.SetSlotId(alternateShard)
+	var createNewSlot = func() {
+		mainstoreShard, _ = c.NewAlternateId()
+		backstoreShard = mainstoreShard.Clone()
 
 		mainstoreShard.SetGroupId(0)
 		backstoreShard.SetGroupId(1)
-
-		setStoreOnAllUsages()
-
-		return mainstoreShard.GetSlotId()
 	}
 
-	var nodesForShard = make(map[string]bool, 0)
-	for _, nodeMap := range replicaMap {
-		for idxrNode := range nodeMap {
-			nodesForShard[idxrNode.NodeUUID] = true
-		}
-	}
-
-	// Pass 0: are all the indexer nodes under minShardsPerNode?
-	var nodesUnderMinShards = make([]string, 0, len(nodesForShard))
-	for nodeUUID := range nodesForShard {
-		if sd.nodeToSlotCountMap[nodeUUID] < sd.minShardsPerNode {
-			nodesUnderMinShards = append(nodesUnderMinShards, nodeUUID)
-		}
-	}
-
-	if len(nodesUnderMinShards) == len(nodesForShard) {
-		// all nodes under min shard. create new alternate shards and return
-		mainstoreShard, _ = c.NewAlternateId()
-		backstoreShard = mainstoreShard.Clone()
+	// Check if defnID already has a slot assigned. If that is the case, use the same slot to
+	// maintain consistency
+	if alternateShard, exists := sd.indexSlots[defnID]; exists {
+		logging.Tracef("ShardDealer::GetSlot slot %v already in-use for defn %v. setting slot on all indexes in %v",
+			alternateShard, defnID, replicaMap)
+		mainstoreShard, backstoreShard = &c.AlternateShardId{}, &c.AlternateShardId{}
+		mainstoreShard.SetSlotId(alternateShard)
+		backstoreShard.SetSlotId(alternateShard)
 
 		mainstoreShard.SetGroupId(0)
 		backstoreShard.SetGroupId(1)
@@ -353,5 +351,255 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId,
 		return mainstoreShard.GetSlotId()
 	}
 
+	var nodesForShard = make(map[string]bool, 0)
+	for _, nodeMap := range replicaMap {
+		for idxrNode := range nodeMap {
+			nodesForShard[idxrNode.NodeUUID] = true
+		}
+	}
+
+	// Pass 0: are all the indexer nodes under minShardsPerNode?
+	var nodesUnderMinShards = make([]string, 0, len(nodesForShard))
+	for nodeUUID := range nodesForShard {
+		if sd.nodeToShardCountMap[nodeUUID] < sd.minShardsPerNode {
+			nodesUnderMinShards = append(nodesUnderMinShards, nodeUUID)
+		}
+	}
+
+	logging.Debugf("ShardDealer::GetSlot nodes under minShardsPerNode - %v, all nodes - %v for defnID %v",
+		nodesUnderMinShards, nodesForShard, defnID)
+
+	if len(nodesUnderMinShards) == len(nodesForShard) {
+		// all nodes under min shard. create new alternate shards and return
+		logging.Tracef("ShardDealer::GetSlot pass-0 success. all nodes %v under min shard capacity. creating new slot for defnID %v",
+			nodesUnderMinShards, defnID)
+
+		createNewSlot()
+
+		// update index usages
+		setStoreOnAllUsages()
+
+		// update book keeping
+		var errSlice = updateShardDealerRecords()
+		if len(errSlice) != 0 {
+			return 0
+		}
+
+		return mainstoreShard.GetSlotId()
+	}
+
+	var indexShardCategory ShardCategory = INVALID_SHARD_CATEGORY
+	for _, nodes := range replicaMap {
+		for _, index := range nodes {
+			if index == nil {
+				continue
+			}
+			indexShardCategory = getIndexCategory(index)
+			logging.Debugf("ShardDealer::GetSlot shard category for inst (d:%v-i:%v-p:%v) is %v",
+				defnID, index.InstId, index.PartnId, indexShardCategory)
+			if indexShardCategory != INVALID_SHARD_CATEGORY {
+				break
+			}
+		}
+	}
+	if indexShardCategory == INVALID_SHARD_CATEGORY {
+		logging.Warnf("ShardDealer::GetSlot index defn %v not of a valid shard category. skipping slot allotment",
+			defnID)
+		return 0
+	}
+
+	// Pass 1: find nodes under soft_limit
+	var nodesUnderSoftLimit = make(map[string]map[c.AlternateShard_SlotId]*pseudoShardContainer)
+	for nodeUUID := range nodesForShard {
+		var slotsUnderSoftLimit = sd.findShardUnderSoftLimit(nodeUUID, indexShardCategory)
+
+		logging.Debugf("ShardDealer::GetSlot node %v shards under soft limit %v",
+			nodeUUID, slotsUnderSoftLimit)
+
+		if len(slotsUnderSoftLimit) != 0 {
+			nodesUnderSoftLimit[nodeUUID] = slotsUnderSoftLimit
+		}
+	}
+
+	// find a common Slot from nodesUnderSoftLimit
+	var commonSlotIDs = make(map[c.AlternateShard_SlotId]*pseudoShardContainer, 0)
+
+	for _, alternateShardIDs := range nodesUnderSoftLimit {
+		if len(commonSlotIDs) == 0 {
+			logging.Tracef("ShardDealer::GetSlot empty common slots. initialising with %v", alternateShardIDs)
+			commonSlotIDs = alternateShardIDs
+			continue
+		}
+
+		for commonSlot, maxContainer := range commonSlotIDs {
+			if shardContainer, exists := alternateShardIDs[commonSlot]; exists {
+				if shardContainer.dataSize > maxContainer.dataSize ||
+					shardContainer.totalPartitions > maxContainer.totalPartitions {
+					commonSlotIDs[commonSlot] = maxContainer
+				}
+			} else {
+				delete(commonSlotIDs, commonSlot)
+			}
+		}
+		logging.Tracef("ShardDealer::GetSlot: update common slots - %v", commonSlotIDs)
+
+		if len(commonSlotIDs) == 0 {
+			logging.Debugf("ShardDealer::GetSlot no common slots across nodes %v for shard category %v",
+				nodesUnderSoftLimit, indexShardCategory)
+			break
+		}
+	}
+
+	if len(commonSlotIDs) != 0 {
+		var sortedSlots = sortedSlotsByContainerUse(commonSlotIDs)
+		// target slot is the min slot which is present on all nodes
+		var minSlot c.AlternateShard_SlotId
+		for _, slotID := range sortedSlots {
+			if isSlotOnAllRequiredNodes(slotID, nodesForShard, sd.nodeToSlotMap) {
+				minSlot = slotID
+				break
+			}
+		}
+
+		if minSlot == 0 {
+			// this scenario should not be possible
+			logging.Warnf("ShardDealer::GetSlot failed to get min slot from %v for defnID %v",
+				commonSlotIDs, defnID)
+		} else {
+			logging.Debugf("ShardDealer::GetSlot pass-1 success. using common slot %v for defnID %v as it is under soft limit",
+				commonSlotIDs[0], defnID)
+			mainstoreShard, backstoreShard = &c.AlternateShardId{}, &c.AlternateShardId{}
+			mainstoreShard.SetSlotId(minSlot)
+			backstoreShard.SetSlotId(minSlot)
+
+			mainstoreShard.SetGroupId(0)
+			backstoreShard.SetGroupId(1)
+
+			// update index usages
+			setStoreOnAllUsages()
+
+			// TODO: make sure that the slot selected ensures the index-replicaID and slot-replicaID
+			// match for all nodes. if not, move index-replica around to ensure that
+
+			// update book keeping
+			var errSlice = updateShardDealerRecords()
+			if len(errSlice) != 0 {
+				return 0
+			}
+
+			return mainstoreShard.GetSlotId()
+		}
+	}
+
 	return 0
+}
+
+// findShardUnderSoftLimit returns a map of `SlotIDs` of `category` which are under
+// the soft limit on node `nodeUUID`
+func (sd *ShardDealer) findShardUnderSoftLimit(nodeUUID string,
+	category ShardCategory) map[c.AlternateShard_SlotId]*pseudoShardContainer {
+
+	var slotsOnNode = sd.nodeToSlotMap[nodeUUID]
+	if slotsOnNode == nil {
+		return nil
+	}
+
+	var slotsToContainerMap = make(map[c.AlternateShard_SlotId]*pseudoShardContainer)
+
+	for slotID, replicaID := range slotsOnNode {
+		if !sd.isSlotOfCategory(slotID, category) {
+			continue
+		}
+		var slotGroup = sd.slotsMap[slotID][replicaID]
+		var aboveCapacity = false
+
+		// We only look at GroupID 0 aka mainstore as backstore could have different size
+		// but num-indexes remain the same
+		var mainstoreGroupID c.AlternateShard_GroupId = 0
+		var shardContainer = slotGroup[mainstoreGroupID]
+		if shardContainer != nil {
+			if shardContainer.dataSize > softLimitDataUsageOfShard {
+				aboveCapacity = true
+			}
+
+			if !aboveCapacity && shardContainer.totalPartitions > sd.minPartitionsPerShard {
+				aboveCapacity = true
+			}
+
+		}
+		if !aboveCapacity {
+			slotsToContainerMap[slotID] = shardContainer
+		}
+	}
+
+	return slotsToContainerMap
+}
+
+func (sd *ShardDealer) isSlotOfCategory(slotID c.AlternateShard_SlotId,
+	category ShardCategory) bool {
+
+	if slotsOfCategory := sd.slotsPerCategory[category]; len(slotsOfCategory) != 0 {
+		return slotsOfCategory[slotID]
+	}
+
+	return false
+}
+
+func minSlotsFromContainerUse(
+	slotsToContainerMap map[c.AlternateShard_SlotId]*pseudoShardContainer) c.AlternateShard_SlotId {
+
+	var minSlotID c.AlternateShard_SlotId
+	var minContainer *pseudoShardContainer
+	for slotID, container := range slotsToContainerMap {
+		if minSlotID == 0 || minContainer == nil {
+			minSlotID = slotID
+			minContainer = container
+			continue
+		}
+		if (container.dataSize == 0 && container.totalPartitions <
+			minContainer.totalPartitions) ||
+			((container.dataSize / container.totalPartitions) <
+				(minContainer.dataSize / minContainer.totalPartitions)) {
+			minContainer = container
+			minSlotID = slotID
+		}
+	}
+	return minSlotID
+}
+
+func sortedSlotsByContainerUse(slotsToContainerMap map[c.AlternateShard_SlotId]*pseudoShardContainer) []c.AlternateShard_SlotId {
+	var slotIDs = make([]c.AlternateShard_SlotId, 0, len(slotsToContainerMap))
+	var computeParams = make(map[c.AlternateShard_SlotId]float64)
+	for altID, container := range slotsToContainerMap {
+		slotIDs = append(slotIDs, altID)
+		var computeParam float64
+		if container == nil || container.totalPartitions == 0 {
+			computeParam = 0
+		} else {
+			computeParam = float64(container.dataSize)/float64(container.totalPartitions) +
+				float64(container.totalPartitions)
+		}
+		computeParams[altID] = computeParam
+	}
+
+	slices.SortFunc(slotIDs, func(a c.AlternateShard_SlotId, b c.AlternateShard_SlotId) int {
+		return int(computeParams[a] - computeParams[b])
+	})
+
+	return slotIDs
+}
+
+func isSlotOnAllRequiredNodes(slotID c.AlternateShard_SlotId, nodes map[string]bool, nodeToSlotMap map[string]map[c.AlternateShard_SlotId]c.AlternateShard_ReplicaId) bool {
+
+	for node := range nodes {
+		var nodeMap = nodeToSlotMap[node]
+		if len(nodeMap) == 0 {
+			return false
+		}
+		if _, exists := nodeMap[slotID]; !exists {
+			return false
+		}
+	}
+
+	return len(nodes) != 0
 }
