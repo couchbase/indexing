@@ -360,9 +360,13 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId,
 
 	// Pass 0: are all the indexer nodes under minShardsPerNode?
 	var nodesUnderMinShards = make([]string, 0, len(nodesForShard))
+	var nodesUnderShardCapacity = make([]string, 0, len(nodesForShard))
 	for nodeUUID := range nodesForShard {
 		if sd.nodeToShardCountMap[nodeUUID] < sd.minShardsPerNode {
 			nodesUnderMinShards = append(nodesUnderMinShards, nodeUUID)
+			nodesUnderShardCapacity = append(nodesUnderShardCapacity, nodeUUID)
+		} else if sd.nodeToShardCountMap[nodeUUID] < sd.shardCapacityPerNode {
+			nodesUnderShardCapacity = append(nodesUnderShardCapacity, nodeUUID)
 		}
 	}
 
@@ -491,6 +495,27 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId,
 		}
 	}
 
+	// Pass-2 - if all nodes under shardCapacity, create new shard
+	logging.Debugf("ShardDealer::GetSlot nodes under shard capacity - %v", nodesUnderShardCapacity)
+	if len(nodesUnderShardCapacity) == len(nodesForShard) {
+		// all nodes under min shard. create new alternate shards and return
+		logging.Tracef("ShardDealer::GetSlot pass-2 success. all nodes %v under shard capacity. creating new slot for defnID %v",
+			nodesUnderMinShards, defnID)
+
+		createNewSlot()
+
+		// update index usages
+		setStoreOnAllUsages()
+
+		// update book keeping
+		var errSlice = updateShardDealerRecords()
+		if len(errSlice) != 0 {
+			return 0
+		}
+
+		return mainstoreShard.GetSlotId()
+	}
+
 	return 0
 }
 
@@ -522,7 +547,7 @@ func (sd *ShardDealer) findShardUnderSoftLimit(nodeUUID string,
 				aboveCapacity = true
 			}
 
-			if !aboveCapacity && shardContainer.totalPartitions > sd.minPartitionsPerShard {
+			if !aboveCapacity && shardContainer.totalPartitions >= sd.minPartitionsPerShard {
 				aboveCapacity = true
 			}
 
