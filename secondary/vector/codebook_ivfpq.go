@@ -265,14 +265,39 @@ func (cb *codebookIVFPQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) 
 }
 
 // Size returns the memory size in bytes.
-func (cb *codebookIVFPQ) Size() uint64 {
+// Size() should be used after codebook is trained.
+func (cb *codebookIVFPQ) Size() int64 {
+	var totalSize int64
 
-	var size uint64
 	if cb.index != nil {
-		//TODO the memory size is not correct
-		size = cb.index.Size()
+		const float32Size = 4
+		// Size of storage_idx_t, used for internal storage of vectors (32 bits)
+		const hnswIndexStorageSize = 4
+		// Number of connections per point (set to 32 by default)
+		const numConnection = 32
+
+		var pqCbSize int64
+
+		coarseCbSize := int64(cb.nlist * cb.dim * float32Size)
+
+		// Memory usage for the Product Quantization (PQ) codebook
+		// PQ quantizes each sub-vector using a codebook of quantized vectors.
+		// Memory size formula: m * (2^nbits) * (d/m) * sizeof(float32)
+		// - m: Number of sub-vectors, each with its own codebook.
+		// - 2^nbits: Number of quantization levels (codes) for each sub-vector.
+		// - d/m: Dimensionality of each sub-vector, 
+		//since the original vector of dimension d is split into m sub-vectors.
+		// Each codebook entry represents a vector of size d/m.
+		pqCbSize = int64((1<<cb.nbits) * cb.dim * float32Size)
+
+		// Memory usage for HNSW graph as IVF_HNSW is used.
+		// This memory is used for maintaing centroids' HNSW structure.
+		// ref: https://github.com/facebookresearch/faiss/wiki/Guidelines-to-choose-an-index#if-not-hnswm-or-ivf1024pqnx4fsrflat
+		hnswGraphSize := int64(cb.nlist * numConnection * hnswIndexStorageSize * 2)
+
+		totalSize = coarseCbSize + pqCbSize + hnswGraphSize
 	}
-	return size
+	return totalSize
 }
 
 // Close frees the memory used by codebook.

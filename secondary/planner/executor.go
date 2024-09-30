@@ -385,7 +385,11 @@ func filterSolution(solution *Solution) error {
 						index.destNode = destIndexer
 						// Note: Avoiding constraint check as we are just avoiding un necessary movements
 						// not using moveIndex2 for stats update at indexer level
-						solution.moveIndex(preFilterDest, index, index.destNode, true)
+						err := solution.moveIndex(preFilterDest, index, index.destNode, true)
+						if err != nil {
+							logging.Warnf("Planner::filterSolution moveIndex failed to move index to different node.")
+							return err
+						}
 						populateDestNodeForGroupedIndexes(index, index.destNode)
 
 						replicaId := 0
@@ -437,7 +441,11 @@ func filterSolution(solution *Solution) error {
 						}
 						// Note: Avoiding constraint check as we are just avoiding un necessary movements
 						// not using moveIndex2 for stats update at indexer level
-						solution.moveIndex(preFilterDest, index, index.destNode, true)
+						err := solution.moveIndex(preFilterDest, index, index.destNode, true)
+						if err != nil {
+							logging.Errorf("Planner::filterSolution moveIndex failed for un-necessary movement.")
+							return err
+						}
 						populateDestNodeForGroupedIndexes(index, index.destNode)
 					}
 				}

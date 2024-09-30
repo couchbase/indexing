@@ -1145,6 +1145,9 @@ func (mdb *bhiveSlice) ResetCodebook() error {
 	// reset codebookSize
 	mdb.codeSize = 0
 
+	// reset codebook mem stat
+	mdb.idxStats.codebookSize.Set(0)
+
 	if mdb.codebook != nil {
 		err := mdb.codebook.Close()
 		mdb.codebook = nil
@@ -1173,6 +1176,8 @@ func (mdb *bhiveSlice) InitCodebookFromSerialized(content []byte) error {
 		return err
 	}
 
+	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
+
 	mdb.initQuantizedCodeBuf()
 	return nil
 }
@@ -1192,6 +1197,9 @@ func (mdb *bhiveSlice) Train(vecs []float32) error {
 		mdb.codeSize = 0
 		return err
 	}
+
+	// Update codebook mem stat
+	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
 	return nil
@@ -1321,6 +1329,8 @@ func (mdb *bhiveSlice) recoverCodebook(codebookPath string) error {
 		mdb.ResetCodebook() // Ignore error for now
 		return err
 	}
+
+	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
 	return nil
@@ -2482,17 +2492,15 @@ func (s *bhiveSnapshot) Destroy() {
 // Snapshot Reader - Placeholder (to be implemented by Varun)
 // //////////////////////////////////////////////////////////
 
-// [VECTOR_TODO] The Count logic needs support from snapshot. Currently,
-// implement dummy methods for IndexReader compatibility
 func (s *bhiveSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error) {
-	return 0, nil
+	return s.MainSnap.Count(), nil
 }
 
-// [VECTOR_TODO] The Count logic needs support from snapshot. Currently,
-// implement dummy methods for IndexReader compatibility
 func (s *bhiveSnapshot) StatCountTotal() (uint64, error) {
-	return 0, nil
+	c := s.slice.GetCommittedCount()
+	return c, nil
 }
+
 func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, callb EntryCallback, fincb FinishCallback) error {
 
 	defer func() {

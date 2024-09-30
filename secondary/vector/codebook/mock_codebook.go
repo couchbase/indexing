@@ -142,7 +142,7 @@ func (mc *MockCodebook) EncodeAndAssignVectors(vecs []float32, codes []byte, lab
 }
 func (mc *MockCodebook) ComputeDistanceTable(vec []float32) ([][]float32, error)       { return nil, nil }
 func (mc *MockCodebook) ComputeDistanceWithDT(code []byte, dtable [][]float32) float32 { return 0.0 }
-func (mc *MockCodebook) Size() uint64                                                  { return 0 }
+func (mc *MockCodebook) Size() int64                                                   { return 0 }
 func (mc *MockCodebook) Close() error                                                  { return nil }
 func (mc *MockCodebook) Marshal() ([]byte, error)                                      { return nil, nil }
 

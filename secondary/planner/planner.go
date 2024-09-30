@@ -117,7 +117,7 @@ type CostMethod interface {
 }
 
 type PlacementMethod interface {
-	Move(s *Solution) (bool, bool, bool)
+	Move(s *Solution) (bool, bool, bool, error)
 	Add(s *Solution, indexes []*IndexUsage) error
 	AddToIndexer(s *Solution, indexer *IndexerNode, idx *IndexUsage)
 	InitialPlace(s *Solution, indexes []*IndexUsage) error
@@ -367,7 +367,10 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 	solution = p.adjustInitialSolutionIfNecessary(solution)
 
 	if p.shardAffinity {
-		solution.PrePopulateAlternateShardIds(command)
+		err := solution.PrePopulateAlternateShardIds(command)
+		if err != nil {
+			return nil, err
+		}
 
 		for _, indexer := range solution.Placement {
 			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
@@ -652,7 +655,10 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 
 			i++
 
-			new_solution, force, final := p.findNeighbor(current)
+			new_solution, force, final, err := p.findNeighbor(current)
+			if err != nil {
+				return nil, err, nil
+			}
 			if new_solution != nil {
 				new_cost := p.cost.Cost(new_solution)
 				prob := p.getAcceptProbability(old_cost, new_cost, temperature)
@@ -937,7 +943,7 @@ func (p *SAPlanner) PrintCost() {
 
 // This function finds a neighbor placement layout using
 // given placement method.
-func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
+func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool, error) {
 
 	currentOK := s.SatisfyClusterConstraint()
 	neighbor := s.clone()
@@ -947,11 +953,15 @@ func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
 	retry := 0
 
 	for retry = 0; retry < ResizePerIteration; retry++ {
-		success, final, mustAccept := p.placement.Move(neighbor)
+		success, final, mustAccept, err := p.placement.Move(neighbor)
+		if err != nil {
+			logging.Warnf("Planner::findNeighbor failed in placement.Move, retry:%v", retry)
+			return nil, false, done, err
+		}
 		if success {
 			neighborOK := neighbor.SatisfyClusterConstraint()
 			logging.Tracef("Planner::findNeighbor retry: %v", retry)
-			return neighbor, (mustAccept || force || (!currentOK && neighborOK)), final
+			return neighbor, (mustAccept || force || (!currentOK && neighborOK)), final, nil
 		}
 
 		// Add new node to change cluster in order to ensure constraint can be satisfied
@@ -975,7 +985,7 @@ func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
 
 	logging.Tracef("Planner::findNeighbor retry: %v", retry)
 	s.copyEstimationFrom(neighbor)
-	return nil, false, done
+	return nil, false, done, nil
 }
 
 // Get the initial temperature.
@@ -2043,7 +2053,10 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 	p.initializeSolution(command, solution)
 
 	if p.shardAffinity {
-		solution.PrePopulateAlternateShardIds(command)
+		err := solution.PrePopulateAlternateShardIds(command)
+		if err != nil {
+			return nil, err
+		}
 
 		for _, indexer := range solution.Placement {
 			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)

@@ -333,6 +333,9 @@ type IndexStats struct {
 	avgUnitsUsage      stats.Int64Val //normalized units usage moving average
 	max20minUnitsUsage stats.Int64Val //max normalized units usage in the last 20mins(highest among current usage vs both disk snapshots max)
 	lastUnitsStatTime  stats.Int64Val //last time when units usage stats were calculated
+
+	//vector stats
+	codebookSize	   stats.Int64Val
 }
 
 type IndexerStatsHolder struct {
@@ -590,8 +593,8 @@ func (s *IndexStats) Init() {
 	s.keySizeDist.Init()
 	s.arrKeySizeDist.Init()
 
-	s.scanReqInitLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
-	s.scanReqWaitLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
+	s.scanReqInitLatDist.InitLatency(scanReqLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
+	s.scanReqWaitLatDist.InitLatency(scanReqLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.scanReqLatDist.InitLatency(scanReqLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.snapGenLatDist.InitLatency(snapLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 
@@ -604,6 +607,8 @@ func (s *IndexStats) Init() {
 	s.avgUnitsUsage.Init()
 	s.max20minUnitsUsage.Init()
 	s.lastUnitsStatTime.Init()
+
+	s.codebookSize.Init()
 
 	// Set filters
 	// Note that the filters will be set on both: instance level stats and
@@ -2007,6 +2012,13 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		},
 		&s.numItemsFlushed, s.partnInt64Stats)
 
+
+	statMap.AddAggrStatFiltered("disk_bytes",
+		func(ss *IndexStats) int64 {
+			return ss.lastDiskBytes.Value()
+		},
+		&s.lastDiskBytes, s.partnInt64Stats)
+
 	statMap.AddAggrStatFiltered("num_flush_queued",
 		func(ss *IndexStats) int64 {
 			return ss.numDocsFlushQueued.Value()
@@ -2092,6 +2104,15 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			},
 			&s.max20minUnitsUsage, s.partnInt64Stats)
 	}
+
+	if s.isVectorIndex {
+		statMap.AddAggrStatFiltered("codebook_mem_usage",
+			func(ss *IndexStats) int64 {
+				return ss.codebookSize.Value()
+			},
+			&s.codebookSize, s.partnInt64Stats)
+	}
+
 	// -------------------------------
 	// All partition and index stats
 	// -------------------------------
@@ -2540,6 +2561,20 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	residentPercent := s.partnAvgInt64Stats(func(ss *IndexStats) int64 { return ss.residentPercent.Value() })
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "resident_percent", s.bucket, collectionLabels, s.dispName, residentPercent)
 	st = append(st, []byte(str)...)
+
+	diskBytes := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.lastDiskBytes.Value() })
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "disk_bytes", s.bucket, collectionLabels, s.dispName, diskBytes)
+	st = append(st, []byte(str)...)
+
+	itemsFlushed := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numItemsFlushed.Value() })
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_items_flushed", s.bucket, collectionLabels, s.dispName, itemsFlushed)
+	st = append(st, []byte(str)...)
+
+	if s.isVectorIndex {
+		codebookSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.codebookSize.Value() })
+		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "codebook_mem_usage", s.bucket, collectionLabels, s.dispName, codebookSize)
+		st = append(st, []byte(str)...)
+	}
 
 	return st
 }
