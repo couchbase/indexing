@@ -13618,6 +13618,9 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 						continue
 					}
 
+					logging.Infof("Indexer::initiateTraining: Completed serializing the codebook for index instance: %v, "+
+					" partnId: %v, serialized codebook size: %v", instId, partnId, len(codebook))
+
 					// Reaching here implies that new codebook serialized for partition, ready to be shared
 					defnCodebook = codebook
 					setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, defnCodebook)
