@@ -516,6 +516,77 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId,
 		return mainstoreShard.GetSlotId()
 	}
 
+	// Pass-3 find common slot of category across all nodes
+	commonSlotIDs = make(map[c.AlternateShard_SlotId]*pseudoShardContainer, 0)
+
+	for nodeUUID := range nodesForShard {
+		var alternateShardIDs = sd.getSlotsOfCategory(nodeUUID, indexShardCategory)
+		if len(commonSlotIDs) == 0 {
+			logging.Tracef("ShardDealer::GetSlot empty common slots. initialising with %v", alternateShardIDs)
+			commonSlotIDs = alternateShardIDs
+			continue
+		}
+
+		for commonSlot, maxContainer := range commonSlotIDs {
+			if shardContainer, exists := alternateShardIDs[commonSlot]; exists {
+				if shardContainer.dataSize > maxContainer.dataSize ||
+					shardContainer.totalPartitions > maxContainer.totalPartitions {
+					commonSlotIDs[commonSlot] = maxContainer
+				}
+			} else {
+				delete(commonSlotIDs, commonSlot)
+			}
+		}
+		logging.Tracef("ShardDealer::GetSlot: update common slots - %v", commonSlotIDs)
+
+		if len(commonSlotIDs) == 0 {
+			logging.Debugf("ShardDealer::GetSlot no common slots across nodes %v for shard category %v",
+				nodesUnderSoftLimit, indexShardCategory)
+			break
+		}
+	}
+
+	if len(commonSlotIDs) != 0 {
+		var sortedSlots = sortedSlotsByContainerUse(commonSlotIDs)
+		// target slot is the min slot which is present on all nodes
+		var minSlot c.AlternateShard_SlotId
+		for _, slotID := range sortedSlots {
+			if isSlotOnAllRequiredNodes(slotID, nodesForShard, sd.nodeToSlotMap) {
+				minSlot = slotID
+				break
+			}
+		}
+
+		if minSlot == 0 {
+			// this scenario should not be possible
+			logging.Warnf("ShardDealer::GetSlot failed to get min slot from %v for defnID %v",
+				commonSlotIDs, defnID)
+		} else {
+			logging.Debugf("ShardDealer::GetSlot pass-3 success. using common slot %v for defnID %v as it is under soft limit",
+				commonSlotIDs[0], defnID)
+			mainstoreShard, backstoreShard = &c.AlternateShardId{}, &c.AlternateShardId{}
+			mainstoreShard.SetSlotId(minSlot)
+			backstoreShard.SetSlotId(minSlot)
+
+			mainstoreShard.SetGroupId(0)
+			backstoreShard.SetGroupId(1)
+
+			// update index usages
+			setStoreOnAllUsages()
+
+			// TODO: make sure that the slot selected ensures the index-replicaID and slot-replicaID
+			// match for all nodes. if not, move index-replica around to ensure that
+
+			// update book keeping
+			var errSlice = updateShardDealerRecords()
+			if len(errSlice) != 0 {
+				return 0
+			}
+
+			return mainstoreShard.GetSlotId()
+		}
+	}
+
 	return 0
 }
 
@@ -568,6 +639,26 @@ func (sd *ShardDealer) isSlotOfCategory(slotID c.AlternateShard_SlotId,
 	}
 
 	return false
+}
+
+func (sd *ShardDealer) getSlotsOfCategory(
+	nodeUUID string, category ShardCategory,
+) map[c.AlternateShard_SlotId]*pseudoShardContainer {
+	var slotsOnNode = sd.nodeToSlotMap[nodeUUID]
+	if slotsOnNode == nil {
+		return nil
+	}
+
+	var slotsToContainerMap = make(map[c.AlternateShard_SlotId]*pseudoShardContainer)
+
+	for slotID, replicaID := range slotsOnNode {
+		if !sd.isSlotOfCategory(slotID, category) {
+			continue
+		}
+		slotsToContainerMap[slotID] = sd.slotsMap[slotID][replicaID][0]
+	}
+
+	return slotsToContainerMap
 }
 
 func minSlotsFromContainerUse(
