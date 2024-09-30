@@ -631,7 +631,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 			// TODO: temp. replace with `validateShardDealerInternals`
 			if len(dealer.indexSlots) != int(testShardCapacity) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(), dealer.indexSlots, minShardsPerNode)
+					t0.Name(), dealer.indexSlots, testShardCapacity)
 			}
 			if len(dealer.slotsMap) != len(slotIDs) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
@@ -741,6 +741,88 @@ func TestSingleNodeAssignment(t *testing.T) {
 			}
 
 		})
+	})
+
+	t.Run("Pass-3", func(subt *testing.T) {
+		var testShardCapacity uint64 = 10
+		var dealer = NewShardDealer(minShardsPerNode, 1, testShardCapacity)
+
+		var indexerNode = createDummyIndexerNode(subt.Name(), testShardCapacity, testShardCapacity, testShardCapacity/4, testShardCapacity/4, 0)
+
+		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+		var alternateShardIDs = make(map[string]bool)
+
+		for defnID := len(indexerNode.Indexes); defnID >= 0; defnID-- {
+			for _, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+				var slotID = dealer.GetSlot(c.IndexDefnId(defnID), repmap)
+
+				if slotID == 0 {
+					subt.Fatalf("%v failed to get slot for replica map %v",
+						subt.Name(), repmap)
+				}
+				slotIDs[slotID] = true
+				for _, nodeMap := range repmap {
+					for _, inst := range nodeMap {
+						var expectedAlternateShardIDCount = 2
+						if inst.IsPrimary {
+							expectedAlternateShardIDCount = 1
+						}
+
+						if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
+							subt.Fatalf("%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+								subt.Name(), inst.IsPrimary, expectedAlternateShardIDCount,
+								inst.AlternateShardIds)
+						}
+
+						for _, asi := range inst.AlternateShardIds {
+							alternateShardIDs[asi] = true
+						}
+					}
+				}
+			}
+		}
+
+		if len(slotIDs) != int(testShardCapacity)/2 {
+			subt.Fatalf("%v expected to create %v slots we have %v (%v)",
+				subt.Name(), testShardCapacity, len(slotIDs), slotIDs)
+		}
+		if len(alternateShardIDs) != int(testShardCapacity) {
+			subt.Fatalf("%v expected to create %v shards we have %v (%v)",
+				subt.Name(), testShardCapacity, len(alternateShardIDs), alternateShardIDs)
+		}
+		// TODO: temp. replace with `validateShardDealerInternals`
+		if len(dealer.indexSlots) != len(indexerNode.Indexes) {
+			subt.Fatalf("%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+				subt.Name(), dealer.indexSlots, len(indexerNode.Indexes))
+		}
+		if len(dealer.slotsMap) != len(slotIDs) {
+			subt.Fatalf("%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
+				subt.Name(), dealer.slotsMap, len(slotIDs))
+		}
+		if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
+			subt.Fatalf("%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
+				subt.Name(), dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+				len(slotIDs))
+		}
+
+		// create extra index. it should not create a new shard
+		var extraIndex = createDummyIndexUsage(uint64(len(indexerNode.Indexes)), false, false, false, false)
+		extraIndex.initialNode = indexerNode
+
+		var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
+		replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
+		replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
+		slotID := dealer.GetSlot(extraIndex.DefnId, replicaMap)
+		if slotID == 0 {
+			subt.Fatalf("%v failed to get slot id for replicaMap %v",
+				subt.Name(), replicaMap)
+		}
+		if _, exists := slotIDs[slotID]; !exists {
+			subt.Fatalf("%v extra slot created when it was not expected. New slot %v. All Slots %v",
+				subt.Name(), slotID, slotIDs)
+		}
+
 	})
 }
 
