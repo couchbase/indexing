@@ -136,6 +136,7 @@ type ScanRequest struct {
 	protoScans            []*protobuf.Scan
 	vectorScans           map[common.PartitionId]map[int64][]Scan
 	parallelCentroidScans int
+	indexOrder            *IndexKeyOrder
 
 	// re-ranking support for BHIVE vector indexes
 	enableReranking bool // set to 'true' if re-ranking is enabled
@@ -150,6 +151,45 @@ type ScanRequest struct {
 	perPartnSnaps       map[common.PartitionId]SliceSnapshot
 	perPartnReaderCtx   map[common.PartitionId][]IndexReaderContext
 	readersPerPartition int
+}
+
+type IndexKeyOrder struct {
+	vectorDistOnly  bool
+	vectorDistDesc  bool
+	inIndexOrder    bool
+	posInIndexOrder int
+	keyPos          []int32
+	desc            []bool
+}
+
+func (io *IndexKeyOrder) IsSortKeyNeeded() bool {
+	if io.vectorDistOnly {
+		return false
+	}
+	// if io.inIndexOrder {
+	// 	return false
+	// }
+	return true
+}
+
+func (io *IndexKeyOrder) IsDistAdditionNeeded() bool {
+	if io.vectorDistOnly {
+		return false
+	}
+	if io.inIndexOrder {
+		return true
+	}
+	return false
+}
+
+func (io *IndexKeyOrder) IsOrderAscending() bool {
+	if io == nil {
+		return true
+	}
+	if io.vectorDistOnly {
+		return !io.vectorDistDesc
+	}
+	return true
 }
 
 type Projection struct {
@@ -489,6 +529,11 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			}
 
 			r.setRerankLimits()
+			protoIndexOrder := req.GetIndexOrder()
+			if r.indexOrder, err = validateIndexOrder(protoIndexOrder,
+				r.IndexInst.Defn.Desc, r.vectorPos); err != nil {
+				return
+			}
 		} else {
 			if r.Scans, err = r.makeScans(req.GetScans()); err != nil {
 				return
@@ -1490,6 +1535,61 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 	return
 }
 
+func validateIndexOrder(protoIndexOrder *protobuf.IndexKeyOrder, indexDesc []bool,
+	vectorKeyPos int) (*IndexKeyOrder, error) {
+	if protoIndexOrder == nil {
+		return nil, nil
+	}
+
+	// VECTOR_TODO: Add validations on keypos and desc..
+	// VECTOR_TODO: Check these positions for flattened array indexes
+	indexOrder := &IndexKeyOrder{
+		keyPos: make([]int32, len(protoIndexOrder.KeyPos)),
+		desc:   make([]bool, len(protoIndexOrder.Desc)),
+	}
+	copy(indexOrder.keyPos, protoIndexOrder.GetKeyPos())
+	copy(indexOrder.desc, protoIndexOrder.GetDesc())
+
+	if logging.IsEnabled(logging.Verbose) {
+		defer logging.Infof("validateIndexOrder: %+v", indexOrder)
+	}
+
+	// If there is orderby on vectorkey only use vector distance in heap and sort based on desc
+	if len(protoIndexOrder.KeyPos) == 1 && vectorKeyPos == int(protoIndexOrder.KeyPos[0]) {
+		indexOrder.vectorDistOnly = true
+		indexOrder.vectorDistDesc = protoIndexOrder.Desc[0]
+		return indexOrder, nil
+	} else {
+		for i, keyPos := range indexOrder.keyPos {
+			if keyPos == int32(vectorKeyPos) {
+				indexOrder.vectorDistDesc = indexOrder.desc[i]
+			}
+		}
+	}
+
+	// For orderby to be in index order it should start from 0th key in index and
+	// should be strictly increasing till the vector pos
+	outOfIndexOrder := false
+	// There should be ordering on all keys till vector key possition
+	if len(indexOrder.keyPos) < vectorKeyPos+1 {
+		outOfIndexOrder = true
+	} else if indexOrder.keyPos[0] == 0 && indexOrder.desc[0] == indexDesc[0] {
+		prevKp := int32(0)
+		for i := 1; i < len(indexOrder.keyPos); i++ {
+			currkp := indexOrder.keyPos[i]
+			if currkp != prevKp+1 || indexOrder.desc[i] != indexDesc[currkp] {
+				outOfIndexOrder = true
+				break
+			}
+			prevKp = currkp
+		}
+	} else {
+		outOfIndexOrder = true
+	}
+	indexOrder.inIndexOrder = !outOfIndexOrder
+	return indexOrder, nil
+}
+
 func validateIndexProjection(projection *protobuf.IndexProjection, cklen int) (*Projection, error) {
 	if len(projection.EntryKeys) > cklen {
 		e := errors.New(fmt.Sprintf("Invalid number of Entry Keys %v in IndexProjection", len(projection.EntryKeys)))
@@ -2253,6 +2353,34 @@ func (r *ScanRequest) getVectorCodeSize() int {
 		}
 	}
 	return 0
+}
+
+func (r *ScanRequest) getRowCompare() RowsCompareLessFn {
+	if r.indexOrder == nil {
+		logging.Verbosef("getRowCompare: No OderBy pushdown is seen")
+		return nil
+	}
+
+	if r.indexOrder.vectorDistOnly {
+		logging.Verbosef("getRowCompare: Ordering by Vector Distance only..")
+		return nil
+	}
+
+	// For this we always need ordering based on distance and hence we need
+	// substituion of dist and which is not possible when we are not copying
+	// row as we will modifying the storage copy. So make sort key and use
+	// that in this case too
+	// if r.indexOrder.inIndexOrder {
+	// 	logging.Infof("Odering in the Index Order")
+	// 	return func(i, j *Row) bool {
+	// 		return bytes.Compare(i.key, j.key) < 0
+	// 	}
+	// }
+
+	logging.Verbosef("getRowCompare: Odering using sortkey")
+	return func(i, j *Row) bool {
+		return bytes.Compare(i.sortKey, j.sortKey) < 0
+	}
 }
 
 /////////////////////////////////////////////////////////////////////////

@@ -181,7 +181,8 @@ func (h *TopKRowHeap) PrintHeap() {
 	logging.Infof("Start of Heap")
 	for i := 0; i < h.heap.Len(); i++ {
 		row := h.heap.GetRow(i)
-		logging.Infof("Row: %+v", row)
+		logging.Infof("sortKey:<%s> sortKeyDecoded<%s> keyDecoded<%s>",
+			row.sortKey, row.SortKeyString(), row.KeyString())
 	}
 	logging.Infof("End of Heap")
 }
