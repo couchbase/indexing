@@ -8,15 +8,14 @@ import (
 	"strings"
 )
 
-type AlternateShard_SlotId uint64
-type AlternateShard_ReplicaId uint8
-type AlternateShard_GroupId uint8
+type AlternateShard_SlotId = uint64
+type AlternateShard_ReplicaId = uint8
+type AlternateShard_GroupId = uint8
 
 type AlternateShardId struct {
-	// TODO: move uints to respective types so code is easy to read in future
-	SlotId    uint64
-	ReplicaId uint8
-	GroupId   uint8
+	SlotId    AlternateShard_SlotId
+	ReplicaId AlternateShard_ReplicaId
+	GroupId   AlternateShard_GroupId
 }
 type PartnAlternateShardIdMap map[PartitionId][]string
 
