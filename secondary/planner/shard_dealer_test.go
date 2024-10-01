@@ -49,12 +49,23 @@ func createDummyIndexUsage(id uint64, isPrimary, isVector, isBhive, isMoi bool) 
 	}
 }
 
+func createNewAlternateShardIDGenerator() func() (*c.AlternateShardId, error) {
+	var counter uint64
+	return func() (*c.AlternateShardId, error) {
+		counter++
+		return &c.AlternateShardId{
+			SlotId: counter,
+		}, nil
+	}
+}
+
 func TestBasicSlotAssignment(t *testing.T) {
 	var dealer = NewShardDealer(
 		minShardsPerNode,
 		minPartitionsPerShard,
 		maxDiskUsagePerShard,
 		shardCapacity,
+		createNewAlternateShardIDGenerator(),
 	)
 
 	var indexerNode = createDummyIndexerNode(t.Name(), 1, 1, 0, 0, 0)
@@ -99,7 +110,7 @@ func TestBasicSlotAssignment(t *testing.T) {
 			t.Name(), dealer.slotsPerCategory)
 	}
 
-	if len(dealer.slotsPerCategory[STANDARD_SHARD_CATEGORY]) != 2 {
+	if len(dealer.slotsPerCategory[StandardShardCategory]) != 2 {
 		t.Fatalf("%v shard dealer book keeping mismatch - expected it to contain 2 shard category but it has %v",
 			t.Name(), dealer.slotsPerCategory)
 	}
@@ -203,6 +214,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				minPartitionsPerShard,
 				maxDiskUsagePerShard,
 				shardCapacity,
+				createNewAlternateShardIDGenerator(),
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), 0, minShardsPerNode, 0, 0, 0)
@@ -269,6 +281,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				minPartitionsPerShard,
 				maxDiskUsagePerShard,
 				shardCapacity,
+				createNewAlternateShardIDGenerator(),
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), minShardsPerNode, minShardsPerNode, 0, 0, 0)
@@ -339,6 +352,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				minPartitionsPerShard,
 				maxDiskUsagePerShard,
 				shardCapacity,
+				createNewAlternateShardIDGenerator(),
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), 0, minPartitionsPerShard, 0, 0, 0)
@@ -390,6 +404,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				minPartitionsPerShard,
 				maxDiskUsagePerShard,
 				shardCapacity,
+				createNewAlternateShardIDGenerator(),
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), minShardsPerNode*2, minShardsPerNode*2, 0, 0, 0)
@@ -455,6 +470,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				minPartitionsPerShard,
 				maxDiskUsagePerShard,
 				shardCapacity,
+				createNewAlternateShardIDGenerator(),
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), 1, 1, 1, 1, 0)
@@ -502,23 +518,23 @@ func TestSingleNodeAssignment(t *testing.T) {
 					t0.Name(), 3, dealer.slotsPerCategory)
 			}
 
-			if len(dealer.slotsPerCategory[STANDARD_SHARD_CATEGORY]) != 2 {
+			if len(dealer.slotsPerCategory[StandardShardCategory]) != 2 {
 				t0.Fatalf("%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(), STANDARD_SHARD_CATEGORY,
-					dealer.slotsPerCategory[STANDARD_SHARD_CATEGORY], minShardsPerNode*2,
+					t0.Name(), StandardShardCategory,
+					dealer.slotsPerCategory[StandardShardCategory], minShardsPerNode*2,
 				)
 			}
 
-			if len(dealer.slotsPerCategory[VECTOR_SHARD_CATEGORY]) != 1 {
+			if len(dealer.slotsPerCategory[VectorShardCategory]) != 1 {
 				t0.Fatalf("%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(), VECTOR_SHARD_CATEGORY,
-					dealer.slotsPerCategory[VECTOR_SHARD_CATEGORY], 1,
+					t0.Name(), VectorShardCategory,
+					dealer.slotsPerCategory[VectorShardCategory], 1,
 				)
 			}
-			if len(dealer.slotsPerCategory[BHIVE_SHARD_CATEGORY]) != 1 {
+			if len(dealer.slotsPerCategory[BhiveShardCategory]) != 1 {
 				t0.Fatalf("%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(), BHIVE_SHARD_CATEGORY,
-					dealer.slotsPerCategory[BHIVE_SHARD_CATEGORY], 1,
+					t0.Name(), BhiveShardCategory,
+					dealer.slotsPerCategory[BhiveShardCategory], 1,
 				)
 			}
 
@@ -536,7 +552,13 @@ func TestSingleNodeAssignment(t *testing.T) {
 		subt.Run("Basic-AllPrimary", func(t0 *testing.T) {
 			t0.Parallel()
 
-			var dealer = NewShardDealer(minShardsPerNode, 1, shardCapacity)
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				1,
+				maxDiskUsagePerShard,
+				shardCapacity,
+				createNewAlternateShardIDGenerator(),
+			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), 0, shardCapacity/10, 0, 0, 0)
 
@@ -582,7 +604,13 @@ func TestSingleNodeAssignment(t *testing.T) {
 			t0.Parallel()
 
 			var testShardCapacity uint64 = 10
-			var dealer = NewShardDealer(minShardsPerNode, 1, testShardCapacity)
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				1,
+				maxDiskUsagePerShard,
+				testShardCapacity,
+				createNewAlternateShardIDGenerator(),
+			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), testShardCapacity, 0, 0, 0, 0)
 
@@ -665,6 +693,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				minPartitionsPerShard,
 				maxDiskUsagePerShard,
 				shardCapacity,
+				createNewAlternateShardIDGenerator(),
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), minShardsPerNode, minShardsPerNode, 1, 1, 0)
@@ -714,22 +743,22 @@ func TestSingleNodeAssignment(t *testing.T) {
 					t0.Name(), 3, dealer.slotsPerCategory)
 			}
 
-			if len(dealer.slotsPerCategory[STANDARD_SHARD_CATEGORY]) != int(minShardsPerNode) {
+			if len(dealer.slotsPerCategory[StandardShardCategory]) != int(minShardsPerNode) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(), STANDARD_SHARD_CATEGORY,
-					dealer.slotsPerCategory[STANDARD_SHARD_CATEGORY], minShardsPerNode,
+					t0.Name(), StandardShardCategory,
+					dealer.slotsPerCategory[StandardShardCategory], minShardsPerNode,
 				)
 			}
-			if len(dealer.slotsPerCategory[VECTOR_SHARD_CATEGORY]) != 1 {
+			if len(dealer.slotsPerCategory[VectorShardCategory]) != 1 {
 				t0.Fatalf("%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(), VECTOR_SHARD_CATEGORY,
-					dealer.slotsPerCategory[VECTOR_SHARD_CATEGORY], 1,
+					t0.Name(), VectorShardCategory,
+					dealer.slotsPerCategory[VectorShardCategory], 1,
 				)
 			}
-			if len(dealer.slotsPerCategory[BHIVE_SHARD_CATEGORY]) != 1 {
+			if len(dealer.slotsPerCategory[BhiveShardCategory]) != 1 {
 				t0.Fatalf("%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(), BHIVE_SHARD_CATEGORY,
-					dealer.slotsPerCategory[BHIVE_SHARD_CATEGORY], 1,
+					t0.Name(), BhiveShardCategory,
+					dealer.slotsPerCategory[BhiveShardCategory], 1,
 				)
 			}
 
@@ -745,7 +774,13 @@ func TestSingleNodeAssignment(t *testing.T) {
 
 	t.Run("Pass-3", func(subt *testing.T) {
 		var testShardCapacity uint64 = 10
-		var dealer = NewShardDealer(minShardsPerNode, 1, testShardCapacity)
+		var dealer = NewShardDealer(
+			minShardsPerNode,
+			1,
+			maxDiskUsagePerShard,
+			testShardCapacity,
+			createNewAlternateShardIDGenerator(),
+		)
 
 		var indexerNode = createDummyIndexerNode(subt.Name(), testShardCapacity, testShardCapacity, testShardCapacity/4, testShardCapacity/4, 0)
 
