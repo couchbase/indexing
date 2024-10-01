@@ -281,7 +281,7 @@
         ],
         "notes": "Total scan duration includes the time taken for index scan, as well as time for which scan request was waiting for a consistent snapshot to be available."
     },
-    "num_items_flushed": {
+    "index_num_items_flushed": {
         "type": "counter",
         "help": "Number of documents written from memory to index storage",
         "labels": [
@@ -291,7 +291,7 @@
             "index"
         ]
     },
-    "disk_bytes": {
+    "index_disk_bytes": {
         "type": "gauge",
         "help": "Number of bytes read from and written to disk, including insert, get, and delete operations",
         "unit": "bytes",
