@@ -1021,6 +1021,7 @@ type secondaryIndex struct {
 	vectorDimension    int
 	nprobes            int
 	vectorDescription  string
+	vectorTrainList    int
 
 	isBhive bool
 	include expression.Expressions
@@ -1118,6 +1119,7 @@ func newSecondaryIndexFromMetaData(
 		}
 		si.vectorDimension = indexDefn.VectorMeta.Dimension
 		si.vectorDescription = indexDefn.VectorMeta.Quantizer.String()
+		si.vectorTrainList = indexDefn.VectorMeta.TrainList
 
 		// By default "nprobes" is 1. If any value is specified in query,
 		// indexer will use it instead
@@ -1216,6 +1218,23 @@ func (si *secondaryIndex) IndexMetadata() map[string]interface{} {
 	}
 	indexInfo["stats"] = statsCopy
 	return indexInfo
+}
+
+func (si *secondaryIndex) With() map[string]interface{} {
+
+	withClause := make(map[string]interface{})
+
+	if si.isCompositeVector || si.isBhive {
+		withClause["dimension"] = si.vectorDimension
+		withClause["similarity"] = si.vectorDistanceType
+		withClause["scan_nprobes"] = si.nprobes
+		withClause["description"] = si.vectorDescription
+		if si.vectorTrainList != 0 {
+			withClause["train_list"] = si.vectorTrainList
+		}
+	}
+
+	return withClause
 }
 
 // State implement Index{} interface.
@@ -1900,17 +1919,17 @@ func (si *secondaryIndex6) VectorDescription() string {
 	return si.vectorDescription
 }
 
-//[VECTOR_TODO] stub function, needs to be updated
+// [VECTOR_TODO] stub function, needs to be updated
 func (si *secondaryIndex6) NumberOfCentroids() int {
 	return int(0)
 }
 
-//[VECTOR_TODO] stub function, needs to be updated
+// [VECTOR_TODO] stub function, needs to be updated
 func (si *secondaryIndex6) NumberOfPartitions() int {
 	return int(0)
 }
 
-//[VECTOR_TODO] stub function, needs to be updated
+// [VECTOR_TODO] stub function, needs to be updated
 func (si *secondaryIndex6) MaxHeapSize() int {
 	return int(8192) //keep this as index config
 }
