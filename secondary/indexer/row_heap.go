@@ -4,20 +4,31 @@ import (
 	"container/heap"
 	"errors"
 	"math"
+	"sort"
 
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
 var ErrorZeroCapactiy = errors.New("Empty heap is not allowed")
 
+type RowsCompareLessFn func(i, j *Row) bool
+
 // RowHeap is a heap of *Row based on the dist field.
 type RowHeap struct {
 	rows  []*Row
 	isMin bool // determines if this is a min-heap or max-heap
+	less  RowsCompareLessFn
 }
 
 func (h RowHeap) Len() int { return len(h.rows) }
 func (h RowHeap) Less(i, j int) bool {
+	if h.less != nil {
+		if h.isMin {
+			return h.less(h.rows[i], h.rows[j])
+		}
+		return h.less(h.rows[j], h.rows[i])
+	}
+
 	di := float64(h.rows[i].dist)
 	dj := float64(h.rows[j].dist)
 
@@ -81,6 +92,36 @@ func (h *RowHeap) Rows() []*Row {
 	return h.rows
 }
 
+func (h *RowHeap) LessRows(rowi, rowj *Row) bool {
+	if h.less != nil {
+		if h.isMin {
+			return h.less(rowi, rowj)
+		}
+		return h.less(rowj, rowi)
+	}
+
+	di := float64(rowi.dist)
+	dj := float64(rowj.dist)
+
+	// Handle NaN comparisons
+	if math.IsNaN(di) && math.IsNaN(dj) {
+		return false // consider NaNs equal to each other
+	}
+	if math.IsNaN(di) {
+		// if di is NaN, in a min-heap it should be considered greater, in a max-heap it should be considered lesser
+		return h.isMin
+	}
+	if math.IsNaN(dj) {
+		// if dj is NaN, in a min-heap it should be considered lesser, in a max-heap it should be considered greater
+		return !h.isMin
+	}
+
+	if h.isMin {
+		return di < dj
+	}
+	return di > dj
+}
+
 // TopKRowHeap is a heap that maintains a fixed size.
 type TopKRowHeap struct {
 	heap     RowHeap
@@ -88,7 +129,7 @@ type TopKRowHeap struct {
 }
 
 // NewTopKRowHeap creates a new TopKRowHeap with the given capacity and heap type.
-func NewTopKRowHeap(capacity int, isMin bool) (*TopKRowHeap, error) {
+func NewTopKRowHeap(capacity int, isMin bool, less RowsCompareLessFn) (*TopKRowHeap, error) {
 	if capacity == 0 {
 		return nil, ErrorZeroCapactiy
 	}
@@ -97,6 +138,7 @@ func NewTopKRowHeap(capacity int, isMin bool) (*TopKRowHeap, error) {
 		heap: RowHeap{
 			rows:  make([]*Row, 0, capacity),
 			isMin: isMin,
+			less:  less,
 		},
 		capacity: capacity,
 	}
@@ -104,15 +146,18 @@ func NewTopKRowHeap(capacity int, isMin bool) (*TopKRowHeap, error) {
 	return h, nil
 }
 
+func (h *TopKRowHeap) GetSortedRows() []*Row {
+	sort.Sort(h.heap)
+	return h.heap.Rows()
+}
+
 // Add inserts a new element into the heap, maintaining the fixed size.
 func (h *TopKRowHeap) Push(row *Row) {
 	if h.heap.Len() < h.capacity {
 		heap.Push(&h.heap, row)
 	} else {
-		isMin := h.heap.IsMin()
 		row0 := h.heap.GetRow(0)
-		if (isMin && row.dist > row0.dist) ||
-			(!isMin && row.dist < row0.dist) {
+		if h.heap.LessRows(row0, row) {
 			h.heap.SetRow(0, row)
 			heap.Fix(&h.heap, 0)
 			row0.free() // row0 is replaces so free it

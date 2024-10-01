@@ -248,7 +248,7 @@ func TestRowHeap(t *testing.T) {
 	testPatterns = append(testPatterns, testPatterns2...)
 	for _, tp := range testPatterns {
 		t.Run(tp.name, func(t *testing.T) {
-			heap, err := NewTopKRowHeap(len(tp.output), tp.minHeap)
+			heap, err := NewTopKRowHeap(len(tp.output), tp.minHeap, nil)
 			if err != nil && err != ErrorZeroCapactiy {
 				t.Fatal(err)
 			}
