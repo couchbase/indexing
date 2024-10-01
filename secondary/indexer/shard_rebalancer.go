@@ -4646,6 +4646,12 @@ func asyncCollectProgress(progHolder *float64Holder, collector func() float64, d
 func getCodebookPaths(tt *c.TransferToken) (codebookPaths []string) {
 
 	for _, idxInst := range tt.IndexInsts {
+		// Don't consider deferred indexes
+		if idxInst.Defn.Deferred && (idxInst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+			idxInst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
+			continue
+		}
+
 		if idxInst.Defn.IsVectorIndex {
 			for _, partnId := range idxInst.Defn.Partitions {
 

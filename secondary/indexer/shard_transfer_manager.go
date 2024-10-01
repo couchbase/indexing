@@ -960,6 +960,11 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 	var codebookPaths []string
 
 	for _, inst := range vectorIndexInsts {
+		// Don't consider deferred indexes
+		if inst.Defn.Deferred && (inst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+			inst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
+			continue
+		}
 		if _, ok := codebookMap[inst.InstId]; !ok {
 			codebookMap[inst.InstId] = make(map[c.PartitionId]string)
 		}
@@ -1005,6 +1010,10 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 		defer close(codebookRestoreDoneCh)
 
 		for _, vectorIdxInst := range vectorIndexInsts {
+			if vectorIdxInst.Defn.Deferred && (vectorIdxInst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+				vectorIdxInst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
+				continue
+			}
 			for _, partnId := range vectorIdxInst.Defn.Partitions {
 				select {
 				case <-cancelCh:
