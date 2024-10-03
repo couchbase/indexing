@@ -150,6 +150,25 @@ func TestCodebookIVFSQ(t *testing.T) {
 			t.Logf("Computed distance %v", dist)
 			t.Logf("Computed distance timing %v", delta)
 
+			dist2 := make([]float32, n)
+			//remove labels from codes
+			coarseSize := computeCoarseCodeSize(tc.nlist)
+
+			t0 = time.Now()
+			for i := 0; i < n; i++ {
+				codeStart := i*(tc.dim+coarseSize) + coarseSize
+				listno := decodeListNo(codes[i*(tc.dim+coarseSize) : codeStart])
+				tdist := make([]float32, 1)
+				err = codebook.ComputeDistanceEncoded(qvec, 1, codes[codeStart:codeStart+tc.dim], tdist, listno)
+				dist2[i] = tdist[0]
+				if err != nil {
+					t.Errorf("Error computing encoded distance %v", err)
+				}
+				delta = time.Now().Sub(t0)
+			}
+			t.Logf("Computed distance encoded %v, expected %v", dist2, dist)
+			t.Logf("Computed distance encoded timing %v", delta)
+
 			//encode and assign vector
 			codes = make([]byte, n*codeSize)
 			labels := make([]int64, n)
@@ -383,4 +402,50 @@ func TestIVFSQTiming(t *testing.T) {
 		})
 	}
 
+}
+
+//decodeListNo decodes the listno encoded
+//as little-endian []byte to an int64
+func decodeListNo(code []byte) int64 {
+	var listNo int64
+	nbit := 0
+
+	for i := 0; i < len(code); i++ {
+		listNo |= int64(code[i]) << nbit
+		nbit += 8
+	}
+
+	return listNo
+}
+
+//compute coarse code size based on nlist
+func computeCoarseCodeSize(nlist int) int {
+
+	nl := nlist - 1
+	nbyte := 0
+	for nl > 0 {
+		nbyte++
+		nl >>= 8
+	}
+	return nbyte
+}
+
+//stripCoarseCode is a helper function to strip out the coarse code from
+//the quantized code. This function doesn't allocate a new slice.
+func stripCoarseCode(codes []byte, total_code_size, coarse_size int) []byte {
+
+	code_size := total_code_size - coarse_size
+
+	num_codes := len(codes) / total_code_size
+
+	start_pos := 0
+	copy_to := 0
+	for i := 0; i < num_codes; i++ {
+		copy_from := start_pos + coarse_size //actual code
+		copy(codes[copy_to:copy_to+code_size], codes[copy_from:copy_from+code_size])
+		start_pos += total_code_size //pos of next code before strip
+		copy_to += code_size         //pos of next code after strip
+	}
+	codes = codes[:copy_to]
+	return codes
 }

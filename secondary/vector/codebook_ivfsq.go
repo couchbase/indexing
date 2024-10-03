@@ -258,6 +258,19 @@ func (cb *codebookIVFSQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) 
 	return 0
 }
 
+//Compute the distance between a vector and flat quantized codes.
+//Quantized codes are decoded first before distance comparison.
+//Codes must be provided without coarse code(i.e. centroid ID).
+//This function only works with vectors belonging to the same centroid(input as listno).
+func (cb *codebookIVFSQ) ComputeDistanceEncoded(qvec []float32,
+	n int, codes []byte, dists []float32, listno int64) error {
+
+	return cb.index.ComputeDistanceEncodedSQ(qvec, n, codes, dists, listno,
+		convertToFaissMetric(cb.metric),
+		convertToFaissSqRange(cb.sqRange),
+		cb.dim)
+}
+
 // Size returns the memory size in bytes.
 // Size() should be used after codebook is trained.
 func (cb *codebookIVFSQ) Size() int64 {
@@ -362,4 +375,27 @@ func recoverCodebookIVFSQ(data []byte) (c.Codebook, error) {
 
 	return cb, nil
 
+}
+
+func convertToFaissSqRange(sqRange common.ScalarQuantizerRange) int {
+
+	switch sqRange {
+
+	case common.SQ_8BIT:
+		return faiss.QT_8bit
+	case common.SQ_4BIT:
+		return faiss.QT_4bit
+	case common.SQ_8BIT_UNIFORM:
+		return faiss.QT_8bit_uniform
+	case common.SQ_4BIT_UNIFORM:
+		return faiss.QT_4bit_uniform
+	case common.SQ_FP16:
+		return faiss.QT_fp16
+	case common.SQ_8BIT_DIRECT:
+		return faiss.QT_8bit_direct
+	case common.SQ_6BIT:
+		return faiss.QT_6bit
+	}
+
+	return 0 // default to SQ8
 }
