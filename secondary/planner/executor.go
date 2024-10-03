@@ -6196,8 +6196,13 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			}
 
 			if useShardDealer {
-				// TODO add shard dealer code here
-				solution.shardDealer.GetSlot(defnId, replicaMap)
+				slotAlloted := solution.shardDealer.GetSlot(defnId, partnId, replicaMap)
+				if slotAlloted == 0 {
+					logging.Warnf("Planner::PopulateAlternateShardIds failed to get slot for {defnID: %v, partnID: %v}",
+						defnId, partnId)
+				}
+				logging.Tracef("Planner::PopulateAlternateShardIds assigned slot ID %v to {defnID: %v, partnID: %v} with replicaMap %v",
+					slotAlloted, defnId, partnId, replicaMap)
 			} else {
 				// If a new shard can be created for this partition across all indexer nodes,
 				// then generate new shardIds and populate the IndexUsage structure. A new shard

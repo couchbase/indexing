@@ -121,8 +121,8 @@ type ShardDealer struct {
 	slotsPerCategory map[ShardCategory]map[asSlotID]bool
 	// cluster level picture
 	slotsMap map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer
-	// defnId to slotId
-	indexSlots map[c.IndexDefnId]asSlotID
+	// <defnId, partnId> to slotID
+	partnSlots map[c.IndexDefnId]map[c.PartitionId]asSlotID
 
 	// per node pic of which shard pair belongs to which node
 	nodeToSlotMap       map[string]map[asSlotID]asReplicaID
@@ -153,9 +153,10 @@ func NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity uint6
 		minPartitionsPerShard: minPartitionsPerShard,
 		shardCapacityPerNode:  shardCapacity,
 
-		slotsPerCategory:    make(map[ShardCategory]map[asSlotID]bool),
-		slotsMap:            make(map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer),
-		indexSlots:          make(map[c.IndexDefnId]asSlotID),
+		slotsPerCategory: make(map[ShardCategory]map[asSlotID]bool),
+		slotsMap:         make(map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer),
+		// indexSlots:          make(map[c.IndexDefnId]asSlotID),
+		partnSlots:          make(map[c.IndexDefnId]map[c.PartitionId]asSlotID),
 		nodeToShardCountMap: make(map[string]uint64),
 
 		alternateShardIDGenerator: alternateShardIDGenerater,
@@ -218,11 +219,14 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, is
 	}
 	sd.slotsPerCategory[category][slotID] = true
 
-	// record defnId in indexSlots map
-	if sd.indexSlots == nil {
-		sd.indexSlots = make(map[c.IndexDefnId]asSlotID)
+	// record defnId in partnSlots map
+	if sd.partnSlots == nil {
+		sd.partnSlots = make(map[c.IndexDefnId]map[c.PartitionId]asSlotID)
 	}
-	sd.indexSlots[index.DefnId] = slotID
+	if sd.partnSlots[index.DefnId] == nil {
+		sd.partnSlots[index.DefnId] = make(map[c.PartitionId]asSlotID)
+	}
+	sd.partnSlots[index.DefnId][index.PartnId] = slotID
 
 	// record index in slotsMap
 	if sd.slotsMap == nil {
@@ -283,7 +287,7 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, is
 // GetSlot - returns an appropriate Slot to place the indexes of the defn `defnId` into
 // This could be a new slot or it could be an old slot being re-used
 // GetSlot is the implementation of the 3 pass shard distribution
-func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId,
+func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 	replicaMap map[int]map[*IndexerNode]*IndexUsage) asSlotID {
 
 	logging.Tracef("ShardDealer::GetSlot called for defnID %v with replica map %v",
@@ -387,27 +391,29 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId,
 
 	// Check if defnID already has a slot assigned. If that is the case, use the same slot to
 	// maintain consistency
-	if alternateShard, exists := sd.indexSlots[defnID]; exists {
-		logging.Tracef(
-			"ShardDealer::GetSlot slot %v already in-use for defn %v. setting slot on all indexes in %v",
-			alternateShard,
-			defnID,
-			replicaMap,
-		)
+	if alternateShardMap, exists := sd.partnSlots[defnID]; exists && len(alternateShardMap) > 0 {
+		if alternateShard, exists := alternateShardMap[partnID]; exists && alternateShard != 0 {
+			logging.Tracef(
+				"ShardDealer::GetSlot slot %v already in-use for defn %v. setting slot on all indexes in %v",
+				alternateShard,
+				defnID,
+				replicaMap,
+			)
 
-		// update shards
-		setSlotInShards(alternateShard)
+			// update shards
+			setSlotInShards(alternateShard)
 
-		// update index usages
-		setStoreOnAllUsages()
+			// update index usages
+			setStoreOnAllUsages()
 
-		// update book keeping
-		var errSlice = updateShardDealerRecords()
-		if len(errSlice) != 0 {
-			return 0
+			// update book keeping
+			var errSlice = updateShardDealerRecords()
+			if len(errSlice) != 0 {
+				return 0
+			}
+
+			return mainstoreShard.GetSlotId()
 		}
-
-		return mainstoreShard.GetSlotId()
 	}
 
 	var nodesForShard = make(map[string]bool, 0)
