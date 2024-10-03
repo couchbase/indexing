@@ -2211,7 +2211,7 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 
 	if config.EnableShardAffinity {
 		logging.Infof("************ Index Layout After Planning *************")
-		planner.GetResult()
+		planner.GetResult().PrintLayout()
 		logging.Infof("****************************************")
 
 		PopulateAlternateShardIds(planner.GetResult(), indexes, config.binSize, config.Override, config.UseShardDealer)
@@ -2819,7 +2819,12 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 			// Hence, always do filterSolution() on grouped indexes
 
 			for _, indexer := range solution.Placement {
-				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
+				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(
+					indexer.Indexes,        // indexes []*IndexUsage
+					indexer,                // indexer *IndexerNode
+					command == CommandPlan, // skipDeferredIndexGrouping bool
+					solution,               // solution *Solution
+				)
 			}
 
 			if err := filterSolution(solution); err != nil {
@@ -2844,7 +2849,12 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 
 		// Re-group indexes
 		for _, indexer := range solution.Placement {
-			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
+			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(
+				indexer.Indexes,        // indexes []*IndexUsage
+				indexer,                // indexer *IndexerNode
+				command == CommandPlan, // skipDefferedIndexGrouping bool
+				solution,               // solution *Solution
+			)
 		}
 
 		PopulateSiblingIndexForReplicaRepair(solution, config.binSize)
@@ -3947,7 +3957,11 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 	}
 
 	// initialise shardDealer in solution here
-	r.shardDealer = createShardDealerForIndexers(r.Placement, nil)
+	r.shardDealer = createShardDealerForIndexers(
+		r.Placement,                   // indexers []*IndexerNode
+		nil,                           // config common.Config
+		r.shardDealerMoveInstCallback, // mic func(srcNode, destNode string, partn *IndexUsage) error
+	)
 
 	return r, constraint, indexes, movedIndex, movedData
 }
@@ -6192,12 +6206,22 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			// are grouped together. Also, if a new alternate shardId has been generated in earlier
 			// iteration, regrouping will help to consider/prune the shard for current iteration
 			for _, indexer := range solution.Placement {
-				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, false)
+				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(
+					indexer.Indexes, // indexes []*IndexUsage
+					indexer,         // indexer *IndexerNode
+					false,           // skipDeferredIndexGrouping bool
+					solution,        // solution *Solution
+				)
 			}
 
 			if useShardDealer {
-				// TODO add shard dealer code here
-				solution.shardDealer.GetSlot(defnId, replicaMap)
+				slotAlloted := solution.shardDealer.GetSlot(defnId, partnId, replicaMap)
+				if slotAlloted == 0 {
+					logging.Warnf("Planner::PopulateAlternateShardIds failed to get slot for {defnID: %v, partnID: %v}",
+						defnId, partnId)
+				}
+				logging.Tracef("Planner::PopulateAlternateShardIds assigned slot ID %v to {defnID: %v, partnID: %v} with replicaMap %v",
+					slotAlloted, defnId, partnId, replicaMap)
 			} else {
 				// If a new shard can be created for this partition across all indexer nodes,
 				// then generate new shardIds and populate the IndexUsage structure. A new shard
@@ -7045,4 +7069,24 @@ func newPlanFromSolution(plan *Plan, solution *Solution) *Plan {
 
 	newPlan.UsedReplicaIdMap = GenerateReplicaMap(solution.Placement)
 	return newPlan
+}
+
+func (solution *Solution) shardDealerMoveInstCallback(srcNodeUUID, destNodeUUID string,
+	partn *IndexUsage) error {
+	var srcNode, destNode *IndexerNode
+	for _, node := range solution.Placement {
+		switch node.NodeUUID {
+		case srcNodeUUID:
+			srcNode = node
+		case destNodeUUID:
+			destNode = node
+		}
+	}
+
+	if srcNode == nil || destNode == nil {
+		return fmt.Errorf("couldn't find node %v/%v in solution to move",
+			srcNodeUUID, destNodeUUID)
+	}
+
+	return solution.moveIndex(srcNode, partn, destNode, false)
 }

@@ -373,7 +373,12 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 		}
 
 		for _, indexer := range solution.Placement {
-			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
+			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(
+				indexer.Indexes,        // indexes []*IndexUsage
+				indexer,                // indexer *IndexerNode
+				command == CommandPlan, // skipDeferredIndexGrouping bool
+				solution,               // solution *Solution
+			)
 		}
 		solution.place.RegroupIndexes(command == CommandPlan)
 
@@ -2059,7 +2064,12 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 		}
 
 		for _, indexer := range solution.Placement {
-			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
+			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(
+				indexer.Indexes,        // indexes []*IndexUsage
+				indexer,                // indexer *IndexerNode
+				command == CommandPlan, // skipDeferredIndexGrouping bool
+				solution,               // solution *Solution
+			)
 		}
 
 		solution.place.RegroupIndexes(command == CommandPlan)

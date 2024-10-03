@@ -10,6 +10,7 @@ package planner
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"reflect"
@@ -2053,7 +2054,8 @@ func validateShardIds(index *IndexUsage) bool {
 	return true
 }
 
-func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode, skipDeferredIndexGrouping bool) ([]*IndexUsage, int, error) {
+func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode, skipDeferredIndexGrouping bool,
+	solution *Solution) ([]*IndexUsage, int, error) {
 
 	result := []*IndexUsage{}
 	numShards := 0
@@ -2154,6 +2156,12 @@ func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode, skipDeferredIndex
 				index.updateProxyStats(shardStats)
 			}
 		}
+
+		if solution != nil && solution.shardDealer != nil {
+			for _, shardStats := range indexer.ShardStats {
+				solution.shardDealer.UpdateStatsForShard(shardStats)
+			}
+		}
 	}
 
 	return result, numShards, nil
@@ -2182,7 +2190,9 @@ func UngroupIndexes(solution *Solution) {
 // createShardDealerForIndexers inits the ShardDealer on each indexer from config
 // if shard affinity is enabled. ONLY call this if indexer node has all the stats set
 // as these stats will be used for the shard dealer initialisation
-func createShardDealerForIndexers(indexers []*IndexerNode, config common.Config) *ShardDealer {
+func createShardDealerForIndexers(indexers []*IndexerNode, config common.Config,
+	moveInstanceCallback moveFuncCb) *ShardDealer {
+
 	if config == nil {
 		var err error
 		config, err = common.GetSettingsConfig(common.SystemConfig)
@@ -2223,10 +2233,22 @@ func createShardDealerForIndexers(indexers []*IndexerNode, config common.Config)
 		return nil
 	}
 
-	var dealer = NewShardDealer2(minShardsPerNode, minPartitionsPerShard, 0, 0)
+	var shardCapacity uint64 = math.MaxUint64
+	for _, indexer := range indexers {
+		indexer.ComputeMinShardCapacity(config)
+		if indexer.MinShardCapacity < int(shardCapacity) {
+			shardCapacity = uint64(indexer.MinShardCapacity)
+		}
+	}
+
+	var dealer = NewDefaultShardDealer(minShardsPerNode, minPartitionsPerShard, 0, shardCapacity)
+	dealer.SetMoveInstanceCallback(moveInstanceCallback)
 
 	for _, indexer := range indexers {
 		populateShardDealerWithNode(dealer, indexer)
+		for _, shardStat := range indexer.ShardStats {
+			dealer.UpdateStatsForShard(shardStat)
+		}
 	}
 
 	return dealer

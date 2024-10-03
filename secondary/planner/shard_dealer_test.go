@@ -66,6 +66,7 @@ func TestBasicSlotAssignment(t *testing.T) {
 		maxDiskUsagePerShard,
 		shardCapacity,
 		createNewAlternateShardIDGenerator(),
+		nil,
 	)
 
 	var indexerNode = createDummyIndexerNode(t.Name(), 1, 1, 0, 0, 0)
@@ -75,7 +76,7 @@ func TestBasicSlotAssignment(t *testing.T) {
 		replicaMap[inst.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
 		replicaMap[inst.Instance.ReplicaId][indexerNode] = inst
 
-		slotID := dealer.GetSlot(inst.DefnId, replicaMap)
+		slotID := dealer.GetSlot(inst.DefnId, inst.PartnId, replicaMap)
 
 		if slotID == 0 {
 			t.Fatalf("%v failed to get slot id for index %v in 0th pass",
@@ -94,9 +95,9 @@ func TestBasicSlotAssignment(t *testing.T) {
 		}
 	}
 
-	if len(dealer.indexSlots) != 2 {
+	if len(dealer.partnSlots) != 2 {
 		t.Fatalf("%v shard dealer book keeping mismatch - expected it to contain 2 index defns but it has %v",
-			t.Name(), dealer.indexSlots)
+			t.Name(), dealer.partnSlots)
 	}
 
 	if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != 3 {
@@ -172,7 +173,7 @@ func createDummyIndexerNode(nodeID string, num2iIndexes, numPrimaryIndexes, numV
 
 func getReplicaMapsForIndexerNode(
 	node *IndexerNode,
-) map[c.IndexDefnId][]map[int]map[*IndexerNode]*IndexUsage {
+) map[c.IndexDefnId]map[c.PartitionId]map[int]map[*IndexerNode]*IndexUsage {
 	var defnMap = make(map[c.IndexDefnId]map[c.PartitionId]map[int]map[*IndexerNode]*IndexUsage)
 
 	for _, partn := range node.Indexes {
@@ -193,15 +194,7 @@ func getReplicaMapsForIndexerNode(
 		defnMap[partn.DefnId][partn.PartnId][partn.Instance.ReplicaId][node] = partn
 	}
 
-	var res = make(map[c.IndexDefnId][]map[int]map[*IndexerNode]*IndexUsage)
-	for defnID, partnReplicaMap := range defnMap {
-		res[defnID] = make([]map[int]map[*IndexerNode]*IndexUsage, 0, len(partnReplicaMap))
-		for _, replicaMap := range partnReplicaMap {
-			res[defnID] = append(res[defnID], replicaMap)
-		}
-	}
-
-	return res
+	return defnMap
 }
 
 func TestSingleNodeAssignment(t *testing.T) {
@@ -215,6 +208,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				maxDiskUsagePerShard,
 				shardCapacity,
 				createNewAlternateShardIDGenerator(),
+				nil,
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), 0, minShardsPerNode, 0, 0, 0)
@@ -224,8 +218,8 @@ func TestSingleNodeAssignment(t *testing.T) {
 			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
 
 			for defnID, repMaps := range replicaMaps {
-				for _, repmap := range repMaps {
-					slotID := dealer.GetSlot(defnID, repmap)
+				for partnID, repmap := range repMaps {
+					slotID := dealer.GetSlot(defnID, partnID, repmap)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -242,9 +236,9 @@ func TestSingleNodeAssignment(t *testing.T) {
 			}
 
 			// TODO: temp. replace with `validateShardDealerInternals`
-			if len(dealer.indexSlots) != int(minShardsPerNode) {
+			if len(dealer.partnSlots) != int(minShardsPerNode) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(), dealer.indexSlots, minShardsPerNode)
+					t0.Name(), dealer.partnSlots, minShardsPerNode)
 			}
 			if len(dealer.slotsMap) != int(minShardsPerNode) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
@@ -262,7 +256,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 			var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
 			replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
 			replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
-			slotID := dealer.GetSlot(extraIndex.DefnId, replicaMap)
+			slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap)
 			if _, exists := slotIDs[slotID]; slotID != 0 && !exists {
 				t0.Fatalf("%v extra slot created when it was not expected. New slot %v. All Slots %v",
 					t0.Name(), slotID, slotIDs)
@@ -282,6 +276,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				maxDiskUsagePerShard,
 				shardCapacity,
 				createNewAlternateShardIDGenerator(),
+				nil,
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), minShardsPerNode, minShardsPerNode, 0, 0, 0)
@@ -291,8 +286,8 @@ func TestSingleNodeAssignment(t *testing.T) {
 			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
 
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
-				for _, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), repmap)
+				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot id for replica map %v in 0th pass",
@@ -332,9 +327,9 @@ func TestSingleNodeAssignment(t *testing.T) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
 					t0.Name(), len(alternateShardIDs), dealer.nodeToShardCountMap[indexerNode.NodeUUID])
 			}
-			if len(dealer.indexSlots) != len(indexerNode.Indexes) {
+			if len(dealer.partnSlots) != len(indexerNode.Indexes) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - expected %v index defns but it has %v",
-					t0.Name(), len(indexerNode.Indexes), len(dealer.indexSlots))
+					t0.Name(), len(indexerNode.Indexes), len(dealer.partnSlots))
 			}
 		})
 
@@ -353,6 +348,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				maxDiskUsagePerShard,
 				shardCapacity,
 				createNewAlternateShardIDGenerator(),
+				nil,
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), 0, minPartitionsPerShard, 0, 0, 0)
@@ -362,8 +358,8 @@ func TestSingleNodeAssignment(t *testing.T) {
 			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
 
 			for defnID, repMaps := range replicaMaps {
-				for _, repmap := range repMaps {
-					slotID := dealer.GetSlot(defnID, repmap)
+				for partnID, repmap := range repMaps {
+					slotID := dealer.GetSlot(defnID, partnID, repmap)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -380,9 +376,9 @@ func TestSingleNodeAssignment(t *testing.T) {
 			}
 
 			// TODO: temp. replace with `validateShardDealerInternals`
-			if len(dealer.indexSlots) != int(minPartitionsPerShard) {
+			if len(dealer.partnSlots) != int(minPartitionsPerShard) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(), dealer.indexSlots, minPartitionsPerShard)
+					t0.Name(), dealer.partnSlots, minPartitionsPerShard)
 			}
 			if len(dealer.slotsMap) != int(minShardsPerNode) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
@@ -405,6 +401,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				maxDiskUsagePerShard,
 				shardCapacity,
 				createNewAlternateShardIDGenerator(),
+				nil,
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), minShardsPerNode*2, minShardsPerNode*2, 0, 0, 0)
@@ -413,8 +410,8 @@ func TestSingleNodeAssignment(t *testing.T) {
 			var alternateShardIDs = make(map[string]bool)
 
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
-				for _, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), repmap)
+				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
 
 					if slotID == 0 {
 						t0.Fatalf("%v expected to get a valid slot for replica map %v but got 0",
@@ -456,9 +453,9 @@ func TestSingleNodeAssignment(t *testing.T) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
 					t0.Name(), 2*minShardsPerNode, dealer.nodeToShardCountMap[indexerNode.NodeUUID])
 			}
-			if len(dealer.indexSlots) != int(minShardsPerNode)*4 {
+			if len(dealer.partnSlots) != int(minShardsPerNode)*4 {
 				t0.Fatalf("%v shard dealer book keeping mismatch - expected %v index defns but it has %v",
-					t0.Name(), minShardsPerNode*4, len(dealer.indexSlots))
+					t0.Name(), minShardsPerNode*4, len(dealer.partnSlots))
 			}
 		})
 
@@ -471,6 +468,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				maxDiskUsagePerShard,
 				shardCapacity,
 				createNewAlternateShardIDGenerator(),
+				nil,
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), 1, 1, 1, 1, 0)
@@ -479,8 +477,8 @@ func TestSingleNodeAssignment(t *testing.T) {
 			var alternateShardIDs = make(map[string]bool)
 
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
-				for _, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), repmap)
+				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot for replica map %v",
@@ -558,6 +556,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				maxDiskUsagePerShard,
 				shardCapacity,
 				createNewAlternateShardIDGenerator(),
+				nil,
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), 0, shardCapacity/10, 0, 0, 0)
@@ -567,8 +566,8 @@ func TestSingleNodeAssignment(t *testing.T) {
 			var slotIDs = make(map[c.AlternateShard_SlotId]bool)
 
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
-				for _, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), repmap)
+				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -585,9 +584,9 @@ func TestSingleNodeAssignment(t *testing.T) {
 			}
 
 			// TODO: temp. replace with `validateShardDealerInternals`
-			if len(dealer.indexSlots) != len(slotIDs) {
+			if len(dealer.partnSlots) != len(slotIDs) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(), dealer.indexSlots, minShardsPerNode)
+					t0.Name(), dealer.partnSlots, minShardsPerNode)
 			}
 			if len(dealer.slotsMap) != len(slotIDs) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
@@ -610,6 +609,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				maxDiskUsagePerShard,
 				testShardCapacity,
 				createNewAlternateShardIDGenerator(),
+				nil,
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), testShardCapacity, 0, 0, 0, 0)
@@ -619,8 +619,8 @@ func TestSingleNodeAssignment(t *testing.T) {
 			var alternateShardIDs = make(map[string]bool)
 
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
-				for _, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
-					var slotID = dealer.GetSlot(c.IndexDefnId(defnID), repmap)
+				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+					var slotID = dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot for replica map %v",
@@ -657,9 +657,9 @@ func TestSingleNodeAssignment(t *testing.T) {
 					t0.Name(), testShardCapacity, len(alternateShardIDs), alternateShardIDs)
 			}
 			// TODO: temp. replace with `validateShardDealerInternals`
-			if len(dealer.indexSlots) != int(testShardCapacity) {
+			if len(dealer.partnSlots) != int(testShardCapacity) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(), dealer.indexSlots, testShardCapacity)
+					t0.Name(), dealer.partnSlots, testShardCapacity)
 			}
 			if len(dealer.slotsMap) != len(slotIDs) {
 				t0.Fatalf("%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
@@ -678,7 +678,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 			var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
 			replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
 			replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
-			slotID := dealer.GetSlot(extraIndex.DefnId, replicaMap)
+			slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap)
 			if _, exists := slotIDs[slotID]; slotID != 0 && !exists {
 				t0.Fatalf("%v extra slot created when it was not expected. New slot %v. All Slots %v",
 					t0.Name(), slotID, slotIDs)
@@ -694,6 +694,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 				maxDiskUsagePerShard,
 				shardCapacity,
 				createNewAlternateShardIDGenerator(),
+				nil,
 			)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), minShardsPerNode, minShardsPerNode, 1, 1, 0)
@@ -702,8 +703,8 @@ func TestSingleNodeAssignment(t *testing.T) {
 			var alternateShardIDs = make(map[string]bool)
 
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
-				for _, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), repmap)
+				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot for replica map %v",
@@ -780,6 +781,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 			maxDiskUsagePerShard,
 			testShardCapacity,
 			createNewAlternateShardIDGenerator(),
+			nil,
 		)
 
 		var indexerNode = createDummyIndexerNode(subt.Name(), testShardCapacity, testShardCapacity, testShardCapacity/4, testShardCapacity/4, 0)
@@ -789,8 +791,8 @@ func TestSingleNodeAssignment(t *testing.T) {
 		var alternateShardIDs = make(map[string]bool)
 
 		for defnID := len(indexerNode.Indexes); defnID >= 0; defnID-- {
-			for _, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
-				var slotID = dealer.GetSlot(c.IndexDefnId(defnID), repmap)
+			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+				var slotID = dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
 
 				if slotID == 0 {
 					subt.Fatalf("%v failed to get slot for replica map %v",
@@ -827,9 +829,9 @@ func TestSingleNodeAssignment(t *testing.T) {
 				subt.Name(), testShardCapacity, len(alternateShardIDs), alternateShardIDs)
 		}
 		// TODO: temp. replace with `validateShardDealerInternals`
-		if len(dealer.indexSlots) != len(indexerNode.Indexes) {
+		if len(dealer.partnSlots) != len(indexerNode.Indexes) {
 			subt.Fatalf("%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-				subt.Name(), dealer.indexSlots, len(indexerNode.Indexes))
+				subt.Name(), dealer.partnSlots, len(indexerNode.Indexes))
 		}
 		if len(dealer.slotsMap) != len(slotIDs) {
 			subt.Fatalf("%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
@@ -848,7 +850,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 		var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
 		replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
 		replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
-		slotID := dealer.GetSlot(extraIndex.DefnId, replicaMap)
+		slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap)
 		if slotID == 0 {
 			subt.Fatalf("%v failed to get slot id for replicaMap %v",
 				subt.Name(), replicaMap)
