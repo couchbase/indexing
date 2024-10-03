@@ -299,6 +299,33 @@ func (idx *IndexImpl) DecodeVectors(nx int, codes []byte, x []float32) (err erro
 	return err
 }
 
+//Compute the distance between a vector with a list of flat quantized codes.
+//This function needs a listno as input and all the codes must belong to
+//the same listno. The computed distances are returned in `dists`.
+func (idx *IndexImpl) ComputeDistanceEncodedSQ(qvec []float32,
+	nx int, codes []byte, dists []float32, listno int64, metric int, qt int, dim int) (err error) {
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
+	if ivfPtr == nil {
+		return fmt.Errorf("index is not of ivf type")
+	}
+
+	if C.faiss_IndexIVF_compute_distance_to_codes_for_list(
+		ivfPtr,
+		C.faiss_idx_t(listno),
+		(*C.float)(&qvec[0]),
+		C.faiss_idx_t(nx),
+		(*C.uint8_t)(&codes[0]),
+		(*C.float)(&dists[0])) != 0 {
+		err = getLastError()
+		return
+	}
+	return
+}
+
 func RenormL2(d int, nx int, x []float32) {
 	C.faiss_fvec_renorm_L2(
 		C.size_t(d),
