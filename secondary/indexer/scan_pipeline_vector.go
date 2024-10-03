@@ -462,7 +462,7 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		}
 	}()
 
-	logging.Verbosef("%v processCurrentBatch %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid)
+	logging.Verbosef("%v processCurrentBatch %v %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid, w.currJob.cid)
 
 	if len(w.currBatchRows) == 0 {
 		return
@@ -476,29 +476,49 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		w.codes = append(w.codes, codei...)
 	}
 
-	// Decode vectors
-	t0 := time.Now()
-	err = w.currJob.codebook.DecodeVectors(vecCount, w.codes, w.fvecs[:vecCount*w.vectorDim])
-	if err != nil {
-		logging.Verbosef("%v Sender got error: %v from DecodeVectors", w.logPrefix, err)
-		return
+	qtype := w.r.IndexInst.Defn.VectorMeta.Quantizer.Type
+
+	//ComputeDistanceEncoded is only implemented for SQ currently. It can only
+	//be used if all vectors in a batch belong to the same centroid. If cid < 0,
+	//it implies that scan is spanning across centroids.
+	if w.currJob.cid < 0 && qtype == c.SQ {
+
+		t0 := time.Now()
+
+		qvec := w.r.queryVector
+		w.dists = w.dists[:vecCount]
+		err = w.currJob.codebook.ComputeDistanceEncoded(qvec, vecCount, w.codes, w.dists, w.currJob.cid)
+		if err != nil {
+			logging.Verbosef("%v Sender got error: %v from ComputeDistance", w.logPrefix, err)
+			return
+		}
+		atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
+		atomic.AddInt64(&w.currJob.distCmpCnt, int64(vecCount))
+	} else {
+		// Decode vectors
+		t0 := time.Now()
+		err = w.currJob.codebook.DecodeVectors(vecCount, w.codes, w.fvecs[:vecCount*w.vectorDim])
+		if err != nil {
+			logging.Verbosef("%v Sender got error: %v from DecodeVectors", w.logPrefix, err)
+			return
+		}
+		atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
+		atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
+
+		// Compute distance from query vector using codebook
+		t0 = time.Now()
+		qvec := w.r.queryVector
+		w.dists = w.dists[:vecCount]
+		err = w.currJob.codebook.ComputeDistance(qvec, w.fvecs[:vecCount*w.vectorDim], w.dists)
+		if err != nil {
+			logging.Verbosef("%v Sender got error: %v from ComputeDistance", w.logPrefix, err)
+			return
+		}
+
+		atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
+		atomic.AddInt64(&w.currJob.distCmpCnt, int64(vecCount))
+
 	}
-	atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
-	atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
-
-	// Compute distance from query vector using codebook
-	t0 = time.Now()
-	qvec := w.r.queryVector
-	w.dists = w.dists[:vecCount]
-	err = w.currJob.codebook.ComputeDistance(qvec, w.fvecs[:vecCount*w.vectorDim], w.dists)
-	if err != nil {
-		logging.Verbosef("%v Sender got error: %v from ComputeDistance", w.logPrefix, err)
-		return
-	}
-
-	atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
-	atomic.AddInt64(&w.currJob.distCmpCnt, int64(vecCount))
-
 	// Substitue distance in place centroidId and send to outCh or store in local heap
 	for i := 0; i < vecCount; i++ {
 		w.currBatchRows[i].dist = w.dists[i] // Add distance for sorting in heap
