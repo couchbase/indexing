@@ -284,6 +284,7 @@
     "index_num_items_flushed": {
         "type": "counter",
         "help": "Number of documents written from memory to index storage",
+        "added": "7.6.4",
         "labels": [
             "bucket",
             "scope",
@@ -292,9 +293,10 @@
         ]
     },
     "index_disk_bytes": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Number of bytes read from and written to disk, including insert, get, and delete operations",
         "unit": "bytes",
+        "added": "7.6.4",
         "labels": [
             "bucket",
             "scope",
