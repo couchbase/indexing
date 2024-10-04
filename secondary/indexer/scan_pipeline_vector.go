@@ -31,6 +31,8 @@ type ScanJob struct {
 	codebook codebook.Codebook
 	doneCh   chan<- struct{}
 
+	coarseSize int
+
 	bytesRead    uint64
 	rowsScanned  uint64
 	rowsReturned uint64
@@ -56,6 +58,7 @@ func NewScanJob(r *ScanRequest, batch int, pid common.PartitionId, cid int64, sc
 		ctx:      ctx,
 		codebook: cb,
 	}
+	j.coarseSize = r.getVectorCoarseSize()
 	j.logPrefix = fmt.Sprintf("%v[%v]ScanJob Batch(%v) Partn(%v) Centroid(%v) Scan[%s-%s]", r.LogPrefix, r.RequestId,
 		j.batch, j.pid, j.cid, logging.TagUD(j.scan.Low), logging.TagUD(j.scan.High))
 	j.doneCh = make(chan<- struct{})
@@ -470,12 +473,6 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 
 	vecCount := len(w.currBatchRows)
 
-	// Make list of vectors to calculate distance
-	for i := 0; i < vecCount; i++ {
-		codei := w.currBatchRows[i].value
-		w.codes = append(w.codes, codei...)
-	}
-
 	qtype := w.r.IndexInst.Defn.VectorMeta.Quantizer.Type
 
 	//ComputeDistanceEncoded is only implemented for SQ currently. It can only
@@ -483,6 +480,12 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 	//it implies that scan is spanning across centroids.
 	if w.currJob.cid < 0 && qtype == c.SQ {
 
+		// Make list of vectors to calculate distance
+		for i := 0; i < vecCount; i++ {
+			codei := w.currBatchRows[i].value
+			codei = codei[w.currJob.coarseSize:] //strip coarse code(i.e. centroidID)
+			w.codes = append(w.codes, codei...)
+		}
 		t0 := time.Now()
 
 		qvec := w.r.queryVector
@@ -495,6 +498,11 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
 		atomic.AddInt64(&w.currJob.distCmpCnt, int64(vecCount))
 	} else {
+		// Make list of vectors to calculate distance
+		for i := 0; i < vecCount; i++ {
+			codei := w.currBatchRows[i].value
+			w.codes = append(w.codes, codei...)
+		}
 		// Decode vectors
 		t0 := time.Now()
 		err = w.currJob.codebook.DecodeVectors(vecCount, w.codes, w.fvecs[:vecCount*w.vectorDim])
