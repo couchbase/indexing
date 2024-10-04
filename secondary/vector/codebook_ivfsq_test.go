@@ -418,18 +418,6 @@ func decodeListNo(code []byte) int64 {
 	return listNo
 }
 
-//compute coarse code size based on nlist
-func computeCoarseCodeSize(nlist int) int {
-
-	nl := nlist - 1
-	nbyte := 0
-	for nl > 0 {
-		nbyte++
-		nl >>= 8
-	}
-	return nbyte
-}
-
 //stripCoarseCode is a helper function to strip out the coarse code from
 //the quantized code. This function doesn't allocate a new slice.
 func stripCoarseCode(codes []byte, total_code_size, coarse_size int) []byte {

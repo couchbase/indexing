@@ -21,6 +21,9 @@ type Codebook interface {
 	//CodeSize returns the size of produced code in bytes.
 	CodeSize() (int, error)
 
+	//CoarseSize returns the size of the coarse code for IVF index.
+	CoarseSize() (int, error)
+
 	//Compute the quantized code for a given input vector.
 	//Must be run on a trained codebook.
 	EncodeVector(vec []float32, code []byte) error

@@ -136,6 +136,7 @@ func (mc *MockCodebook) DecodeVectors(n int, codes []byte, vecs []float32) error
 }
 
 func (mc *MockCodebook) CodeSize() (int, error)                           { return 0, nil }
+func (mc *MockCodebook) CoarseSize() (int, error)                         { return 0, nil }
 func (mc *MockCodebook) EncodeVectors(vecs []float32, codes []byte) error { return nil }
 func (mc *MockCodebook) EncodeAndAssignVectors(vecs []float32, codes []byte, labels []int64) error {
 	return nil

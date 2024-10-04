@@ -138,6 +138,15 @@ func (cb *codebookIVFSQ) CodeSize() (int, error) {
 	return cb.index.CodeSize()
 }
 
+// CoarseSize returns the size of produced code in bytes.
+func (cb *codebookIVFSQ) CoarseSize() (int, error) {
+
+	if !cb.IsTrained() {
+		return 0, c.ErrCodebookNotTrained
+	}
+	return computeCoarseCodeSize(cb.nlist), nil
+}
+
 // Compute the quantized code for a given input vector.
 // Must be run on a trained codebook.
 func (cb *codebookIVFSQ) EncodeVector(vec []float32, code []byte) error {
