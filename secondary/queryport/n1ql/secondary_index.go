@@ -1563,7 +1563,7 @@ func (si *secondaryIndex2) countInternal(requestId string, spans datastore.Spans
 	skipReadMetering := false
 	user := ""
 	reqDeadline := time.Time{}
-	var reqDeadlineSlack time.Duration 
+	var reqDeadlineSlack time.Duration
 	if conn != nil {
 		skipReadMetering = conn.SkipMetering()
 		user = conn.User()
@@ -1898,6 +1898,21 @@ func (si *secondaryIndex6) Include() (rvs expression.Expressions) {
 
 func (si *secondaryIndex6) VectorDescription() string {
 	return si.vectorDescription
+}
+
+//[VECTOR_TODO] stub function, needs to be updated
+func (si *secondaryIndex6) NumberOfCentroids() int {
+	return int(0)
+}
+
+//[VECTOR_TODO] stub function, needs to be updated
+func (si *secondaryIndex6) NumberOfPartitions() int {
+	return int(0)
+}
+
+//[VECTOR_TODO] stub function, needs to be updated
+func (si *secondaryIndex6) MaxHeapSize() int {
+	return int(8192) //keep this as index config
 }
 
 // Scan6 implements Index6 interface
@@ -2318,7 +2333,6 @@ func n1qlError(client *qclient.GsiClient, err error) errors.Error {
 
 	return errors.NewError(err, client.DescribeError(err))
 }
-
 
 //-----------------------
 // datastore.Statistics{}
