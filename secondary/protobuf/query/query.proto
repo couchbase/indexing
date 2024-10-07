@@ -26,6 +26,11 @@ message IndexVector {
     required bool  actualVector  = 4;
 }
 
+message IndexKeyOrder {
+    repeated int32 keyPos = 1;
+    repeated bool  desc   = 2;
+}
+
 // Request can be one of the optional field.
 message QueryPayload {
     required uint32             version           = 1;
@@ -87,6 +92,7 @@ message ScanRequest {
     optional bool               skipReadMetering    = 18;
     optional IndexVector        indexVector     = 19;
     optional int64              ReqTimeout      = 20;
+    optional IndexKeyOrder      indexOrder      = 21;
 }
 
 // Full table scan request from indexer.

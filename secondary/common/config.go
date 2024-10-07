@@ -1356,6 +1356,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.enableArenaSeparation": ConfigValue{
+		true,
+		"Use user created jemalloc arenas for plasma. This is for co-existence with bhive indexes",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.numReaders": ConfigValue{
 		runtime.GOMAXPROCS(0) * 3,
 		"Numbers of readers for plasma",

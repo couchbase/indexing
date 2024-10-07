@@ -182,7 +182,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		if r.Offset != 0 {
 			w.heapSize += int(r.Offset)
 		}
-		w.heap, _ = NewTopKRowHeap(w.heapSize, false)
+		w.heap, _ = NewTopKRowHeap(w.heapSize, false, nil)
 	}
 
 	w.logPrefix = fmt.Sprintf("%v[%v]ScanWorker[%v]", r.LogPrefix, r.RequestId, id)
@@ -249,7 +249,7 @@ func (w *ScanWorker) Scanner() {
 
 		w.senderCh = make(chan *Row, w.senderChSize)
 		w.senderErrCh = make(chan error)
-		w.heap, _ = NewTopKRowHeap(w.heapSize, false)
+		w.heap, _ = NewTopKRowHeap(w.heapSize, false, nil)
 
 		scan := job.scan
 		snap := job.snap.Snapshot()
@@ -930,7 +930,7 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 			heapSize += r.Offset
 		}
 
-		fio.heap, err = NewTopKRowHeap(int(heapSize), false)
+		fio.heap, err = NewTopKRowHeap(int(heapSize), false, nil)
 		if err != nil {
 			return nil, err
 		}
