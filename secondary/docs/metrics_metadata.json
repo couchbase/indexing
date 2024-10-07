@@ -304,6 +304,30 @@
             "index"
         ]
     },
+    "index_codebook_mem_usage": {
+        "type": "counter",
+        "help": "Amount of memory used by codebook for this index, includes memory used for coarse codebook and quantization codebook",
+        "unit": "bytes",
+        "added": "7.7",
+        "labels": [
+            "bucket",
+            "scope",
+            "collection",
+            "index"
+        ]
+    },
+    "index_codebook_train_duration": {
+        "type": "counter",
+        "help": "Amount of time spent in training the codebook, for this index",
+        "unit": "Nanoseconds",
+        "added": "7.7",
+        "labels": [
+            "bucket",
+            "scope",
+            "collection",
+            "index"
+        ]
+    },
     "index_memory_used_total": {
         "type": "gauge",
         "help": "Total memory used by the indexer process",
