@@ -44,6 +44,8 @@ type Row struct {
 	sortKey []byte // Used in order by
 
 	mem *allocator
+
+	rowBuf *AtomicRowBuffer //cache for Row objects, only used for vector index
 }
 
 type Queue struct {
@@ -423,6 +425,9 @@ func (r *Row) init(mem *allocator) {
 func (r *Row) free() {
 	if r.mem != nil {
 		r.freeKeyBuf()
+	}
+	if r.rowBuf != nil {
+		r.rowBuf.Put(r)
 	}
 }
 
