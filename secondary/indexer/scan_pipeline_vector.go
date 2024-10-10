@@ -182,7 +182,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		if r.Offset != 0 {
 			w.heapSize += int(r.Offset)
 		}
-		w.heap, _ = NewTopKRowHeap(w.heapSize, false, nil)
+		w.heap, _ = NewTopKRowHeap(w.heapSize, false, r.getRowCompare())
 	}
 
 	w.logPrefix = fmt.Sprintf("%v[%v]ScanWorker[%v]", r.LogPrefix, r.RequestId, id)
@@ -249,7 +249,7 @@ func (w *ScanWorker) Scanner() {
 
 		w.senderCh = make(chan *Row, w.senderChSize)
 		w.senderErrCh = make(chan error)
-		w.heap, _ = NewTopKRowHeap(w.heapSize, false, nil)
+		w.heap, _ = NewTopKRowHeap(w.heapSize, false, w.r.getRowCompare())
 
 		scan := job.scan
 		snap := job.snap.Snapshot()
@@ -411,6 +411,7 @@ func (w *ScanWorker) flushLocalHeap() {
 
 			entry1 := secondaryIndexEntry(row.key)
 			newRow.len = entry1.lenKey()
+			newRow.sortKey = row.sortKey
 		}
 
 		select {
@@ -501,6 +502,19 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 	// Substitue distance in place centroidId and send to outCh or store in local heap
 	for i := 0; i < vecCount; i++ {
 		w.currBatchRows[i].dist = w.dists[i] // Add distance for sorting in heap
+
+		var sortKey []byte
+		if w.r.indexOrder != nil && w.r.indexOrder.IsSortKeyNeeded() {
+			// VECTOR_TODO: Optimize buffer allocation
+			sortKey = make([]byte, 0, len(w.currBatchRows[i].key)*3)
+			sortKey, err = w.makeSortKeyForOrderBy(nil, w.r.indexOrder,
+				w.currBatchRows[i].key, w.dists[i], w.r.getVectorKeyPos(),
+				w.r.indexOrder.vectorDistDesc, sortKey)
+			if err != nil {
+				return err
+			}
+			w.currBatchRows[i].sortKey = sortKey
+		}
 
 		if w.r.useHeapForVectorIndex() {
 			w.heap.Push(w.currBatchRows[i])
@@ -930,7 +944,7 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 			heapSize += r.Offset
 		}
 
-		fio.heap, err = NewTopKRowHeap(int(heapSize), false, nil)
+		fio.heap, err = NewTopKRowHeap(int(heapSize), false, r.getRowCompare())
 		if err != nil {
 			return nil, err
 		}
@@ -1111,7 +1125,8 @@ func (fio *MergeOperator) Collector() {
 	rowList := fio.heap.List()
 	sortedRows := RowHeap{
 		rows:  make([]*Row, 0),
-		isMin: true,
+		isMin: fio.req.indexOrder.IsOrderAscending(),
+		less:  fio.req.getRowCompare(),
 	}
 	sortedRows.rows = append(sortedRows.rows, rowList...)
 	sort.Sort(sortedRows)
@@ -1514,4 +1529,56 @@ func NewScanPipeline2(req *ScanRequest, w ScanResponseWriter, is IndexSnapshot, 
 	scanPipeline.object.AddSink("writer", wr)
 
 	return scanPipeline
+}
+
+func (w *ScanWorker) makeSortKeyForOrderBy(compositeKeys [][]byte, indexOrder *IndexKeyOrder, key []byte,
+	dist float32, vectorKeyPos int, vectorKeyPosDesc bool, buf []byte) ([]byte, error) {
+
+	var keysToJoin [][]byte
+	var err error
+
+	desc := w.r.IndexInst.Defn.Desc
+
+	if compositeKeys == nil {
+		compositeKeys, err = jsonEncoder.ExplodeArray4(key, buf)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	for _, keyPos := range indexOrder.keyPos {
+		if keyPos == int32(vectorKeyPos) {
+			distVal := n1qlval.NewValue(float64(dist))
+			encodeBuf := make([]byte, 0, distVal.Size()*3)
+			codec1 := collatejson.NewCodec(16)
+			distCode, err := codec1.EncodeN1QLValue(distVal, encodeBuf)
+			if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
+				distCode, err = encodeN1qlVal(distVal)
+			}
+			if err != nil {
+				logging.Verbosef("makeSortKeyForOrderBy: Sender got error: %v from EncodeN1qlvalue", err)
+				return nil, err
+			}
+			if vectorKeyPosDesc {
+				FlipBits(distCode)
+			}
+			keysToJoin = append(keysToJoin, distCode)
+			continue
+		}
+		revBuf := compositeKeys[keyPos]
+		if desc != nil && desc[keyPos] {
+			revBuf = make([]byte, 0)
+			revBuf = append(revBuf, compositeKeys[keyPos]...)
+			FlipBits(revBuf)
+		}
+		keysToJoin = append(keysToJoin, revBuf)
+	}
+
+	buf = buf[:0]
+	if buf, err = jsonEncoder.JoinArray(keysToJoin, buf); err != nil {
+		l.Errorf("makeSortKeyForOrderBy: join array error %v", err)
+		return nil, err
+	}
+
+	return buf, err
 }

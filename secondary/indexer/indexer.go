@@ -13606,8 +13606,12 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 						continue
 					}
 
+					// Update index inst. stat
+					trainDur := time.Since(start)
+					idx.stats.indexes[instId].cbTrainDuration.Set(trainDur.Nanoseconds())
+
 					logging.Infof("Indexer::initiateTraining Training completed for vector index instance: %v, "+
-						"partnId: %v, elapsed: %v", instId, partnId, time.Since(start))
+						"partnId: %v, elapsed: %v", instId, partnId, trainDur)
 
 					// Serialize codebook for persistance
 					codebook, err := slice.SerializeCodebook()
@@ -13640,6 +13644,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					logging.Errorf("Indexer::initiateTraining error observed while persisting codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
 					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
 					slice.ResetCodebook() // Reset codebook as build retry will initiate training again
+					idx.stats.indexes[instId].cbTrainDuration.Set(0)
 					continue
 				}
 			}

@@ -41,6 +41,8 @@ type Row struct {
 	partnId int    // Used to identify snapshot and reader context for partitioned indexes
 	cid     []byte // CentroidID used for the scan
 
+	sortKey []byte // Used in order by
+
 	mem *allocator
 }
 
@@ -422,4 +424,20 @@ func (r *Row) free() {
 	if r.mem != nil {
 		r.freeKeyBuf()
 	}
+}
+
+func (r *Row) KeyString() string {
+	data := r.key
+	klen := len(data)
+	buf := make([]byte, 0, klen*3)
+	buf, _ = jsonEncoder.Decode(data, buf)
+	return string(buf)
+}
+
+func (r *Row) SortKeyString() string {
+	data := r.sortKey
+	klen := len(data)
+	buf := make([]byte, 0, klen*3)
+	buf, _ = jsonEncoder.Decode(data, buf)
+	return string(buf)
 }

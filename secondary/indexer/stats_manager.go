@@ -335,7 +335,8 @@ type IndexStats struct {
 	lastUnitsStatTime  stats.Int64Val //last time when units usage stats were calculated
 
 	//vector stats
-	codebookSize	   stats.Int64Val
+	codebookSize    stats.Int64Val
+	cbTrainDuration stats.Int64Val
 }
 
 type IndexerStatsHolder struct {
@@ -609,6 +610,7 @@ func (s *IndexStats) Init() {
 	s.lastUnitsStatTime.Init()
 
 	s.codebookSize.Init()
+	s.cbTrainDuration.Init()
 
 	// Set filters
 	// Note that the filters will be set on both: instance level stats and
@@ -1917,6 +1919,14 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		},
 		&s.numScanErrors, s.int64Stats)
 
+	if s.isVectorIndex {
+		statMap.AddAggrStatFiltered("codebook_train_duration",
+			func(ss *IndexStats) int64 {
+				return ss.cbTrainDuration.Value()
+			},
+			&s.cbTrainDuration, s.int64Stats)
+	}
+
 	// ----------------------
 	// All partnInt64Stats
 	// ----------------------
@@ -2573,6 +2583,10 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	if s.isVectorIndex {
 		codebookSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.codebookSize.Value() })
 		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "codebook_mem_usage", s.bucket, collectionLabels, s.dispName, codebookSize)
+		st = append(st, []byte(str)...)
+
+		cbTrainDuration := s.int64Stats(func(ss *IndexStats) int64 { return ss.cbTrainDuration.Value() })
+		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "codebook_train_duration", s.bucket, collectionLabels, s.dispName, cbTrainDuration)
 		st = append(st, []byte(str)...)
 	}
 
@@ -4180,6 +4194,7 @@ const last_num_rows_scanned = "lrs"
 const num_rollbacks = "nrb"
 const num_rollbacks_to_zero = "nrbz"
 const chunkSz = "chunkSz"
+const codebook_train_duration = "cbtd"
 const STREAM_PREFIX = "stream"
 
 func (s *statsManager) GetStatsForIndexesToBePersisted(indexInstances []common.IndexInstId, compress bool) ([]byte, error) {
@@ -4227,6 +4242,7 @@ func getStatsToBePersistedMap(indexerStats *IndexerStats) (statsMap map[string]i
 		for k, indexStats := range indexerStats.indexes {
 			instdId := strconv.FormatUint(uint64(k), 10)
 			statsMap[instdId+":"+last_known_scan_time] = indexStats.lastScanTime.Value()
+			statsMap[instdId+":"+codebook_train_duration] = indexStats.cbTrainDuration.Value()
 
 			for pk, partnStats := range indexStats.partitions {
 				partnId := strconv.FormatUint(uint64(pk), 10)
@@ -4323,6 +4339,11 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 				val, ok := getInt64Val(value, statName)
 				if ok {
 					indexerStats.indexes[instdId].lastScanTime.Set(val)
+				}
+			case codebook_train_duration:
+				val, ok := getInt64Val(value, statName)
+				if ok {
+					indexerStats.indexes[instdId].cbTrainDuration.Set(val)
 				}
 			}
 		}
