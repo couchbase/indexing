@@ -2211,7 +2211,7 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 
 	if config.EnableShardAffinity {
 		logging.Infof("************ Index Layout After Planning *************")
-		planner.GetResult()
+		planner.GetResult().PrintLayout()
 		logging.Infof("****************************************")
 
 		PopulateAlternateShardIds(planner.GetResult(), indexes, config.binSize, config.Override, config.UseShardDealer)
@@ -3947,7 +3947,11 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 	}
 
 	// initialise shardDealer in solution here
-	r.shardDealer = createShardDealerForIndexers(r.Placement, nil)
+	r.shardDealer = createShardDealerForIndexers(
+		r.Placement,                   // indexers []*IndexerNode
+		nil,                           // config common.Config
+		r.shardDealerMoveInstCallback, // mic func(srcNode, destNode string, partn *IndexUsage) error
+	)
 
 	return r, constraint, indexes, movedIndex, movedData
 }
@@ -7050,4 +7054,24 @@ func newPlanFromSolution(plan *Plan, solution *Solution) *Plan {
 
 	newPlan.UsedReplicaIdMap = GenerateReplicaMap(solution.Placement)
 	return newPlan
+}
+
+func (solution *Solution) shardDealerMoveInstCallback(srcNodeUUID, destNodeUUID string,
+	partn *IndexUsage) error {
+	var srcNode, destNode *IndexerNode
+	for _, node := range solution.Placement {
+		switch node.NodeUUID {
+		case srcNodeUUID:
+			srcNode = node
+		case destNodeUUID:
+			destNode = node
+		}
+	}
+
+	if srcNode == nil || destNode == nil {
+		return fmt.Errorf("couldn't find node %v/%v in solution to move",
+			srcNodeUUID, destNodeUUID)
+	}
+
+	return solution.moveIndex(srcNode, partn, destNode, false)
 }

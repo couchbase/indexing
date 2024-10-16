@@ -2182,7 +2182,9 @@ func UngroupIndexes(solution *Solution) {
 // createShardDealerForIndexers inits the ShardDealer on each indexer from config
 // if shard affinity is enabled. ONLY call this if indexer node has all the stats set
 // as these stats will be used for the shard dealer initialisation
-func createShardDealerForIndexers(indexers []*IndexerNode, config common.Config) *ShardDealer {
+func createShardDealerForIndexers(indexers []*IndexerNode, config common.Config,
+	moveInstanceCallback moveFuncCb) *ShardDealer {
+
 	if config == nil {
 		var err error
 		config, err = common.GetSettingsConfig(common.SystemConfig)
@@ -2223,7 +2225,8 @@ func createShardDealerForIndexers(indexers []*IndexerNode, config common.Config)
 		return nil
 	}
 
-	var dealer = NewShardDealer2(minShardsPerNode, minPartitionsPerShard, 0)
+	var dealer = NewDefaultShardDealer(minShardsPerNode, minPartitionsPerShard, 0)
+	dealer.SetMoveInstanceCallback(moveInstanceCallback)
 
 	for _, indexer := range indexers {
 		populateShardDealerWithNode(dealer, indexer)
