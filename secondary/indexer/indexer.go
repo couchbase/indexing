@@ -13848,7 +13848,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		inst.TrainingPhase = c.TRAINING_NOT_STARTED
 		errStr := ""
 		for partnId, err := range partnErrMap {
-			errStr += fmt.Sprintf("%v:%v ", partnId, err)
+			errStr += fmt.Sprintf("%v for partnId:%v ", err, partnId)
 			inst.Nlist[partnId] = 0 // Reset nlist per partition Id
 		}
 		inst.Error = errStr

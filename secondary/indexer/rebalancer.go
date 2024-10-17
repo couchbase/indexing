@@ -2472,7 +2472,7 @@ loop:
 
 				indexState, err := getIndexStatusFromMeta(tt, localMeta)
 				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
-					if err != "" && common.IsBuildErrAfterTraining(err) {
+					if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
 						errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
 						goto cleanup
 					}
@@ -2482,7 +2482,7 @@ loop:
 					setTransferTokenInMetakv(ttid, tt)
 				} else if err != "" {
 					l.Errorf("%v Error Fetching Index Status %v %v", _waitForIndexBuild, r.localaddr, err)
-					if err != "" && common.IsBuildErrAfterTraining(err) {
+					if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
 						errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
 						goto cleanup
 					}
@@ -2624,7 +2624,7 @@ loop:
 
 				indexState, err := getIndexStatusFromMeta(tt, localMeta)
 				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
-					if err != "" && common.IsBuildErrAfterTraining(err) {
+					if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
 						errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
 						goto cleanup
 					}
@@ -2634,7 +2634,7 @@ loop:
 					setTransferTokenInMetakv(ttid, tt)
 				} else if err != "" {
 					l.Errorf("%v Error Fetching Index Status %v %v", _waitForIndexBuildBatch, r.localaddr, err)
-					if err != "" && common.IsBuildErrAfterTraining(err) {
+					if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
 						errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
 						goto cleanup
 					}
