@@ -13623,7 +13623,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					}
 
 					logging.Infof("Indexer::initiateTraining: Completed serializing the codebook for index instance: %v, "+
-					" partnId: %v, serialized codebook size: %v", instId, partnId, len(codebook))
+						" partnId: %v, serialized codebook size: %v", instId, partnId, len(codebook))
 
 					// Reaching here implies that new codebook serialized for partition, ready to be shared
 					defnCodebook = codebook
@@ -13810,8 +13810,9 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		} else {
 			inst.TrainingPhase = c.TRAINING_NOT_STARTED
 		}
-		idx.indexInstMap[instId] = inst
+
 		inst.Error = "" // Reset any error observed from earlier iterations
+		idx.indexInstMap[instId] = inst
 		toBuildInstIds = append(toBuildInstIds, instId)
 		allInsts = append(allInsts, instId)
 
