@@ -77,4 +77,7 @@ type Codebook interface {
 
 	//Marshal the codebook to a slice of bytes
 	Marshal() ([]byte, error)
+
+	// Number of centroids used in training the instance
+	NumCentroids() int
 }

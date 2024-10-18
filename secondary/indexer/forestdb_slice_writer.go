@@ -1581,6 +1581,10 @@ func (fdb *fdbSlice) SetNlist(nlist int) {
 	// no-op
 }
 
+func (fdb *fdbSlice) GetNlist() int {
+	return 0
+}
+
 func (fdb *fdbSlice) InitCodebook() error {
 	return nil
 }

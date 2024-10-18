@@ -1849,6 +1849,10 @@ func (mdb *memdbSlice) SetNlist(nlist int) {
 	// no-op
 }
 
+func (mdb *memdbSlice) GetNlist() int {
+	return 0
+}
+
 func (mdb *memdbSlice) InitCodebook() error {
 	return nil
 }

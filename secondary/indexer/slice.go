@@ -58,6 +58,7 @@ type Slice interface {
 	SetStopWriteUnitBilling(disableBilling bool)
 
 	SetNlist(int)
+	GetNlist() int
 	InitCodebook() error
 	ResetCodebook() error
 	InitCodebookFromSerialized([]byte) error

@@ -9419,6 +9419,16 @@ func (idx *indexer) initFromPersistedState() error {
 			inst.TrainingPhase = common.TRAINING_NOT_STARTED
 		}
 
+		if inst.TrainingPhase == common.TRAINING_COMPLETED {
+			if inst.Nlist == nil {
+				inst.Nlist = make(map[c.PartitionId]int)
+			}
+			for partnId, partnInst := range partnInstMap {
+				slice := partnInst.Sc.GetSliceById(0)
+				inst.Nlist[partnId] = slice.GetNlist()
+			}
+		}
+
 		idx.updateTopologyOnShardIdChange(&inst, partnShardIdMap)
 
 		idx.indexInstMap[inst.InstId] = inst

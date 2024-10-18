@@ -1111,6 +1111,15 @@ func (mdb *bhiveSlice) SetNlist(nlist int) {
 	mdb.nlist = nlist
 }
 
+func (mdb *bhiveSlice) GetNlist() int {
+	if mdb.idxDefn.IsVectorIndex && mdb.codebook.IsTrained() {
+		nlist := mdb.codebook.NumCentroids()
+		mdb.nlist = nlist
+		return nlist
+	}
+	return 0
+}
+
 func (mdb *bhiveSlice) InitCodebook() error {
 	if mdb.idxDefn.IsVectorIndex == false {
 		mdb.codebook = nil // Codebook is relevant only for vector indexes

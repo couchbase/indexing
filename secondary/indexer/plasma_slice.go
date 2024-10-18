@@ -3403,7 +3403,7 @@ func updatePlasmaConfig(cfg common.Config) {
 		(float64(cfg["plasma.holecleaner.cpuPercent"].Int()) / 100)))
 	plasma.SetHoleCleanerMaxThreads(int64(numHoleCleanerThreads))
 
-	plasma.SetupArenaSeparationOnce(cfg["plasma.enableArenaSeparation"].Bool() )
+	plasma.SetupArenaSeparationOnce(cfg["plasma.enableArenaSeparation"].Bool())
 }
 
 func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
@@ -5290,6 +5290,15 @@ func (slice *plasmaSlice) ClearRebalRunning() {
 
 func (mdb *plasmaSlice) SetNlist(nlist int) {
 	mdb.nlist = nlist
+}
+
+func (mdb *plasmaSlice) GetNlist() int {
+	if mdb.idxDefn.IsVectorIndex && mdb.codebook.IsTrained() {
+		nlist := mdb.codebook.NumCentroids()
+		mdb.nlist = nlist
+		return nlist
+	}
+	return 0
 }
 
 func (mdb *plasmaSlice) InitCodebook() error {
