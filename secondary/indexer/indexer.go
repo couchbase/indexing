@@ -10168,9 +10168,7 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId, keyspaceId string) (
 					if oldTs == nil {
 						continue
 					}
-					if !ts.AsRecentTs(oldTs) {
-						restartTs[keyspaceId] = ts
-					}
+					restartTs[keyspaceId] = common.ComputeMinTs(oldTs, ts)
 				} else {
 					restartTs[keyspaceId] = ts
 				}
