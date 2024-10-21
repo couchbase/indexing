@@ -626,7 +626,12 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 	}
 
 	//store rows in the current batch buffer
-	w.currBatchRows = append(w.currBatchRows, newRow)
+	select {
+	case <-w.stopCh:
+		return ErrScanWorkerStopped
+	default:
+		w.currBatchRows = append(w.currBatchRows, newRow)
+	}
 
 	//once batch size number of rows are available, process the current batch
 	if len(w.currBatchRows) == w.senderBatchSize {
