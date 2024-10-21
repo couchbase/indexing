@@ -1649,7 +1649,7 @@ func (s *scanCoordinator) fillCodebookMap(r *ScanRequest) (cbErr error) {
 // This will also return the IndexReaderContext for each partition.  IndexReaderContext must
 // be returned in the same order as partitionIds.
 func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common.PartitionId,
-	user string, skipReadMetering bool, ctxsPerPartition int) (
+	user string, skipReadMetering bool, ctxsPerPartition int, getCtxs bool) (
 	*common.IndexInst, []IndexReaderContext, error) {
 
 	hasIndex := false
@@ -1663,17 +1663,10 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common
 	// Get all instanceId's of interest
 	instIdList := s.indexDefnMap[common.IndexDefnId(defnID)]
 
-	// This can only happen in case of vector index and when value is not being set from query
-	// so we must use the value from index creation time
-	if ctxsPerPartition == 0 {
-		// Get the value from the first inst all Nprobes of given DefnId must be same
-		for _, instId := range instIdList {
-			inst := indexInstMap[instId]
-			ctxsPerPartition = inst.Defn.VectorMeta.Nprobes
-			break
-		}
+	var ctx []IndexReaderContext
+	if getCtxs {
+		ctx = make([]IndexReaderContext, len(partitionIds)*ctxsPerPartition)
 	}
-	ctx := make([]IndexReaderContext, len(partitionIds)*ctxsPerPartition)
 
 	for _, instId := range instIdList {
 		inst := indexInstMap[instId]
@@ -1689,12 +1682,17 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common
 				found := true
 				for i, partnId := range partitionIds {
 					if partition, ok := pmap[partnId]; ok {
-						for j := 0; j < ctxsPerPartition; j++ {
-							ctxUser := user
-							if user == "" {
-								ctxUser = fmt.Sprintf("%v_%v", partnId, j)
+						if getCtxs {
+							for j := 0; j < ctxsPerPartition; j++ {
+								ctxUser := user
+								if user == "" {
+									ctxUser = fmt.Sprintf("%v_%v", partnId, j)
+								}
+								ctx[i*ctxsPerPartition+j] = partition.Sc.GetSliceById(0).GetReaderContext(ctxUser, skipReadMetering)
 							}
-							ctx[i*ctxsPerPartition+j] = partition.Sc.GetSliceById(0).GetReaderContext(ctxUser, skipReadMetering)
+						} else {
+							// A no-op since the purpose of getCtxs = false is to get the
+							// right index instance for performing the scan
 						}
 					} else {
 						found = false
