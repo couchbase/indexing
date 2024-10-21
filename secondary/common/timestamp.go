@@ -348,22 +348,22 @@ func (ts *TsVbuuid) Len() int {
 	return length
 }
 
-//Persisted returns the value of persisted flag
+// Persisted returns the value of persisted flag
 func (ts *TsVbuuid) GetSnapType() IndexSnapType {
 	return ts.SnapType
 }
 
-//Persisted sets the persisted flag
+// Persisted sets the persisted flag
 func (ts *TsVbuuid) SetSnapType(typ IndexSnapType) {
 	ts.SnapType = typ
 }
 
-//HasLargeSnapshot returns the value of largeSnap flag
+// HasLargeSnapshot returns the value of largeSnap flag
 func (ts *TsVbuuid) HasLargeSnapshot() bool {
 	return ts.LargeSnap
 }
 
-//SetLargeSnapshot sets the largeSnap flag
+// SetLargeSnapshot sets the largeSnap flag
 func (ts *TsVbuuid) SetLargeSnapshot(largeSnap bool) {
 	ts.LargeSnap = largeSnap
 }
@@ -619,7 +619,7 @@ func (ts *TsVbuuid) Diff(other *TsVbuuid) string {
 	return buf.String()
 }
 
-//check if seqnum of all vbuckets are aligned with the snapshot end
+// check if seqnum of all vbuckets are aligned with the snapshot end
 func (ts *TsVbuuid) CheckSnapAligned() bool {
 
 	// Nil timestamp can be considered equivalent to all vbs with seqno=0 (empty bucket)
@@ -636,7 +636,7 @@ func (ts *TsVbuuid) CheckSnapAligned() bool {
 
 }
 
-//IsSnapAligned returns the value of SnapAligned flag
+// IsSnapAligned returns the value of SnapAligned flag
 func (ts *TsVbuuid) IsSnapAligned() bool {
 
 	if ts == nil {
@@ -646,7 +646,7 @@ func (ts *TsVbuuid) IsSnapAligned() bool {
 	return ts.SnapAligned
 }
 
-//SetSnapAligned sets the SnapAligned flag
+// SetSnapAligned sets the SnapAligned flag
 func (ts *TsVbuuid) SetSnapAligned(snapAligned bool) {
 	ts.SnapAligned = snapAligned
 }
@@ -664,8 +664,8 @@ func (ts *TsVbuuid) SetSmallSnapDropped(smallSnapDropped bool) {
 	ts.SmallSnapDropped = smallSnapDropped
 }
 
-//Returns true if all vbs have processsed first DCP snap.
-//This function doesn't not support OSO mode.
+// Returns true if all vbs have processsed first DCP snap.
+// This function doesn't not support OSO mode.
 func (ts *TsVbuuid) HasProcessedFirstSnap() bool {
 	if ts == nil {
 		return false
@@ -685,4 +685,32 @@ func (ts *TsVbuuid) HasProcessedFirstSnap() bool {
 		}
 	}
 	return true
+}
+
+func ComputeMinTs(ts1, ts2 *TsVbuuid) *TsVbuuid {
+	if ts1 == nil || ts2 == nil {
+		return nil
+	}
+
+	if ts1.Bucket != ts2.Bucket {
+		return nil
+	}
+
+	if len(ts1.Seqnos) != len(ts2.Seqnos) {
+		return nil
+	}
+
+	out := ts1.Clone()
+	for i, seqno := range ts1.Seqnos {
+		if ts2.Seqnos[i] < seqno { // The seqno. in ts2 is less than ts1. Use this seqno. in "out"
+			out.Seqnos[i] = ts2.Seqnos[i]
+			out.Snapshots[i] = ts2.Snapshots[i] // Along with the seqno. also use the Snapshot and vbuuid
+			out.Vbuuids[i] = ts2.Vbuuids[i]
+			out.ManifestUIDs[i] = ts2.ManifestUIDs[i]
+		}
+	}
+
+	out.SnapAligned = out.CheckSnapAligned()
+
+	return out
 }
