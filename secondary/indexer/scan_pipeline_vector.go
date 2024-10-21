@@ -663,11 +663,13 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	// meta() has to be split into include column fields and quantized codes
 	value = meta
 
-	var newRow Row
+	var newRow *Row
 	if w.r.useHeapForVectorIndex() {
 		//Store reference to entry, value in the row struct.
 		//processCurrentBatch will process and maintain a TopK local heap for these.
 		//Before iterator close, these will be copied and sent down the pipeline.
+		newRow = w.rowBuf.Get()
+
 		newRow.key = entry
 		newRow.value = value
 		newRow.partnId = int(w.currJob.pid)
@@ -689,6 +691,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 		// VECTOR_TODO:
 		// 1. Check if adding a Queue/CirularBuffer of Rows here in place of senderCh will help
 		// 2. Check if having a sync.Pool of Row objects per connCtx will help
+		newRow = &Row{}
 		newRow.init(w.mem)
 		newRow.copy(&w.itrRow)
 	}
@@ -697,7 +700,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	case <-w.stopCh:
 		return ErrScanWorkerStopped
 	default:
-		w.currBatchRows = append(w.currBatchRows, &newRow)
+		w.currBatchRows = append(w.currBatchRows, newRow)
 	}
 
 	//once batch size number of rows are available, process the current batch
