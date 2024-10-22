@@ -144,6 +144,27 @@ func (cb *codebookIVFPQ) CodeSize() (int, error) {
 	return cb.index.CodeSize()
 }
 
+//compute coarse code size based on nlist
+func computeCoarseCodeSize(nlist int) int {
+
+	nl := nlist - 1
+	nbyte := 0
+	for nl > 0 {
+		nbyte++
+		nl >>= 8
+	}
+	return nbyte
+}
+
+// CoarseSize returns the size of produced code in bytes.
+func (cb *codebookIVFPQ) CoarseSize() (int, error) {
+
+	if !cb.IsTrained() {
+		return 0, c.ErrCodebookNotTrained
+	}
+	return computeCoarseCodeSize(cb.nlist), nil
+}
+
 // Compute the quantized code for a given input vector.
 // Must be run on a trained codebook.
 func (cb *codebookIVFPQ) EncodeVector(vec []float32, code []byte) error {
@@ -264,6 +285,16 @@ func (cb *codebookIVFPQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) 
 	return 0
 }
 
+//Compute the distance between a vector and flat quantized codes.
+//Quantized codes are decoded first before distance comparison.
+//Codes must be provided without coarse code(i.e. centroid ID).
+//This function only works with vectors belonging to the same centroid(input as listno).
+func (cb *codebookIVFPQ) ComputeDistanceEncoded(qvec []float32,
+	n int, codes []byte, dists []float32, listno int64) error {
+	//Not yet implemented
+	return nil
+}
+
 // Size returns the memory size in bytes.
 // Size() should be used after codebook is trained.
 func (cb *codebookIVFPQ) Size() int64 {
@@ -285,10 +316,10 @@ func (cb *codebookIVFPQ) Size() int64 {
 		// Memory size formula: m * (2^nbits) * (d/m) * sizeof(float32)
 		// - m: Number of sub-vectors, each with its own codebook.
 		// - 2^nbits: Number of quantization levels (codes) for each sub-vector.
-		// - d/m: Dimensionality of each sub-vector, 
+		// - d/m: Dimensionality of each sub-vector,
 		//since the original vector of dimension d is split into m sub-vectors.
 		// Each codebook entry represents a vector of size d/m.
-		pqCbSize = int64((1<<cb.nbits) * cb.dim * float32Size)
+		pqCbSize = int64((1 << cb.nbits) * cb.dim * float32Size)
 
 		// Memory usage for HNSW graph as IVF_HNSW is used.
 		// This memory is used for maintaing centroids' HNSW structure.

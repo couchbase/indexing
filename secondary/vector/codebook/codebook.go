@@ -21,6 +21,9 @@ type Codebook interface {
 	//CodeSize returns the size of produced code in bytes.
 	CodeSize() (int, error)
 
+	//CoarseSize returns the size of the coarse code for IVF index.
+	CoarseSize() (int, error)
+
 	//Compute the quantized code for a given input vector.
 	//Must be run on a trained codebook.
 	EncodeVector(vec []float32, code []byte) error
@@ -54,6 +57,12 @@ type Codebook interface {
 
 	//Compute the distance between a vector with another given set of vectors.
 	ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error
+
+	//Compute the distance between a vector and flat quantized codes.
+	//Quantized codes are decoded first before distance comparison.
+	//Codes must be provided without coarse code(i.e. centroid ID).
+	//This function only works with vectors belonging to the same centroid(input as listno).
+	ComputeDistanceEncoded(qvec []float32, n int, codes []byte, dists []float32, listno int64) error
 
 	//Decode the quantized code and return float32 vector.
 	//Must be run on a trained codebook.
