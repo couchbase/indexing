@@ -810,5 +810,6 @@ func (worker *VbucketWorker) resizeEncodeBuf() {
 			logging.Debugf("%v ##%v ##%v Resizing encodeBuf size to: %v from: %v", worker.logPrefix, worker.opaque, worker.opaque2, maxLen, confEncBufSize)
 		}
 		worker.lastBufferSizeCheckTime = time.Now()
+		worker.maxEncodedKeyLenInLastInterval = 0
 	}
 }
