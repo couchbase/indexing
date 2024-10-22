@@ -237,6 +237,22 @@ func (w *ScanWorker) PrintStats() {
 }
 
 func (w *ScanWorker) Scanner() {
+	defer func() {
+		if r := recover(); r != nil {
+			l.Fatalf("%v - panic(%v) detected in scanner while processing %s", w.logPrefix, r, w.r)
+			l.Fatalf("%s", l.StackTraceAll())
+
+			select {
+			case <-w.stopCh:
+			case w.errCh <- fmt.Errorf("%v - panic(%v) detected in scanner while processing %s", w.logPrefix, r, w.r):
+			}
+
+			if w.currJob != nil {
+				w.finishJob()
+			}
+		}
+	}()
+
 	defer w.PrintStats()
 	for {
 		var job *ScanJob
@@ -291,15 +307,15 @@ func (w *ScanWorker) Scanner() {
 				}
 			}
 		}
-		w.finishJob(job)
+		w.finishJob()
 	}
 }
 
 // finishJob marks the job as finished. There are currently 2 mechanisms to
 // track a job completion - a. job.doneCh b. jobsWg.
-func (w *ScanWorker) finishJob(job *ScanJob) {
-	if job.doneCh != nil {
-		close(job.doneCh) // Mark the job done
+func (w *ScanWorker) finishJob() {
+	if w.currJob.doneCh != nil {
+		close(w.currJob.doneCh) // Mark the job done
 	}
 	if w.jobsWg != nil {
 		w.jobsWg.Done()
