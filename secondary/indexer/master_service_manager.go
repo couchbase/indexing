@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/cbauth/revrpc"
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/logging"
 
@@ -143,6 +144,18 @@ func (msm *MasterServiceManager) registerWithServer() {
 		logging.Errorf(
 			"MasterServiceManager::registerWithServer: Failed to register with Cluster Manager. err: %v",
 			err)
+		if err == revrpc.ErrRevRpcUnauthorized {
+			// restart indexer on invalid credentials.
+			// This situation can happen if any RPC call takes more than 1 hour and the passwords
+			// are rotated in the mean time. Once password rotation happens, old password can be used
+			// for 30min. During rebalance, some RPC calls like CancelTask() can take more than an hour
+			// if there is resource contention (as cancel involves index drops). As the password that is
+			// used at the start of RPC call will become invalid after 1 hour, the RPC server would
+			// terminate and not retry. In such cases, the recommendation from ns_server team is to
+			// restart indexer so that index service can fetch new set of passwords
+			logging.Fatalf("MasterServiceManager::registerWithServer: Observed invalid RPC credentials. Restarting indexer")
+			panic(err)
+		}
 		return
 	}
 	logging.Infof("MasterServiceManager::registerWithServer: Registered with Cluster Manager")
