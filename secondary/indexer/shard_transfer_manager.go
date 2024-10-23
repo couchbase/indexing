@@ -629,9 +629,10 @@ func (stm *ShardTransferManager) cleanupCodebooks(msg *MsgShardTransferCleanup, 
 
 		// TODO handle S3 transfers
 
-		if err := copier.CleanupFiles(location); err != nil && !os.IsNotExist(err) {
+		if err = copier.CleanupFiles(location); err != nil && !os.IsNotExist(err) {
 			err = fmt.Errorf("failed codebook cleanups, path: %v, codebooks: %v, error: %v",
 				location, codebookNames, err)
+			logging.Errorf("ShardTransferManager::cleanupCodebooks observed error: %v", err)
 		}
 
 		if err == nil {
