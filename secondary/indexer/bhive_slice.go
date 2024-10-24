@@ -1980,6 +1980,11 @@ func (mdb *bhiveSlice) RollbackToZero(initialBuild bool) error {
 		atomic.StoreInt32(&mdb.isInitialBuild, 1)
 	}
 
+	// During rollback to zero, initialise the quantizedCodeBuf. Rest of the metadata is still valid
+	if mdb.idxDefn.IsVectorIndex {
+		mdb.initQuantizedCodeBuf()
+	}
+
 	return nil
 }
 
@@ -2056,6 +2061,13 @@ func (mdb *bhiveSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 	}
 }
 
+func (slice *bhiveSlice) resetBuffers() {
+	slice.stopWriters(0)
+
+	slice.cmdCh = slice.cmdCh[:0]
+	slice.stopCh = slice.stopCh[:0]
+}
+
 func (mdb *bhiveSlice) resetStores(initBuild bool) error {
 	// Clear all readers
 	for i := 0; i < cap(mdb.readers); i++ {
@@ -2064,6 +2076,7 @@ func (mdb *bhiveSlice) resetStores(initBuild bool) error {
 
 	numWriters := mdb.numWriters
 	mdb.freeAllWriters()
+	mdb.resetBuffers()
 
 	mdb.mainstore.Close()
 	mdb.backstore.Close()
