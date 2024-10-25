@@ -992,21 +992,21 @@ func CloseGsiKeyspace(gsi datastore.Indexer) {
 // secondaryIndex to hold meta data information, network-address for
 // a single secondary-index.
 type secondaryIndex struct {
-	gsi        *gsiKeyspace // back-reference to container.
-	bucketn    string
-	name       string // name of the index
-	defnID     uint64
-	isPrimary  bool
-	using      c.IndexType
-	partnExpr  expression.Expressions
-	secExprs   expression.Expressions
-	desc       []bool
-	vectorAttr []bool
-	whereExpr  expression.Expression
-	state      datastore.IndexState
-	err        string
-	deferred   bool
-	indexInfo  map[string]interface{}
+	gsi          *gsiKeyspace // back-reference to container.
+	bucketn      string
+	name         string // name of the index
+	defnID       uint64
+	isPrimary    bool
+	using        c.IndexType
+	partnExpr    expression.Expressions
+	secExprs     expression.Expressions
+	desc         []bool
+	vectorAttr   []bool
+	whereExpr    expression.Expression
+	state        datastore.IndexState
+	err          string
+	deferred     bool
+	indexInfo    map[string]interface{}
 
 	scheduled bool
 	schedFail bool
@@ -1023,6 +1023,7 @@ type secondaryIndex struct {
 	vectorDescription  string
 	vectorTrainList    int
 	numCentroids	   int
+	numPartition       int
 
 	isBhive bool
 	include expression.Expressions
@@ -1140,6 +1141,12 @@ func newSecondaryIndexFromMetaData(
 			}
 			si.include = exprs
 		}
+	}
+
+	// Using Index Definition for NumPartitions is problematic because, during index creation,
+	// numPartitions is explicitly set to 0 and isn’t propagated back to the query client.
+	if len(imd.Instances) > 0 {
+		si.numPartition = int(imd.Instances[0].NumPartitions)
 	}
 
 	return si, nil
