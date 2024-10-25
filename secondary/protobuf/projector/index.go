@@ -154,8 +154,8 @@ type IndexEvaluator struct {
 	// created
 	dimension int
 
-	// For BHIVE indexes, the expresses to be evaluated for include columns
-	include []interface{}
+	// The expresses to be evaluated for include columns
+	includeExprs []interface{}
 }
 
 // NewIndexEvaluator returns a reference to a new instance
@@ -270,13 +270,13 @@ func NewIndexEvaluator(
 			if err != nil {
 				return nil, err
 			} else if len(includeExprs) > 0 {
-				ie.include = includeExprs
+				ie.includeExprs = includeExprs
 			}
 		}
 
 		logging.Infof("NewIndexEvaluator: InstId: %v, isVectorIndex: %v, vectorPos: %v, arrayPos: %v, "+
 			"vectorPosInFlattenedArray: %v, dimension: %v, include: %v", ie.instance.InstId, ie.isVectorIndex,
-			ie.vectorPos, ie.arrayPos, ie.vectorPosInFlattenedArray, ie.dimension, ie.include)
+			ie.vectorPos, ie.arrayPos, ie.vectorPosInFlattenedArray, ie.dimension, ie.includeExprs)
 
 	default:
 		logging.Errorf("invalid expression type %v\n", exprtype)
@@ -396,7 +396,7 @@ func (ie *IndexEvaluator) StreamEndData(
 
 func (ie *IndexEvaluator) ProcessEvent(m *mc.DcpEvent, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context,
-	pl *logging.TimedNStackTraces) (npkey, opkey, nkey, okey, newBuf []byte,
+	pl *logging.TimedNStackTraces) (npkey, opkey, nkey, okey, includeColumn, newBuf []byte,
 	where bool, opcode mcd.CommandCode, nVectors [][]float32, centroidPos []int32, err error) {
 
 	defer func() { // panic safe
@@ -431,18 +431,29 @@ func (ie *IndexEvaluator) ProcessEvent(m *mc.DcpEvent, encodeBuf []byte,
 	ie.dcpEvent2Meta(m, docval)
 	where, err = ie.wherePredicate(m, docval, context, encodeBuf)
 	if err != nil {
-		return npkey, opkey, nkey, okey, newBuf, where, opcode, nil, nil, err
+		return npkey, opkey, nkey, okey, includeColumn, newBuf, where, opcode, nil, nil, err
 	}
 
 	npkey, err = ie.partitionKey(m, m.Key, docval, context, encodeBuf)
 	if err != nil {
-		return npkey, opkey, nkey, okey, newBuf, where, opcode, nil, nil, err
+		return npkey, opkey, nkey, okey, includeColumn, newBuf, where, opcode, nil, nil, err
 	}
 
 	if where && (len(m.Value) > 0 || retainDelete) { // project new secondary key
 		nkey, newBuf, nVectors, centroidPos, err = ie.evaluate(m, m.Key, docval, context, encodeBuf)
 		if err != nil {
-			return npkey, opkey, nkey, okey, newBuf, where, opcode, nVectors, centroidPos, err
+			return npkey, opkey, nkey, okey, includeColumn, newBuf, where, opcode, nVectors, centroidPos, err
+		}
+
+		if cap(newBuf) > cap(encodeBuf) {
+			encodeBuf = newBuf
+		}
+
+		// evaluate() will allocate new memory for the final collate JSON encoded value
+		// Hence, re-use the encodeBuf for include column evaluation
+		includeColumn, newBuf, err = ie.includeColumns(m, m.Key, docval, context, encodeBuf[:0])
+		if err != nil {
+			return npkey, opkey, nkey, okey, includeColumn, newBuf, where, opcode, nil, nil, err
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
@@ -451,15 +462,15 @@ func (ie *IndexEvaluator) ProcessEvent(m *mc.DcpEvent, encodeBuf []byte,
 		oldval.ShareAnnotations(docval)
 		opkey, err = ie.partitionKey(m, m.Key, oldval, context, encodeBuf)
 		if err != nil {
-			return npkey, opkey, nkey, okey, newBuf, where, opcode, nil, nil, err
+			return npkey, opkey, nkey, okey, includeColumn, newBuf, where, opcode, nil, nil, err
 		}
 		okey, newBuf, _, _, err = ie.evaluate(m, m.Key, oldval, context, encodeBuf)
 		if err != nil {
-			return npkey, opkey, nkey, okey, newBuf, where, opcode, nil, nil, err
+			return npkey, opkey, nkey, okey, includeColumn, newBuf, where, opcode, nil, nil, err
 		}
 	}
 
-	return npkey, opkey, nkey, okey, newBuf, where, opcode, nVectors, centroidPos, nil
+	return npkey, opkey, nkey, okey, includeColumn, newBuf, where, opcode, nVectors, centroidPos, nil
 }
 
 // TransformRoute implement Evaluator{} interface.
@@ -469,7 +480,7 @@ func (ie *IndexEvaluator) TransformRoute(
 	numIndexes int, opaque2 uint64, oso bool, pl *logging.TimedNStackTraces) ([]byte, int, error) {
 
 	var err error
-	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
+	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey, includeColumn []byte
 	var newBuf []byte
 	var where bool
 	var opcode mcd.CommandCode
@@ -477,13 +488,13 @@ func (ie *IndexEvaluator) TransformRoute(
 	var centroidPos []int32
 
 	forceUpsertDeletion := false
-	npkey, opkey, nkey, okey, newBuf, where, opcode, nVectors, centroidPos, err = ie.ProcessEvent(m,
+	npkey, opkey, nkey, okey, includeColumn, newBuf, where, opcode, nVectors, centroidPos, err = ie.ProcessEvent(m,
 		encodeBuf, docval, context, pl)
 	if err != nil {
 		forceUpsertDeletion = true
 	}
 
-	err1 := ie.populateData(vbuuid, m, data, numIndexes, npkey, opkey, nkey, okey,
+	err1 := ie.populateData(vbuuid, m, data, numIndexes, npkey, opkey, nkey, okey, includeColumn,
 		where, opcode, nVectors, centroidPos, opaque2, forceUpsertDeletion, oso, pl)
 
 	if err == nil && err1 != nil {
@@ -502,7 +513,7 @@ func (ie *IndexEvaluator) TransformRoute(
 
 func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 	data map[string]interface{}, numIndexes int, npkey, opkey []byte,
-	nkey, okey []byte, where bool, opcode mcd.CommandCode, nVectors [][]float32,
+	nkey, okey, includeColumn []byte, where bool, opcode mcd.CommandCode, nVectors [][]float32,
 	centroidPos []int32, opaque2 uint64, forceUpsertDeletion bool, oso bool, pl *logging.TimedNStackTraces) (err error) {
 
 	defer func() { // panic safe
@@ -532,17 +543,17 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 				if len(nVectors) > 0 {
-					kv.AddUpsertWithVectors(uuid, nkey, okey, npkey, nVectors, centroidPos)
+					kv.AddUpsertWithVectors(uuid, nkey, okey, npkey, includeColumn, nVectors, centroidPos)
 				} else {
-					kv.AddUpsert(uuid, nkey, okey, npkey)
+					kv.AddUpsert(uuid, nkey, okey, npkey, includeColumn)
 				}
 				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid,
 					kv, opaque2, oso}
 			} else {
 				if len(nVectors) > 0 {
-					dkv.Kv.AddUpsertWithVectors(uuid, nkey, okey, npkey, nVectors, centroidPos)
+					dkv.Kv.AddUpsertWithVectors(uuid, nkey, okey, npkey, includeColumn, nVectors, centroidPos)
 				} else {
-					dkv.Kv.AddUpsert(uuid, nkey, okey, npkey)
+					dkv.Kv.AddUpsert(uuid, nkey, okey, npkey, includeColumn)
 				}
 			}
 			data[raddr] = dkv
@@ -556,17 +567,17 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 				if len(nVectors) > 0 {
-					kv.AddUpsertDeletionWithVectors(uuid, okey, npkey, nVectors, centroidPos)
+					kv.AddUpsertDeletionWithVectors(uuid, okey, npkey, includeColumn, nVectors, centroidPos)
 				} else {
-					kv.AddUpsertDeletion(uuid, okey, npkey)
+					kv.AddUpsertDeletion(uuid, okey, npkey, includeColumn)
 				}
 				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid,
 					kv, opaque2, oso}
 			} else {
 				if len(nVectors) > 0 {
-					dkv.Kv.AddUpsertDeletionWithVectors(uuid, okey, npkey, nVectors, centroidPos)
+					dkv.Kv.AddUpsertDeletionWithVectors(uuid, okey, npkey, includeColumn, nVectors, centroidPos)
 				} else {
-					dkv.Kv.AddUpsertDeletion(uuid, okey, npkey)
+					dkv.Kv.AddUpsertDeletion(uuid, okey, npkey, includeColumn)
 				}
 			}
 			data[raddr] = dkv
@@ -579,11 +590,11 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			dkv, ok := data[raddr].(*c.DataportKeyVersions)
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
-				kv.AddDeletion(uuid, okey, npkey)
+				kv.AddDeletion(uuid, okey, npkey, includeColumn)
 				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid,
 					kv, opaque2, oso}
 			} else {
-				dkv.Kv.AddDeletion(uuid, okey, npkey)
+				dkv.Kv.AddDeletion(uuid, okey, npkey, includeColumn)
 			}
 			data[raddr] = dkv
 		}
@@ -696,6 +707,25 @@ func (ie *IndexEvaluator) wherePredicate(
 		return false, nil // predicate is false
 	}
 	return true, nil
+}
+
+func (ie *IndexEvaluator) includeColumns(
+	m *mc.DcpEvent, docid []byte, docval qvalue.AnnotatedValue,
+	context qexpr.Context, encodeBuf []byte) ([]byte, []byte, error) {
+
+	defn := ie.instance.GetDefinition()
+	if ie.includeExprs == nil { // no include expressions
+		return nil, encodeBuf, nil
+	}
+
+	exprType := defn.GetExprType()
+	switch exprType {
+	case ExprType_N1QL:
+		out, newBuf, err := N1QLTransform(docid, docval, context, ie.includeExprs,
+			0, encodeBuf, ie.stats, false)
+		return out, newBuf, err
+	}
+	return nil, nil, nil
 }
 
 // helper functions

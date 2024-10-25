@@ -116,7 +116,7 @@ func evaluateEvent(evaluators []*protoProj.IndexEvaluator,
 	var vectors [][]float32
 
 	for i, evaluator := range evaluators {
-		_, _, _, _, newBuf, _, _, vectors, _, err = evaluator.ProcessEvent(m,
+		_, _, _, _, _, newBuf, _, _, vectors, _, err = evaluator.ProcessEvent(m,
 			encodeBuf, docval, context, nil)
 
 		if err != nil {

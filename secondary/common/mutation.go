@@ -223,13 +223,14 @@ func (vb *VbKeyVersions) FreeKeyVersions() {
 
 // KeyVersions for a single mutation from KV for a subset of index.
 type KeyVersions struct {
-	Seqno     uint64   // vbucket sequence number for this mutation
-	Docid     []byte   // primary document id
-	Uuids     []uint64 // list of unique ids, like index-ids
-	Commands  []byte   // list of commands for each index
-	Keys      [][]byte // list of key-versions for each index
-	Oldkeys   [][]byte // previous key-versions, if available
-	Partnkeys [][]byte // partition key for each key-version
+	Seqno         uint64   // vbucket sequence number for this mutation
+	Docid         []byte   // primary document id
+	Uuids         []uint64 // list of unique ids, like index-ids
+	Commands      []byte   // list of commands for each index
+	Keys          [][]byte // list of key-versions for each index
+	Oldkeys       [][]byte // previous key-versions, if available
+	Partnkeys     [][]byte // partition key for each key-version
+	IncludeColumn [][]byte // Include column values for each key-version
 
 	// List of vectors for each index instance
 	Vectors     [][][]float32
@@ -251,29 +252,34 @@ func NewKeyVersions(seqno uint64, docid []byte, maxCount int, ctime int64) *KeyV
 	kv.Oldkeys = make([][]byte, 0, maxCount)
 	kv.Partnkeys = make([][]byte, 0, maxCount)
 	kv.Vectors = make([][][]float32, 0, maxCount)
+	kv.IncludeColumn = make([][]byte, 0, maxCount)
 
 	kv.Ctime = ctime
 	return kv
 }
 
 // addKey will add key-version for a single index.
-func (kv *KeyVersions) addKey(uuid uint64, command byte, key, oldkey, pkey []byte) {
+func (kv *KeyVersions) addKey(uuid uint64, command byte, key, oldkey, pkey []byte, includeColumn []byte) {
 	kv.Uuids = append(kv.Uuids, uuid)
 	kv.Commands = append(kv.Commands, command)
 	kv.Keys = append(kv.Keys, key)
 	kv.Oldkeys = append(kv.Oldkeys, oldkey)
 	kv.Partnkeys = append(kv.Partnkeys, pkey)
+	kv.IncludeColumn = append(kv.IncludeColumn, includeColumn)
 	kv.Vectors = append(kv.Vectors, nil)         // Append nil to preserve ordering
 	kv.CentroidPos = append(kv.CentroidPos, nil) // Append nil to preserve ordering
 }
 
 // addKey will add key-version for a single index.
-func (kv *KeyVersions) addKeyWithVectors(uuid uint64, command byte, key, oldkey, pkey []byte, nVectors [][]float32, centroidPos []int32) {
+func (kv *KeyVersions) addKeyWithVectors(uuid uint64, command byte, key, oldkey, pkey []byte,
+	includeColumn []byte, nVectors [][]float32, centroidPos []int32) {
+
 	kv.Uuids = append(kv.Uuids, uuid)
 	kv.Commands = append(kv.Commands, command)
 	kv.Keys = append(kv.Keys, key)
 	kv.Oldkeys = append(kv.Oldkeys, oldkey)
 	kv.Partnkeys = append(kv.Partnkeys, pkey)
+	kv.IncludeColumn = append(kv.IncludeColumn, includeColumn)
 	kv.Vectors = append(kv.Vectors, nVectors)
 	kv.CentroidPos = append(kv.CentroidPos, centroidPos)
 }
@@ -309,48 +315,48 @@ func (kv *KeyVersions) Length() int {
 }
 
 // AddUpsert add a new keyversion for same OpMutation.
-func (kv *KeyVersions) AddUpsert(uuid uint64, key, oldkey, pkey []byte) {
-	kv.addKey(uuid, Upsert, key, oldkey, pkey)
+func (kv *KeyVersions) AddUpsert(uuid uint64, key, oldkey, pkey, includeColumn []byte) {
+	kv.addKey(uuid, Upsert, key, oldkey, pkey, includeColumn)
 }
 
 // AddUpsert add a new keyversion for same OpMutation.
-func (kv *KeyVersions) AddUpsertWithVectors(uuid uint64, key, oldkey, pkey []byte, vectors [][]float32, centroidPos []int32) {
-	kv.addKeyWithVectors(uuid, Upsert, key, oldkey, pkey, vectors, centroidPos)
+func (kv *KeyVersions) AddUpsertWithVectors(uuid uint64, key, oldkey, pkey, includeColumn []byte, vectors [][]float32, centroidPos []int32) {
+	kv.addKeyWithVectors(uuid, Upsert, key, oldkey, pkey, includeColumn, vectors, centroidPos)
 }
 
 // AddDeletion add a new keyversion for same OpDeletion.
-func (kv *KeyVersions) AddDeletion(uuid uint64, oldkey, pkey []byte) {
-	kv.addKey(uuid, Deletion, nil, oldkey, pkey)
+func (kv *KeyVersions) AddDeletion(uuid uint64, oldkey, pkey, includeColumn []byte) {
+	kv.addKey(uuid, Deletion, nil, oldkey, pkey, includeColumn)
 }
 
 // AddUpsertDeletion add a keyversion command to delete old entry.
-func (kv *KeyVersions) AddUpsertDeletion(uuid uint64, oldkey, pkey []byte) {
-	kv.addKey(uuid, UpsertDeletion, nil, oldkey, pkey)
+func (kv *KeyVersions) AddUpsertDeletion(uuid uint64, oldkey, pkey, includeColumn []byte) {
+	kv.addKey(uuid, UpsertDeletion, nil, oldkey, pkey, includeColumn)
 }
 
 // AddUpsertDeletion add a keyversion command to delete old entry.
-func (kv *KeyVersions) AddUpsertDeletionWithVectors(uuid uint64, oldkey, pkey []byte, vectors [][]float32, centroidPos []int32) {
-	kv.addKeyWithVectors(uuid, UpsertDeletion, nil, oldkey, pkey, vectors, centroidPos)
+func (kv *KeyVersions) AddUpsertDeletionWithVectors(uuid uint64, oldkey, pkey, includeColumn []byte, vectors [][]float32, centroidPos []int32) {
+	kv.addKeyWithVectors(uuid, UpsertDeletion, nil, oldkey, pkey, includeColumn, vectors, centroidPos)
 }
 
 // AddSync add Sync command for vbucket heartbeat.
 func (kv *KeyVersions) AddSync() {
-	kv.addKey(0, Sync, nil, nil, nil)
+	kv.addKey(0, Sync, nil, nil, nil, nil)
 }
 
 // AddDropData add DropData command for trigger downstream catchup.
 func (kv *KeyVersions) AddDropData() {
-	kv.addKey(0, DropData, nil, nil, nil)
+	kv.addKey(0, DropData, nil, nil, nil, nil)
 }
 
 // AddStreamBegin add StreamBegin command for a new vbucket.
 func (kv *KeyVersions) AddStreamBegin(status byte, code byte) {
-	kv.addKey(0, StreamBegin, []byte{status, code}, nil, nil)
+	kv.addKey(0, StreamBegin, []byte{status, code}, nil, nil, nil)
 }
 
 // AddStreamEnd add StreamEnd command for a vbucket shutdown.
 func (kv *KeyVersions) AddStreamEnd() {
-	kv.addKey(0, StreamEnd, nil, nil, nil)
+	kv.addKey(0, StreamEnd, nil, nil, nil, nil)
 }
 
 // AddSnapshot add Snapshot command for a vbucket shutdown.
@@ -360,7 +366,7 @@ func (kv *KeyVersions) AddSnapshot(typ uint32, start, end uint64) {
 	var key, okey [8]byte
 	binary.BigEndian.PutUint64(key[:8], start)
 	binary.BigEndian.PutUint64(okey[:8], end)
-	kv.addKey(uint64(typ), Snapshot, key[:8], okey[:8], nil)
+	kv.addKey(uint64(typ), Snapshot, key[:8], okey[:8], nil, nil)
 }
 
 func (kv *KeyVersions) GetSnapshot() (uint32, uint64, uint64) {
@@ -377,37 +383,37 @@ func (kv *KeyVersions) AddSystemEvent(eventType transport.CollectionEvent,
 
 	switch eventType {
 	case transport.COLLECTION_CREATE:
-		kv.addKey(0, CollectionCreate, manifestUID, scopeID, collectionID)
+		kv.addKey(0, CollectionCreate, manifestUID, scopeID, collectionID, nil)
 	case transport.COLLECTION_DROP:
-		kv.addKey(0, CollectionDrop, manifestUID, scopeID, collectionID)
+		kv.addKey(0, CollectionDrop, manifestUID, scopeID, collectionID, nil)
 	case transport.COLLECTION_FLUSH:
-		kv.addKey(0, CollectionFlush, manifestUID, scopeID, collectionID)
+		kv.addKey(0, CollectionFlush, manifestUID, scopeID, collectionID, nil)
 	case transport.SCOPE_CREATE:
-		kv.addKey(0, ScopeCreate, manifestUID, scopeID, nil)
+		kv.addKey(0, ScopeCreate, manifestUID, scopeID, nil, nil)
 	case transport.SCOPE_DROP:
-		kv.addKey(0, ScopeDrop, manifestUID, scopeID, nil)
+		kv.addKey(0, ScopeDrop, manifestUID, scopeID, nil, nil)
 	case transport.COLLECTION_CHANGED:
-		kv.addKey(0, CollectionChanged, manifestUID, scopeID, collectionID)
+		kv.addKey(0, CollectionChanged, manifestUID, scopeID, collectionID, nil)
 	}
 }
 
 // AddUpdateSeqno add UpdateSeqno command
 func (kv *KeyVersions) AddUpdateSeqno() {
-	kv.addKey(0, UpdateSeqno, nil, nil, nil)
+	kv.addKey(0, UpdateSeqno, nil, nil, nil, nil)
 }
 
 // AddSeqnoAdvanced adds SeqnoAdvanced command
 func (kv *KeyVersions) AddSeqnoAdvanced() {
-	kv.addKey(0, SeqnoAdvanced, nil, nil, nil)
+	kv.addKey(0, SeqnoAdvanced, nil, nil, nil, nil)
 }
 
 // AddOSOSnapshot adds OSOSnapshot command
 func (kv *KeyVersions) AddOSOSnapshot(eventType transport.CollectionEvent) {
 	switch eventType {
 	case transport.OSO_SNAPSHOT_START:
-		kv.addKey(0, OSOSnapshotStart, nil, nil, nil)
+		kv.addKey(0, OSOSnapshotStart, nil, nil, nil, nil)
 	case transport.OSO_SNAPSHOT_END:
-		kv.addKey(0, OSOSnapshotEnd, nil, nil, nil)
+		kv.addKey(0, OSOSnapshotEnd, nil, nil, nil, nil)
 	}
 }
 

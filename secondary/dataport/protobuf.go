@@ -56,6 +56,7 @@ func protobufEncode(payload interface{}) (data []byte, err error) {
 				pkv.Keys = make([][]byte, 0, l)
 				pkv.Oldkeys = make([][]byte, 0, l)
 				pkv.Partnkeys = make([][]byte, 0, l)
+				pkv.IncludeColumns = make([][]byte, 0, l)
 				pkv.Vectors = make([]*protobuf.Vectors, 0, l)
 				pkv.CentroidPos = make([]*protobuf.FieldPos, 0, l)
 				for i, uuid := range kv.Uuids { // for each key-version
@@ -64,6 +65,7 @@ func protobufEncode(payload interface{}) (data []byte, err error) {
 					pkv.Keys = append(pkv.Keys, kv.Keys[i])
 					pkv.Oldkeys = append(pkv.Oldkeys, kv.Oldkeys[i])
 					pkv.Partnkeys = append(pkv.Partnkeys, kv.Partnkeys[i])
+					pkv.IncludeColumns = append(pkv.IncludeColumns, kv.IncludeColumn[i])
 					if len(kv.Vectors[i]) > 0 {
 						vectors := &protobuf.Vectors{}
 
