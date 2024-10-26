@@ -529,8 +529,8 @@ func insertDelete1(c *Context, mutationMeta *indexer.MutationMeta, wg *sync.Wait
 	defer wg.Done()
 	for i := 0; i < c.numItems; i++ {
 		mutationMeta.SetVBId(int(crc32.ChecksumIEEE(c.docid[i])) % 1024)
-		c.memDbSlice.Insert(c.keys[i], c.docid[i], nil, mutationMeta)
-		c.plasmaSlice.Insert(c.keys[i], c.docid[i], nil, mutationMeta)
+		c.memDbSlice.Insert(c.keys[i], c.docid[i], nil, nil, nil, mutationMeta)
+		c.plasmaSlice.Insert(c.keys[i], c.docid[i], nil, nil, nil, mutationMeta)
 	}
 
 	arr := randomGenerator(c)
@@ -547,8 +547,8 @@ func insertdata(c *Context, wg *sync.WaitGroup, mutationMeta *indexer.MutationMe
 	defer wg.Done()
 	for i := start; i < end; i++ {
 		mutationMeta.SetVBId(int(crc32.ChecksumIEEE(c.docid[i])) % 1024)
-		c.memDbSlice.Insert(c.keys[i], c.docid[i], mutationMeta)
-		c.plasmaSlice.Insert(c.keys[i], c.docid[i], mutationMeta)
+		c.memDbSlice.Insert(c.keys[i], c.docid[i], nil, nil, nil, mutationMeta)
+		c.plasmaSlice.Insert(c.keys[i], c.docid[i], nil, nil, nil, mutationMeta)
 	}
 }
 

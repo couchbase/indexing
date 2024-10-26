@@ -602,7 +602,9 @@ func (mdb *bhiveSlice) getNextDocSeqno() uint64 {
 	return atomic.AddUint64(&mdb.docSeqno, 1)
 }
 
-func (mdb *bhiveSlice) Insert(key []byte, docid []byte, vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
+func (mdb *bhiveSlice) Insert(key []byte, docid []byte, includeColumn []byte,
+	vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
+
 	if mdb.CheckCmdChStopped() {
 		return mdb.fatalDbErr
 	}
@@ -613,12 +615,13 @@ func (mdb *bhiveSlice) Insert(key []byte, docid []byte, vectors [][]float32, cen
 	}
 
 	mut := &indexMutation{
-		op:          op,
-		key:         key,
-		docid:       docid,
-		vecs:        vectors,
-		centroidPos: centroidPos,
-		meta:        meta,
+		op:            op,
+		key:           key,
+		docid:         docid,
+		includeColumn: includeColumn,
+		vecs:          vectors,
+		centroidPos:   centroidPos,
+		meta:          meta,
 	}
 
 	atomic.AddInt64(&mdb.qCount, 1)
@@ -815,7 +818,7 @@ loop:
 			switch icmd.op {
 			case opUpdate, opInsert:
 				start = time.Now()
-				nmut = mdb.insert(icmd.key, icmd.docid, workerId, icmd.op == opInsert, icmd.vecs)
+				nmut = mdb.insert(icmd.key, icmd.docid, icmd.includeColumn, workerId, icmd.op == opInsert, icmd.vecs)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
@@ -910,7 +913,7 @@ func (slice *bhiveSlice) freeAllWriters() {
 // Mutation
 ////////////////////////////////////////////////
 
-func (mdb *bhiveSlice) insert(key []byte, docid []byte, workerId int, init bool, vecs [][]float32) int {
+func (mdb *bhiveSlice) insert(key []byte, docid []byte, includeColumn []byte, workerId int, init bool, vecs [][]float32) int {
 
 	defer func() {
 		atomic.AddInt64(&mdb.qCount, -1)
@@ -925,7 +928,7 @@ func (mdb *bhiveSlice) insert(key []byte, docid []byte, workerId int, init bool,
 		if mdb.idxDefn.IsArrayIndex {
 			// [VECTOR_TODO]: Add support for array indexes with VECTOR attribute
 		} else {
-			nmut = mdb.insertVectorIndex(key, docid, workerId, init, vecs)
+			nmut = mdb.insertVectorIndex(key, docid, includeColumn, workerId, init, vecs)
 		}
 	}
 
@@ -962,8 +965,8 @@ func (mdb *bhiveSlice) delete2(docid []byte, workerId int) int {
 //  2. back:
 //     a) key: docID
 //     b) value: SHA(vector)+SHA(scalar)+centroidID
-func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
-	init bool, vecs [][]float32) (nmut int) {
+func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn []byte,
+	workerId int, init bool, vecs [][]float32) (nmut int) {
 
 	start := time.Now()
 	defer func() {
@@ -987,9 +990,11 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
 	}
 
 	vec := vecs[0]
+	metalen := mdb.codeSize + len(includeColumn)
+	mdb.quantizedCodeBuf[workerId] = resizeQuantizedCodeBuf(mdb.quantizedCodeBuf[workerId], 1, metalen, true)
 
 	// compute centroidId and quantized code
-	quantizedCode, centroidId, err := mdb.getQuantizedCodeForVector(vec, mdb.codeSize, mdb.quantizedCodeBuf[workerId])
+	_, centroidId, err := mdb.getQuantizedCodeForVector(vec, mdb.codeSize, mdb.quantizedCodeBuf[workerId])
 	if err != nil {
 		logging.Errorf("bhiveSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
 			"Skipping docid:%s  due to error in computing centroidId and quantized code.  Error: %v",
@@ -998,13 +1003,24 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
 		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
 	}
 
+	// First "codeSize" of quantizedCodeBuf will be the quantized code.
+	// Re-use that buffer to stitch include columns and quantized code together
+	// This will help avoid new memory allocations
+	var bhiveMeta []byte
+	if len(includeColumn) > 0 {
+		copy(mdb.quantizedCodeBuf[workerId][mdb.codeSize:metalen], includeColumn)
+		bhiveMeta = mdb.quantizedCodeBuf[workerId][:metalen]
+	} else {
+		bhiveMeta = mdb.quantizedCodeBuf[workerId][:mdb.codeSize]
+	}
+
 	if vec != nil {
 
 		var docSeqno uint64
 
 		// remove old record
 		if !init {
-			if n, changed, seqno := mdb.deleteVectorIndex(docid, vec, key, workerId); !changed {
+			if n, changed, seqno := mdb.deleteVectorIndex(docid, vec, bhiveMeta, workerId); !changed {
 				return 0
 			} else if n == 1 { // exist
 				docSeqno = seqno
@@ -1026,11 +1042,11 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
 
 		// insert into main index
 		v := ((bhive.Vector)(vec)).Bytes()
-		err = mdb.mainWriters[workerId].Insert(docSeqno, cid[:], docid, quantizedCode, v)
+		err = mdb.mainWriters[workerId].Insert(docSeqno, cid[:], docid, bhiveMeta, v)
 		if err != nil {
 			logging.Errorf("bhiveSlice:insertVectorIndex.  Error during insert main index: msg=%v", err.Error())
 		}
-		mainIndexEntrySz := int64(len(docid) + 8 + len(key) + len(v))
+		mainIndexEntrySz := int64(len(docid) + 8 + len(bhiveMeta) + len(v))
 		if err == nil {
 			mdb.idxStats.rawDataSize.Add(mainIndexEntrySz)
 			addKeySizeStat(mdb.idxStats, int(mainIndexEntrySz))
@@ -1049,7 +1065,7 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
 		copy(buf[offset:offset+sha256.Size], common.ComputeSHA256ForFloat32Array(vec))
 
 		offset += sha256.Size
-		copy(buf[offset:offset+sha256.Size], common.ComputeSHA256ForByteArray(key))
+		copy(buf[offset:offset+sha256.Size], common.ComputeSHA256ForByteArray(bhiveMeta))
 
 		offset += sha256.Size
 		copy(buf[offset:], cid[:])

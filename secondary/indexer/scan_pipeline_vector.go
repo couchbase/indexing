@@ -137,6 +137,7 @@ type ScanWorker struct {
 
 	vectorDim int
 	heapSize  int
+	codeSize  int
 
 	//local heap for each worker
 	heap *TopKRowHeap
@@ -170,6 +171,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 
 	//init temp buffers
 	w.vectorDim = r.getVectorDim()
+	w.codeSize = r.getVectorCodeSize()
 
 	w.currBatchRows = make([]*Row, 0, senderBatchSize)
 	w.codes = make([]byte, 0, senderBatchSize*r.getVectorCodeSize())
@@ -689,10 +691,14 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 		w.currJob.bytesRead += uint64(len(value))
 	}
 
+	codeSize := w.codeSize
 	storeId, recordId, meta := w.currJob.snap.Snapshot().DecodeMeta(value)
-	// Replace value with meta for now. Once include column support is added,
-	// meta() has to be split into include column fields and quantized codes
 	value = meta
+
+	// The value field will contain both quantized codes and include column fields.
+	// The first "codeSize" bytes contain quantized codes. Hence, retrive only the
+	// quantized code from value till includeColumn filtering is supported in scan pipeline
+	value = value[:codeSize]
 
 	var newRow *Row
 	if w.r.useHeapForVectorIndex() {

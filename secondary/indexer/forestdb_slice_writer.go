@@ -308,7 +308,8 @@ func (fdb *fdbSlice) DecrRef() {
 // Internally the request is buffered and executed async.
 // If forestdb has encountered any fatal error condition,
 // it will be returned as error.
-func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
+func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, includeColumn []byte,
+	vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
 	szConf := fdb.updateSliceBuffers()
 	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex,
 		1, fdb.idxDefn.Desc, meta, szConf)
