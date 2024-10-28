@@ -674,6 +674,10 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 
 func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 
+	if w.currJob.rowsScanned%SCAN_ROLLBACK_ERROR_BATCHSIZE == 0 && w.r.hasRollback != nil && w.r.hasRollback.Load() == true {
+		return ErrIndexRollback
+	}
+
 	w.rowsScanned++
 	w.currJob.rowsScanned++
 	w.bytesRead += uint64(len(entry) + 8) // 8 bytes for centroidId that are read and filtered out
