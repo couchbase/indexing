@@ -1497,6 +1497,37 @@ func (r *ScanRequest) setConsistency(cons common.Consistency, vector *protobuf.T
 	return
 }
 
+func computeNprobesAndCtxs(indexInst *common.IndexInst, scanTimeNProbes, parallelCentroidScans int) (int, int, error) {
+
+	// If scanTimeNprobes is 0 fallback to value from index creation time
+	nprobes := scanTimeNProbes
+	if nprobes <= 0 {
+		nprobes = indexInst.Defn.VectorMeta.Nprobes
+	}
+
+	if nprobes <= 0 {
+		return 0, 0, fmt.Errorf("nprobes value is zero. scan_probes: %v from index creation"+
+			" probes: %v from index scan", indexInst.Defn.VectorMeta.Nprobes, scanTimeNProbes)
+	}
+
+	// nprobes is a positive integer (i.e. a valid value)
+	// check if nprobes is more than the centroids in index instance
+	// Use min(nprobes, centroids) for scanning the index
+	for partnId, centroids := range indexInst.Nlist {
+		if centroids <= 0 {
+			return 0, 0, fmt.Errorf("Cannot scan the index as the centroids available for index: %v partnId: %v is zero", indexInst.InstId, partnId)
+		}
+		nprobes = min(nprobes, centroids)
+	}
+
+	// Compute the minimum of nprobes and parallelCentroidScans as we can not scan
+	// more centroids than that are required i.e. we should not scan 3 centroids
+	// if only 2 centroid scans are required
+	ctxsPerPartition := min(nprobes, parallelCentroidScans)
+
+	return nprobes, ctxsPerPartition, nil
+}
+
 func (r *ScanRequest) setIndexParams() (localErr error) {
 	r.sco.mu.RLock()
 	defer r.sco.mu.RUnlock()
@@ -1504,17 +1535,23 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 	var indexInst *common.IndexInst
 
 	ctxsPerPartition := 1
+	stats := r.sco.stats.Get()
+
 	if r.isVectorScan {
-		ctxsPerPartition = r.parallelCentroidScans
-		// If r.nprobes is 0 fallback to value from index creation time
-		if ctxsPerPartition > r.nprobes {
-			ctxsPerPartition = r.nprobes
+		indexInst, _, localErr = r.sco.findIndexInstance(r.DefnID, r.PartitionIds,
+			r.User, r.SkipReadMetering, 0, false)
+		if localErr != nil {
+			return
+		}
+
+		r.nprobes, ctxsPerPartition, localErr = computeNprobesAndCtxs(indexInst, r.nprobes, r.parallelCentroidScans)
+		if localErr != nil {
+			return
 		}
 	}
-
-	stats := r.sco.stats.Get()
 	indexInst, r.Ctxs, localErr = r.sco.findIndexInstance(r.DefnID, r.PartitionIds,
-		r.User, r.SkipReadMetering, ctxsPerPartition)
+		r.User, r.SkipReadMetering, ctxsPerPartition, true)
+
 	if localErr == nil {
 		r.isPrimary = indexInst.Defn.IsPrimary
 		r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket

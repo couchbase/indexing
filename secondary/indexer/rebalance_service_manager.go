@@ -2029,6 +2029,7 @@ func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid strin
 
 	var err error
 	if dropIndexes {
+		var cfg common.Config = nil
 		for i, inst := range tt.IndexInsts {
 			defn := inst.Defn
 			defn.InstId = tt.InstIds[i]
@@ -2036,6 +2037,22 @@ func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid strin
 			err1 := m.cleanupIndex(defn)
 			if err1 != nil {
 				err = err1
+			}
+			//There are few scenarios where the cleanupIndex won't remove the codebook directory as the sliceDir and
+			//codebook are explicitly created as part of codebook restore (not due to plasma slice creation), it becomes
+			//the responsibility of the rebalancer to cleanup the codebook folders for any residual cleanup
+			//This is a no-op if the cleanup already happened
+			if defn.IsVectorIndex {
+				if cfg == nil {
+					cfg = m.config.Load()
+				}
+				for _, partnId := range defn.Partitions {
+					err2 := RemoveCodebookDir(cfg["storage_dir"].String(), &inst, partnId, SliceId(0))
+					if err2 != nil {
+						logging.Errorf("RebalanceServiceManager::cleanupLocalIndexInstsAndShardToken Error observed while cleaning up codebook dir"+
+							"for path:%v, err: %v", IndexPath(&inst, partnId, SliceId(0)), err2)
+					}
+				}
 			}
 		}
 	}

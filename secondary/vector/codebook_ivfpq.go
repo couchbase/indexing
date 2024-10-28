@@ -188,8 +188,8 @@ func (cb *codebookIVFPQ) EncodeVectors(vecs []float32, codes []byte) error {
 	return cb.index.EncodeVectors(vecs, codes, cb.nlist)
 }
 
-//Compute the quantized code and find the nearest centroidID
-//for a given list of vectors. Must be run on a trained codebook.
+// Compute the quantized code and find the nearest centroidID
+// for a given list of vectors. Must be run on a trained codebook.
 func (cb *codebookIVFPQ) EncodeAndAssignVectors(vecs []float32, codes []byte, labels []int64) error {
 
 	if !cb.IsTrained() {
@@ -367,6 +367,10 @@ func (cb *codebookIVFPQ) Marshal() ([]byte, error) {
 	cbio.Checksum = crc32.ChecksumIEEE(data)
 
 	return json.Marshal(cbio)
+}
+
+func (cb *codebookIVFPQ) NumCentroids() int {
+	return cb.nlist
 }
 
 func recoverCodebookIVFPQ(data []byte) (c.Codebook, error) {

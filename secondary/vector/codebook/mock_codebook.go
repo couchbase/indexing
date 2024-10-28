@@ -149,6 +149,7 @@ func (mc *MockCodebook) ComputeDistanceWithDT(code []byte, dtable [][]float32) f
 func (mc *MockCodebook) Size() int64                                                   { return 0 }
 func (mc *MockCodebook) Close() error                                                  { return nil }
 func (mc *MockCodebook) Marshal() ([]byte, error)                                      { return nil, nil }
+func (mc *MockCodebook) NumCentroids() int                                             { return 0 }
 
 // -----------------
 // KMeans Clustering
