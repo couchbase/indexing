@@ -38,7 +38,7 @@ services:
     init: true
     # comment both of the below to run standalone tests
     restart: unless-stopped
-    entrypoint: /home/bot/.ciscripts/secondary/tests/ci/scripts/build
+    entrypoint: /home/bot/.ciscripts/secondary/tests/ci/scripts/setup/container-runner.sh
   apache:
     build:
       dockerfile: apache_server.dockerfile

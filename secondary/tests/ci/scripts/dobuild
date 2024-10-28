@@ -28,14 +28,15 @@ error_exit() {
   exit 2
 }
 
-> ~/repos.list
+>~/repos.list
 note_version() {
-  repo=$1; pos=$2
-  echo "$repo $pos" >> ~/repos.list
+  repo=$1
+  pos=$2
+  echo "$repo $pos" >>~/repos.list
   cd $pos
-  current="`git rev-parse HEAD`"
-  test -f ~/$repo.good || (echo $current > ~/$repo.good)
-  good="`cat ~/$repo.good`"
+  current="$(git rev-parse HEAD)"
+  test -f ~/$repo.good || (echo $current >~/$repo.good)
+  good="$(cat ~/$repo.good)"
   echo -n "$repo is at <a href='https://github.com/couchbase/$repo/commit/$current'>${current:0:7}</a>, changes since last good build: "
   if [ "$current" != "$good" ]; then
     echo
@@ -46,81 +47,9 @@ note_version() {
   fi
 }
 
-build() (
-  FORCEX86=0
-  if [ "$(echo $1 | tr 'A-Z' 'a-z')" = "-forcex86" ]; then
-    FORCEX86=1
-    echo "Forcing to build for x86 architecture"
-  fi
-  if [ "$BUILD_ENTERPRISE" = "" ]; then
-    echo "BUILD_ENTERPRISE empty. Building enterprise edition"
-    export BUILD_ENTERPRISE=true
-  fi
-
-  BUILD_ENTERPRISE=$(echo "$BUILD_ENTERPRISE" | tr 'a-z' 'A-Z')
-  if [ $BUILD_ENTERPRISE = "TRUE" ]; then
-    echo "Building Enterprise Edition"
-  else
-    echo "Building community edition"
-  fi
-
-  SUFFIX=""
-  if [ $BUILD_ENTERPRISE = "TRUE" ]; then
-    SUFFIX="EE"
-  else
-    SUFFIX="CE"
-  fi
-
-  cd $WORKSPACE
-  PRODUCT_VERSION=${RELEASE}-${BLD_NUM}-rel-$SUFFIX
-  rm -f *.rpm *.deb
-  rm -rf ~/rpmbuild
-  rm -rf $WORKSPACE/voltron/build/deb
-  rm -rf $WORKSPACE/install/*
-  find goproj godeps -name \*.a -print0 | xargs -0 rm -f
-
-  cd $WORKSPACE
-  mkdir -p build
-  cd build
-
-  CMAKE_x86_OPTS=
-  if [ $FORCEX86 -eq 1 ];then
-    CMAKE_x86_OPTS="-D CMAKE_APPLE_SILICON_PROCESSOR=x86_64 -D CMAKE_OSX_ARCHITECTURES=x86_64"
-  fi
-
-  echo "Building cmakefiles and deps [$SUFFIX]"
-  cmake  ${CMAKE_x86_OPTS} \
-        -D CMAKE_INSTALL_PREFIX=$WORKSPACE/install \
-        -D CMAKE_PREFIX_PATH=$WORKSPACE/install \
-        -D CMAKE_BUILD_TYPE=RelWithDebInfo \
-        -D PRODUCT_VERSION=${PRODUCT_VERSION} \
-        -D BUILD_ENTERPRISE=${BUILD_ENTERPRISE} \
-        -D CB_DOWNLOAD_DEPS=1 \
-        -D SNAPPY_OPTION=Disable \
-        .. 1>>$WORKSPACE/make.log 2>&1
-  test $? -eq 0 || error_exit "CMake build [$SUFFIX]"
-
-  echo "Building main product [$SUFFIX]"
-  cd $WORKSPACE/build
-  make -j8 install 1>> $WORKSPACE/make.log 2>&1
-  test $? -eq 0 || error_exit "Making Install [$SUFFIX]"
-
-  cd $WORKSPACE
-  repo manifest -r > current.xml
-  repo manifest -r > manifest.xml
-
-  echo "Actual Versions:" >> $WORKSPACE/versions.cfg
-  cd $WORKSPACE
-  repo forall -c 'echo "$REPO_PROJECT `git log --oneline HEAD...HEAD^`"' 2>/dev/null 1>>$WORKSPACE/versions.cfg
-
-  chmod a+r /var/www/*
-  echo "Build $SUFFIX finished"
-
-)
-
 echo "</pre><h3>Building</h3><pre>"
-> $WORKSPACE/versions.cfg
-> $WORKSPACE/make.log
+>$WORKSPACE/versions.cfg
+>$WORKSPACE/make.log
 
 if [ ! -d ~/.reference ]; then
   mkdir ~/.reference
@@ -129,21 +58,20 @@ if [ ! -d ~/.reference ]; then
   test $? -eq 0 || error_exit "Repo Init"
 fi
 
-echo "Started building at `date +'%Y/%m/%d %H:%M:%S'`"
+echo "Started building at $(date +'%Y/%m/%d %H:%M:%S')"
 test "$BLD_NUM" = "0" || echo "Using pegged server, $BLD_NUM build"
 echo "Calculating base"
 rm -rf ~/.manifests
 git clone ssh://github.com/couchbase/build-manifests ~/.manifests 1>>$WORKSPACE/make.log 2>&1
 cd ~/.manifests
 
-test "$BLD_NUM" = "0" && BLD_NUM="`git log --oneline | grep "couchbase-server" | grep -F "$RELEASE-" | head -1 | sed "s/^.*$RELEASE-\([0-9]*\).*$/\1/g"`"
-SHA=`git log --oneline | grep "couchbase-server" | grep "$RELEASE-$BLD_NUM" | head -1 | awk '{print $1}'`
+test "$BLD_NUM" = "0" && BLD_NUM="$(git log --oneline | grep "couchbase-server" | grep -F "$RELEASE-" | head -1 | sed "s/^.*$RELEASE-\([0-9]*\).*$/\1/g")"
+SHA=$(git log --oneline | grep "couchbase-server" | grep "$RELEASE-$BLD_NUM" | head -1 | awk '{print $1}')
 git branch thisrun $SHA 1>>$WORKSPACE/make.log 2>&1
 
 num_cores=0
 core_read_commands=("nproc --all" "sysctl -n hw.ncpu" "echo 32")
-for cmd in $core_read_commands
-do
+for cmd in $core_read_commands; do
   val=$(eval $cmd)
   if [ $? -eq 0 ]; then
     num_cores=$val
@@ -171,12 +99,12 @@ test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find
 cd $WORKSPACE
 rm -rf analytics/CMakeLists.txt
 
-note_version query        $WORKSPACE/goproj/src/github.com/couchbase/query
-note_version gometa       $WORKSPACE/goproj/src/github.com/couchbase/gometa
-note_version ns_server    $WORKSPACE/ns_server
-note_version couchstore   $WORKSPACE/couchstore
-note_version forestdb     $WORKSPACE/forestdb
-note_version kv_engine    $WORKSPACE/kv_engine
+note_version query $WORKSPACE/goproj/src/github.com/couchbase/query
+note_version gometa $WORKSPACE/goproj/src/github.com/couchbase/gometa
+note_version ns_server $WORKSPACE/ns_server
+note_version couchstore $WORKSPACE/couchstore
+note_version forestdb $WORKSPACE/forestdb
+note_version kv_engine $WORKSPACE/kv_engine
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
 echo "Switching indexing to $BRANCH"
@@ -218,70 +146,76 @@ cd $WORKSPACE/testrunner
 echo "Switching testrunner to master"
 git checkout master 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout master"
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
-git submodule init; git submodule update --init --force --remote;
+git submodule init
+git submodule update --init --force --remote
 note_version testrunner $WORKSPACE/testrunner
 
-> ~/gerrit.list
+>~/gerrit.list
 if [ "$CIBOT" = "true" ]; then
-  autolist="`ssh review.couchbase.org gerrit query \"project:indexing status:open branch:$BRANCH reviewer:self\" | grep number: | awk '{print $2}' | sort -n`"
-  for patch_id in $GERRIT $autolist
-  do
+  autolist="$(ssh review.couchbase.org gerrit query \"project:indexing status:open branch:$BRANCH reviewer:self\" | grep number: | awk '{print $2}' | sort -n)"
+  for patch_id in $GERRIT $autolist; do
     cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
-    revspec=`git ls-remote -q ssh://review.couchbase.org/indexing refs/changes/*/$patch_id/* | awk '{print $2}' | sort -n -t/ -k5 | tail -1`
+    revspec=$(git ls-remote -q ssh://review.couchbase.org/indexing refs/changes/*/$patch_id/* | awk '{print $2}' | sort -n -t/ -k5 | tail -1)
     if [ "$revspec" == "" ]; then continue; fi
     echo "Pulling in <a href='http://review.couchbase.org/#/c/$patch_id'>uncommitted change $patch_id</a> at $revspec"
     git fetch -q ssh://review.couchbase.org/indexing $revspec && git cherry-pick FETCH_HEAD
-    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >> ~/gerrit.list
+    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >>~/gerrit.list
   done
-  autolist="`ssh review.couchbase.org gerrit query \"project:plasma status:open branch:$BRANCH reviewer:self\" | grep number: | awk '{print $2}' | sort -n`"
-  for patch_id in $GERRIT $autolist
-  do
+  autolist="$(ssh review.couchbase.org gerrit query \"project:plasma status:open branch:$BRANCH reviewer:self\" | grep number: | awk '{print $2}' | sort -n)"
+  for patch_id in $GERRIT $autolist; do
     cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
-    revspec=`git ls-remote -q ssh://review.couchbase.org/plasma refs/changes/*/$patch_id/* | awk '{print $2}' | sort -n -t/ -k5 | tail -1`
+    revspec=$(git ls-remote -q ssh://review.couchbase.org/plasma refs/changes/*/$patch_id/* | awk '{print $2}' | sort -n -t/ -k5 | tail -1)
     if [ "$revspec" == "" ]; then continue; fi
     echo "Pulling in <a href='http://review.couchbase.org/#/c/$patch_id'>uncommitted change $patch_id</a> at $revspec"
     git fetch -q ssh://review.couchbase.org/plasma $revspec && git cherry-pick FETCH_HEAD
-    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >> ~/gerrit.list
+    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >>~/gerrit.list
   done
 
-  autolist="`ssh review.couchbase.org gerrit query \"project:bhive status:open branch:main reviewer:self\" | grep number: | awk '{print $2}' | sort -n`"
-  for patch_id in $GERRIT $autolist
-  do
+  autolist="$(ssh review.couchbase.org gerrit query \"project:bhive status:open branch:main reviewer:self\" | grep number: | awk '{print $2}' | sort -n)"
+  for patch_id in $GERRIT $autolist; do
     cd $WORKSPACE/goproj/src/github.com/couchbase/bhive
-    revspec=`git ls-remote -q ssh://review.couchbase.org/bhive refs/changes/*/$patch_id/* | awk '{print $2}' | sort -n -t/ -k5 | tail -1`
+    revspec=$(git ls-remote -q ssh://review.couchbase.org/bhive refs/changes/*/$patch_id/* | awk '{print $2}' | sort -n -t/ -k5 | tail -1)
     if [ "$revspec" == "" ]; then continue; fi
     echo "Pulling in <a href='http://review.couchbase.org/#/c/$patch_id'>uncommitted change $patch_id</a> at $revspec"
     git fetch -q ssh://review.couchbase.org/bhive $revspec && git cherry-pick FETCH_HEAD
-    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >> ~/gerrit.list
+    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >>~/gerrit.list
   done
 
-  autolist="`ssh review.couchbase.org gerrit query \"project:gometa status:open branch:master reviewer:self\" | grep number: | awk '{print $2}' | sort -n`"
-  for patch_id in $GERRIT $autolist
-  do
+  autolist="$(ssh review.couchbase.org gerrit query \"project:gometa status:open branch:master reviewer:self\" | grep number: | awk '{print $2}' | sort -n)"
+  for patch_id in $GERRIT $autolist; do
     cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
-    revspec=`git ls-remote -q ssh://review.couchbase.org/gometa refs/changes/*/$patch_id/* | awk '{print $2}' | sort -n -t/ -k5 | tail -1`
+    revspec=$(git ls-remote -q ssh://review.couchbase.org/gometa refs/changes/*/$patch_id/* | awk '{print $2}' | sort -n -t/ -k5 | tail -1)
     if [ "$revspec" == "" ]; then continue; fi
     echo "Pulling in <a href='http://review.couchbase.org/#/c/$patch_id'>uncommitted change $patch_id</a> at $revspec"
     git fetch -q ssh://review.couchbase.org/gometa $revspec && git cherry-pick FETCH_HEAD
-    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >> ~/gerrit.list
+    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >>~/gerrit.list
   done
-  autolist="`ssh review.couchbase.org gerrit query \"project:nitro status:open branch:$BRANCH reviewer:self\" | grep number: | awk '{print $2}' | sort -n`"
-  for patch_id in $GERRIT $autolist
-  do
+  autolist="$(ssh review.couchbase.org gerrit query \"project:nitro status:open branch:$BRANCH reviewer:self\" | grep number: | awk '{print $2}' | sort -n)"
+  for patch_id in $GERRIT $autolist; do
     cd $WORKSPACE/goproj/src/github.com/couchbase/nitro
-    revspec=`git ls-remote -q ssh://review.couchbase.org/nitro refs/changes/*/$patch_id/* | awk '{print $2}' | sort -n -t/ -k5 | tail -1`
+    revspec=$(git ls-remote -q ssh://review.couchbase.org/nitro refs/changes/*/$patch_id/* | awk '{print $2}' | sort -n -t/ -k5 | tail -1)
     if [ "$revspec" == "" ]; then continue; fi
     echo "Pulling in <a href='http://review.couchbase.org/#/c/$patch_id'>uncommitted change $patch_id</a> at $revspec"
     git fetch -q ssh://review.couchbase.org/nitro $revspec && git cherry-pick FETCH_HEAD
-    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >> ~/gerrit.list
+    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >>~/gerrit.list
   done
 fi
 
 # Add 2ici_test to tag to compile "testcode" package for CI
 sed -i 's/SET (TAGS "jemalloc")/SET (TAGS "jemalloc 2ici_test")/' $WORKSPACE/goproj/src/github.com/couchbase/indexing/CMakeLists.txt
 
-BUILD_ENTERPRISE=false build # -forcex86 # add -forcex86 if build fail on arm64
+BUILD_ENTERPRISE=false builder # -forcex86 # add -forcex86 if build fail on arm64
 test $? -eq 0 || exit $?
 # Building again will delete output from previous build
-build # -forcex86 # add -forcex86 if build fail on arm64
+builder # -forcex86 # add -forcex86 if build fail on arm64
 test $? -eq 0 || exit $?
+
+cd $WORKSPACE
+repo manifest -r >current.xml
+repo manifest -r >manifest.xml
+
+echo "Actual Versions:" >>$WORKSPACE/versions.cfg
+cd $WORKSPACE
+repo forall -c 'echo "$REPO_PROJECT `git log --oneline HEAD...HEAD^`"' 2>/dev/null 1>>$WORKSPACE/versions.cfg
+
+chmod a+r /var/www/*

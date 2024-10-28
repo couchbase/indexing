@@ -16,7 +16,7 @@ RUN ln -s /usr/bin/python3 /usr/bin/python && \
 
 ARG USERNAME=cbci
 
-RUN useradd -rm -d /home/bot -s /bin/bash -g root -G root bot
+RUN useradd -rm -d /home/bot -s /bin/bash -u 1300 -g root -G root bot
 
 RUN mkdir /home/bot/.ssh /home/bot/.cbdepscache /home/bot/.cbdepcache
 RUN mkdir /var/www
@@ -85,12 +85,6 @@ ARG BRANCH="unstable"
 ARG STORAGE="plasma"
 ARG PEGGED
 
-# do this to add basic ciscripts to the image so that we can run something in entrypoint
-RUN git clone -q https://github.com/couchbase/indexing.git ${ciscripts_dir} && \
-	cd ${ciscripts_dir} && \
-	git checkout ${BRANCH} && \
-	git pull -q
-
 # setup .cienv file on the basis of ARGS
 COPY <<EOF /home/bot/.cienv
 export WORKSPACE=${WORKSPACE}
@@ -120,7 +114,14 @@ RUN mkdir /home/bot/bin
 
 WORKDIR ${WORKSPACE}
 
-# ENTRYPOINT [ "/bin/bash", "-c" ]
+# do this to add basic ciscripts to the image so that we can run something in entrypoint
+# if you want to try local scripts, run `git daemon --base-path=<server-root>/goproj/src/github.com/couchbase --export-all`
+# RUN git clone -q git://host.docker.internal/indexing/ ${ciscripts_dir} && \
+RUN git clone -q https://github.com/couchbase/indexing.git ${ciscripts_dir} && \
+	cd ${ciscripts_dir} && \
+	git checkout ${BRANCH} && \
+	git pull -q
+
 
 # default CMD is domain to run the script only once
 # set this to ${ciscripts_dir}/build for running in CI
