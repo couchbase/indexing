@@ -992,21 +992,23 @@ func CloseGsiKeyspace(gsi datastore.Indexer) {
 // secondaryIndex to hold meta data information, network-address for
 // a single secondary-index.
 type secondaryIndex struct {
-	gsi          *gsiKeyspace // back-reference to container.
-	bucketn      string
-	name         string // name of the index
-	defnID       uint64
-	isPrimary    bool
-	using        c.IndexType
-	partnExpr    expression.Expressions
-	secExprs     expression.Expressions
-	desc         []bool
-	vectorAttr   []bool
-	whereExpr    expression.Expression
-	state        datastore.IndexState
-	err          string
-	deferred     bool
-	indexInfo    map[string]interface{}
+	gsi                *gsiKeyspace // back-reference to container.
+	bucketn            string
+	name               string // name of the index
+	defnID             uint64
+	isPrimary          bool
+	using              c.IndexType
+	partnExpr          expression.Expressions
+	secExprs           expression.Expressions
+	desc               []bool
+	vectorAttr         []bool
+	whereExpr          expression.Expression
+	state              datastore.IndexState
+	err                string
+	deferred           bool
+	indexInfo          map[string]interface{}
+	numReplica         int
+	retainDeletedXATTR bool
 
 	scheduled bool
 	schedFail bool
@@ -1022,7 +1024,7 @@ type secondaryIndex struct {
 	nprobes            int
 	vectorDescription  string
 	vectorTrainList    int
-	numCentroids	   int
+	numCentroids       int
 	numPartition       int
 
 	isBhive bool
@@ -1074,6 +1076,8 @@ func newSecondaryIndexFromMetaData(
 		schedFail:              imd.ScheduleFailed,
 		indexMissingLeadingKey: indexDefn.IndexMissingLeadingKey,
 		indexStatsHolder:       imd.Stats,
+		numReplica:             numReplica,
+		retainDeletedXATTR:     indexDefn.RetainDeletedXATTR,
 	}
 
 	if indexDefn.SecExprs != nil {
@@ -1248,6 +1252,12 @@ func (si *secondaryIndex) With() map[string]interface{} {
 		if si.vectorTrainList != 0 {
 			withClause["train_list"] = si.vectorTrainList
 		}
+	}
+
+	withClause["num_replica"] = si.numReplica
+	withClause["retain_deleted_xattr"] = si.retainDeletedXATTR
+	if si.numPartition > 0 {
+		withClause["num_partition"] = si.numPartition
 	}
 
 	return withClause
