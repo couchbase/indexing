@@ -598,6 +598,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		close(idx.meteringMgrCmdCh)
 	}
 
+	idx.cleanupRebalStagingDir()
+
 	//bootstrap phase 1
 	idx.bootstrap1(snapshotNotifych, snapshotReqCh)
 
@@ -8891,6 +8893,23 @@ func (idx *indexer) cleanupOrphanIndexes() {
 			logging.Infof("Cleaned up the orphan index slice %v.", f)
 		}
 	}
+}
+
+func (idx *indexer) cleanupRebalStagingDir() error {
+	storageDir := idx.config["storage_dir"].String()
+	rpcDir := GetRPCRootDir()
+
+	if rpcDir != "" && common.GetStorageMode() == common.PLASMA {
+		dir := filepath.Join(storageDir, rpcDir)
+
+		if err := idx.removeResidualFile(dir); err != nil {
+			logging.Errorf("Indexer::cleanupRebalStagingDir Error observed while removing residual files at path: %v, err: %v", dir, err)
+			return err
+		}
+		logging.Infof("Indexer::cleanupRebalStagingDir cleaned up path:%v successfully", dir)
+	}
+
+	return nil
 }
 
 func (idx *indexer) handleStorageWarmupDone(msg Message) {

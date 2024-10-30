@@ -74,3 +74,7 @@ func GetEmptyShardInfo() ([]common.ShardId, error) {
 func DestroyShard(shardId common.ShardId) error {
 	return plasma.DestroyShardID(plasma.ShardId(shardId))
 }
+
+func GetRPCRootDir() string {
+	return plasma.RPCRootDir
+}
