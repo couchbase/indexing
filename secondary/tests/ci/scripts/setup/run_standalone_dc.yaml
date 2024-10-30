@@ -30,11 +30,13 @@ services:
       - "9000-9120/tcp"
       - 2222:22
     volumes:
-      - build:/home/bot/build:rw
       - var-www:/var/www:rw
-      - depscache:/home/bot/.cbdepscache:rw
-      - depscache:/home/bot/.cbdepcache:rw
       - $HOME/testdata:/home/bot/testdata
+      # set your cb server root as $WORKSPACE to run CI tests on current set of scripts
+      - $WORKSPACE:/mnt/project
+    entrypoint: /home/bot/.ciscripts/secondary/tests/ci/scripts/setup/standalone-runner.sh
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   apache:
     build:
       dockerfile: apache_server.dockerfile
@@ -57,5 +59,3 @@ secrets:
     file: $HOME/.ssh/gerrit_password_less
 volumes:
   var-www:
-  build:
-  depscache:
