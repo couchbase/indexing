@@ -36,6 +36,7 @@ type Row struct {
 	len      int
 	last     bool
 	dist     float32
+	storeId  uint64 // used in BHIVE scans for re-ranking
 	recordId uint64 // used in BHIVE scans for re-ranking
 
 	partnId int    // Used to identify snapshot and reader context for partitioned indexes
@@ -342,6 +343,7 @@ func (r *Row) copyForBhive(source *Row) {
 
 	r.partnId = source.partnId
 	r.recordId = source.recordId
+	r.storeId = source.storeId
 
 	// cid is a read-only value derived from the scan request spans
 	// for BHIVE indexes only. The memory should be valid until the

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/stubs/nitro/bhive"
 	"math"
 	"math/rand"
 	"net"
@@ -165,6 +166,7 @@ func (s *settingsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
 	mux.HandleFunc("/settings/runtime/forceGC", s.handleForceGCReq)
 	mux.HandleFunc("/plasmaDiag", s.handlePlasmaDiag)
+	mux.HandleFunc("/bhiveDiag", s.handleBhiveDiag)
 	mux.HandleFunc("/settings/thisNodeOnly", s.handlePerNodeSettingsReq)
 	mux.HandleFunc("/settings/shardAffinity", s.handleShardAffinitySettingsReq)
 }
@@ -443,6 +445,20 @@ func (s *settingsManager) handlePlasmaDiag(w http.ResponseWriter, r *http.Reques
 	}
 
 	plasma.Diag.HandleHttp(w, r)
+}
+
+func (s *settingsManager) handleBhiveDiag(w http.ResponseWriter, r *http.Request) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, r, w,
+		"SettingsManager::handlePlasmaDiag") {
+		return
+	}
+
+	bhive.Diag.HandleHttp(w, r)
 }
 
 func (s *settingsManager) run() {

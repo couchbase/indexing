@@ -71,8 +71,8 @@ type IndexReader interface {
 	Ranger
 	RangeCounter
 
-	DecodeMeta([]byte) (uint64, []byte)                                    // Used only for BHIVE storage currently
-	FetchValue(IndexReaderContext, uint64, []byte, []byte) ([]byte, error) // Used only for BHIVE storage
+	DecodeMeta([]byte) (uint64, uint64, []byte)                                    // Used only for BHIVE storage currently
+	FetchValue(IndexReaderContext, uint64, uint64, []byte, []byte) ([]byte, error) // Used only for BHIVE storage
 }
 
 // Abstract context implemented by storage subsystem

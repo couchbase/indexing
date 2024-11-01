@@ -294,11 +294,11 @@ func (s *fdbSnapshot) iterEqualKeys(k IndexKey, it *ForestDBIterator,
 	return err
 }
 
-func (s *fdbSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
-	return 0, nil
+func (s *fdbSnapshot) DecodeMeta(meta []byte) (uint64, uint64, []byte) {
+	return 0, 0, nil
 }
 
-func (s *fdbSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
+func (s *fdbSnapshot) FetchValue(ctx IndexReaderContext, storeId uint64, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
 	return nil, nil
 }
 

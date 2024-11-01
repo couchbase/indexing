@@ -4566,11 +4566,11 @@ func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
 	return err
 }
 
-func (s *plasmaSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
-	return 0, nil
+func (s *plasmaSnapshot) DecodeMeta(meta []byte) (uint64, uint64, []byte) {
+	return 0, 0, nil
 }
 
-func (s *plasmaSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
+func (s *plasmaSnapshot) FetchValue(ctx IndexReaderContext, storeId uint64, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
 	return nil, nil
 }
 

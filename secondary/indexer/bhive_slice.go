@@ -9,14 +9,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"math"
-	"os"
-	"path/filepath"
-	"reflect"
-	"sync"
-	"sync/atomic"
-	"time"
-
 	"github.com/couchbase/bhive"
 	bc "github.com/couchbase/bhive/common"
 	"github.com/couchbase/indexing/secondary/common"
@@ -26,6 +18,13 @@ import (
 	"github.com/couchbase/indexing/secondary/vector"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	"github.com/couchbase/plasma"
+	"math"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // Copyright 2014-Present Couchbase, Inc.
@@ -109,6 +108,10 @@ type bhiveSlice struct {
 	clusterAddr        string
 	maxRollbacks       int
 	maxDiskSnaps       int
+	topNScan           int
+
+	// doc Seq no
+	docSeqno uint64
 
 	//
 	// rebalance
@@ -168,6 +171,8 @@ type bhiveSnapshotInfo struct {
 	Version    int
 	InstId     common.IndexInstId
 	PartnId    common.PartitionId
+
+	docSeqno uint64
 }
 
 type bhiveSnapshot struct {
@@ -234,7 +239,8 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 	slice.numVbuckets = numVBuckets
 	slice.maxRollbacks = sysconf["settings.plasma.recovery.max_rollbacks"].Int()
 	slice.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()
-	slice.maxNumWriters = sysconf["numSliceWriters"].Int()
+	slice.maxNumWriters = NumKVStore // num writers must match kvstore
+	slice.topNScan = sysconf["bhive.topNScan"].Int()
 
 	numReaders := sysconf["bhive.numReaders"].Int()
 	slice.readers = make(chan *bhive.Reader, numReaders)
@@ -314,15 +320,31 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.StorageDir = slice.storageDir
 	cfg.Group = bhive.InstanceGroup(MAIN_INDEX)
 
-	cfg.EnableKeyPrefixMode = true
+	cfg.EnableKeyPrefixMode = false
 	cfg.EnableUpdateStatusForSet = false
 
 	cfg.CentroidIDSize = int(reflect.TypeOf(i).Size())
 	cfg.KeyPrefixSize = uint64(cfg.CentroidIDSize)
 	cfg.NumKVStore = NumKVStore
-	cfg.MaxBatchSize = MaxBatchSize
+	cfg.MaxBatchSize = MaxBatchSize // TODO: Make it configurable (for testing)
+
+	cfg.Parallelism = 1
+	cfg.Dimension = slice.idxDefn.VectorMeta.Dimension
+
+	cfg.UseDistanceTable = slice.sysconf["bhive.vanama.useDistanceTable"].Bool()
+	cfg.EfNumNeighbors = slice.sysconf["bhive.vanama.efNumNeighbors"].Int()
+	cfg.EfConstruction = slice.sysconf["bhive.vanama.efConstruction"].Int()
+	cfg.VanamaBuildQuota = slice.sysconf["bhive.vanama.buildQuota"].Int()
+	cfg.NumCompactor = slice.sysconf["bhive.numCompactor"].Int()
+	cfg.PersistFullVector = slice.sysconf["bhive.persistFullVector"].Bool()
+	cfg.UseVanama = slice.sysconf["bhive.useVanama"].Bool()
+	cfg.UseDistEncoded = slice.sysconf["bhive.useResidual"].Bool()
 
 	cfg.NumWriters = slice.maxNumWriters
+
+	logging.Infof("bhiveSlice:setupConfig UseDistanceTable %v efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v",
+		cfg.UseDistanceTable, cfg.EfNumNeighbors, cfg.EfConstruction, cfg.VanamaBuildQuota, cfg.NumCompactor, slice.topNScan)
+
 	return cfg
 }
 
@@ -575,6 +597,10 @@ func (mdb *bhiveSlice) UpdateConfig(cfg common.Config) {
 // Flusher API
 ////////////////////////////////////////////////
 
+func (mdb *bhiveSlice) getNextDocSeqno() uint64 {
+	return atomic.AddUint64(&mdb.docSeqno, 1)
+}
+
 func (mdb *bhiveSlice) Insert(key []byte, docid []byte, vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
 	if mdb.CheckCmdChStopped() {
 		return mdb.fatalDbErr
@@ -688,7 +714,7 @@ func (slice *bhiveSlice) setupWriters() {
 	slice.backWriters = make([]*bhive.Writer, 0, slice.maxNumWriters)
 
 	// start writers
-	numWriter := slice.numWritersPerPartition()
+	numWriter := slice.maxNumWriters // numWriters must match numKVStores
 	slice.startWriters(numWriter)
 }
 
@@ -919,7 +945,7 @@ func (mdb *bhiveSlice) delete2(docid []byte, workerId int) int {
 	var nmut int
 
 	if !mdb.idxDefn.IsArrayIndex {
-		nmut, _ = mdb.deleteVectorIndex(docid, nil, nil, workerId)
+		nmut, _, _ = mdb.deleteVectorIndex(docid, nil, nil, workerId)
 	} else {
 		// [VECTOR_TODO]: Add support for array vector index
 	}
@@ -973,11 +999,19 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
 
 	if vec != nil {
 
+		var docSeqno uint64
+
 		// remove old record
 		if !init {
-			if _, changed := mdb.deleteVectorIndex(docid, vec, key, workerId); !changed {
+			if n, changed, seqno := mdb.deleteVectorIndex(docid, vec, key, workerId); !changed {
 				return 0
+			} else if n == 1 { // exist
+				docSeqno = seqno
+			} else { // does not exist
+				docSeqno = mdb.getNextDocSeqno()
 			}
+		} else {
+			docSeqno = mdb.getNextDocSeqno()
 		}
 
 		mdb.mainWriters[workerId].Begin()
@@ -991,7 +1025,7 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
 
 		// insert into main index
 		v := ((bhive.Vector)(vec)).Bytes()
-		err = mdb.mainWriters[workerId].Insert(cid[:], docid, quantizedCode, v)
+		err = mdb.mainWriters[workerId].Insert(docSeqno, cid[:], docid, quantizedCode, v)
 		if err != nil {
 			logging.Errorf("bhiveSlice:insertVectorIndex.  Error during insert main index: msg=%v", err.Error())
 		}
@@ -1003,11 +1037,14 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
 		}
 
 		// insert into back index
-		backIndexEntrySz := sha256.Size + sha256.Size + 8 // sha(vector) + sha(scalar)+ centroidId
-		var buffer [sha256.Size + sha256.Size + 8]byte
+		backIndexEntrySz := 8 + sha256.Size + sha256.Size + 8 // docSeqno + sha(vector) + sha(scalar)+ centroidId
+		var buffer [8 + sha256.Size + sha256.Size + 8]byte
 		buf := buffer[:]
 
 		offset := 0
+		binary.LittleEndian.PutUint64(buf[offset:offset+8], docSeqno)
+
+		offset += 8
 		copy(buf[offset:offset+sha256.Size], common.ComputeSHA256ForFloat32Array(vec))
 
 		offset += sha256.Size
@@ -1032,7 +1069,7 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
 }
 
 // back entry: SHA(vector)+SHA(scalar)+centroidID
-func (mdb *bhiveSlice) deleteVectorIndex(docid []byte, vector []float32, fields []byte, workerId int) (nmut int, changed bool) {
+func (mdb *bhiveSlice) deleteVectorIndex(docid []byte, vector []float32, fields []byte, workerId int) (nmut int, changed bool, docSeqno uint64) {
 
 	// Delete entry from back and main index if present
 	mdb.backWriters[workerId].Begin()
@@ -1047,13 +1084,14 @@ func (mdb *bhiveSlice) deleteVectorIndex(docid []byte, vector []float32, fields 
 		shaVec := common.ComputeSHA256ForFloat32Array(vector)
 		shaField := common.ComputeSHA256ForByteArray(fields)
 
-		backShaVec := backEntry[0:sha256.Size]
+		docSeqno = binary.LittleEndian.Uint64(backEntry[0:8])
+		backShaVec := backEntry[8:sha256.Size]
 		backShaField := backEntry[sha256.Size : sha256.Size*2]
 		centroidId := backEntry[sha256.Size*2:]
 
 		// back entry has not changed
 		if bytes.Equal(shaVec, backShaVec) && bytes.Equal(shaField, backShaField) {
-			return 0, false
+			return 0, false, docSeqno
 		}
 
 		t0 := time.Now()
@@ -1068,7 +1106,7 @@ func (mdb *bhiveSlice) deleteVectorIndex(docid []byte, vector []float32, fields 
 		mdb.mainWriters[workerId].Begin()
 		defer mdb.mainWriters[workerId].End()
 
-		err = mdb.mainWriters[workerId].Delete(centroidId, docid)
+		err = mdb.mainWriters[workerId].Delete(docSeqno, centroidId, docid)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 
 		// TODO: Cannot update rawDataSize for main index
@@ -1083,10 +1121,10 @@ func (mdb *bhiveSlice) deleteVectorIndex(docid []byte, vector []float32, fields 
 	mdb.isDirty = true
 
 	if itemFound {
-		return 1, true
+		return 1, true, docSeqno
 	} else {
 		//nothing deleted
-		return 0, true
+		return 0, true, docSeqno
 	}
 }
 
@@ -1106,6 +1144,38 @@ func (mdb *bhiveSlice) logWriterStat() {
 // //////////////////////////////////////////////////////////
 // Vector
 // //////////////////////////////////////////////////////////
+
+func (mdb *bhiveSlice) createVectorFuncCtx() *bhive.VectorFuncCtx {
+	distance := func(v1 []float32, v2 []float32, dist []float32) error {
+		return mdb.codebook.ComputeDistance(v1, v2, dist)
+	}
+
+	decode := func(n int, q []byte, v []float32) error {
+		return mdb.codebook.DecodeVectors(n, q, v)
+	}
+
+	sz := func() (int, error) {
+		return mdb.codebook.CodeSize()
+	}
+
+	coarseSz := func() (int, error) {
+		return mdb.codebook.CoarseSize()
+	}
+
+	distEncoded := func(q []float32, n int, codes []byte, dist []float32, cid int64) error {
+		return mdb.codebook.ComputeDistanceEncoded(q, n, codes, dist, cid)
+	}
+
+	ctx := &bhive.VectorFuncCtx{
+		Distance:        distance,
+		Decode:          decode,
+		CodeSize:        sz,
+		CoarseSize:      coarseSz,
+		DistanceEncoded: distEncoded,
+	}
+
+	return ctx
+}
 
 func (mdb *bhiveSlice) SetNlist(nlist int) {
 	mdb.nlist = nlist
@@ -1141,6 +1211,8 @@ func (mdb *bhiveSlice) InitCodebook() error {
 
 	logging.Infof("bhiveSlice: cookbook initialized with %v centroids", mdb.nlist)
 	mdb.codebook = codebook
+	mdb.mainstore.SetVectorFuncCtx(mdb.createVectorFuncCtx())
+
 	return nil
 }
 
@@ -1184,6 +1256,7 @@ func (mdb *bhiveSlice) InitCodebookFromSerialized(content []byte) error {
 		mdb.ResetCodebook()
 		return err
 	}
+	mdb.mainstore.SetVectorFuncCtx(mdb.createVectorFuncCtx())
 
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
@@ -1338,6 +1411,7 @@ func (mdb *bhiveSlice) recoverCodebook(codebookPath string) error {
 		mdb.ResetCodebook() // Ignore error for now
 		return err
 	}
+	mdb.mainstore.SetVectorFuncCtx(mdb.createVectorFuncCtx())
 
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
@@ -1671,6 +1745,7 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 	s.info.Version = SNAPSHOT_META_VERSION_BHIVE_1
 	s.info.InstId = mdb.idxInstId
 	s.info.PartnId = mdb.idxPartnId
+	s.info.docSeqno = atomic.LoadUint64(&mdb.docSeqno)
 
 	meta, err := json.Marshal(s.info)
 	common.CrashOnError(err)
@@ -2035,6 +2110,7 @@ func (mdb *bhiveSlice) restore(o SnapshotInfo) error {
 
 	// Update stats available in snapshot info
 	mdb.updateStatsFromSnapshotMeta(o)
+	atomic.StoreUint64(&mdb.docSeqno, info.docSeqno)
 	return nil
 }
 
@@ -2523,7 +2599,7 @@ func (s *bhiveSnapshot) StatCountTotal() (uint64, error) {
 	return c, nil
 }
 
-func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, callb EntryCallback, fincb FinishCallback) error {
+func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, queryKey IndexKey, callb EntryCallback, fincb FinishCallback) error {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -2561,9 +2637,17 @@ func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, cal
 
 	// [VECTOR_TODO]: Add more timing stats
 
-	err = iter.Execute(s.MainSnap, bhive.CentroidID(centroidId.Bytes()))
-	if err != nil {
-		return err
+	if queryKey != nil {
+		q := ([]float32)(bhive.BytesToVec(queryKey.Bytes()))
+		err = iter.FindNearest(s.MainSnap, bhive.CentroidID(centroidId.Bytes()), q, s.slice.topNScan)
+		if err != nil {
+			return err
+		}
+	} else {
+		err = iter.Execute(s.MainSnap, bhive.CentroidID(centroidId.Bytes()))
+		if err != nil {
+			return err
+		}
 	}
 
 	for iter.Valid() {
@@ -2589,10 +2673,10 @@ func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, cal
 
 func (s *bhiveSnapshot) Range(ctx IndexReaderContext, low IndexKey, high IndexKey,
 	incl Inclusion, callb EntryCallback, fincb FinishCallback) error {
-	if low.CompareIndexKey(high) != 0 || incl != Both {
-		panic(fmt.Errorf("bhiveSnapshot::Range low: %v and high: %v should be same for Range on bhive snapshot with inclusion: %v being Both", low, high, incl))
-	}
-	return s.Iterate(ctx, low, callb, fincb)
+	//if low.CompareIndexKey(high) != 0 || incl != Both {
+	//	panic(fmt.Errorf("bhiveSnapshot::Range low: %v and high: %v should be same for Range on bhive snapshot with inclusion: %v being Both", low, high, incl))
+	//}
+	return s.Iterate(ctx, low, high, callb, fincb)
 }
 
 func (s *bhiveSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion, stopch StopChannel) (uint64, error) {
@@ -2615,7 +2699,7 @@ func (s *bhiveSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, i
 
 func (s *bhiveSnapshot) Lookup(ctx IndexReaderContext, centroidId IndexKey,
 	callb EntryCallback, fincb FinishCallback) error {
-	return s.Iterate(ctx, centroidId, callb, fincb)
+	return s.Iterate(ctx, centroidId, nil, callb, fincb)
 }
 
 func (s *bhiveSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, stopch StopChannel) (uint64, error) {
@@ -2670,12 +2754,12 @@ func (s *bhiveSnapshot) All(IndexReaderContext, EntryCallback, FinishCallback) e
 	panic("bhiveSnapshot::All - Currently not supported")
 }
 
-func (s *bhiveSnapshot) DecodeMeta(meta []byte) (uint64, []byte) {
-	recordId, actualMeta := s.codec.DecodeMeta(meta)
-	return uint64(recordId), actualMeta
+func (s *bhiveSnapshot) DecodeMeta(meta []byte) (uint64, uint64, []byte) {
+	storeId, recordId, actualMeta := s.codec.DecodeMeta(nil, meta)
+	return uint64(storeId), uint64(recordId), actualMeta
 }
 
-func (s *bhiveSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
+func (s *bhiveSnapshot) FetchValue(ctx IndexReaderContext, storeId uint64, recordId uint64, cid []byte, buf []byte) ([]byte, error) {
 
 	// [VECTOR_TODO]: Add timings stats for FetchValue
 	reader := ctx.(*bhiveReaderCtx)
@@ -2683,7 +2767,7 @@ func (s *bhiveSnapshot) FetchValue(ctx IndexReaderContext, recordId uint64, cid 
 	defer reader.r.End()
 
 	mainSnap := s.MainSnap
-	err := reader.r.FetchValue(bhive.CentroidID(cid), bhive.RecordId(recordId), mainSnap, buf)
+	err := reader.r.FetchValue(bhive.StoreId(storeId), bhive.RecordId(recordId), mainSnap, buf)
 
 	return buf, err
 }
