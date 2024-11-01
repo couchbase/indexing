@@ -14,10 +14,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/iowrap"
@@ -362,4 +364,20 @@ func joinURIPath(parent string, elem ...string) string {
 		elem = append([]string{parent}, elem...)
 		return filepath.Join(elem...)
 	}
+}
+
+func Float32ToByteSlice(v []float32) []byte {
+	var ft float32
+	size := int(reflect.TypeOf(ft).Size())
+
+	//TODO: Use SliceData
+	var b []byte
+	vsh := (*reflect.SliceHeader)(unsafe.Pointer(&v))
+	bsh := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	bsh.Data = vsh.Data
+	bsh.Len = vsh.Len * size
+	bsh.Cap = vsh.Cap * size
+
+	return b
 }

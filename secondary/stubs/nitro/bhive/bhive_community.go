@@ -2,6 +2,9 @@
 
 package bhive
 
+import "net/http"
+import "fmt"
+
 type StubType int
 
 var Diag StubType
