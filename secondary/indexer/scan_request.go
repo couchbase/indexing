@@ -151,6 +151,10 @@ type ScanRequest struct {
 	perPartnSnaps       map[common.PartitionId]SliceSnapshot
 	perPartnReaderCtx   map[common.PartitionId][]IndexReaderContext
 	readersPerPartition int
+
+	indexKeyNames    []string
+	inlineFilter     string
+	inlineFilterExpr expression.Expression
 }
 
 type IndexKeyOrder struct {
@@ -488,12 +492,18 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 		r.Offset = req.GetOffset()
 		r.SkipReadMetering = req.GetSkipReadMetering()
+		r.indexKeyNames = req.GetIndexKeyNames()
+		r.inlineFilter = req.GetInlineFilter()
 
 		if err = r.setIndexParams(); err != nil {
 			return
 		}
 
 		if err = r.setConsistency(cons, tsvector); err != nil {
+			return
+		}
+
+		if err = r.validateIncludeColumns(); err != nil {
 			return
 		}
 
@@ -1703,6 +1713,30 @@ func validateIndexProjectionGroupAggr(projection *protobuf.IndexProjection, prot
 	indexProjection.projectSecKeys = true
 
 	return indexProjection, nil
+}
+
+// indexKeyNames and inlineFilter go together with include columns
+// i.e. if len(indexKeyNames) > 0 then inlineFilter != "" is true
+// if len(indexKeyNames) == 0 then inlineFilter == 0 is true
+func (r *ScanRequest) validateIncludeColumns() error {
+	if len(r.indexKeyNames) == 0 && len(r.inlineFilter) == 0 {
+		return nil
+	}
+
+	if len(r.indexKeyNames) > 0 && len(r.inlineFilter) == 0 {
+		return fmt.Errorf("indexKeyNames: %v is non-empty but inline filter: %v is empty", r.indexKeyNames, r.inlineFilter)
+	}
+
+	if len(r.indexKeyNames) == 0 && len(r.inlineFilter) > 0 {
+		return fmt.Errorf("indexKeyNames: %v is empty but inline filter: %v is non-empty", r.indexKeyNames, r.inlineFilter)
+	}
+
+	inlineFilterExpr, err := compileN1QLExpression(r.inlineFilter)
+	if err != nil {
+		return err
+	}
+	r.inlineFilterExpr = inlineFilterExpr
+	return nil
 }
 
 func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr, protoScans []*protobuf.Scan) (err error) {
