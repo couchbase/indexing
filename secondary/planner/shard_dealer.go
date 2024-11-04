@@ -157,6 +157,7 @@ type ShardDealer struct {
 
 	minShardsPerNode      uint64
 	minPartitionsPerShard uint64
+	maxDiskUsagePerShard  uint64
 	shardCapacityPerNode  uint64
 }
 
@@ -186,13 +187,15 @@ func (sd *ShardDealer) LogDealerStats() {
 }
 
 // NewShardDealer is a constructor for the ShardDealer
-func NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity uint64,
+func NewShardDealer(minShardsPerNode, minPartitionsPerShard, maxDiskUsagePerShard,
+	shardCapacity uint64,
 	alternateShardIDGenerater func() (*c.AlternateShardId, error),
 	moveInstanceCb moveFuncCb) *ShardDealer {
 	return &ShardDealer{
 		minShardsPerNode:      minShardsPerNode,
 		minPartitionsPerShard: minPartitionsPerShard,
 		shardCapacityPerNode:  shardCapacity,
+		maxDiskUsagePerShard:  maxDiskUsagePerShard,
 
 		slotsPerCategory: make(map[ShardCategory]map[asSlotID]bool),
 		slotsMap:         make(map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer),
@@ -206,8 +209,16 @@ func NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity uint6
 }
 
 // NewDefaultShardDealer is a constructor for the ShardDealer with default alternate shard ID generator
-func NewDefaultShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity uint64) *ShardDealer {
-	return NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity, c.NewAlternateId, nil)
+func NewDefaultShardDealer(minShardsPerNode, minPartitionsPerShard, maxDiskUsagePerShard,
+	shardCapacity uint64) *ShardDealer {
+	return NewShardDealer(
+		minShardsPerNode,
+		minPartitionsPerShard,
+		maxDiskUsagePerShard,
+		shardCapacity,
+		c.NewAlternateId,
+		nil,
+	)
 }
 
 // SetMoveInstanceCallback can be used to set the moveInstanceCallback for shard dealer

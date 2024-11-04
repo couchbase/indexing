@@ -11,6 +11,7 @@ const (
 	minPartitionsPerShard uint64 = 16
 	minShardsPerNode      uint64 = 6
 	shardCapacity         uint64 = 1000
+	maxDiskUsagePerShard  uint64 = 256 * 1024 * 1024
 )
 
 func createDummyIndexUsage(id uint64, isPrimary, isVector, isBhive, isMoi bool) *IndexUsage {
@@ -59,7 +60,12 @@ func createNewAlternateShardIDGenerator() func() (*c.AlternateShardId, error) {
 }
 
 func TestBasicSlotAssignment(t *testing.T) {
-	var dealer = NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity, createNewAlternateShardIDGenerator(), nil)
+	var dealer = NewShardDealer(
+		minShardsPerNode,
+		minPartitionsPerShard,
+		maxDiskUsagePerShard,
+		shardCapacity,
+		createNewAlternateShardIDGenerator(), nil)
 
 	var indexerNode = createDummyIndexerNode(t.Name(), 1, 1, 0, 0, 0)
 
@@ -194,7 +200,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 		subt.Run("Basic-AllPrimary", func(t0 *testing.T) {
 			t0.Parallel()
 
-			var dealer = NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity, createNewAlternateShardIDGenerator(), nil)
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				minPartitionsPerShard,
+				maxDiskUsagePerShard,
+				shardCapacity,
+				createNewAlternateShardIDGenerator(), nil)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), 0, minShardsPerNode, 0, 0, 0)
 
@@ -255,7 +266,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 		subt.Run("PrimaryAndSecondary", func(t0 *testing.T) {
 			t0.Parallel()
 
-			var dealer = NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity, createNewAlternateShardIDGenerator(), nil)
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				minPartitionsPerShard,
+				maxDiskUsagePerShard,
+				shardCapacity,
+				createNewAlternateShardIDGenerator(), nil)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), minShardsPerNode, minShardsPerNode, 0, 0, 0)
 
@@ -320,7 +336,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 		subt.Run("Basic-AllPrimary", func(t0 *testing.T) {
 			t0.Parallel()
 
-			var dealer = NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity, createNewAlternateShardIDGenerator(), nil)
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				minPartitionsPerShard,
+				maxDiskUsagePerShard,
+				shardCapacity,
+				createNewAlternateShardIDGenerator(), nil)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), 0, minPartitionsPerShard, 0, 0, 0)
 
@@ -366,7 +387,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 		subt.Run("PrimaryAndSecondary", func(t0 *testing.T) {
 			t0.Parallel()
 
-			var dealer = NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity, createNewAlternateShardIDGenerator(), nil)
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				minPartitionsPerShard,
+				maxDiskUsagePerShard,
+				shardCapacity,
+				createNewAlternateShardIDGenerator(), nil)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), minShardsPerNode*2, minShardsPerNode*2, 0, 0, 0)
 
@@ -426,7 +452,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 		subt.Run("MixCategoryIndexes", func(t0 *testing.T) {
 			t0.Parallel()
 
-			var dealer = NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity, createNewAlternateShardIDGenerator(), nil)
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				minPartitionsPerShard,
+				maxDiskUsagePerShard,
+				shardCapacity,
+				createNewAlternateShardIDGenerator(), nil)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), 1, 1, 1, 1, 0)
 
@@ -507,7 +538,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 		subt.Run("Basic-AllPrimary", func(t0 *testing.T) {
 			t0.Parallel()
 
-			var dealer = NewShardDealer(minShardsPerNode, 1, shardCapacity, createNewAlternateShardIDGenerator(), nil)
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				1,
+				maxDiskUsagePerShard,
+				shardCapacity,
+				createNewAlternateShardIDGenerator(), nil)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), 0, shardCapacity/10, 0, 0, 0)
 
@@ -553,7 +589,11 @@ func TestSingleNodeAssignment(t *testing.T) {
 			t0.Parallel()
 
 			var testShardCapacity uint64 = 10
-			var dealer = NewShardDealer(minShardsPerNode, 1, testShardCapacity, createNewAlternateShardIDGenerator(), nil)
+			var dealer = NewShardDealer(minShardsPerNode,
+				1,
+				maxDiskUsagePerShard,
+				testShardCapacity,
+				createNewAlternateShardIDGenerator(), nil)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), testShardCapacity, 0, 0, 0, 0)
 
@@ -631,7 +671,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 		subt.Run("MixCategoryIndexes", func(t0 *testing.T) {
 			t0.Parallel()
 
-			var dealer = NewShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity, createNewAlternateShardIDGenerator(), nil)
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				minPartitionsPerShard,
+				maxDiskUsagePerShard,
+				shardCapacity,
+				createNewAlternateShardIDGenerator(), nil)
 
 			var indexerNode = createDummyIndexerNode(t0.Name(), minShardsPerNode, minShardsPerNode, 1, 1, 0)
 
@@ -711,7 +756,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 
 	t.Run("Pass-3", func(subt *testing.T) {
 		var testShardCapacity uint64 = 10
-		var dealer = NewShardDealer(minShardsPerNode, 1, testShardCapacity, createNewAlternateShardIDGenerator(), nil)
+		var dealer = NewShardDealer(
+			minShardsPerNode,
+			1,
+			maxDiskUsagePerShard,
+			testShardCapacity,
+			createNewAlternateShardIDGenerator(), nil)
 
 		var indexerNode = createDummyIndexerNode(subt.Name(), testShardCapacity, testShardCapacity, testShardCapacity/4, testShardCapacity/4, 0)
 

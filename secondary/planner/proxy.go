@@ -2234,12 +2234,19 @@ func createShardDealerForIndexers(indexers []*IndexerNode, config common.Config,
 	}
 
 	var shardCapacity uint64 = math.MaxUint64
+	var maxDiskUsagePerShard uint64 = math.MaxUint64
 	for _, indexer := range indexers {
 		indexer.ComputeMinShardCapacity(config)
 		shardCapacity = min(shardCapacity, uint64(indexer.MinShardCapacity))
+		maxDiskUsagePerShard = min(indexer.MaxDiskUsagePerShard, maxDiskUsagePerShard)
 	}
 
-	var dealer = NewDefaultShardDealer(minShardsPerNode, minPartitionsPerShard, shardCapacity)
+	var dealer = NewDefaultShardDealer(
+		minShardsPerNode,      // minShardsPerNode uint64
+		minPartitionsPerShard, // minPartitionsPerShard uint64
+		maxDiskUsagePerShard,  // maxDiskUsagePerShard uint64
+		shardCapacity,         // shardCapacity uint64
+	)
 	dealer.SetMoveInstanceCallback(moveInstanceCallback)
 
 	for _, indexer := range indexers {
