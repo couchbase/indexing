@@ -4,6 +4,7 @@ package planner
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
@@ -106,6 +107,27 @@ func (psc *pseudoShardContainer) addInstToShardContainer(index *IndexUsage) bool
 	psc.diskUsage += index.ActualDiskSize
 	psc.dataSize += index.ActualDataSize
 	return true
+}
+
+func (psc *pseudoShardContainer) getMemUsage() uint64 {
+	if psc.memUsageFromStats > 0 {
+		return psc.memUsageFromStats
+	}
+	return psc.memUsage
+}
+
+func (psc *pseudoShardContainer) getDiskUsage() uint64 {
+	if psc.diskUsageFromStats > 0 {
+		return psc.diskUsageFromStats
+	}
+	return psc.diskUsage
+}
+
+func (psc *pseudoShardContainer) getDataSize() uint64 {
+	if psc.dataSizeFromStats > 0 {
+		return psc.dataSizeFromStats
+	}
+	return psc.dataSize
 }
 
 // type aliasing to make code more easy to read
@@ -587,7 +609,7 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 	for _, alternateShardIDs := range nodesUnderSoftLimit {
 		for slotID, shardContainer := range alternateShardIDs {
 			if maxContainer, exists := commonSlotIDs[slotID]; exists {
-				if shardContainer.dataSize > maxContainer.dataSize ||
+				if shardContainer.getDataSize() > maxContainer.getDataSize() ||
 					shardContainer.totalPartitions > maxContainer.totalPartitions {
 					commonSlotIDs[slotID] = shardContainer
 				}
@@ -684,7 +706,7 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 
 		for slotID, shardContainer := range alternateShardIDs {
 			if maxContainer, exists := commonSlotIDs[slotID]; exists {
-				if shardContainer.dataSize > maxContainer.dataSize ||
+				if shardContainer.getDataSize() > maxContainer.getDataSize() ||
 					shardContainer.totalPartitions > maxContainer.totalPartitions {
 					commonSlotIDs[slotID] = shardContainer
 				}
@@ -794,7 +816,7 @@ func (sd *ShardDealer) findShardUnderSoftLimit(nodeUUID string,
 		var mainstoreGroupID asGroupID = 0
 		var shardContainer = slotGroup[mainstoreGroupID]
 		if shardContainer != nil {
-			if shardContainer.dataSize > softLimitDataUsageOfShard {
+			if shardContainer.getDataSize() > softLimitDataUsageOfShard {
 				aboveCapacity = true
 			}
 
@@ -853,10 +875,10 @@ func minSlotsFromContainerUse(
 			minContainer = container
 			continue
 		}
-		if (container.dataSize == 0 && container.totalPartitions <
+		if (container.getDataSize() == 0 && container.totalPartitions <
 			minContainer.totalPartitions) ||
-			((container.dataSize / container.totalPartitions) <
-				(minContainer.dataSize / minContainer.totalPartitions)) {
+			((container.getDataSize() / container.totalPartitions) <
+				(minContainer.getDataSize() / minContainer.totalPartitions)) {
 			minContainer = container
 			minSlotID = slotID
 		}
@@ -875,7 +897,7 @@ func sortedSlotsByContainerUse(
 		if container == nil || container.totalPartitions == 0 {
 			computeParam = 0
 		} else {
-			computeParam = float64(container.dataSize)/float64(container.totalPartitions) +
+			computeParam = float64(container.getDataSize())/float64(container.totalPartitions) +
 				float64(container.totalPartitions)
 		}
 		computeParams[altID] = computeParam
@@ -965,4 +987,48 @@ func (sd *ShardDealer) getNewAlternateSlotID() (asSlotID, error) {
 		return 0, err
 	}
 	return alternateShardID.GetSlotId(), nil
+}
+
+// UpdateStatsForShard should be used to update shard statistics
+func (sd *ShardDealer) UpdateStatsForShard(shardStats *c.ShardStats) {
+	var alternateShardID, err = c.ParseAlternateId(shardStats.AlternateShardId)
+	if err != nil {
+		logging.Warnf("ShardDealer::UpdateStatsForShard failed to parse alternate ID %v", shardStats.AlternateShardId)
+		return
+	}
+	if sd.slotsMap[alternateShardID.GetSlotId()] == nil {
+		logging.Warnf("ShardDealer::UpdateStatsForShard slotId %v does not exist. skipping %v", alternateShardID.GetSlotId(), shardStats.AlternateShardId)
+		return
+	}
+	if sd.slotsMap[alternateShardID.GetSlotId()][alternateShardID.GetReplicaId()] == nil {
+		logging.Warnf("ShardDealer::UpdateStatsForShard replicaId %v does not exist for slot %v. Skipping %v", alternateShardID.GetReplicaId(), alternateShardID.GetSlotId(), shardStats.AlternateShardId)
+		return
+	}
+	if sd.slotsMap[alternateShardID.GetSlotId()][alternateShardID.GetReplicaId()][alternateShardID.GetGroupId()] == nil {
+		logging.Warnf("ShardDealer::UpdateStatsForShard groupId %v does not exist for slot %v-%v. Skipping %v", alternateShardID.GetGroupId(), alternateShardID.GetReplicaId(), alternateShardID.GetSlotId(), shardStats.AlternateShardId)
+		return
+	}
+	var container = sd.slotsMap[alternateShardID.GetSlotId()][alternateShardID.GetReplicaId()][alternateShardID.GetGroupId()]
+	container.dataSizeFromStats = uint64(shardStats.LSSDataSize)
+	container.diskUsageFromStats = uint64(shardStats.LSSDiskSize) + uint64(shardStats.RecoveryDiskSize)
+	container.memUsageFromStats = uint64(shardStats.MemSz) + uint64(shardStats.MemSzIndex)
+
+	for _, partns := range container.insts {
+		for _, partn := range partns {
+			var found = false
+			var idxPath = fmt.Sprintf("%v_%v", partn.Instance.InstId, partn.PartnId)
+			for instPath := range shardStats.Instances {
+				if strings.Contains(instPath, idxPath) {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				container.dataSizeFromStats += partn.ActualDataSize
+				container.diskUsageFromStats += partn.ActualDiskUsage
+				container.memUsageFromStats += partn.ActualMemUsage
+			}
+		}
+	}
 }

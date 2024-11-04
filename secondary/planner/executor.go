@@ -2819,7 +2819,12 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 			// Hence, always do filterSolution() on grouped indexes
 
 			for _, indexer := range solution.Placement {
-				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
+				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(
+					indexer.Indexes,        // indexes []*IndexUsage
+					indexer,                // indexer *IndexerNode
+					command == CommandPlan, // skipDeferredIndexGrouping bool
+					solution,               // solution *Solution
+				)
 			}
 
 			if err := filterSolution(solution); err != nil {
@@ -2844,7 +2849,12 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 
 		// Re-group indexes
 		for _, indexer := range solution.Placement {
-			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
+			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(
+				indexer.Indexes,        // indexes []*IndexUsage
+				indexer,                // indexer *IndexerNode
+				command == CommandPlan, // skipDefferedIndexGrouping bool
+				solution,               // solution *Solution
+			)
 		}
 
 		PopulateSiblingIndexForReplicaRepair(solution, config.binSize)
@@ -6196,7 +6206,12 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			// are grouped together. Also, if a new alternate shardId has been generated in earlier
 			// iteration, regrouping will help to consider/prune the shard for current iteration
 			for _, indexer := range solution.Placement {
-				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, false)
+				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(
+					indexer.Indexes, // indexes []*IndexUsage
+					indexer,         // indexer *IndexerNode
+					false,           // skipDeferredIndexGrouping bool
+					solution,        // solution *Solution
+				)
 			}
 
 			if useShardDealer {
