@@ -1011,7 +1011,7 @@ func (c *GsiClient) CountLookupInternal(
 		}
 
 		count, err = qc.CountLookup(uint64(index.DefnId), requestId, values, cons, tsvector, rollbackTime, partitions, broker.DoRetry(),
-		reqDeadline, reqDeadlineSlack)
+			reqDeadline, reqDeadlineSlack)
 		return count, err, false
 	}
 
@@ -1138,7 +1138,7 @@ func (c *GsiClient) MultiScanCountInternal(
 		if c.bridge.IsPrimary(uint64(index.DefnId)) {
 			count, ru, err = qc.MultiScanCountPrimary(
 				uint64(index.DefnId), requestId, scans, distinct, cons, tsvector, rollbackTime, partitions, broker.DoRetry(), scanParams,
-				reqDeadline,  reqDeadlineSlack)
+				reqDeadline, reqDeadlineSlack)
 			atomic.AddUint64(&readUnits, ru)
 			return count, err, false
 		}
@@ -1169,7 +1169,8 @@ func (c *GsiClient) Scan3(
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.ScanInternal("scan3", defnID, requestId, scans, reverse, distinct,
-		projection, offset, limit, groupAggr, indexOrder, cons, tsvector, broker, scanParams,
+		projection, offset, limit, groupAggr, indexOrder,
+		nil, "", cons, tsvector, broker, scanParams,
 		nil, time.Time{}, 0)
 }
 
@@ -1177,6 +1178,7 @@ func (c *GsiClient) Scan6(
 	defnID uint64, requestId string, scans Scans, reverse,
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
+	indexKeyNames []string, inlineFilter string,
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, scanParams map[string]interface{},
 	indexVector *IndexVector) (err error) {
@@ -1184,7 +1186,8 @@ func (c *GsiClient) Scan6(
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.ScanInternal("scan6", defnID, requestId, scans, reverse, distinct,
-		projection, offset, limit, groupAggr, indexOrder, cons, tsvector, broker, scanParams,
+		projection, offset, limit, groupAggr, indexOrder,
+		indexKeyNames, inlineFilter, cons, tsvector, broker, scanParams,
 		indexVector, time.Time{}, 0)
 }
 
@@ -1192,6 +1195,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 	defnID uint64, requestId string, scans Scans, reverse,
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
+	indexKeyNames []string, inlineFilter string,
 	cons common.Consistency, tsvector *TsConsistency,
 	broker *RequestBroker, scanParams map[string]interface{},
 	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration) (err error) {
@@ -1232,7 +1236,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 			projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 			broker.GetSorted(), cons, tsvector, handler, rollbackTime,
 			partitions, dataEncFmt, broker.DoRetry(), scanParams, indexVector,
-			reqDeadline, reqDeadlineSlack, indexOrder)
+			reqDeadline, reqDeadlineSlack, indexOrder, indexKeyNames, inlineFilter)
 	}
 
 	broker.SetScanRequestHandler(handler)

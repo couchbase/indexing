@@ -93,6 +93,8 @@ message ScanRequest {
     optional IndexVector        indexVector     = 19;
     optional int64              ReqTimeout      = 20;
     optional IndexKeyOrder      indexOrder      = 21;
+    repeated string             indexKeyNames   = 22;
+    optional string             inlineFilter    = 23;
 }
 
 // Full table scan request from indexer.

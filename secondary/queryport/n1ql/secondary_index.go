@@ -1739,7 +1739,7 @@ func (si *secondaryIndex3) Scan3(
 	err := client.ScanInternal("scan3",
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
 		gsiprojection, offset, limit, gsigroupaggr, indexorder,
-		n1ql2GsiConsistency[cons], vector2ts(tsvector),
+		nil, "", n1ql2GsiConsistency[cons], vector2ts(tsvector),
 		broker, scanParams, nil, reqDeadline, reqDeadlineSlack)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
@@ -1945,8 +1945,8 @@ func (si *secondaryIndex6) Scan6(
 	limit int64,
 	groupAggs *datastore.IndexGroupAggregates,
 	indexOrders datastore.IndexKeyOrders,
-	indexKeyNames []string, // VECTOR_TODO: Use in BHIVE index for expression on include fields
-	inlineFilter string, // VECTOR_TODO: Use in BHIVE index
+	indexKeyNames []string,
+	inlineFilter string,
 	indexVector *datastore.IndexVector, // Used for passing vector field details
 	indexPartionSets datastore.IndexPartitionSets, // Used for paritition elimination on include fields
 	cons datastore.ScanConsistency,
@@ -1998,6 +1998,7 @@ func (si *secondaryIndex6) Scan6(
 	err := client.ScanInternal("scan6",
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
 		gsiprojection, offset, limit, gsigroupaggr, indexorder,
+		indexKeyNames, inlineFilter,
 		n1ql2GsiConsistency[cons], vector2ts(tsvector),
 		broker, scanParams, gsiIndexVector, reqDeadline, reqDeadlineSlack)
 	if err != nil {
