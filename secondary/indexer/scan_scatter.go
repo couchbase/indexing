@@ -554,7 +554,7 @@ func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych ch
 	}
 	defer func() {
 		for i := 0; i < ensembleSize; i++ {
-			rows[i].freeKeyBuf()
+			rows[i].freeBuffers()
 		}
 	}()
 
@@ -625,7 +625,7 @@ func forward(request *ScanRequest, queues []*Queue, donech chan bool, notifych c
 	}
 	defer func() {
 		for i := 0; i < ensembleSize; i++ {
-			rows[i].freeKeyBuf()
+			rows[i].freeBuffers()
 		}
 	}()
 

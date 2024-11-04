@@ -566,7 +566,7 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 			EntryKeys:  []int64{0, 2},
 			PrimaryKey: true,
 		}
-		r.Indexprojection, err = validateIndexProjection(projToProtoProj(proj), cklen)
+		r.Indexprojection, err = validateIndexProjection(projToProtoProj(proj), cklen, 0)
 		r.setExplodePositions()
 
 		mcb := codebook.NewMockCodebook(r.IndexInst.Defn.VectorMeta)
