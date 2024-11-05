@@ -784,7 +784,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	includeColumn := value[codeSize:]
 	value = value[:codeSize]
 
-	if len(includeColumn) > 0 {
+	if len(includeColumn) > 0 && w.r.inlineFilter != "" {
 		processRow, err := w.filterIncludeColumn(entry, includeColumn, true)
 		if err != nil {
 			return err
@@ -1094,6 +1094,9 @@ type MergeOperator struct {
 	buf   *[]byte
 	cktmp [][]byte
 
+	includebuf   *[]byte
+	includecktmp [][]byte
+
 	rowsReceived    uint64
 	rowsOffsetCount uint64
 
@@ -1132,6 +1135,8 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 
 	fio.buf = r.getFromSecKeyBufPool()
 	fio.cktmp = make([][]byte, len(r.IndexInst.Defn.SecExprs))
+	fio.includebuf = r.getFromSecKeyBufPool()
+	fio.includecktmp = make([][]byte, len(r.IndexInst.Defn.Include))
 
 	fio.mergerWg.Add(1)
 	go fio.Collector()
@@ -1268,13 +1273,10 @@ func (fio *MergeOperator) Collector() {
 
 		// If not get projected fields and send it down stream
 		entry := row.key
-		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
-			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
-			if err != nil {
-				logging.Verbosef("%v Collector got error: %v from projectKeys", fio.logPrefix, err)
-				fio.errCh <- err
-				return
-			}
+		entry, err = fio.handleProjection(entry, row)
+		if err != nil {
+			fio.errCh <- err
+			return
 		}
 
 		err = fio.writeItem(entry)
@@ -1324,20 +1326,17 @@ func (fio *MergeOperator) Collector() {
 			}
 		}
 
-		entry := row.key
-		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
-			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
-			if err != nil {
-				logging.Verbosef("%v Collector got error: %v from projectKeys from heap", fio.logPrefix, err)
-				fio.heap.Destroy()
-				fio.errCh <- err
-				return
-			}
-		}
-
 		if fio.req.Offset != 0 && fio.rowsOffsetCount < uint64(fio.req.Offset) {
 			fio.rowsOffsetCount++
 			continue
+		}
+
+		entry := row.key
+		entry, err = fio.handleProjection(entry, row)
+		if err != nil {
+			fio.heap.Destroy()
+			fio.errCh <- err
+			return
 		}
 
 		err = fio.writeItem(entry)
@@ -1461,21 +1460,18 @@ func (fio *MergeOperator) rerankOnHeap() {
 				return
 			}
 		}
-		entry := row.key
-
-		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
-			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
-			if err != nil {
-				logging.Verbosef("%v Collector got error: %v from projectKeys from heap", fio.logPrefix, err)
-				fio.heap.Destroy()
-				fio.errCh <- err
-				return
-			}
-		}
 
 		if fio.req.Offset != 0 && fio.rowsOffsetCount < uint64(fio.req.Offset) {
 			fio.rowsOffsetCount++
 			continue
+		}
+
+		entry := row.key
+		entry, err = fio.handleProjection(entry, row)
+		if err != nil {
+			fio.heap.Destroy()
+			fio.errCh <- err
+			return
 		}
 
 		err = fio.writeItem(entry)
@@ -1507,6 +1503,43 @@ func (fio *MergeOperator) Wait() error {
 	case <-doneCh:
 		return nil
 	}
+}
+
+func (fio *MergeOperator) handleProjection(entry []byte, row *Row) ([]byte, error) {
+	var err error
+
+	if fio.req.Indexprojection != nil {
+
+		if fio.req.Indexprojection.projectSecKeys && !fio.req.Indexprojection.projectInclude {
+			// Include fields are not required in projection. Project only secExprs
+			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
+			if err != nil {
+				logging.Verbosef("%v Collector got error: %v from projectKeys", fio.logPrefix, err)
+				return nil, err
+			}
+		} else if fio.req.Indexprojection.projectSecKeys || fio.req.Indexprojection.projectInclude {
+			// Include fields are required in projection - Project both secExprs and include fields
+			entry, err = projectSecKeysAndInclude(nil, row.key, row.includeColumn, (*fio.buf)[:0], (*fio.includebuf)[:0], fio.req, fio.cktmp, fio.includecktmp)
+			if err != nil {
+				logging.Verbosef("%v Collector got error: %v from projectSecKeysAndInclude", fio.logPrefix, err)
+				return nil, err
+			}
+		} else {
+			// no-op since projectSecKeys == false (which means project everything) and
+			// projectInclude == false which means row.key can be used directly without any changes
+		}
+	} else if row.includeColumn != nil {
+		// project both secExprs and includecolumn together
+		entry, err = projectAllKeys(nil, row.key, row.includeColumn, (*fio.buf)[:0], fio.req)
+		if err != nil {
+			logging.Verbosef("%v Collector got error: %v from projectAllKeys", fio.logPrefix, err)
+			return nil, err
+		}
+	} else {
+		// no-op as req.IndexProjection == nil means project everything and row.includeColumn == nil
+		// means row.key can be used directly. So, no need to change the key for projection
+	}
+	return entry, nil
 }
 
 // ----------------
