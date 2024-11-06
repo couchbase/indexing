@@ -714,12 +714,24 @@ func (o *IndexUsage) SetInitialNode() {
 	// of that index as the initialNode of proxy usage.
 	//
 	// If all the indexes of proxy usage have "nil" initialNode values, it means
-	// that the entire shard has to be repaired. In such a case, leave the
-	// initialNode value as nil
+	// that the entire shard has to be rebuilt using DCP. In such a case, set the initial
+	// node as the first non-nil initial node in grouped indexes.
 	for _, in := range o.GroupedIndexes {
 		if in.initialNode != nil && len(in.InitialAlternateShardIds) > 0 {
 			o.initialNode = in.initialNode
 			break
+		}
+	}
+
+	// If no index exists with valid initialAlternateShardIds, use the first non-nil
+	// initialNode as initialNode as shard proxy. This will ensure that the shard is
+	// not treated as shard being repaired and can filter cyclic movements
+	if o.initialNode == nil {
+		for _, in := range o.GroupedIndexes {
+			if in.initialNode != nil {
+				o.initialNode = in.initialNode
+				break
+			}
 		}
 	}
 
