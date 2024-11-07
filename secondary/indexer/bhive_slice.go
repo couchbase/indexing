@@ -9,6 +9,14 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/couchbase/bhive"
 	bc "github.com/couchbase/bhive/common"
 	"github.com/couchbase/indexing/secondary/common"
@@ -18,13 +26,6 @@ import (
 	"github.com/couchbase/indexing/secondary/vector"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	"github.com/couchbase/plasma"
-	"math"
-	"os"
-	"path/filepath"
-	"reflect"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
 // Copyright 2014-Present Couchbase, Inc.
@@ -1308,7 +1309,7 @@ func (mdb *bhiveSlice) IsTrained() bool {
 }
 
 func (mdb *bhiveSlice) initQuantizedCodeBuf() {
-	numWriters := mdb.numWritersPerPartition()
+	numWriters := mdb.numWriters
 	for i := 0; i < numWriters; i++ {
 		mdb.quantizedCodeBuf[i] = resizeQuantizedCodeBuf(mdb.quantizedCodeBuf[i], 1, mdb.codeSize, true)
 	}
