@@ -1090,7 +1090,7 @@ func (m *RestoreContext) placeIndex(enableShardAffinity bool, binSize uint64) (m
 				}
 			}
 
-			planner.PopulateAlternateShardIds(solution, needsAltIds, binSize, false)
+			planner.PopulateAlternateShardIds(solution, needsAltIds, binSize, false, false)
 		}
 	}
 
@@ -1098,7 +1098,7 @@ func (m *RestoreContext) placeIndex(enableShardAffinity bool, binSize uint64) (m
 	numEmptyIndexer := findNumEmptyIndexer(m.current.Placement, mappedIndexers)
 	if numEmptyIndexer >= len(newNodes) {
 		// place indexes using swap rebalance
-		solution, err := planner.ExecuteSwapWithOptions(m.current, true, "", "", 0, -1, -1, false, newNodeIds, binSize, enableShardAffinity)
+		solution, err := planner.ExecuteSwapWithOptions(m.current, true, "", "", 0, -1, -1, false, newNodeIds, binSize, enableShardAffinity, false)
 		if err == nil {
 
 			populateAltIdsForNonMovingIndexes(enableShardAffinity, solution)
@@ -1132,7 +1132,7 @@ func (m *RestoreContext) placeIndex(enableShardAffinity bool, binSize uint64) (m
 	}
 
 	// place indexes using regular rebalance
-	solution, err := planner.ExecuteRebalanceWithOptions(m.current, nil, true, "", "", 0, -1, -1, false, newNodeIds, binSize, enableShardAffinity)
+	solution, err := planner.ExecuteRebalanceWithOptions(m.current, nil, true, "", "", 0, -1, -1, false, newNodeIds, binSize, enableShardAffinity, false)
 	if err == nil {
 
 		populateAltIdsForNonMovingIndexes(enableShardAffinity, solution)

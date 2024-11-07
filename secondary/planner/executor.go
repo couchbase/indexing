@@ -79,6 +79,9 @@ type RunConfig struct {
 	Override bool
 
 	binSize uint64
+
+	// enable shard dealer for shard distribution
+	UseShardDealer bool
 }
 
 type RunStats struct {
@@ -184,16 +187,20 @@ type TenantUsage struct {
 
 func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool,
 	disableReplicaRepair bool, threshold float64, timeout int, cpuProfile bool, minIterPerTemp int,
-	maxIterPerTemp int, binSize uint64, enableShardAffinity bool) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+	maxIterPerTemp int, binSize uint64, enableShardAffinity, useShardDealer bool) (
+	map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn,
+	error) {
 	runtime := time.Now()
 	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair,
-		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, binSize, enableShardAffinity, &runtime)
+		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, binSize, enableShardAffinity, useShardDealer, &runtime)
 }
 
 func ExecuteRebalanceInternal(clusterUrl string,
 	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool,
 	disableReplicaRepair bool, timeout int, threshold float64, cpuProfile bool, minIterPerTemp, maxIterPerTemp int,
-	binSize uint64, enableShardAffinity bool, runtime *time.Time) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+	binSize uint64, enableShardAffinity, useShardDealer bool, runtime *time.Time) (
+	map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn,
+	error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nil, true)
 	if err != nil {
@@ -239,6 +246,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.MaxIterPerTemp = maxIterPerTemp
 	config.EnableShardAffinity = enableShardAffinity
 	config.binSize = binSize
+	config.UseShardDealer = useShardDealer
 
 	p, _, hostToIndexToRemove, err := executeRebal(config, CommandRebalance, plan, nil, deleteNodes, true)
 	if p != nil && detail {
@@ -1644,7 +1652,7 @@ func populateSiblingTokenId(solution *Solution, transferTokens map[string]*commo
 
 func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool,
 	useGreedyPlanner bool, enforceLimits bool, allowDDLDuringScaleUp bool,
-	binSize uint64, enableShardAffinity bool) (*Solution, error) {
+	binSize uint64, enableShardAffinity, useShardDealer bool) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
@@ -1701,7 +1709,8 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 	detail := logging.IsEnabled(logging.Info)
 
 	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true,
-		useGreedyPlanner, allowDDLDuringScaleUp, binSize, enableShardAffinity, override)
+		useGreedyPlanner, allowDDLDuringScaleUp, binSize, enableShardAffinity, override,
+		useShardDealer)
 }
 
 func GetNumIndexesPerScope(plan *Plan, Bucket string, Scope string) uint32 {
@@ -1980,7 +1989,8 @@ func ExecuteRetrieveWithOptions(plan *Plan, config *RunConfig, params map[string
 func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
 	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, useLive bool,
 	useGreedyPlanner, allowDDLDuringScaleup bool, binSize uint64, enableShardAffinity bool,
-	override bool) (*Solution, error) {
+	override, useShardDealer bool) (
+	*Solution, error) {
 
 	resize := false
 	if plan == nil {
@@ -2002,6 +2012,7 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 	config.EnableShardAffinity = enableShardAffinity
 	config.Override = override
 	config.binSize = binSize
+	config.UseShardDealer = useShardDealer
 
 	p, _, err := executePlan(config, CommandPlan, plan, indexSpecs, ([]string)(nil))
 	if p != nil && detail {
@@ -2019,7 +2030,8 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 
 func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
 	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool,
-	deletedNodes []string, binSize uint64, enableShardAffinity bool) (*Solution, error) {
+	deletedNodes []string, binSize uint64, enableShardAffinity, useShardDealer bool) (
+	*Solution, error) {
 
 	config := DefaultRunConfig()
 	config.Detail = detail
@@ -2032,6 +2044,7 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 	config.AllowUnpin = allowUnpin
 	config.EnableShardAffinity = enableShardAffinity
 	config.binSize = binSize
+	config.UseShardDealer = useShardDealer
 
 	p, _, _, err := executeRebal(config, CommandRebalance, plan, indexSpecs, deletedNodes, false)
 
@@ -2050,7 +2063,8 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 
 func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
 	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool,
-	deletedNodes []string, binSize uint64, enableShardAffinity bool) (*Solution, error) {
+	deletedNodes []string, binSize uint64, enableShardAffinity, useShardDealer bool) (
+	*Solution, error) {
 
 	config := DefaultRunConfig()
 	config.Detail = detail
@@ -2063,6 +2077,7 @@ func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
 	config.AllowUnpin = allowUnpin
 	config.EnableShardAffinity = enableShardAffinity
 	config.binSize = binSize
+	config.UseShardDealer = useShardDealer
 
 	p, _, _, err := executeRebal(config, CommandSwap, plan, nil, deletedNodes, false)
 
@@ -2098,8 +2113,9 @@ func executePlan(config *RunConfig, command CommandType, p *Plan, indexSpecs []*
 	return plan(config, p, indexes)
 }
 
-func executeRebal(config *RunConfig, command CommandType, p *Plan, indexSpecs []*IndexSpec, deletedNodes []string, isInternal bool) (
-	*SAPlanner, *RunStats, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+func executeRebal(config *RunConfig, command CommandType, p *Plan, indexSpecs []*IndexSpec,
+	deletedNodes []string, isInternal bool) (*SAPlanner, *RunStats,
+	map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 
 	var indexes []*IndexUsage
 
@@ -2195,10 +2211,10 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 
 	if config.EnableShardAffinity {
 		logging.Infof("************ Index Layout After Planning *************")
-		planner.GetResult()
+		planner.GetResult().PrintLayout()
 		logging.Infof("****************************************")
 
-		PopulateAlternateShardIds(planner.GetResult(), indexes, config.binSize, config.Override)
+		PopulateAlternateShardIds(planner.GetResult(), indexes, config.binSize, config.Override, config.UseShardDealer)
 		UngroupIndexes(planner.GetResult())
 	}
 
@@ -2803,7 +2819,12 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 			// Hence, always do filterSolution() on grouped indexes
 
 			for _, indexer := range solution.Placement {
-				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
+				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(
+					indexer.Indexes,        // indexes []*IndexUsage
+					indexer,                // indexer *IndexerNode
+					command == CommandPlan, // skipDeferredIndexGrouping bool
+					solution,               // solution *Solution
+				)
 			}
 
 			if err := filterSolution(solution); err != nil {
@@ -2823,12 +2844,17 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 				filteredNeedsNewAlternateShardIds = append(filteredNeedsNewAlternateShardIds, index)
 			}
 
-			PopulateAlternateShardIds(solution, filteredNeedsNewAlternateShardIds, config.binSize, false)
+			PopulateAlternateShardIds(solution, filteredNeedsNewAlternateShardIds, config.binSize, false, config.UseShardDealer)
 		}
 
 		// Re-group indexes
 		for _, indexer := range solution.Placement {
-			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
+			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(
+				indexer.Indexes,        // indexes []*IndexUsage
+				indexer,                // indexer *IndexerNode
+				command == CommandPlan, // skipDefferedIndexGrouping bool
+				solution,               // solution *Solution
+			)
 		}
 
 		PopulateSiblingIndexForReplicaRepair(solution, config.binSize)
@@ -3787,6 +3813,7 @@ func DefaultRunConfig() *RunConfig {
 		MaxIterPerTemp:        20000,
 		AllowDDLDuringScaleup: false,
 		binSize:               common.DEFAULT_BIN_SIZE, // 2.5G
+		UseShardDealer:        false,
 	}
 }
 
@@ -3928,6 +3955,13 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 			}
 		}
 	}
+
+	// initialise shardDealer in solution here
+	r.shardDealer = createShardDealerForIndexers(
+		r.Placement,                   // indexers []*IndexerNode
+		nil,                           // config common.Config
+		r.shardDealerMoveInstCallback, // mic func(srcNode, destNode string, partn *IndexUsage) error
+	)
 
 	return r, constraint, indexes, movedIndex, movedData
 }
@@ -6135,7 +6169,8 @@ func getAllTargetDist(allTargets map[common.PartitionId]map[*IndexerNode]map[*In
 	return str
 }
 
-func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSize uint64, override bool) {
+func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSize uint64,
+	override, useShardDealer bool) {
 
 	// Group indexes for each partition
 	// partnId -> replicaId -> indexerNode to corresponding index usage
@@ -6171,84 +6206,100 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			// are grouped together. Also, if a new alternate shardId has been generated in earlier
 			// iteration, regrouping will help to consider/prune the shard for current iteration
 			for _, indexer := range solution.Placement {
-				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, false)
+				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(
+					indexer.Indexes, // indexes []*IndexUsage
+					indexer,         // indexer *IndexerNode
+					false,           // skipDeferredIndexGrouping bool
+					solution,        // solution *Solution
+				)
 			}
 
-			// If a new shard can be created for this partition across all indexer nodes,
-			// then generate new shardIds and populate the IndexUsage structure. A new shard
-			// can be created if the current shard count is less than the shard limit per tenant
-			if currShardCount <= shardLimitPerTenant && canCreateNewShards(replicaMap) {
-				logging.LazyVerbose(func() string {
-					return fmt.Sprintf("Planner::PopulateAlternateShardIds Generating new shards for index: %v "+
-						"as there is room for new shards", getIndexesFromReplicaMap(replicaMap))
-				})
-
-				// If there is an error in generating alternateID's, do not fail
-				// index creation. Ignore the error so that the index can still be
-				// created without alternateId
-				genAlterntateShardIds(replicaMap, allPartnDist[defnId][partnId])
-
+			if useShardDealer {
+				slotAlloted := solution.shardDealer.GetSlot(defnId, partnId, replicaMap)
+				if slotAlloted == 0 {
+					logging.Warnf("Planner::PopulateAlternateShardIds failed to get slot for {defnID: %v, partnID: %v}",
+						defnId, partnId)
+				}
+				logging.Tracef("Planner::PopulateAlternateShardIds assigned slot ID %v to {defnID: %v, partnID: %v} with replicaMap %v",
+					slotAlloted, defnId, partnId, replicaMap)
 			} else {
-				// Atleast one indexer node has reached the capacity of shards
-				// Try placing the index on existing shards. If no such placement
-				// if possible across the nodes, then force create new shards
+				// If a new shard can be created for this partition across all indexer nodes,
+				// then generate new shardIds and populate the IndexUsage structure. A new shard
+				// can be created if the current shard count is less than the shard limit per tenant
+				if currShardCount <= shardLimitPerTenant && canCreateNewShards(replicaMap) {
+					logging.LazyVerbose(func() string {
+						return fmt.Sprintf("Planner::PopulateAlternateShardIds Generating new shards for index: %v "+
+							"as there is room for new shards", getIndexesFromReplicaMap(replicaMap))
+					})
 
-				logging.LazyVerbose(func() string {
-					return fmt.Sprintf("Planner::PopulateAlternateShardIds All indexer nodes are full with shards "+
-						"Current shard capacity: %v, re-using existing shards", getIndexesFromReplicaMap(replicaMap))
-				})
-
-				allIndexerNodes := make(map[*IndexerNode]bool) // All indexer nodes in the cluster
-				fullCapNodes := make(map[*IndexerNode]bool)    // All nodes where shard capacity is full
-				for _, indexer := range solution.Placement {
-					allIndexerNodes[indexer] = true
-				}
-
-				for indexer := range targetNodes {
-					if indexer.NumShards >= indexer.MinShardCapacity {
-						fullCapNodes[indexer] = true
-					}
-				}
-
-				// If there are no fullCapNodes, then this code path is being executed
-				// either because
-				// (a) global shard limits are being hit (or)
-				// (b) User has choosen custom placement with "nodes" clause.
-				//
-				// In such a case, consider all targetNodes as fullCapNodes and prune
-				// slots accordingly. When user overrides with custom placement, then
-				// planner does not have complete information of the slot distribution.
-				// Therefore, it tries to find common slot among all the target nodes.
-				// If none has been found, then it will create new one. Since the same
-				// is achieved by fullCapNodes logic, its usage is overloaded for
-				// custom placement as well
-				if len(fullCapNodes) == 0 || override {
-					for indexer := range targetNodes {
-						fullCapNodes[indexer] = true
-					}
-				}
-
-				logging.LazyVerbose(func() string {
-					return fmt.Sprintf("Planner::PopulateAlternateShardIds Full capacity nodes are: %v, targetNodes: %v, partnId: %v",
-						getLoadDist(fullCapNodes), getTargetDist(targetNodes), partnId)
-				})
-
-				shardSlots, replan := pruneAndSortByLoad(allIndexerNodes, fullCapNodes, targetNodes, replicaMap, allPartnDist[defnId][partnId], binSize)
-				if replan {
-					logging.Warnf("Planner::populateAlternateShardIds Re-planning placement as no common shard has been found")
-
-					// TODO: Do actual replanning instead of just assining new shardIds
+					// If there is an error in generating alternateID's, do not fail
+					// index creation. Ignore the error so that the index can still be
+					// created without alternateId
 					genAlterntateShardIds(replicaMap, allPartnDist[defnId][partnId])
 
 				} else {
-					// Assign alternate Ids based on the least loaded slot
-					slot := shardSlots[0]
-					logging.Infof("Planner::populateAlternateShardIds Using slot: %v for placing replicas: %v,\nGlobal dist: %v",
-						slot[0].slotId, getIndexesFromReplicaMap(replicaMap), slot[1])
-					assignAlternateIds(replicaMap, slot, targetNodes)
-					populateSlotsForNonMovingReplicas(replicaMap, allPartnDist[defnId][partnId], slot[0].slotId)
+					// Atleast one indexer node has reached the capacity of shards
+					// Try placing the index on existing shards. If no such placement
+					// if possible across the nodes, then force create new shards
+
+					logging.LazyVerbose(func() string {
+						return fmt.Sprintf("Planner::PopulateAlternateShardIds All indexer nodes are full with shards "+
+							"Current shard capacity: %v, re-using existing shards", getIndexesFromReplicaMap(replicaMap))
+					})
+
+					allIndexerNodes := make(map[*IndexerNode]bool) // All indexer nodes in the cluster
+					fullCapNodes := make(map[*IndexerNode]bool)    // All nodes where shard capacity is full
+					for _, indexer := range solution.Placement {
+						allIndexerNodes[indexer] = true
+					}
+
+					for indexer := range targetNodes {
+						if indexer.NumShards >= indexer.MinShardCapacity {
+							fullCapNodes[indexer] = true
+						}
+					}
+
+					// If there are no fullCapNodes, then this code path is being executed
+					// either because
+					// (a) global shard limits are being hit (or)
+					// (b) User has choosen custom placement with "nodes" clause.
+					//
+					// In such a case, consider all targetNodes as fullCapNodes and prune
+					// slots accordingly. When user overrides with custom placement, then
+					// planner does not have complete information of the slot distribution.
+					// Therefore, it tries to find common slot among all the target nodes.
+					// If none has been found, then it will create new one. Since the same
+					// is achieved by fullCapNodes logic, its usage is overloaded for
+					// custom placement as well
+					if len(fullCapNodes) == 0 || override {
+						for indexer := range targetNodes {
+							fullCapNodes[indexer] = true
+						}
+					}
+
+					logging.LazyVerbose(func() string {
+						return fmt.Sprintf("Planner::PopulateAlternateShardIds Full capacity nodes are: %v, targetNodes: %v, partnId: %v",
+							getLoadDist(fullCapNodes), getTargetDist(targetNodes), partnId)
+					})
+
+					shardSlots, replan := pruneAndSortByLoad(allIndexerNodes, fullCapNodes, targetNodes, replicaMap, allPartnDist[defnId][partnId], binSize)
+					if replan {
+						logging.Warnf("Planner::populateAlternateShardIds Re-planning placement as no common shard has been found")
+
+						// TODO: Do actual replanning instead of just assining new shardIds
+						genAlterntateShardIds(replicaMap, allPartnDist[defnId][partnId])
+
+					} else {
+						// Assign alternate Ids based on the least loaded slot
+						slot := shardSlots[0]
+						logging.Infof("Planner::populateAlternateShardIds Using slot: %v for placing replicas: %v,\nGlobal dist: %v",
+							slot[0].slotId, getIndexesFromReplicaMap(replicaMap), slot[1])
+						assignAlternateIds(replicaMap, slot, targetNodes)
+						populateSlotsForNonMovingReplicas(replicaMap, allPartnDist[defnId][partnId], slot[0].slotId)
+					}
 				}
 			}
+
 		}
 	}
 }
@@ -7018,4 +7069,24 @@ func newPlanFromSolution(plan *Plan, solution *Solution) *Plan {
 
 	newPlan.UsedReplicaIdMap = GenerateReplicaMap(solution.Placement)
 	return newPlan
+}
+
+func (solution *Solution) shardDealerMoveInstCallback(srcNodeUUID, destNodeUUID string,
+	partn *IndexUsage) error {
+	var srcNode, destNode *IndexerNode
+	for _, node := range solution.Placement {
+		switch node.NodeUUID {
+		case srcNodeUUID:
+			srcNode = node
+		case destNodeUUID:
+			destNode = node
+		}
+	}
+
+	if srcNode == nil || destNode == nil {
+		return fmt.Errorf("couldn't find node %v/%v in solution to move",
+			srcNodeUUID, destNodeUUID)
+	}
+
+	return solution.moveIndex(srcNode, partn, destNode, false)
 }

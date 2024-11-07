@@ -328,6 +328,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					minIterPerTemp := cfg["planner.internal.minIterPerTemp"].Int()
 					maxIterPerTemp := cfg["planner.internal.maxIterPerTemp"].Int()
 					binSize := common.GetBinSize(cfg)
+					useShardDealer := cfg["planner.use_shard_dealer"].Bool()
 
 					//user setting redistribute_indexes overrides the internal setting
 					//onEjectOnly. onEjectOnly is not expected to be used in production
@@ -340,7 +341,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 
 					sr.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *sr.topologyChange,
 						sr.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
-						minIterPerTemp, maxIterPerTemp, binSize, true)
+						minIterPerTemp, maxIterPerTemp, binSize, true, useShardDealer)
 
 				} else { //
 					sr.transferTokens, _, err = planner.ExecuteTenantAwareRebalance(cfg["clusterAddr"].String(),

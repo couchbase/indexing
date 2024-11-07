@@ -35,7 +35,7 @@ func advanced_usage() {
 	flag.PrintDefaults()
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, `Examples:
-- Plan 
+- Plan
     cbindexplan -command=plan -indexes="indexes.json" -memQuota="10G" -cpuQuota=16
     cbindexplan -command=plan -cluster="127.0.0.1:8091" -username="<user>" -password="<pwd>" -indexes="indexes.json"
     cbindexplan -command=plan -cluster="127.0.0.1:8091" -username="<user>" -password="<pwd>" -indexes="indexes.json" -allowUnpin
@@ -43,7 +43,7 @@ func advanced_usage() {
     cbindexplan -command=plan -indexes="indexes.json" -memQuota="10G" -cpuQuota=16 -output="saved-plan.json"
     cbindexplan -command=plan -plan="saved-plan.json" -indexes="indexes.json"
     cbindexplan -command=plan -plan="saved-plan.json" -indexes="indexes.json" -memQuota="10G" -cpuQuota=16 -output="newplan.json"
-- Rebalance 
+- Rebalance
     cbindexplan -command=rebalance-cluster="127.0.0.1:8091" -username="<user>" -password="<pwd>"
     cbindexplan -command=rebalance-cluster="127.0.0.1:8091" -username="<user>" -password="<pwd>" -addNode=3 -output="saved-plan.json"
     cbindexplan -command=rebalance -plan="saved-plan.json"
@@ -98,9 +98,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "		override cluster index cpu quota setting")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr,
-		`cbindexplan is a planning recommendation tool for index placement.  Given a set of indexes, the tool 
-provides guidance on how to place those indexes based on resource utilization and availability constraint.  
-As input, the tool takes a json file with a list of index sizing specifications.  Based on index sizing, the 
+		`cbindexplan is a planning recommendation tool for index placement.  Given a set of indexes, the tool
+provides guidance on how to place those indexes based on resource utilization and availability constraint.
+As input, the tool takes a json file with a list of index sizing specifications.  Based on index sizing, the
 tool will generate a set of DDL statements for creating and building those indexes.`)
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr,
@@ -110,13 +110,13 @@ tool will generate a set of DDL statements for creating and building those index
     `)
 	fmt.Fprintln(os.Stderr,
 		`Usage Note:
-1) cbindexplan should only be used with memory-optimized index. 
+1) cbindexplan should only be used with memory-optimized index.
 2) The tool requires index specification for new index, but for existing index, it can derive sizing specification from index statistics.
 3) The tool uses a conservative sizing formula to anticipate peak load.  The actual index resource consumption may be less.
 4) When running cbindexplan, it may complain that the memory quota or cpu quota is not sufficient in a live cluster because
-of its conversative sizing formula.  In this case, use -memQuota and -cpuQuota to override the cluster setting for planning purpose. 
+of its conversative sizing formula.  In this case, use -memQuota and -cpuQuota to override the cluster setting for planning purpose.
 5) When running cbindexplan, it may complain that there is not enough node to place replica.   In this case, add new node
-to the cluster or reduce the replica count for index. 
+to the cluster or reduce the replica count for index.
 6) Since indexes come into different sizes, the tool will attemtp to place indexes to balance resource consumption in best-try manner.
 7) The tool relies on runtime index statistics to estimate index resource consumption.   It relies on point-in-time statistics at the time
 when the tool is run.
@@ -298,7 +298,7 @@ func main() {
 			return
 		}
 
-		_, err = planner.ExecutePlanWithOptions(plan, indexSpecs, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, false, true, false, binSize, gEnableShardAffinity, false)
+		_, err = planner.ExecutePlanWithOptions(plan, indexSpecs, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, false, true, false, binSize, gEnableShardAffinity, false, false)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return
@@ -310,7 +310,7 @@ func main() {
 			logging.Fatalf("Invalid argument: option 'ddl' is not supported for rebalancing.")
 		}
 
-		_, err := planner.ExecuteRebalanceWithOptions(plan, nil, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, nil, binSize, gEnableShardAffinity)
+		_, err := planner.ExecuteRebalanceWithOptions(plan, nil, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, nil, binSize, gEnableShardAffinity, false)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return
@@ -357,7 +357,7 @@ func main() {
 		}
 
 		tokens, _, err := planner.ExecuteRebalanceInternal(gClusterUrl, change, masterId, true,
-			gDetail, true, false, 0, 0, false, 100, 20000, binSize, gEnableShardAffinity, nil)
+			gDetail, true, false, 0, 0, false, 100, 20000, binSize, gEnableShardAffinity, false, nil)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return

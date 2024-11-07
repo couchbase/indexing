@@ -10,6 +10,7 @@ package planner
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"reflect"
@@ -2053,7 +2054,8 @@ func validateShardIds(index *IndexUsage) bool {
 	return true
 }
 
-func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode, skipDeferredIndexGrouping bool) ([]*IndexUsage, int, error) {
+func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode, skipDeferredIndexGrouping bool,
+	solution *Solution) ([]*IndexUsage, int, error) {
 
 	result := []*IndexUsage{}
 	numShards := 0
@@ -2154,6 +2156,12 @@ func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode, skipDeferredIndex
 				index.updateProxyStats(shardStats)
 			}
 		}
+
+		if solution != nil && solution.shardDealer != nil {
+			for _, shardStats := range indexer.ShardStats {
+				solution.shardDealer.UpdateStatsForShard(shardStats)
+			}
+		}
 	}
 
 	return result, numShards, nil
@@ -2175,6 +2183,92 @@ func UngroupIndexes(solution *Solution) {
 				indexer.Indexes = append(indexer.Indexes, groupedIndex)
 				groupedIndex.ProxyIndex = nil
 			}
+		}
+	}
+}
+
+// createShardDealerForIndexers inits the ShardDealer on each indexer from config
+// if shard affinity is enabled. ONLY call this if indexer node has all the stats set
+// as these stats will be used for the shard dealer initialisation
+func createShardDealerForIndexers(indexers []*IndexerNode, config common.Config,
+	moveInstanceCallback moveFuncCb) *ShardDealer {
+
+	if config == nil {
+		var err error
+		config, err = common.GetSettingsConfig(common.SystemConfig)
+		if err != nil {
+			logging.Warnf("planner::createShardDealerForIndexers: failed to read system config with error - %v", err)
+			return nil
+		}
+	}
+
+	if !config.GetDeploymentAwareShardAffinity() {
+		return nil
+	}
+
+	var useShardDealer = config.GetDeploymentModelAwareCfg("planner.use_shard_dealer").Bool()
+	if !useShardDealer {
+		return nil
+	}
+
+	var minShardsPerNode = config.
+		GetDeploymentModelAwareCfg("planner.internal.min_shards_per_node").
+		Uint64()
+	var minPartitionsPerShardMap = common.ComputeMinPartitionMapFromConfig(
+		config.GetDeploymentModelAwareCfg("planner.internal.min_partitions_per_shard"),
+	)
+	if len(minPartitionsPerShardMap) == 0 {
+		logging.Warnf("planner::createShardDealerForIndexers: failed to parse `min_partitions_per_shard`. Disabling shard_dealer")
+		return nil
+	}
+
+	var minPartitionsPerShard = common.GetMinPartnsPerShardFromMap(
+		config.GetIndexerMemoryQuota(), // memQuota uint64
+		minPartitionsPerShardMap,       // minPartnsPerShardMap map[uint64]uint64
+	)
+
+	if minPartitionsPerShard == 0 {
+		logging.Warnf("planner::createShardDealerForIndexers: failed to calculate minPartnsPerShard for quota %v. shard dealer init skipped",
+			config.GetIndexerMemoryQuota())
+		return nil
+	}
+
+	var shardCapacity uint64 = math.MaxUint64
+	var maxDiskUsagePerShard uint64 = math.MaxUint64
+	for _, indexer := range indexers {
+		indexer.ComputeMinShardCapacity(config)
+		shardCapacity = min(shardCapacity, uint64(indexer.MinShardCapacity))
+		maxDiskUsagePerShard = min(indexer.MaxDiskUsagePerShard, maxDiskUsagePerShard)
+	}
+
+	var dealer = NewDefaultShardDealer(
+		minShardsPerNode,      // minShardsPerNode uint64
+		minPartitionsPerShard, // minPartitionsPerShard uint64
+		maxDiskUsagePerShard,  // maxDiskUsagePerShard uint64
+		shardCapacity,         // shardCapacity uint64
+	)
+	dealer.SetMoveInstanceCallback(moveInstanceCallback)
+
+	for _, indexer := range indexers {
+		populateShardDealerWithNode(dealer, indexer)
+		for _, shardStat := range indexer.ShardStats {
+			dealer.UpdateStatsForShard(shardStat)
+		}
+	}
+
+	return dealer
+}
+
+func populateShardDealerWithNode(dealer *ShardDealer, node *IndexerNode) {
+	if node == nil {
+		return
+	}
+
+	// classify indices and assign them
+	for _, index := range node.Indexes {
+		if err := dealer.RecordIndexUsage(index, node, true); err != nil {
+			logging.Warnf("planner::populateShardDealerWithNode: failed to record index (%v-%v) for indexer %v with shard dealer on err - %v",
+				index.InstId, index.PartnId, node.NodeUUID, err)
 		}
 	}
 }

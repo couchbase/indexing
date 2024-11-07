@@ -3146,11 +3146,11 @@ func TestShardAssignmentFuncTestCases(t *testing.T) {
 			t.Fatalf("New indexes are empty - Expected non-zero indexes")
 		}
 		for _, indexer := range plan.Placement {
-			indexer.Indexes, indexer.NumShards, _ = planner.GroupIndexes(indexer.Indexes, indexer, true)
+			indexer.Indexes, indexer.NumShards, _ = planner.GroupIndexes(indexer.Indexes, indexer, true, nil)
 		}
 		// Test the index-shard assigment function
 		solution := planner.SolutionFromPlan2(plan)
-		planner.PopulateAlternateShardIds(solution, newIndexes, 2560*1024*1024, false)
+		planner.PopulateAlternateShardIds(solution, newIndexes, 2560*1024*1024, false, false)
 		// Test validation
 		switch testcase.testId {
 		// For this test, the new index that got created should have non-empty shardIds

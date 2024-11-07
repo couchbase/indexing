@@ -77,6 +77,8 @@ type Solution struct {
 	// Contains the list of all nodes on which the slot exists
 	// slotId -> indexerNode -> replica number of the slot on the corresponding node
 	slotMap map[uint64]map[*IndexerNode]int
+
+	shardDealer *ShardDealer
 }
 
 // Constructor
@@ -399,6 +401,11 @@ func (s *Solution) clone() *Solution {
 	r.indexSlots = s.indexSlots
 	r.slotMap = s.slotMap
 
+	r.shardDealer = s.shardDealer
+	if s.shardDealer != nil {
+		r.shardDealer.SetMoveInstanceCallback(r.shardDealerMoveInstCallback)
+	}
+
 	return r
 }
 
@@ -604,6 +611,9 @@ func (s *Solution) PrintLayout() {
 					subIndex.pendingCreate, subIndex.PendingDelete)
 			}
 		}
+	}
+	if s.shardDealer != nil {
+		s.shardDealer.LogDealerStats()
 	}
 }
 

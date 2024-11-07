@@ -423,6 +423,14 @@ func TestIdxCorruptBackup(t *testing.T) {
 		true, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
+	// snapshot after index build is done. The previous test sets snapshot persistance to 20 seconds
+	// If indexer takes more than 20 seconds to process the index creation and build, then indexer
+	// will create another disk snapshot (FORCE_COMMIT) and then this test will fail if the first
+	// snapshot is corrupted while the second snapshot is being created.
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.moi.interval",
+		float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
 	// Step 1: Create index
 	fmt.Println("Creating index ...")
 	err = secondaryindex.CreateSecondaryIndex2("corrupt_idx6_age", "default", indexManagementAddress,
