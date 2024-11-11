@@ -49,6 +49,8 @@ start_cluster() {
       sleep 3
     done
     test "$ok_run" || continue
+    # enable developer preview for BHIVE indexes
+    echo y | ./couchbase-cli enable-developer-preview --enable -c 127.0.0.1:9000 -u $Username -p $Password  
 #    sleep 180
 #    ./cluster_connect -n2 -s 1500 -I 1500 -T n0:kv+n1ql,n1:kv+index >$WORKSPACE/run.log 2>&1 &
 #    for i in {1..120}; do
