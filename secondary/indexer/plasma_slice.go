@@ -874,6 +874,7 @@ func (ctx *plasmaReaderCtx) Init(donech chan bool) bool {
 func (ctx *plasmaReaderCtx) Done() {
 	if ctx.r != nil {
 		ctx.ch <- ctx.r
+		ctx.r = nil
 	}
 }
 

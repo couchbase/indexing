@@ -142,6 +142,10 @@ func (mc *MockCodebook) EncodeAndAssignVectors(vecs []float32, codes []byte, lab
 	return nil
 }
 func (mc *MockCodebook) ComputeDistanceEncoded(qvec []float32, n int, codes []byte, dists []float32, listno int64) error {
+	mc.compDistCurrCount++
+	if mc.compDistCurrCount == mc.CompDistErrOnCount {
+		return mc.InjectedErr
+	}
 	return nil
 }
 func (mc *MockCodebook) ComputeDistanceTable(vec []float32) ([][]float32, error)       { return nil, nil }

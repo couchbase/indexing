@@ -525,8 +525,7 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 	//ComputeDistanceEncoded is only implemented for SQ currently. It can only
 	//be used if all vectors in a batch belong to the same centroid. If cid < 0,
 	//it implies that scan is spanning across centroids.
-	if w.currJob.cid >= 0 && qtype == c.SQ && metric == codebook.METRIC_L2 {
-
+	if !w.currJob.scan.MultiCentroid && qtype == c.SQ && metric == codebook.METRIC_L2 {
 		// Make list of vectors to calculate distance
 		for i := 0; i < vecCount; i++ {
 			codei := w.currBatchRows[i].value
@@ -1596,22 +1595,9 @@ func (s *IndexScanSource2) Routine() error {
 		return nil
 	}
 
-	// How many readers per partition are configured and how may are needed
-	readersPerPartition := s.p.req.parallelCentroidScans
-	if s.p.req.nprobes < s.p.req.parallelCentroidScans {
-		readersPerPartition = s.p.req.nprobes
-	}
-	s.p.req.readersPerPartition = readersPerPartition
-
-	// Make map of parition to reader contexts i.e. readers per parition
-	ctxs := make(map[common.PartitionId][]IndexReaderContext)
-	for i, pid := range s.p.req.PartitionIds {
-		ctxs[pid] = make([]IndexReaderContext, 0)
-		for j := 0; j < readersPerPartition; j++ {
-			ctxs[pid] = append(ctxs[pid], s.p.req.Ctxs[i*readersPerPartition+j])
-		}
-	}
-	s.p.req.perPartnReaderCtx = ctxs
+	s.p.req.setReaderCtxMap()
+	readersPerPartition := s.p.req.readersPerPartition
+	ctxs := s.p.req.perPartnReaderCtx
 
 	// Scans and codebooks
 	scans := s.p.req.vectorScans
@@ -1644,8 +1630,8 @@ func (s *IndexScanSource2) Routine() error {
 	// Make ScanJobs and schedule them on the WorkerPool
 	// * readersPerPartition should be launched in parallel
 	// * Run one scan on all partitions and then launch next one
-	rem := s.p.req.nprobes % readersPerPartition
-	numBatchesPerScan := s.p.req.nprobes / readersPerPartition
+	rem := s.p.req.perPartnScanParallelism % readersPerPartition
+	numBatchesPerScan := s.p.req.perPartnScanParallelism / readersPerPartition
 	if rem != 0 {
 		numBatchesPerScan += 1
 	}

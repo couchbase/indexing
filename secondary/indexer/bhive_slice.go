@@ -1522,6 +1522,7 @@ func (ctx *bhiveReaderCtx) Init(donech chan bool) bool {
 func (ctx *bhiveReaderCtx) Done() {
 	if ctx.r != nil {
 		ctx.ch <- ctx.r
+		ctx.r = nil
 	}
 }
 
