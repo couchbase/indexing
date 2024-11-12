@@ -1438,6 +1438,13 @@ func (s *IndexScanSource2) Routine() error {
 	}
 	s.p.req.perPartnSnaps = snaps
 
+	// For any_consistency scan during rollback we will get nil snapshot. As we will not
+	// have any partitions in nil snapshot partition container this map will be empty.
+	// For normal scans we dont error so following the same principle here.
+	if len(snaps) == 0 {
+		return nil
+	}
+
 	// How many readers per partition are configured and how may are needed
 	readersPerPartition := s.p.req.parallelCentroidScans
 	if s.p.req.nprobes < s.p.req.parallelCentroidScans {
