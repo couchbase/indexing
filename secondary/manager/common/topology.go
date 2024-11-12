@@ -53,6 +53,7 @@ type IndexInstDistribution struct {
 	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
 	RealInstId     uint64                  `json:"realInstId,omitempty"`
 	TrainingPhase  c.TrainingPhase         `json:"trainingPhase,omitempty"`
+	NumCentroids   int                     `json:"numCentroids,omitempty"`
 }
 
 type IndexPartDistribution struct {

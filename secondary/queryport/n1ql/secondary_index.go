@@ -1022,6 +1022,7 @@ type secondaryIndex struct {
 	nprobes            int
 	vectorDescription  string
 	vectorTrainList    int
+	numCentroids	   int
 
 	isBhive bool
 	include expression.Expressions
@@ -1120,6 +1121,11 @@ func newSecondaryIndexFromMetaData(
 		si.vectorDimension = indexDefn.VectorMeta.Dimension
 		si.vectorDescription = indexDefn.VectorMeta.Quantizer.String()
 		si.vectorTrainList = indexDefn.VectorMeta.TrainList
+
+		si.numCentroids = indexDefn.VectorMeta.Quantizer.Nlist
+		if len(imd.Instances) > 0 && imd.Instances[0].NumCentroids != 0 {
+			si.numCentroids = imd.Instances[0].NumCentroids
+		}
 
 		// By default "nprobes" is 1. If any value is specified in query,
 		// indexer will use it instead
@@ -1919,9 +1925,8 @@ func (si *secondaryIndex6) VectorDescription() string {
 	return si.vectorDescription
 }
 
-// [VECTOR_TODO] stub function, needs to be updated
 func (si *secondaryIndex6) NumberOfCentroids() int {
-	return int(0)
+	return si.numCentroids
 }
 
 // [VECTOR_TODO] stub function, needs to be updated

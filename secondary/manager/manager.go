@@ -668,7 +668,7 @@ func (m *IndexManager) HandleBuildIndexRebalDDLEmptyNode(indexIds client.IndexId
 func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
 	partitions []uint64, versions []int, instVersion int, partnShardIdMap common.PartnShardIdMap,
-	trainingPhase common.TrainingPhase) error {
+	trainingPhase common.TrainingPhase, numCentroids int) error {
 
 	inst := &topologyChange{
 		Bucket:        bucket,
@@ -686,6 +686,7 @@ func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, def
 		InstVersion:   instVersion,
 		ShardIdMap:    partnShardIdMap,
 		TrainingPhase: trainingPhase,
+		NumCentroids:  numCentroids,
 	}
 
 	buf, e := json.Marshal(&inst)
@@ -702,7 +703,7 @@ func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, def
 func (m *IndexManager) UpdateIndexInstanceSync(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
 	partitions []uint64, versions []int, instVersion int, partnShardIdMap common.PartnShardIdMap,
-	trainingPhase common.TrainingPhase) error {
+	trainingPhase common.TrainingPhase, numCentroids int) error {
 
 	inst := &topologyChange{
 		Bucket:        bucket,
@@ -720,6 +721,7 @@ func (m *IndexManager) UpdateIndexInstanceSync(bucket, scope, collection string,
 		InstVersion:   instVersion,
 		ShardIdMap:    partnShardIdMap,
 		TrainingPhase: trainingPhase,
+		NumCentroids:  numCentroids,
 	}
 
 	buf, e := json.Marshal(&inst)

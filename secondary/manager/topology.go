@@ -57,6 +57,7 @@ type IndexInstDistribution struct {
 	RealInstId     uint64                  `json:"realInstId,omitempty"`
 
 	TrainingPhase common.TrainingPhase `json:"trainingPhase,omitempty"`
+	NumCentroids  int                  `json:"numCentroids,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -307,7 +308,8 @@ func (t *IndexTopology) UpdateShardIdsForIndexPartn(defnId common.IndexDefnId, i
 }
 
 // Update training phase on instance
-func (t *IndexTopology) UpdateTrainingPhaseForIndex(defnId common.IndexDefnId, instId common.IndexInstId, trainingPhase common.TrainingPhase) bool {
+func (t *IndexTopology) UpdateTrainingPhaseForIndex(defnId common.IndexDefnId, instId common.IndexInstId,
+	trainingPhase common.TrainingPhase, numCentroids int) bool {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
@@ -316,8 +318,13 @@ func (t *IndexTopology) UpdateTrainingPhaseForIndex(defnId common.IndexDefnId, i
 
 					if t.Definitions[i].Instances[j].TrainingPhase != trainingPhase {
 						t.Definitions[i].Instances[j].TrainingPhase = trainingPhase
-						logging.Debugf("IndexTopology.UpdateTrainingPhaseForIndex(): Set trainingPhase for index '%v' inst '%v.  TrainingPhase = '%v'",
-							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].TrainingPhase)
+						logging.Debugf("IndexTopology.UpdateTrainingPhaseForIndex(): Set trainingPhase for index '%v' inst '%v.  TrainingPhase = '%v',"+
+							"NumCentroids: '%v'.", defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].TrainingPhase,
+							t.Definitions[i].Instances[j].NumCentroids)
+
+						if t.Definitions[i].Instances[j].TrainingPhase == common.TRAINING_COMPLETED {
+							t.Definitions[i].Instances[j].NumCentroids = numCentroids
+						}
 						return true
 					}
 				}
