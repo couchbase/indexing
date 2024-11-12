@@ -60,6 +60,8 @@ func createNewAlternateShardIDGenerator() func() (*c.AlternateShardId, error) {
 }
 
 func TestBasicSlotAssignment(t *testing.T) {
+	t.Parallel()
+
 	var dealer = NewShardDealer(
 		minShardsPerNode,
 		minPartitionsPerShard,
@@ -94,24 +96,36 @@ func TestBasicSlotAssignment(t *testing.T) {
 	}
 
 	if len(dealer.partnSlots) != 2 {
-		t.Fatalf("%v shard dealer book keeping mismatch - expected it to contain 2 index defns but it has %v",
-			t.Name(), dealer.partnSlots)
+		t.Fatalf(
+			"%v shard dealer book keeping mismatch - expected it to contain 2 index defns but it has %v",
+			t.Name(),
+			dealer.partnSlots,
+		)
 	}
 
 	if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != 3 {
-		t.Fatalf("%v shard dealer book keeping mismatch - expected it to contain 3 slots but it has %v. (%v)",
-			t.Name(), dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-			dealer.nodeToSlotMap[indexerNode.NodeUUID])
+		t.Fatalf(
+			"%v shard dealer book keeping mismatch - expected it to contain 3 slots but it has %v. (%v)",
+			t.Name(),
+			dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+			dealer.nodeToSlotMap[indexerNode.NodeUUID],
+		)
 	}
 
 	if len(dealer.slotsPerCategory) > 1 {
-		t.Fatalf("%v shard dealer book keeping mismatch - expected it to contain 1 shard category but it has %v",
-			t.Name(), dealer.slotsPerCategory)
+		t.Fatalf(
+			"%v shard dealer book keeping mismatch - expected it to contain 1 shard category but it has %v",
+			t.Name(),
+			dealer.slotsPerCategory,
+		)
 	}
 
 	if len(dealer.slotsPerCategory[StandardShardCategory]) != 2 {
-		t.Fatalf("%v shard dealer book keeping mismatch - expected it to contain 2 shard category but it has %v",
-			t.Name(), dealer.slotsPerCategory)
+		t.Fatalf(
+			"%v shard dealer book keeping mismatch - expected it to contain 2 shard category but it has %v",
+			t.Name(),
+			dealer.slotsPerCategory,
+		)
 	}
 }
 
@@ -196,6 +210,8 @@ func getReplicaMapsForIndexerNode(
 }
 
 func TestSingleNodeAssignment(t *testing.T) {
+	t.Parallel()
+
 	t.Run("Pass-0", func(subt *testing.T) {
 		subt.Run("Basic-AllPrimary", func(t0 *testing.T) {
 			t0.Parallel()
@@ -233,17 +249,28 @@ func TestSingleNodeAssignment(t *testing.T) {
 
 			// TODO: temp. replace with `validateShardDealerInternals`
 			if len(dealer.partnSlots) != int(minShardsPerNode) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(), dealer.partnSlots, minShardsPerNode)
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+					t0.Name(),
+					dealer.partnSlots,
+					minShardsPerNode,
+				)
 			}
 			if len(dealer.slotsMap) != int(minShardsPerNode) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
-					t0.Name(), dealer.slotsMap, minShardsPerNode)
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
+					t0.Name(),
+					dealer.slotsMap,
+					minShardsPerNode,
+				)
 			}
 			if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != minShardsPerNode {
-				t0.Fatalf("%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
-					t0.Name(), dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-					minShardsPerNode)
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
+					t0.Name(),
+					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+					minShardsPerNode,
+				)
 			}
 
 			var extraIndex = createDummyIndexUsage(minShardsPerNode+1, false, false, false, false)
@@ -254,8 +281,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 			replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
 			slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap)
 			if _, exists := slotIDs[slotID]; slotID != 0 && !exists {
-				t0.Fatalf("%v extra slot created when it was not expected. New slot %v. All Slots %v",
-					t0.Name(), slotID, slotIDs)
+				t0.Fatalf(
+					"%v extra slot created when it was not expected. New slot %v. All Slots %v",
+					t0.Name(),
+					slotID,
+					slotIDs,
+				)
 			}
 		})
 
@@ -296,9 +327,13 @@ func TestSingleNodeAssignment(t *testing.T) {
 							}
 
 							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
-								t0.Fatalf("%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
-									t0.Name(), inst.IsPrimary, expectedAlternateShardIDCount,
-									inst.AlternateShardIds)
+								t0.Fatalf(
+									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+									t0.Name(),
+									inst.IsPrimary,
+									expectedAlternateShardIDCount,
+									inst.AlternateShardIds,
+								)
 							}
 
 							for _, asi := range inst.AlternateShardIds {
@@ -318,12 +353,20 @@ func TestSingleNodeAssignment(t *testing.T) {
 
 			// TODO: temp. replace with `validateShardDealerInternals`
 			if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
-					t0.Name(), len(alternateShardIDs), dealer.nodeToShardCountMap[indexerNode.NodeUUID])
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
+					t0.Name(),
+					len(alternateShardIDs),
+					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+				)
 			}
 			if len(dealer.partnSlots) != len(indexerNode.Indexes) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - expected %v index defns but it has %v",
-					t0.Name(), len(indexerNode.Indexes), len(dealer.partnSlots))
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - expected %v index defns but it has %v",
+					t0.Name(),
+					len(indexerNode.Indexes),
+					len(dealer.partnSlots),
+				)
 			}
 		})
 
@@ -369,16 +412,28 @@ func TestSingleNodeAssignment(t *testing.T) {
 
 			// TODO: temp. replace with `validateShardDealerInternals`
 			if len(dealer.partnSlots) != int(minPartitionsPerShard) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(), dealer.partnSlots, minPartitionsPerShard)
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+					t0.Name(),
+					dealer.partnSlots,
+					minPartitionsPerShard,
+				)
 			}
 			if len(dealer.slotsMap) != int(minShardsPerNode) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
-					t0.Name(), dealer.slotsMap, minShardsPerNode)
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
+					t0.Name(),
+					dealer.slotsMap,
+					minShardsPerNode,
+				)
 			}
 			if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != minShardsPerNode {
-				t0.Fatalf("%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
-					t0.Name(), minShardsPerNode, dealer.nodeToShardCountMap[indexerNode.NodeUUID])
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
+					t0.Name(),
+					minShardsPerNode,
+					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+				)
 			}
 		})
 
@@ -416,9 +471,13 @@ func TestSingleNodeAssignment(t *testing.T) {
 							}
 
 							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
-								t0.Fatalf("%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
-									t0.Name(), inst.IsPrimary, expectedAlternateShardIDCount,
-									inst.AlternateShardIds)
+								t0.Fatalf(
+									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+									t0.Name(),
+									inst.IsPrimary,
+									expectedAlternateShardIDCount,
+									inst.AlternateShardIds,
+								)
 							}
 
 							for _, asi := range inst.AlternateShardIds {
@@ -440,12 +499,20 @@ func TestSingleNodeAssignment(t *testing.T) {
 			// now when the new 2i indexes are created, we re-use the slots but we still end
 			// up creating new shards
 			if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != 2*minShardsPerNode {
-				t0.Fatalf("%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
-					t0.Name(), 2*minShardsPerNode, dealer.nodeToShardCountMap[indexerNode.NodeUUID])
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
+					t0.Name(),
+					2*minShardsPerNode,
+					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+				)
 			}
 			if len(dealer.partnSlots) != int(minShardsPerNode)*4 {
-				t0.Fatalf("%v shard dealer book keeping mismatch - expected %v index defns but it has %v",
-					t0.Name(), minShardsPerNode*4, len(dealer.partnSlots))
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - expected %v index defns but it has %v",
+					t0.Name(),
+					minShardsPerNode*4,
+					len(dealer.partnSlots),
+				)
 			}
 		})
 
@@ -481,9 +548,13 @@ func TestSingleNodeAssignment(t *testing.T) {
 							}
 
 							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
-								t0.Fatalf("%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
-									t0.Name(), inst.IsPrimary, expectedAlternateShardIDCount,
-									inst.AlternateShardIds)
+								t0.Fatalf(
+									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+									t0.Name(),
+									inst.IsPrimary,
+									expectedAlternateShardIDCount,
+									inst.AlternateShardIds,
+								)
 							}
 
 							for _, asi := range inst.AlternateShardIds {
@@ -500,33 +571,48 @@ func TestSingleNodeAssignment(t *testing.T) {
 			}
 
 			if len(dealer.slotsPerCategory) != 3 {
-				t0.Fatalf("%v shard dealer book keeping mismatch - expected %v categories but we have %v",
-					t0.Name(), 3, dealer.slotsPerCategory)
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - expected %v categories but we have %v",
+					t0.Name(),
+					3,
+					dealer.slotsPerCategory,
+				)
 			}
 
 			if len(dealer.slotsPerCategory[StandardShardCategory]) != 2 {
-				t0.Fatalf("%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(), StandardShardCategory,
-					dealer.slotsPerCategory[StandardShardCategory], minShardsPerNode*2,
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
+					t0.Name(),
+					StandardShardCategory,
+					dealer.slotsPerCategory[StandardShardCategory],
+					minShardsPerNode*2,
 				)
 			}
 
 			if len(dealer.slotsPerCategory[VectorShardCategory]) != 1 {
-				t0.Fatalf("%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(), VectorShardCategory,
-					dealer.slotsPerCategory[VectorShardCategory], 1,
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
+					t0.Name(),
+					VectorShardCategory,
+					dealer.slotsPerCategory[VectorShardCategory],
+					1,
 				)
 			}
 			if len(dealer.slotsPerCategory[BhiveShardCategory]) != 1 {
-				t0.Fatalf("%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(), BhiveShardCategory,
-					dealer.slotsPerCategory[BhiveShardCategory], 1,
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
+					t0.Name(),
+					BhiveShardCategory,
+					dealer.slotsPerCategory[BhiveShardCategory],
+					1,
 				)
 			}
 
 			if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - node has more shards %v than expected %v",
-					t0.Name(), dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - node has more shards %v than expected %v",
+					t0.Name(),
+					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
 					len(alternateShardIDs),
 				)
 			}
@@ -571,17 +657,28 @@ func TestSingleNodeAssignment(t *testing.T) {
 
 			// TODO: temp. replace with `validateShardDealerInternals`
 			if len(dealer.partnSlots) != len(slotIDs) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(), dealer.partnSlots, minShardsPerNode)
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+					t0.Name(),
+					dealer.partnSlots,
+					minShardsPerNode,
+				)
 			}
 			if len(dealer.slotsMap) != len(slotIDs) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
-					t0.Name(), dealer.slotsMap, len(slotIDs))
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
+					t0.Name(),
+					dealer.slotsMap,
+					len(slotIDs),
+				)
 			}
 			if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(slotIDs) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
-					t0.Name(), dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-					len(slotIDs))
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
+					t0.Name(),
+					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+					len(slotIDs),
+				)
 			}
 		})
 
@@ -618,9 +715,13 @@ func TestSingleNodeAssignment(t *testing.T) {
 							}
 
 							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
-								t0.Fatalf("%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
-									t0.Name(), inst.IsPrimary, expectedAlternateShardIDCount,
-									inst.AlternateShardIds)
+								t0.Fatalf(
+									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+									t0.Name(),
+									inst.IsPrimary,
+									expectedAlternateShardIDCount,
+									inst.AlternateShardIds,
+								)
 							}
 
 							for _, asi := range inst.AlternateShardIds {
@@ -641,17 +742,28 @@ func TestSingleNodeAssignment(t *testing.T) {
 			}
 			// TODO: temp. replace with `validateShardDealerInternals`
 			if len(dealer.partnSlots) != int(testShardCapacity) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(), dealer.partnSlots, testShardCapacity)
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+					t0.Name(),
+					dealer.partnSlots,
+					testShardCapacity,
+				)
 			}
 			if len(dealer.slotsMap) != len(slotIDs) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
-					t0.Name(), dealer.slotsMap, len(slotIDs))
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
+					t0.Name(),
+					dealer.slotsMap,
+					len(slotIDs),
+				)
 			}
 			if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
-					t0.Name(), dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-					len(slotIDs))
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
+					t0.Name(),
+					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+					len(slotIDs),
+				)
 			}
 
 			// create extra index. it should not create a new shard
@@ -663,8 +775,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 			replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
 			slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap)
 			if _, exists := slotIDs[slotID]; slotID != 0 && !exists {
-				t0.Fatalf("%v extra slot created when it was not expected. New slot %v. All Slots %v",
-					t0.Name(), slotID, slotIDs)
+				t0.Fatalf(
+					"%v extra slot created when it was not expected. New slot %v. All Slots %v",
+					t0.Name(),
+					slotID,
+					slotIDs,
+				)
 			}
 		})
 
@@ -700,9 +816,13 @@ func TestSingleNodeAssignment(t *testing.T) {
 							}
 
 							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
-								t0.Fatalf("%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
-									t0.Name(), inst.IsPrimary, expectedAlternateShardIDCount,
-									inst.AlternateShardIds)
+								t0.Fatalf(
+									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+									t0.Name(),
+									inst.IsPrimary,
+									expectedAlternateShardIDCount,
+									inst.AlternateShardIds,
+								)
 							}
 
 							for _, asi := range inst.AlternateShardIds {
@@ -721,32 +841,47 @@ func TestSingleNodeAssignment(t *testing.T) {
 			}
 
 			if len(dealer.slotsPerCategory) != 3 {
-				t0.Fatalf("%v shard dealer book keeping mismatch - expected %v categories but we have %v",
-					t0.Name(), 3, dealer.slotsPerCategory)
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - expected %v categories but we have %v",
+					t0.Name(),
+					3,
+					dealer.slotsPerCategory,
+				)
 			}
 
 			if len(dealer.slotsPerCategory[StandardShardCategory]) != int(minShardsPerNode) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(), StandardShardCategory,
-					dealer.slotsPerCategory[StandardShardCategory], minShardsPerNode,
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
+					t0.Name(),
+					StandardShardCategory,
+					dealer.slotsPerCategory[StandardShardCategory],
+					minShardsPerNode,
 				)
 			}
 			if len(dealer.slotsPerCategory[VectorShardCategory]) != 1 {
-				t0.Fatalf("%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(), VectorShardCategory,
-					dealer.slotsPerCategory[VectorShardCategory], 1,
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
+					t0.Name(),
+					VectorShardCategory,
+					dealer.slotsPerCategory[VectorShardCategory],
+					1,
 				)
 			}
 			if len(dealer.slotsPerCategory[BhiveShardCategory]) != 1 {
-				t0.Fatalf("%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(), BhiveShardCategory,
-					dealer.slotsPerCategory[BhiveShardCategory], 1,
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
+					t0.Name(),
+					BhiveShardCategory,
+					dealer.slotsPerCategory[BhiveShardCategory],
+					1,
 				)
 			}
 
 			if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
-				t0.Fatalf("%v shard dealer book keeping mismatch - node has more shards %v than expected %v",
-					t0.Name(), dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - node has more shards %v than expected %v",
+					t0.Name(),
+					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
 					len(alternateShardIDs),
 				)
 			}
@@ -786,9 +921,13 @@ func TestSingleNodeAssignment(t *testing.T) {
 						}
 
 						if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
-							subt.Fatalf("%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
-								subt.Name(), inst.IsPrimary, expectedAlternateShardIDCount,
-								inst.AlternateShardIds)
+							subt.Fatalf(
+								"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+								subt.Name(),
+								inst.IsPrimary,
+								expectedAlternateShardIDCount,
+								inst.AlternateShardIds,
+							)
 						}
 
 						for _, asi := range inst.AlternateShardIds {
@@ -809,17 +948,28 @@ func TestSingleNodeAssignment(t *testing.T) {
 		}
 		// TODO: temp. replace with `validateShardDealerInternals`
 		if len(dealer.partnSlots) != len(indexerNode.Indexes) {
-			subt.Fatalf("%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-				subt.Name(), dealer.partnSlots, len(indexerNode.Indexes))
+			subt.Fatalf(
+				"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+				subt.Name(),
+				dealer.partnSlots,
+				len(indexerNode.Indexes),
+			)
 		}
 		if len(dealer.slotsMap) != len(slotIDs) {
-			subt.Fatalf("%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
-				subt.Name(), dealer.slotsMap, len(slotIDs))
+			subt.Fatalf(
+				"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
+				subt.Name(),
+				dealer.slotsMap,
+				len(slotIDs),
+			)
 		}
 		if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
-			subt.Fatalf("%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
-				subt.Name(), dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-				len(slotIDs))
+			subt.Fatalf(
+				"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
+				subt.Name(),
+				dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+				len(slotIDs),
+			)
 		}
 
 		// create extra index. it should not create a new shard
@@ -842,7 +992,479 @@ func TestSingleNodeAssignment(t *testing.T) {
 	})
 }
 
-// TODO: add tests for getShardCategory
-// TODO: add tests for RecordIndexUsage
+func TestGetShardCategory(t *testing.T) {
+	t.Parallel()
+
+	// MOI index
+	var moiIndex = createDummyIndexUsage(0, false, false, false, true)
+	var shardCategory = getIndexCategory(moiIndex)
+	if shardCategory != InvalidShardCategory {
+		t.Fatalf(
+			"%v MoI index should have had invalid shard category but is %v",
+			t.Name(),
+			shardCategory,
+		)
+	}
+
+	var plasmaIndex = createDummyIndexUsage(0, true, false, false, false)
+	shardCategory = getIndexCategory(plasmaIndex)
+	if shardCategory != StandardShardCategory {
+		t.Fatalf(
+			"%v primary index should have had std shard category but is %v",
+			t.Name(),
+			shardCategory,
+		)
+	}
+
+	plasmaIndex = createDummyIndexUsage(0, false, false, false, false)
+	shardCategory = getIndexCategory(plasmaIndex)
+	if shardCategory != StandardShardCategory {
+		t.Fatalf(
+			"%v plasma index should have had std shard category but is %v",
+			t.Name(),
+			shardCategory,
+		)
+	}
+
+	var compositeVectorIndex = createDummyIndexUsage(0, false, true, false, false)
+	shardCategory = getIndexCategory(compositeVectorIndex)
+	if shardCategory != VectorShardCategory {
+		t.Fatalf(
+			"%v vector index should have had vector shard category but is %v",
+			t.Name(),
+			shardCategory,
+		)
+	}
+
+	var bhiveIndex = createDummyIndexUsage(0, false, false, true, false)
+	shardCategory = getIndexCategory(bhiveIndex)
+	if shardCategory != BhiveShardCategory {
+		t.Fatalf(
+			"%v bhive index should have had bhive shard category but is %v",
+			t.Name(),
+			shardCategory,
+		)
+	}
+}
+
+func TestRecordIndexUsage(t *testing.T) {
+	t.Parallel()
+
+	var dealer = NewShardDealer(
+		minPartitionsPerShard, minPartitionsPerShard, maxDiskUsagePerShard,
+		shardCapacity, createNewAlternateShardIDGenerator(),
+		nil)
+
+	var err = dealer.RecordIndexUsage(nil, nil, true)
+	if err != nil {
+		t.Fatalf("expected nil error on nil index but got %v", err)
+	}
+
+	var moiIndex = createDummyIndexUsage(0, false, false, false, true)
+	err = dealer.RecordIndexUsage(moiIndex, nil, true)
+	if err != nil {
+		t.Fatalf("expected nil error on MoI index but got %v", err)
+	}
+	if len(moiIndex.AlternateShardIds) != 0 {
+		t.Fatalf(
+			"expected alternate shard IDs to be nil for MoI index but they are %v",
+			moiIndex.AlternateShardIds,
+		)
+	}
+
+	// this fails on invalid shard category
+	moiIndex.InitialAlternateShardIds = []string{""}
+	err = dealer.RecordIndexUsage(moiIndex, nil, true)
+	if err == nil {
+		t.Fatalf(
+			"expected to fail in recording MoI index due to invalid category but it got recorded",
+		)
+	}
+
+	// this fails on invalid shard category
+	moiIndex.AlternateShardIds = []string{""}
+	err = dealer.RecordIndexUsage(moiIndex, nil, false)
+	if err == nil {
+		t.Fatalf(
+			"expected to fail in recording MoI index due to invalid category but it got recorded",
+		)
+	}
+
+	var plasmaIndex = createDummyIndexUsage(0, false, false, false, false)
+	err = dealer.RecordIndexUsage(plasmaIndex, nil, false)
+	if err != nil {
+		t.Fatalf(
+			"expected to not fail record index usage if index has nil shards but it failed with %v",
+			err,
+		)
+	}
+
+	// this fails on invalid alternate shard IDs
+	plasmaIndex.InitialAlternateShardIds = []string{""}
+	err = dealer.RecordIndexUsage(plasmaIndex, nil, true)
+	if err == nil {
+		t.Fatalf(
+			"expected to fail record index usage as index has invalid shards but it did not fail",
+		)
+	}
+
+	// this fails on invalid alternate shard IDs
+	plasmaIndex.AlternateShardIds = []string{""}
+	err = dealer.RecordIndexUsage(plasmaIndex, nil, false)
+	if err == nil {
+		t.Fatalf(
+			"expected to fail record index usage as index has invalid shards but it did not fail",
+		)
+	}
+
+	plasmaIndex = createDummyIndexUsage(1, false, false, false, false)
+	var mainAlternateID, _ = c.NewAlternateId()
+	mainAlternateID.SetSlotId(1)    // dont use `0` here
+	mainAlternateID.SetReplicaId(1) // dont use `0` here
+	mainAlternateID.SetGroupId(0)
+	var backAlternateID = mainAlternateID.Clone()
+	backAlternateID.SetGroupId(1)
+
+	var alternateShardIDs = []string{mainAlternateID.String(), backAlternateID.String()}
+	plasmaIndex.InitialAlternateShardIds = alternateShardIDs
+	err = dealer.RecordIndexUsage(plasmaIndex, nil, false)
+	if err != nil {
+		t.Fatalf("expected no-op record usage to succeed but it failed with err %v",
+			err)
+	}
+	if len(dealer.slotsMap[mainAlternateID.GetSlotId()]) != 0 {
+		t.Fatalf("slot 0 should have been empty but it contains %v",
+			dealer.slotsMap[mainAlternateID.GetSlotId()])
+	}
+
+	var indexer = createDummyIndexerNode("0", 0, 0, 0, 0, 0)
+	indexer.Indexes = append(indexer.Indexes, plasmaIndex)
+
+	err = dealer.RecordIndexUsage(plasmaIndex, indexer, true)
+	if err != nil {
+		t.Fatalf("expected index to be recorded but it failed with err %v", err)
+	}
+
+	if len(dealer.slotsMap[mainAlternateID.GetSlotId()]) == 0 ||
+		len(dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()]) == 0 ||
+		dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][mainAlternateID.GetGroupId()] == nil ||
+		dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][backAlternateID.GetGroupId()] == nil {
+		t.Fatalf(
+			"book keeping mismatch in shard dealer. slots map is not correct - %v",
+			dealer.slotsMap[mainAlternateID.GetSlotId()],
+		)
+	}
+	var shardContainer = dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][mainAlternateID.GetGroupId()]
+	if len(shardContainer.insts) != 1 {
+		t.Fatalf(
+			"book keeping mismatch in shard container. expected only 1 inst but there are - %v",
+			shardContainer.insts,
+		)
+	}
+	if len(shardContainer.insts[plasmaIndex.InstId]) > 1 {
+		t.Fatalf(
+			"book keeping mismatch in shard container. expected only 1 index usage but there are - %v",
+			shardContainer.insts[plasmaIndex.InstId],
+		)
+	}
+	if shardContainer.insts[plasmaIndex.InstId][0] != plasmaIndex {
+		t.Fatalf("book keeping mismatch in shard container. expected index to be %p but it is %p",
+			shardContainer.insts[plasmaIndex.InstId][0], plasmaIndex)
+	}
+	if shardContainer.totalPartitions != uint64(plasmaIndex.Instance.Defn.NumPartitions)+1 {
+		t.Fatalf(
+			"book keeping mismatch is shard container. expected %v partitions but there are %v",
+			plasmaIndex.Instance.Defn.NumPartitions,
+			shardContainer.totalPartitions,
+		)
+	}
+	if len(dealer.partnSlots[plasmaIndex.DefnId]) == 0 ||
+		dealer.partnSlots[plasmaIndex.DefnId][plasmaIndex.PartnId] != mainAlternateID.GetSlotId() {
+		t.Fatalf(
+			"book keeping mismatch. expected slotID to be %v but it is (partnSlot map for defn) %v",
+			mainAlternateID.GetSlotId(),
+			dealer.partnSlots[plasmaIndex.DefnId],
+		)
+	}
+
+	var shardCategory = getIndexCategory(plasmaIndex)
+	if len(dealer.slotsPerCategory[shardCategory]) == 0 ||
+		!dealer.slotsPerCategory[shardCategory][mainAlternateID.GetSlotId()] {
+		t.Fatalf(
+			"book keeping mismatch. expected dealer to have slot in category %v but it has (slotsMap) %v",
+			shardCategory,
+			dealer.slotsPerCategory,
+		)
+	}
+
+	if dealer.nodeToShardCountMap[indexer.NodeUUID] != uint64(
+		len(plasmaIndex.InitialAlternateShardIds),
+	) {
+		t.Fatalf("book keeping mismatch. expected dealer to have %v shards but has %v",
+			len(plasmaIndex.AlternateShardIds), dealer.nodeToShardCountMap[indexer.NodeUUID])
+	}
+
+	if len(dealer.nodeToSlotMap[indexer.NodeUUID]) == 0 ||
+		dealer.nodeToSlotMap[indexer.NodeUUID][mainAlternateID.GetSlotId()] != mainAlternateID.GetReplicaId() {
+		t.Fatalf(
+			"book keeping mismatch. expected nodeToSlotMap to have %v replicaID but it has (slotMap for node) %v",
+			mainAlternateID.GetReplicaId(),
+			dealer.nodeToSlotMap[indexer.NodeUUID],
+		)
+	}
+
+	// duplicate insert of same index. should not lead to any changes in dealer internal records
+	err = dealer.RecordIndexUsage(plasmaIndex, indexer, true)
+	if err != nil {
+		t.Fatalf("expected index to be recorded but it failed with err %v", err)
+	}
+
+	if len(dealer.slotsMap[mainAlternateID.GetSlotId()]) == 0 ||
+		len(dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()]) == 0 ||
+		dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][mainAlternateID.GetGroupId()] == nil ||
+		dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][backAlternateID.GetGroupId()] == nil {
+		t.Fatalf(
+			"book keeping mismatch in shard dealer. slots map is not correct - %v",
+			dealer.slotsMap[mainAlternateID.GetSlotId()],
+		)
+	}
+	shardContainer = dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][mainAlternateID.GetGroupId()]
+	if len(shardContainer.insts) != 1 {
+		t.Fatalf(
+			"book keeping mismatch in shard container. expected only 1 inst but there are - %v",
+			shardContainer.insts,
+		)
+	}
+	if len(shardContainer.insts[plasmaIndex.InstId]) > 1 {
+		t.Fatalf(
+			"book keeping mismatch in shard container. expected only 1 index usage but there are - %v",
+			shardContainer.insts[plasmaIndex.InstId],
+		)
+	}
+	if shardContainer.insts[plasmaIndex.InstId][0] != plasmaIndex {
+		t.Fatalf("book keeping mismatch in shard container. expected index to be %p but it is %p",
+			shardContainer.insts[plasmaIndex.InstId][0], plasmaIndex)
+	}
+	if shardContainer.totalPartitions != uint64(plasmaIndex.Instance.Defn.NumPartitions)+1 {
+		t.Fatalf(
+			"book keeping mismatch is shard container. expected %v partitions but there are %v",
+			plasmaIndex.Instance.Defn.NumPartitions,
+			shardContainer.totalPartitions,
+		)
+	}
+	if len(dealer.partnSlots[plasmaIndex.DefnId]) == 0 ||
+		dealer.partnSlots[plasmaIndex.DefnId][plasmaIndex.PartnId] != mainAlternateID.GetSlotId() {
+		t.Fatalf(
+			"book keeping mismatch. expected slotID to be %v but it is (partnSlot map for defn) %v",
+			mainAlternateID.GetSlotId(),
+			dealer.partnSlots[plasmaIndex.DefnId],
+		)
+	}
+
+	shardCategory = getIndexCategory(plasmaIndex)
+	if len(dealer.slotsPerCategory[shardCategory]) == 0 ||
+		!dealer.slotsPerCategory[shardCategory][mainAlternateID.GetSlotId()] {
+		t.Fatalf(
+			"book keeping mismatch. expected dealer to have slot in category %v but it has (slotsMap) %v",
+			shardCategory,
+			dealer.slotsPerCategory,
+		)
+	}
+
+	if dealer.nodeToShardCountMap[indexer.NodeUUID] != uint64(
+		len(plasmaIndex.InitialAlternateShardIds),
+	) {
+		t.Fatalf("book keeping mismatch. expected dealer to have %v shards but has %v",
+			len(plasmaIndex.AlternateShardIds), dealer.nodeToShardCountMap[indexer.NodeUUID])
+	}
+
+	if len(dealer.nodeToSlotMap[indexer.NodeUUID]) == 0 ||
+		dealer.nodeToSlotMap[indexer.NodeUUID][mainAlternateID.GetSlotId()] != mainAlternateID.GetReplicaId() {
+		t.Fatalf(
+			"book keeping mismatch. expected nodeToSlotMap to have %v replicaID but it has (slotMap for node) %v",
+			mainAlternateID.GetReplicaId(),
+			dealer.nodeToSlotMap[indexer.NodeUUID],
+		)
+	}
+
+	var oldPlasmaIndex = plasmaIndex
+	plasmaIndex = createDummyIndexUsage(2, false, false, false, false)
+	mainAlternateID.SetSlotId(2)
+	backAlternateID.SetSlotId(2)
+
+	alternateShardIDs = []string{mainAlternateID.String(), backAlternateID.String()}
+	plasmaIndex.AlternateShardIds = alternateShardIDs
+
+	indexer.Indexes = append(indexer.Indexes, plasmaIndex)
+
+	err = dealer.RecordIndexUsage(plasmaIndex, indexer, false)
+	if err != nil {
+		t.Fatalf("expected index to be recorded but it failed with err %v", err)
+	}
+
+	if len(dealer.slotsMap[mainAlternateID.GetSlotId()]) == 0 ||
+		len(dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()]) == 0 ||
+		dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][mainAlternateID.GetGroupId()] == nil ||
+		dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][backAlternateID.GetGroupId()] == nil {
+		t.Fatalf(
+			"book keeping mismatch in shard dealer. slots map is not correct - %v",
+			dealer.slotsMap[mainAlternateID.GetSlotId()],
+		)
+	}
+	shardContainer = dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][mainAlternateID.GetGroupId()]
+	if len(shardContainer.insts) != 1 {
+		t.Fatalf("book keeping mismatch in shard container. expected 1 inst but there are - %v",
+			shardContainer.insts)
+	}
+	if len(shardContainer.insts[plasmaIndex.InstId]) > 1 {
+		t.Fatalf(
+			"book keeping mismatch in shard container. expected only 1 index usage but there are - %v",
+			shardContainer.insts[plasmaIndex.InstId],
+		)
+	}
+	if shardContainer.insts[plasmaIndex.InstId][0] != plasmaIndex {
+		t.Fatalf("book keeping mismatch in shard container. expected index to be %p but it is %p",
+			shardContainer.insts[plasmaIndex.InstId][0], plasmaIndex)
+	}
+	if shardContainer.totalPartitions != uint64(plasmaIndex.Instance.Defn.NumPartitions)+1 {
+		t.Fatalf(
+			"book keeping mismatch is shard container. expected %v partitions but there are %v",
+			plasmaIndex.Instance.Defn.NumPartitions,
+			shardContainer.totalPartitions,
+		)
+	}
+	if len(dealer.partnSlots[plasmaIndex.DefnId]) == 0 ||
+		dealer.partnSlots[plasmaIndex.DefnId][plasmaIndex.PartnId] != mainAlternateID.GetSlotId() {
+		t.Fatalf(
+			"book keeping mismatch. expected slotID to be %v but it is (partnSlot map for defn) %v",
+			mainAlternateID.GetSlotId(),
+			dealer.partnSlots[plasmaIndex.DefnId],
+		)
+	}
+
+	shardCategory = getIndexCategory(plasmaIndex)
+	if len(dealer.slotsPerCategory[shardCategory]) == 0 ||
+		!dealer.slotsPerCategory[shardCategory][mainAlternateID.GetSlotId()] {
+		t.Fatalf(
+			"book keeping mismatch. expected dealer to have slot in category %v but it has (slotsMap) %v",
+			shardCategory,
+			dealer.slotsPerCategory,
+		)
+	}
+
+	if int(
+		dealer.nodeToShardCountMap[indexer.NodeUUID],
+	) != len(
+		plasmaIndex.AlternateShardIds,
+	)+len(
+		oldPlasmaIndex.InitialAlternateShardIds,
+	) {
+		t.Fatalf(
+			"book keeping mismatch. expected dealer to have %v shards but has %v",
+			len(
+				plasmaIndex.AlternateShardIds,
+			)+len(
+				oldPlasmaIndex.InitialAlternateShardIds,
+			),
+			dealer.nodeToShardCountMap[indexer.NodeUUID],
+		)
+	}
+
+	if len(dealer.nodeToSlotMap[indexer.NodeUUID]) == 0 ||
+		dealer.nodeToSlotMap[indexer.NodeUUID][mainAlternateID.GetSlotId()] != mainAlternateID.GetReplicaId() {
+		t.Fatalf(
+			"book keeping mismatch. expected nodeToSlotMap to have %v replicaID but it has (slotMap for node) %v",
+			mainAlternateID.GetReplicaId(),
+			dealer.nodeToSlotMap[indexer.NodeUUID],
+		)
+	}
+
+	// duplicate insert of same index. should not lead to any changes in dealer internal records
+	err = dealer.RecordIndexUsage(plasmaIndex, indexer, false)
+	if err != nil {
+		t.Fatalf("expected index to be recorded but it failed with err %v", err)
+	}
+
+	if len(dealer.slotsMap[mainAlternateID.GetSlotId()]) == 0 ||
+		len(dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()]) == 0 ||
+		dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][mainAlternateID.GetGroupId()] == nil ||
+		dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][backAlternateID.GetGroupId()] == nil {
+		t.Fatalf(
+			"book keeping mismatch in shard dealer. slots map is not correct - %v",
+			dealer.slotsMap[mainAlternateID.GetSlotId()],
+		)
+	}
+	shardContainer = dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][mainAlternateID.GetGroupId()]
+	if len(shardContainer.insts) != 1 {
+		t.Fatalf(
+			"book keeping mismatch in shard container. expected only 1 inst but there are - %v",
+			shardContainer.insts,
+		)
+	}
+	if len(shardContainer.insts[plasmaIndex.InstId]) > 1 {
+		t.Fatalf(
+			"book keeping mismatch in shard container. expected only 1 index usage but there are - %v",
+			shardContainer.insts[plasmaIndex.InstId],
+		)
+	}
+	if shardContainer.insts[plasmaIndex.InstId][0] != plasmaIndex {
+		t.Fatalf("book keeping mismatch in shard container. expected index to be %p but it is %p",
+			shardContainer.insts[plasmaIndex.InstId][0], plasmaIndex)
+	}
+	if shardContainer.totalPartitions != uint64(plasmaIndex.Instance.Defn.NumPartitions)+1 {
+		t.Fatalf(
+			"book keeping mismatch is shard container. expected %v partitions but there are %v",
+			plasmaIndex.Instance.Defn.NumPartitions,
+			shardContainer.totalPartitions,
+		)
+	}
+	if len(dealer.partnSlots[plasmaIndex.DefnId]) == 0 ||
+		dealer.partnSlots[plasmaIndex.DefnId][plasmaIndex.PartnId] != mainAlternateID.GetSlotId() {
+		t.Fatalf(
+			"book keeping mismatch. expected slotID to be %v but it is (partnSlot map for defn) %v",
+			mainAlternateID.GetSlotId(),
+			dealer.partnSlots[plasmaIndex.DefnId],
+		)
+	}
+
+	shardCategory = getIndexCategory(plasmaIndex)
+	if len(dealer.slotsPerCategory[shardCategory]) == 0 ||
+		!dealer.slotsPerCategory[shardCategory][mainAlternateID.GetSlotId()] {
+		t.Fatalf(
+			"book keeping mismatch. expected dealer to have slot in category %v but it has (slotsMap) %v",
+			shardCategory,
+			dealer.slotsPerCategory,
+		)
+	}
+
+	if int(
+		dealer.nodeToShardCountMap[indexer.NodeUUID],
+	) != len(
+		plasmaIndex.AlternateShardIds,
+	)+len(
+		oldPlasmaIndex.InitialAlternateShardIds,
+	) {
+		t.Fatalf(
+			"book keeping mismatch. expected dealer to have %v shards but has %v",
+			len(
+				plasmaIndex.AlternateShardIds,
+			)+len(
+				oldPlasmaIndex.InitialAlternateShardIds,
+			),
+			dealer.nodeToShardCountMap[indexer.NodeUUID],
+		)
+	}
+
+	if len(dealer.nodeToSlotMap[indexer.NodeUUID]) == 0 ||
+		dealer.nodeToSlotMap[indexer.NodeUUID][mainAlternateID.GetSlotId()] != mainAlternateID.GetReplicaId() {
+		t.Fatalf(
+			"book keeping mismatch. expected nodeToSlotMap to have %v replicaID but it has (slotMap for node) %v",
+			mainAlternateID.GetReplicaId(),
+			dealer.nodeToSlotMap[indexer.NodeUUID],
+		)
+	}
+
+}
+
 // TODO: add tests for cluster level validation of dealer
 // func validateShardDealerInternals(*ShardDealer, []*IndexerNode) error
