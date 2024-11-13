@@ -1657,7 +1657,7 @@ func (mdb *bhiveSlice) cmpRPMeta(a, b []byte) int {
 	return int(av - bv)
 }
 
-func (mdb *bhiveSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
+func (mdb *bhiveSlice) OpenSnapshot(info SnapshotInfo, logOncePerBucket *sync.Once) (Snapshot, error) {
 	if mdb.CheckCmdChStopped() {
 		return nil, common.ErrSliceClosed
 	}
@@ -1886,7 +1886,7 @@ func (mdb *bhiveSlice) cleanupOldRecoveryPoints(sinfo *bhiveSnapshotInfo) {
 		seqTs = NewTimestamp(mdb.numVbuckets)
 		for i := 0; i < MAX_GETSEQS_RETRIES; i++ {
 
-			seqnos, err := common.BucketMinSeqnos(mdb.clusterAddr, "default", mdb.idxDefn.Bucket)
+			seqnos, err := common.BucketMinSeqnos(mdb.clusterAddr, "default", mdb.idxDefn.Bucket, false)
 			if err != nil {
 				logging.Errorf("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 					"Error collecting cluster seqnos %v",

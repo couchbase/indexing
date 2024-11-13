@@ -637,7 +637,7 @@ func (r *vbSeqnosReader) processMinSeqAndItemCount() {
 		switch req.(type) {
 		case *vbMinSeqnosRequest:
 			sreq := req.(*vbMinSeqnosRequest)
-			seqnos, err := FetchMinSeqnos(r.kvfeeds, sreq.cid, sreq.bucketLevel, r.bucket)
+			seqnos, err := FetchMinSeqnos(r.kvfeeds, sreq.cid, sreq.bucketLevel, r.bucket, sreq.debugLogs)
 			response := &vbSeqnosResponse{
 				seqnos: seqnos,
 				err:    err,
@@ -980,7 +980,7 @@ func GetSeqnos(cluster, pool, bucket, cid string) (l_seqnos []uint64, err error)
 	return BucketSeqnos(cluster, pool, bucket)
 }
 
-func GetMinSeqnos(cluster, pool, bucket, cid string) (l_seqnos []uint64, err error) {
+func GetMinSeqnos(cluster, pool, bucket, cid string, debugLogs bool) (l_seqnos []uint64, err error) {
 
 	if cid != DEFAULT_COLLECTION_ID {
 		return CollectionMinSeqnos(cluster, pool, bucket, cid)
@@ -990,7 +990,7 @@ func GetMinSeqnos(cluster, pool, bucket, cid string) (l_seqnos []uint64, err err
 			return CollectionMinSeqnos(cluster, pool, bucket, cid)
 		}
 	}
-	return BucketMinSeqnos(cluster, pool, bucket)
+	return BucketMinSeqnos(cluster, pool, bucket, debugLogs)
 }
 
 func ResetBucketStats() error {
@@ -1355,6 +1355,7 @@ type vbMinSeqnosRequest struct {
 	bucketLevel bool
 	respCh      chan *vbSeqnosResponse
 	bucketName  string
+	debugLogs   bool
 }
 
 func (req *vbMinSeqnosRequest) Reply(response *vbSeqnosResponse) {
@@ -1375,7 +1376,7 @@ func (req *vbMinSeqnosRequest) Response() ([]uint64, error) {
 // in both the cases if the call is retried it should get fixed, provided
 // a valid bucket exists.
 // This method fetches Bucket level min seqnos
-func BucketMinSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error) {
+func BucketMinSeqnos(cluster, pooln, bucketn string, debugLogs bool) (l_seqnos []uint64, err error) {
 	// any type of error will cleanup the bucket and its kvfeeds.
 	defer func() {
 		if err != nil {
@@ -1410,7 +1411,7 @@ func BucketMinSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err err
 		return nil, err
 	}
 
-	l_seqnos, err = reader.GetBucketMinSeqnos()
+	l_seqnos, err = reader.GetBucketMinSeqnos(debugLogs)
 	return
 }
 
@@ -1501,7 +1502,7 @@ func CollectionMinSeqnos(cluster, pooln, bucketn string, cid string) (l_seqnos [
 	return
 }
 
-func (r *vbSeqnosReader) GetBucketMinSeqnos() (seqs []uint64, err error) {
+func (r *vbSeqnosReader) GetBucketMinSeqnos(debugLogs bool) (seqs []uint64, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = errConnClosed
@@ -1512,6 +1513,7 @@ func (r *vbSeqnosReader) GetBucketMinSeqnos() (seqs []uint64, err error) {
 		cid:         BUCKET_ID,
 		bucketLevel: true,
 		respCh:      make(chan *vbSeqnosResponse, 1),
+		debugLogs:   debugLogs,
 	}
 
 	r.requestCh <- req
@@ -1555,7 +1557,7 @@ func (r *vbSeqnosReader) GetCollectionItemCount(cid string) (itemCount uint64, e
 }
 
 func FetchMinSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool,
-	bucketName string) (l_seqnos []uint64, err error) {
+	bucketName string, debugLogs bool) (l_seqnos []uint64, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Return error as callers take care of retry.
@@ -1631,6 +1633,12 @@ func FetchMinSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool,
 			conn := kvfeeds[kvaddr].mc
 			logging.Errorf("feed.FetchMinSeqnos(): %v from node: %v\n", err, conn.GetRemoteAddr())
 			return nil, err
+		}
+
+		if debugLogs {
+			conn := kvfeeds[kvaddr].mc
+			logging.Infof("feed.FetchMinSeqnos(): Got seqnos: %v for bucket: %v from node: %v",
+				kv_seqnos, bucketName, conn.GetRemoteAddr())
 		}
 
 		for vbno, seqno := range kv_seqnos {

@@ -444,15 +444,16 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 	s.assertOnNonAlignedDiskCommit(streamId, keyspaceId, tsVbuuid_copy)
 
+	var logOncePerBucket sync.Once
 	if snapType == common.FORCE_COMMIT_MERGE {
 		//response is sent on supvCmdch in case of FORCE_COMMIT_MERGE
 		s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
 			indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats,
-			flushWasAborted, hasAllSB, s.supvCmdch)
+			flushWasAborted, hasAllSB, s.supvCmdch, &logOncePerBucket)
 	} else {
 		go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
 			indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats,
-			flushWasAborted, hasAllSB, s.supvRespch)
+			flushWasAborted, hasAllSB, s.supvRespch, &logOncePerBucket)
 	}
 
 }
@@ -461,7 +462,8 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	instIdList []common.IndexInstId, instsPerWorker [][]common.IndexInstId,
-	stats *IndexerStats, flushWasAborted bool, hasAllSB bool, respch MsgChannel) {
+	stats *IndexerStats, flushWasAborted bool, hasAllSB bool, respch MsgChannel,
+	logOncePerBucket *sync.Once) {
 
 	startTime := time.Now().UnixNano()
 	var needsCommit bool
@@ -482,7 +484,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 				s.createSnapshotForIndex(streamId, keyspaceId, indexInstMap,
 					indexPartnMap, indexSnapMap, idxInstId, tsVbuuid,
 					stats, hasAllSB, flushWasAborted, needsCommit, forceCommit,
-					&wg, startTime)
+					&wg, startTime, logOncePerBucket)
 			}
 		}(instListPerWorker)
 	}
@@ -514,7 +516,8 @@ func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 	indexPartnMap IndexPartnMap, indexSnapMap IndexSnapMap,
 	idxInstId common.IndexInstId, tsVbuuid *common.TsVbuuid, stats *IndexerStats,
 	hasAllSB bool, flushWasAborted bool, needsCommit bool,
-	forceCommit bool, wg *sync.WaitGroup, startTime int64) {
+	forceCommit bool, wg *sync.WaitGroup, startTime int64,
+    logOncePerBucket *sync.Once) {
 
 	idxInst := indexInstMap[idxInstId]
 	//process only if index belongs to the flushed keyspaceId and stream
@@ -630,7 +633,7 @@ func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 				hasNewSnapshot = true
 
 				snapOpenStart := time.Now()
-				if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
+				if newSnapshot, err = slice.OpenSnapshot(info, logOncePerBucket); err != nil {
 					isSnapCreated = false
 					if err != common.ErrSliceClosed {
 						logging.Errorf("StorageMgr::handleCreateSnapshot Error Creating Snapshot "+
@@ -2369,7 +2372,7 @@ func (s *storageMgr) openSnapshot(idxInstId common.IndexInstId, partnInst Partit
 		snapFound = true
 		logging.Infof("StorageMgr::openSnapshot IndexInst:%v Partition:%v Attempting to open snapshot (%v)",
 			idxInstId, pid, snapInfo)
-		usableSnapshot, err := slice.OpenSnapshot(snapInfo)
+		usableSnapshot, err := slice.OpenSnapshot(snapInfo, nil)
 		if err != nil {
 			if err == errStorageCorrupted {
 				// Slice has already cleaned up the snapshot files. Try with older snapshot.
