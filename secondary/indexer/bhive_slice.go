@@ -2199,6 +2199,10 @@ func (mdb *bhiveSlice) resetStores(initBuild bool) error {
 	return nil
 }
 
+func (mdb *bhiveSlice) cleanupWritersOnClose() {
+	mdb.freeAllWriters()
+}
+
 func (mdb *bhiveSlice) resetStats() {
 
 	mdb.idxStats.itemsCount.Set(0)
@@ -2433,6 +2437,10 @@ func (mdb *bhiveSlice) Compact(abortTime time.Time, minFrag int) error {
 func (mdb *bhiveSlice) Close() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
+
+	// Stop consumer of cmdCh - this will return after the current in process
+	// mutation completes and consumer loop is terminated
+	mdb.cleanupWritersOnClose()
 
 	// Stop producer of cmdCh - if producer is blocked on cmdCh it will by
 	// pass and quit processing that mutation. Any mutation thereafter will
