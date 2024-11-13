@@ -803,6 +803,14 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 	bhiveCreateCollection := "CREATE VECTOR INDEX `%s` ON `%s`.`%s`.`%s`(%s)"
 	where := " WHERE %s"
 	partition := " PARTITION BY hash(%s)"
+	include := " INCLUDE(%v)"
+
+	getIncludeStmt := func() string {
+		if len(def.Include) > 0 {
+			return fmt.Sprintf(include, strings.Join(def.Include, ","))
+		}
+		return ""
+	}
 
 	getPartnStmt := func() string {
 		if len(def.PartitionKeys) > 0 {
@@ -848,6 +856,8 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 				stmt = fmt.Sprintf(secCreate, def.Name, def.Bucket, exprs)
 			}
 		}
+
+		stmt += getIncludeStmt()
 
 		stmt += getPartnStmt()
 
