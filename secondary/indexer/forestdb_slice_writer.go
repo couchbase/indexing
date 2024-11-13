@@ -969,7 +969,7 @@ func (fdb *fdbSlice) checkFatalDbError(err error) {
 // Creates an open snapshot handle from snapshot info
 // Snapshot info is obtained from NewSnapshot() or GetSnapshots() API
 // Returns error if snapshot handle cannot be created.
-func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
+func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo, logOncePerBucket *sync.Once) (Snapshot, error) {
 	snapInfo := info.(*fdbSnapshotInfo)
 
 	var s *fdbSnapshot

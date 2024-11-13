@@ -9,6 +9,7 @@
 package indexer
 
 import (
+	"sync"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
@@ -65,7 +66,7 @@ type IndexWriter interface {
 	GetSnapshots() ([]SnapshotInfo, error)
 
 	// Create open snapshot handle
-	OpenSnapshot(SnapshotInfo) (Snapshot, error)
+	OpenSnapshot(SnapshotInfo, *sync.Once) (Snapshot, error)
 
 	//Rollback to given snapshot
 	Rollback(s SnapshotInfo) error
