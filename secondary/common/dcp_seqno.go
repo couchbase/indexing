@@ -1040,6 +1040,9 @@ func FetchItemCount(kvfeeds map[string]*kvConn, cid string) (itemCount uint64, e
 		go func(kvaddress string, feed *kvConn) {
 			defer wg.Done()
 
+			feed.mc.SetMcdConnectionDeadline()
+			defer feed.mc.ResetMcdConnectionDeadline()
+
 			var cnt int64
 			statsMap, err := feed.mc.StatsMap(key)
 			if len(statsMap) > 0 {
