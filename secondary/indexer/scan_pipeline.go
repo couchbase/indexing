@@ -891,23 +891,19 @@ func projectAllKeys(compositekeys [][]byte, key, include []byte, buf []byte, r *
 func projectSecKeysAndInclude(compositekeys [][]byte, key, include, buf []byte, includeBuf []byte, r *ScanRequest, cktmp, includecktmp [][]byte) ([]byte, error) {
 	var err error
 
-	if r.Indexprojection.entryKeysEmpty {
-		if r.isBhiveScan && r.ProjectVectorDist() == false {
-			return key, nil
-		} else {
-			entry := secondaryIndexEntry(key)
-			buf = append(buf, key[entry.lenKey():]...)
-		}
-		return buf, nil
+	secKeyExplode := true
+	entry := secondaryIndexEntry(key)
+	if r.isBhiveScan && r.ProjectVectorDist() == false {
+		secKeyExplode = false
 	}
 
 	var keysToJoin [][]byte
-	entry := secondaryIndexEntry(key)
+
 	if r.Indexprojection.projectSecKeys == false { // project all secondary keys
 		secKey := entry[1 : entry.lenKey()-1] // strip first and last symbol
 		keysToJoin = append(keysToJoin, secKey)
-	} else { // project specific keys as per explodePositions
-		if compositekeys == nil {
+	} else { // project specific keys as per explodePositions unless projection is disabled for secKeys
+		if compositekeys == nil && secKeyExplode {
 			compositekeys, _, err = jsonEncoder.ExplodeArray3(key, buf, cktmp, nil,
 				r.explodePositions, nil, r.explodeUpto)
 			if err != nil {
@@ -962,7 +958,13 @@ func projectSecKeysAndInclude(compositekeys [][]byte, key, include, buf []byte, 
 		return nil, err
 	}
 
-	buf = append(buf, key[entry.lenKey():]...)
+	if !secKeyExplode {
+		// If for BHIVE scan, distance is not projected, key would be docid as
+		// distance is not substituted. Hence, use key directly
+		buf = append(buf, key...)
+	} else {
+		buf = append(buf, key[entry.lenKey():]...)
+	}
 	return buf, nil
 }
 
