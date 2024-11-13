@@ -501,7 +501,7 @@ loop:
 				break loop
 			}
 		} else if d.p.req.isBhiveScan {
-			if d.p.req.ProjectVectorDist() {
+			if d.p.req.projectVectorDist {
 				sk, docid, err = siSplitEntryCJson(row)
 				if err != nil {
 					d.CloseWithError(err)
@@ -800,7 +800,7 @@ func projectKeys(compositekeys [][]byte, key, buf []byte, r *ScanRequest, cktmp 
 	var err error
 
 	if r.Indexprojection.entryKeysEmpty {
-		if r.isBhiveScan && r.ProjectVectorDist() == false {
+		if r.isBhiveScan && r.projectVectorDist == false {
 			return key, nil
 		} else {
 			entry := secondaryIndexEntry(key)
@@ -893,7 +893,7 @@ func projectSecKeysAndInclude(compositekeys [][]byte, key, include, buf []byte, 
 
 	secKeyExplode := true
 	entry := secondaryIndexEntry(key)
-	if r.isBhiveScan && r.ProjectVectorDist() == false {
+	if r.isBhiveScan && r.projectVectorDist == false {
 		secKeyExplode = false
 	}
 

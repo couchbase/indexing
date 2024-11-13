@@ -137,6 +137,7 @@ type ScanRequest struct {
 	vectorScans           map[common.PartitionId]map[int64][]Scan
 	parallelCentroidScans int
 	indexOrder            *IndexKeyOrder
+	projectVectorDist     bool // set to true if vector distance has to be projected. false otherwise
 
 	// re-ranking support for BHIVE vector indexes
 	enableReranking bool // set to 'true' if re-ranking is enabled
@@ -544,6 +545,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 				return
 			}
 
+			r.projectVectorDist = r.ProjectVectorDist()
 			r.setRerankLimits()
 			protoIndexOrder := req.GetIndexOrder()
 			if r.indexOrder, err = validateIndexOrder(protoIndexOrder,

@@ -1242,7 +1242,7 @@ func (fio *MergeOperator) Collector() {
 	var ok bool
 	var err error
 
-	projectDistance := fio.req.ProjectVectorDist()
+	projectDistance := fio.req.projectVectorDist
 
 	for {
 		row, ok = <-fio.recvCh
@@ -1445,7 +1445,7 @@ func (fio *MergeOperator) rerankOnHeap() {
 		return allRows[i].dist < allRows[j].dist
 	})
 
-	projectDistance := fio.req.ProjectVectorDist()
+	projectDistance := fio.req.projectVectorDist
 	// write the top-k items to next phase in the pipeline. "k" is
 	// the limit on the number of rows that are requested in query
 	for i := int64(0); i < min(fio.req.Limit, int64(len(allRows))); i++ {
