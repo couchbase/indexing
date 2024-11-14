@@ -817,6 +817,10 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 				mut.centroidPos = nil
 			}
 
+			if kv.GetIncludeColumns() != nil && kv.GetIncludeColumns()[i] != nil {
+				mut.includeColumn = kv.GetIncludeColumns()[i]
+			}
+
 			// For backward compatibilty, projector may not send partnkey pre-5.1.
 			if len(kv.GetPartnkeys()) != 0 && len(kv.GetPartnkeys()[i]) != 0 {
 				mut.partnkey = append(mut.partnkey, kv.GetPartnkeys()[i]...)

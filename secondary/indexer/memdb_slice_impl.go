@@ -47,12 +47,13 @@ const (
 const tmpDirName = ".tmp"
 
 type indexMutation struct {
-	op          int
-	key         []byte
-	docid       []byte
-	vecs        [][]float32
-	centroidPos []int32
-	meta        *MutationMeta
+	op            int
+	key           []byte
+	docid         []byte
+	includeColumn []byte
+	vecs          [][]float32
+	centroidPos   []int32
+	meta          *MutationMeta
 }
 
 func docIdFromEntryBytes(e []byte) []byte {
@@ -400,7 +401,8 @@ func (mdb *memdbSlice) DecrRef() {
 	}
 }
 
-func (mdb *memdbSlice) Insert(key []byte, docid []byte, vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
+func (mdb *memdbSlice) Insert(key []byte, docid []byte, includeColumn []byte,
+	vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
 	mut := &indexMutation{
 		op:    opUpdate,
 		key:   key,

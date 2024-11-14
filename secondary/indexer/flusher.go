@@ -544,7 +544,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 
 	if partnInst, ok := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(mut.key)
-		if err := slice.Insert(mut.key, docid, mut.vectors, mut.centroidPos, meta); err != nil {
+		if err := slice.Insert(mut.key, docid, mut.includeColumn, mut.vectors, mut.centroidPos, meta); err != nil {
 			logging.Errorf("Flusher::processUpsert Error indexing Key: %s "+
 				"docid: %s in Slice: %v. Error: %v. Skipped.",
 				logging.TagUD(mut.key), logging.TagStrUD(docid), slice.Id(), err)

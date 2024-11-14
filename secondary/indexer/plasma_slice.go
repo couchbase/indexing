@@ -961,7 +961,8 @@ func (mdb *plasmaSlice) DecrRef() {
 	}
 }
 
-func (mdb *plasmaSlice) Insert(key []byte, docid []byte, vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
+func (mdb *plasmaSlice) Insert(key []byte, docid []byte, includeColumn []byte,
+	vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
 	if mdb.CheckCmdChStopped() {
 		return mdb.fatalDbErr
 	}

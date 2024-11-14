@@ -132,7 +132,7 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult, scanRang
 		requestID := os.Args[0] + uuid
 		err = client.Scan6(spec.DefnId, requestID, scanRange.GetScans(spec), false,
 			false, spec.IndexProjection, 0, spec.Limit, spec.GroupAggr,
-			nil, cons, nil, callb, scanParams, spec.IndexVector)
+			nil, nil, "", cons, nil, callb, scanParams, spec.IndexVector)
 	}
 
 	if err != nil {

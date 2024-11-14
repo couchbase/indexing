@@ -1031,7 +1031,7 @@ func (c *GsiScanClient) Scan(
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
 	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration,
-	indexOrderForVector *IndexKeyOrder) (error, bool) {
+	indexOrderForVector *IndexKeyOrder, indexKeyNames []string, inlineFilter string) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -1187,6 +1187,8 @@ func (c *GsiScanClient) Scan(
 		IndexVector:      protoIndexVector,
 		ReqTimeout:       proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
 		IndexOrder:       protoIndexKeyOrder,
+		IndexKeyNames:    indexKeyNames,
+		InlineFilter:     proto.String(inlineFilter),
 	}
 	if tsvector != nil {
 		req.TsVector = protobuf.NewTsConsistency(
