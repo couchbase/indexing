@@ -217,7 +217,7 @@ func createSnapshotFunc(ctx smat.Context) (next smat.State, err error) {
 	}
 	fmt.Print(info, "\n")
 
-	c.snap, err = c.slice.OpenSnapshot(info)
+	c.snap, err = c.slice.OpenSnapshot(info, nil)
 	if err != nil {
 		return nil, err
 	}

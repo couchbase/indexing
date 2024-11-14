@@ -590,7 +590,7 @@ func createSnapshot1(c *Context) {
 	common.CrashOnError(err1)
 
 	// Open snapshot
-	snap, err5 := c.memDbSlice.OpenSnapshot(info)
+	snap, err5 := c.memDbSlice.OpenSnapshot(info, nil)
 	if len(c.memDbSnaps) == 2 {
 		c.memDbSnaps[0].Close()
 		c.memDbSnaps = []indexer.Snapshot{c.memDbSnaps[1]}
@@ -598,7 +598,7 @@ func createSnapshot1(c *Context) {
 	common.CrashOnError(err5)
 	c.memDbSnaps = append(c.memDbSnaps, snap)
 
-	snap, err5 = c.plasmaSlice.OpenSnapshot(info1)
+	snap, err5 = c.plasmaSlice.OpenSnapshot(info1, nil)
 	if len(c.plasmaSnaps) == 2 {
 		c.plasmaSnaps[0].Close()
 		c.plasmaSnaps = []indexer.Snapshot{c.plasmaSnaps[1]}

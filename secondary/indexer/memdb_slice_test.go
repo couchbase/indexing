@@ -102,7 +102,7 @@ func runFlusher(interval time.Duration, streams []chan *ientry, slice Slice, fin
 		if snap != nil {
 			snap.Close()
 		}
-		snap, err = slice.OpenSnapshot(info)
+		snap, err = slice.OpenSnapshot(info, nil)
 		common.CrashOnError(err)
 
 		select {
