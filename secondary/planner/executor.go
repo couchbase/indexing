@@ -1306,7 +1306,8 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			token.SourceHost = ""
 			token.TransferMode = common.TokenTransferModeCopy
 
-			if index.siblingIndex != nil && index.siblingIndex.initialNode != nil {
+			if index.IsShardProxy && index.siblingIndex != nil &&
+				index.siblingIndex.initialNode != nil {
 				// shard repair
 				token.SourceId = index.siblingIndex.initialNode.NodeUUID
 				token.SourceHost = index.siblingIndex.initialNode.NodeId
