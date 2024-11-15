@@ -1,8 +1,11 @@
+//go:build ignore
 // +build ignore
 
 package indexer
 
 import (
+	"sync"
+
 	c "github.com/couchbase/indexing/secondary/common"
 )
 
@@ -170,7 +173,7 @@ func (s *mockSlice) NewSnapshot(ts *c.TsVbuuid, commit bool) (SnapshotInfo, erro
 	return &mockSnapshotInfo{}, s.err
 }
 
-func (s *mockSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
+func (s *mockSlice) OpenSnapshot(info SnapshotInfo, logOncePerBucket *sync.Once) (Snapshot, error) {
 	return s.snap, s.err
 }
 

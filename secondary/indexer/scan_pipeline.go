@@ -866,6 +866,106 @@ func projectLeadingKey(compositekeys [][]byte, key []byte, buf *[]byte) ([]byte,
 	return *buf, nil
 }
 
+func projectAllKeys(compositekeys [][]byte, key, include []byte, buf []byte, r *ScanRequest) ([]byte, error) {
+	var err error
+
+	entry := secondaryIndexEntry(key)
+	docid := key[entry.lenKey():]
+	secKey := entry[:entry.lenKey()]
+
+	var keysToJoin [][]byte
+	keysToJoin = append(keysToJoin, secKey[1:len(secKey)-1])   // Strip of first and last symbol
+	keysToJoin = append(keysToJoin, include[1:len(include)-1]) // Strip of first and last symbol
+
+	// Note: Reusing the same buf used for Explode in JoinArray as well
+	// This is because we always project in order and hence avoiding two
+	// different buffers for Explode and Join
+	if buf, err = jsonEncoder.JoinArray(keysToJoin, buf); err != nil {
+		return nil, err
+	}
+
+	buf = append(buf, docid...)
+	return buf, nil
+}
+
+func projectSecKeysAndInclude(compositekeys [][]byte, key, include, buf []byte, includeBuf []byte, r *ScanRequest, cktmp, includecktmp [][]byte) ([]byte, error) {
+	var err error
+
+	if r.Indexprojection.entryKeysEmpty {
+		if r.isBhiveScan && r.ProjectVectorDist() == false {
+			return key, nil
+		} else {
+			entry := secondaryIndexEntry(key)
+			buf = append(buf, key[entry.lenKey():]...)
+		}
+		return buf, nil
+	}
+
+	var keysToJoin [][]byte
+	entry := secondaryIndexEntry(key)
+	if r.Indexprojection.projectSecKeys == false { // project all secondary keys
+		secKey := entry[1 : entry.lenKey()-1] // strip first and last symbol
+		keysToJoin = append(keysToJoin, secKey)
+	} else { // project specific keys as per explodePositions
+		if compositekeys == nil {
+			compositekeys, _, err = jsonEncoder.ExplodeArray3(key, buf, cktmp, nil,
+				r.explodePositions, nil, r.explodeUpto)
+			if err != nil {
+				if err == collatejson.ErrorOutputLen {
+					newBuf := make([]byte, 0, len(key)*3)
+					compositekeys, _, err = jsonEncoder.ExplodeArray3(key, newBuf, cktmp, nil,
+						r.explodePositions, nil, r.explodeUpto)
+				}
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		for i, projectKey := range r.Indexprojection.projectionKeys {
+			if projectKey {
+				keysToJoin = append(keysToJoin, compositekeys[i])
+			}
+		}
+	}
+
+	if r.Indexprojection.projectAllInclude {
+		includeval := include[1 : len(include)-1] // strip the first and last symbol
+		keysToJoin = append(keysToJoin, includeval)
+	} else {
+		var includekeys [][]byte
+
+		includekeys, _, err = jsonEncoder.ExplodeArray3(include, includeBuf, includecktmp, nil,
+			r.Indexprojection.projectIncludeKeys, nil, len(r.IndexInst.Defn.Include))
+		if err != nil {
+			if err == collatejson.ErrorOutputLen {
+				newBuf := make([]byte, 0, len(key)*3)
+				includekeys, _, err = jsonEncoder.ExplodeArray3(include, newBuf, includecktmp, nil,
+					r.Indexprojection.projectIncludeKeys, nil, len(r.IndexInst.Defn.Include))
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for i, projectKey := range r.Indexprojection.projectIncludeKeys {
+			if projectKey {
+				keysToJoin = append(keysToJoin, includekeys[i])
+			}
+		}
+	}
+
+	// Note: Reusing the same buf used for Explode in JoinArray as well
+	// This is because we always project in order and hence avoiding two
+	// different buffers for Explode and Join
+	if buf, err = jsonEncoder.JoinArray(keysToJoin, buf); err != nil {
+		return nil, err
+	}
+
+	buf = append(buf, key[entry.lenKey():]...)
+	return buf, nil
+}
+
 /////////////////////////////////////////////////////////////////////////
 //
 // group by/aggregate implementation

@@ -1009,7 +1009,7 @@ type memdbSnapshot struct {
 // OpenSnapshot creates an open snapshot handle from snapshot info.
 // Snapshot info is obtained from NewSnapshot() or GetSnapshots() API
 // Returns error if snapshot handle cannot be created.
-func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
+func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo, logOncePerBucket *sync.Once) (Snapshot, error) {
 	var err error
 	snapInfo := info.(*memdbSnapshotInfo)
 
@@ -1028,7 +1028,7 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 
 	if s.committed && mdb.hasPersistence {
 		s.info.MainSnap.Open()
-		mdb.doPersistSnapshot(s)
+		mdb.doPersistSnapshot(s, logOncePerBucket)
 	}
 
 	if s.info.MainSnap == nil {
@@ -1069,7 +1069,7 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 // doPersistSnapshot writes a snapshot to disk, including a checksum file, manifests, and
 // snapshot info with a subset of stats. (The checksum only covers the snapshot itself.)
 // Most of the work is done in a separate goroutine running the anonymous function below.
-func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
+func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *sync.Once) {
 	var concurrency int = 1
 
 	if atomic.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
@@ -1163,7 +1163,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 				if err == nil {
 					err = iowrap.Os_Rename(tmpdir, dir)
 					if err == nil {
-						mdb.cleanupOldSnapshotFiles(mdb.maxRollbacks, s.info)
+						mdb.cleanupOldSnapshotFiles(mdb.maxRollbacks, s.info, logOncePerBucket)
 					}
 				}
 			}
@@ -1178,6 +1178,10 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 					" create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, dir, err)
 				iowrap.Os_RemoveAll(tmpdir)
 				iowrap.Os_RemoveAll(dir)
+
+				// Clear the old snapshots in the error case too. In case fetching seqnos did not work in prev iteration
+				// we can cleanup the snapshots in this iteration.
+				mdb.cleanupOldSnapshotFiles(mdb.maxRollbacks, s.info, logOncePerBucket)
 			}
 		}()
 	} else {
@@ -1192,7 +1196,7 @@ func (mdb *memdbSlice) IsPersistanceActive() bool {
 }
 
 // cleanupOldSnapshotFiles deletes old disk snapshots.
-func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotInfo) {
+func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotInfo, logOncePerBucket *sync.Once) {
 
 	var seqTs Timestamp
 
@@ -1201,7 +1205,7 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotIn
 		seqTs = NewTimestamp(mdb.numVbuckets)
 		for i := 0; i < MAX_GETSEQS_RETRIES; i++ {
 
-			seqnos, err := common.BucketMinSeqnos(mdb.clusterAddr, "default", mdb.idxDefn.Bucket)
+			seqnos, err := common.BucketMinSeqnos(mdb.clusterAddr, "default", mdb.idxDefn.Bucket, false)
 			if err != nil {
 				logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 					"Error collecting cluster seqnos %v",
@@ -1228,12 +1232,14 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotIn
 
 	infos, manifests, _ := mdb.getSnapshots()
 	numDiskSnapshots := len(manifests)
+	var snapTs Timestamp
+	var file string
 	if len(manifests) > keepn {
 		for i := 0; i < len(manifests)-keepn; i++ {
-			file := manifests[len(manifests)-i-1]
+			file = manifests[len(manifests)-i-1]
 			snapInfo := infos[len(infos)-i-1]
 			snapTsVbuuid := snapInfo.Timestamp()
-			snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
+			snapTs = getSeqTsFromTsVbuuid(snapTsVbuuid)
 
 			if (seqTs.GreaterThanEqual(snapTs) && //min cluster seqno is greater than snap ts
 				mdb.lastRollbackTs == nil) || //last rollback was successful
@@ -1242,7 +1248,13 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotIn
 				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 					"Removing disk snapshot %v. Num snapshots %v.", mdb.id, mdb.idxInstId,
 					mdb.idxPartnId, dir, len(manifests)-i)
-				iowrap.Os_RemoveAll(dir)
+				err := iowrap.Os_RemoveAll(dir)
+				if err != nil {
+					logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+						"Error: %v while removing disk snapshot %v. Num snapshots %v.", err, mdb.id, mdb.idxInstId,
+						mdb.idxPartnId, dir, len(manifests)-i)
+					continue
+				}
 				numDiskSnapshots--
 			} else {
 				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
@@ -1250,6 +1262,16 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotIn
 					mdb.id, mdb.idxInstId, mdb.idxPartnId, file, len(manifests)-i)
 				break
 			}
+		}
+		// Log timestamp once per bucket when you are keeping more than maxRollbacks
+		if logOncePerBucket != nil && numDiskSnapshots > keepn {
+			logOncePerBucket.Do(func() {
+				common.BucketMinSeqnos(mdb.clusterAddr, "default", mdb.idxDefn.Bucket, true)
+				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Skipped disk snapshot cleanup %v. Num snapshots %v. snapTs: %v seqTs: %v "+
+					"lastRollbackTs: %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, file,
+					numDiskSnapshots, snapTs, seqTs, mdb.lastRollbackTs)
+			})
 		}
 	}
 	mdb.idxStats.numDiskSnapshots.Set(int64(numDiskSnapshots))

@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"sync"
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
@@ -214,7 +215,7 @@ func (ms *mockSlice) NewSnapshot(*c.TsVbuuid, bool) (SnapshotInfo, error) {
 	return nil, nil
 }
 
-func (ms *mockSlice) OpenSnapshot(SnapshotInfo) (Snapshot, error) {
+func (ms *mockSlice) OpenSnapshot(SnapshotInfo, *sync.Once) (Snapshot, error) {
 	if ms.testErr != nil {
 		return nil, ms.testErr
 	}

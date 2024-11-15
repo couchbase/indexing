@@ -47,6 +47,8 @@ type Row struct {
 	mem *allocator
 
 	rowBuf *AtomicRowBuffer //cache for Row objects, only used for vector index
+
+	includeColumn []byte // Unexploded version of include columns
 }
 
 type Queue struct {
@@ -162,7 +164,7 @@ func (b *Queue) Dequeue(row *Row) bool {
 
 			row.copy(&b.buf[b.head])
 
-			b.buf[b.head].freeKeyBuf()
+			b.buf[b.head].freeBuffers()
 			b.head = next
 
 			if atomic.AddInt64(&b.count, -1) == (b.size - 1) {
@@ -227,7 +229,7 @@ func (b *Queue) Close() {
 
 func (b *Queue) Free() {
 	for i := 0; i < int(b.size); i++ {
-		b.buf[i].freeKeyBuf()
+		b.buf[i].freeBuffers()
 	}
 }
 
@@ -330,6 +332,10 @@ func (r *Row) copy(source *Row) {
 	if source.value != nil {
 		r.copyValue(source.value)
 	}
+
+	if source.includeColumn != nil {
+		r.copyInclude(source.includeColumn)
+	}
 }
 
 func (r *Row) copyForBhive(source *Row) {
@@ -339,6 +345,10 @@ func (r *Row) copyForBhive(source *Row) {
 	r.copyKey(source.key)
 	if source.value != nil {
 		r.copyValue(source.value)
+	}
+
+	if source.includeColumn != nil {
+		r.copyInclude(source.includeColumn)
 	}
 
 	r.partnId = source.partnId
@@ -397,6 +407,28 @@ func (r *Row) copyValue(val []byte) {
 	return
 }
 
+func (r *Row) copyInclude(include []byte) {
+	if len(include) == 0 {
+		if r.includeColumn != nil {
+			r.includeColumn = r.includeColumn[:0]
+		}
+		return
+	}
+
+	if r.includeColumn == nil && r.mem != nil {
+		r.initIncludeBuf()
+	}
+
+	if len(include) > cap(r.includeColumn) {
+		r.value = make([]byte, 0, len(include))
+	}
+
+	r.includeColumn = r.includeColumn[:0]
+	r.includeColumn = append(r.includeColumn, include...)
+
+	return
+}
+
 func (r *Row) initKeyBuf() {
 	bufPtr := r.mem.get()
 	r.key = bufPtr[:0]
@@ -407,8 +439,13 @@ func (r *Row) initValBuf() {
 	r.value = bufPtr[:0]
 }
 
-// freeKeyBuf clears key and value buffers
-func (r *Row) freeKeyBuf() {
+func (r *Row) initIncludeBuf() {
+	bufPtr := r.mem.get()
+	r.includeColumn = bufPtr[:0]
+}
+
+// freeBuffers clears key, value and includeColumn buffers
+func (r *Row) freeBuffers() {
 	if r.key != nil {
 		r.mem.put(r.key)
 		r.key = nil
@@ -418,6 +455,11 @@ func (r *Row) freeKeyBuf() {
 		r.mem.put(r.value)
 		r.value = nil
 	}
+
+	if r.includeColumn != nil {
+		r.mem.put(r.includeColumn)
+		r.includeColumn = nil
+	}
 }
 
 func (r *Row) init(mem *allocator) {
@@ -426,7 +468,7 @@ func (r *Row) init(mem *allocator) {
 
 func (r *Row) free() {
 	if r.mem != nil {
-		r.freeKeyBuf()
+		r.freeBuffers()
 	}
 	if r.rowBuf != nil {
 		r.rowBuf.Put(r)

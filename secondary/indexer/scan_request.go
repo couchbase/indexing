@@ -201,6 +201,10 @@ type Projection struct {
 	projectionKeys   []bool
 	entryKeysEmpty   bool
 	projectGroupKeys []projGroup
+
+	projectInclude     bool
+	projectAllInclude  bool
+	projectIncludeKeys []bool
 }
 
 type projGroup struct {
@@ -510,7 +514,9 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		if proj != nil {
 			var localerr error
 			if req.GetGroupAggr() == nil {
-				if r.Indexprojection, localerr = validateIndexProjection(proj, len(r.IndexInst.Defn.SecExprs)); localerr != nil {
+				cklen := len(r.IndexInst.Defn.SecExprs)
+				includelen := len(r.IndexInst.Defn.Include)
+				if r.Indexprojection, localerr = validateIndexProjection(proj, cklen, includelen); localerr != nil {
 					err = localerr
 					return
 				}
@@ -1639,19 +1645,32 @@ func validateIndexOrder(protoIndexOrder *protobuf.IndexKeyOrder, indexDesc []boo
 	return indexOrder, nil
 }
 
-func validateIndexProjection(projection *protobuf.IndexProjection, cklen int) (*Projection, error) {
-	if len(projection.EntryKeys) > cklen {
-		e := errors.New(fmt.Sprintf("Invalid number of Entry Keys %v in IndexProjection", len(projection.EntryKeys)))
+func validateIndexProjection(projection *protobuf.IndexProjection, cklen int, includelen int) (*Projection, error) {
+	if len(projection.EntryKeys) > cklen+includelen {
+		e := errors.New(fmt.Sprintf("Invalid number of Entry Keys %v in IndexProjection. cklen: %v, includelen: %v",
+			len(projection.EntryKeys), cklen, includelen))
 		return nil, e
 	}
 
+	projectInclude := false
+	projectIncludeKeys := make([]bool, includelen)
 	projectionKeys := make([]bool, cklen)
 	for _, position := range projection.EntryKeys {
-		if position >= int64(cklen) || position < 0 {
+		if position < 0 {
+			e := errors.New(fmt.Sprintf("Invalid Entry Key %v in IndexProjection", position))
+			return nil, e
+		} else if position < int64(cklen) {
+			projectionKeys[position] = true
+		} else if position >= int64(cklen) && position < int64(cklen+includelen) {
+			projectInclude = true
+			projectIncludeKeys[position-int64(cklen)] = true
+		} else if position > int64(cklen+includelen) {
+			// position == int64(cklen + includelen) is when meta().id is included in projection
+			// It is a valid case. Hence, only check for position > int64(cklen + includelen)
 			e := errors.New(fmt.Sprintf("Invalid Entry Key %v in IndexProjection", position))
 			return nil, e
 		}
-		projectionKeys[position] = true
+
 	}
 
 	projectAllSecKeys := true
@@ -1661,10 +1680,21 @@ func validateIndexProjection(projection *protobuf.IndexProjection, cklen int) (*
 		}
 	}
 
+	projectAllIncludeKeys := true
+	for _, ip := range projectIncludeKeys {
+		if ip == false {
+			projectAllIncludeKeys = false
+		}
+	}
+
 	indexProjection := &Projection{}
 	indexProjection.projectSecKeys = !projectAllSecKeys
 	indexProjection.projectionKeys = projectionKeys
 	indexProjection.entryKeysEmpty = len(projection.EntryKeys) == 0
+
+	indexProjection.projectInclude = projectInclude
+	indexProjection.projectAllInclude = projectAllIncludeKeys
+	indexProjection.projectIncludeKeys = projectIncludeKeys
 
 	return indexProjection, nil
 }

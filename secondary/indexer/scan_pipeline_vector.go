@@ -16,6 +16,8 @@ import (
 	l "github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/value"
 	n1qlval "github.com/couchbase/query/value"
 )
 
@@ -151,6 +153,13 @@ type ScanWorker struct {
 	dists []float32
 
 	rowBuf *AtomicRowBuffer
+
+	// temporary buffer to process each include column
+	includeColumnBuf     []byte
+	includeColumnExplode []bool
+	includeColumnDecode  []bool
+	includeColumncktemp  [][]byte
+	includeColumndktemp  value.Values
 }
 
 func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- *Row,
@@ -158,15 +167,19 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	senderBatchSize int) *ScanWorker {
 
 	w := &ScanWorker{
-		id:              id,
-		r:               r,
-		workCh:          workCh,
-		outCh:           outCh,
-		stopCh:          stopCh,
-		jobsWg:          wg,
-		errCh:           errCh,
-		senderChSize:    senderChSize,
-		senderBatchSize: senderBatchSize,
+		id:                   id,
+		r:                    r,
+		workCh:               workCh,
+		outCh:                outCh,
+		stopCh:               stopCh,
+		jobsWg:               wg,
+		errCh:                errCh,
+		senderChSize:         senderChSize,
+		senderBatchSize:      senderBatchSize,
+		includeColumnExplode: make([]bool, len(r.IndexInst.Defn.Include)),
+		includeColumnDecode:  make([]bool, len(r.IndexInst.Defn.Include)),
+		includeColumncktemp:  make([][]byte, len(r.IndexInst.Defn.Include)),
+		includeColumndktemp:  make(n1qlval.Values, len(r.IndexInst.Defn.Include)),
 	}
 
 	//init temp buffers
@@ -177,6 +190,14 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	w.codes = make([]byte, 0, senderBatchSize*r.getVectorCodeSize())
 	w.fvecs = make([]float32, senderBatchSize*r.getVectorDim())
 	w.dists = make([]float32, senderBatchSize)
+
+	for i := len(r.IndexInst.Defn.SecExprs); i < len(r.IndexInst.Defn.SecExprs)+len(r.IndexInst.Defn.Include); i++ {
+		index := i - len(r.IndexInst.Defn.SecExprs)
+		if r.indexKeyNames != nil && r.indexKeyNames[i] != "" {
+			w.includeColumnExplode[index] = true
+			w.includeColumnDecode[index] = true
+		}
+	}
 
 	//Use local heap for limit pushdown case. Each scan worker maintains
 	//its own local heap as only limit(topK) number of rows are required to be
@@ -671,9 +692,71 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 		w.itrRow.len = 0
 		w.itrRow.key = nil
 		w.itrRow.value = nil
+		w.itrRow.includeColumn = nil
 	}
 
 	return nil
+}
+
+func resizeIncludeColumnBuf(buf []byte, capacity int) []byte {
+	if cap(buf) < capacity {
+		buf = make([]byte, 0, capacity+64) // Add 32 bytes additional padding
+	}
+	return buf
+}
+
+func (w *ScanWorker) filterIncludeColumn(secKey []byte, includeColumn []byte, isBhive bool) (bool, error) {
+
+	if !isBhive {
+		return false, errors.New("Include column filtering is only supported with BHIVE indexes")
+	}
+
+	// VECTOR_TODO: Try to reuse these values instead of alloacting everytime
+	cv := value.NewScopeValue(make(map[string]interface{}), nil)
+	av := value.NewAnnotatedValue(cv)
+	exprContext := expression.NewIndexContext()
+
+	docId := secKey // For Bhive, secKey is docId
+
+	w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(includeColumn))
+
+	// VECTOR_TODO: No need to explode all experssions. Explode only upto those expressions
+	// that are required in index definition
+	_, explodedIncludeValues, err := jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
+		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, len(w.r.IndexInst.Defn.Include))
+	if err != nil {
+		if err == collatejson.ErrorOutputLen {
+			w.includeColumnBuf = make([]byte, 0, len(includeColumn)*3)
+			_, explodedIncludeValues, err = jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
+				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, len(w.r.IndexInst.Defn.Include))
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+
+	indexDefn := w.r.IndexInst.Defn
+	cklen := len(indexDefn.SecExprs)
+	metalen := len(indexDefn.SecExprs) + len(indexDefn.Include)
+	for i := cklen; i < metalen; i++ {
+		index := i - cklen
+		if w.r.indexKeyNames != nil && w.r.indexKeyNames[i] != "" {
+			av.SetCover(w.r.indexKeyNames[i], explodedIncludeValues[index])
+		}
+	}
+
+	if len(w.r.indexKeyNames) >= metalen && w.r.indexKeyNames[metalen] != "" {
+		av.SetCover(w.r.indexKeyNames[metalen], value.NewValue(string(docId)))
+	}
+
+	evalValue, _, err := w.r.inlineFilterExpr.EvaluateForIndex(av, exprContext)
+	switch evalValue.Actual().(type) {
+	case bool:
+		return evalValue.Actual().(bool), nil
+	default:
+		return false, nil
+	}
+
 }
 
 func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
@@ -696,9 +779,21 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	value = meta
 
 	// The value field will contain both quantized codes and include column fields.
-	// The first "codeSize" bytes contain quantized codes. Hence, retrive only the
-	// quantized code from value till includeColumn filtering is supported in scan pipeline
+	// The first "codeSize" bytes contain quantized codes. Remaining bytes contain
+	// the "includeColumn" value
+	includeColumn := value[codeSize:]
 	value = value[:codeSize]
+
+	if len(includeColumn) > 0 && w.r.inlineFilter != "" {
+		processRow, err := w.filterIncludeColumn(entry, includeColumn, true)
+		if err != nil {
+			return err
+		}
+		if !processRow { // Skip the row from further processing
+			// VECTOR_TODO: Add stat for num_rows_filtered
+			return nil // return if the row is being filtered
+		}
+	}
 
 	var newRow *Row
 	if w.r.useHeapForVectorIndex() {
@@ -714,6 +809,12 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 		newRow.storeId = storeId
 		newRow.cid = w.currJob.scan.Low.Bytes()
 
+		// Copy the include column as is without explosion
+		// Once all the rows are filtered out, we can then explode and project
+		// only those keys that are required. Otherwise, we need memory allocation
+		// at this point which does not go well with performance
+		newRow.includeColumn = includeColumn
+
 	} else {
 
 		//For non limit pushdown cases, all the entries need to be sent to query.
@@ -725,6 +826,10 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 		w.itrRow.len = len(entry)
 		w.itrRow.key = entry
 		w.itrRow.value = value
+
+		// VECTOR_TODO: It is not at all optimal to use the unexploded includeColumn here
+		// as all rows are being push. Use exploded versions
+		w.itrRow.includeColumn = includeColumn
 
 		// VECTOR_TODO:
 		// 1. Check if adding a Queue/CirularBuffer of Rows here in place of senderCh will help
@@ -989,6 +1094,9 @@ type MergeOperator struct {
 	buf   *[]byte
 	cktmp [][]byte
 
+	includebuf   *[]byte
+	includecktmp [][]byte
+
 	rowsReceived    uint64
 	rowsOffsetCount uint64
 
@@ -1027,6 +1135,8 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 
 	fio.buf = r.getFromSecKeyBufPool()
 	fio.cktmp = make([][]byte, len(r.IndexInst.Defn.SecExprs))
+	fio.includebuf = r.getFromSecKeyBufPool()
+	fio.includecktmp = make([][]byte, len(r.IndexInst.Defn.Include))
 
 	fio.mergerWg.Add(1)
 	go fio.Collector()
@@ -1163,13 +1273,10 @@ func (fio *MergeOperator) Collector() {
 
 		// If not get projected fields and send it down stream
 		entry := row.key
-		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
-			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
-			if err != nil {
-				logging.Verbosef("%v Collector got error: %v from projectKeys", fio.logPrefix, err)
-				fio.errCh <- err
-				return
-			}
+		entry, err = fio.handleProjection(entry, row)
+		if err != nil {
+			fio.errCh <- err
+			return
 		}
 
 		err = fio.writeItem(entry)
@@ -1219,20 +1326,17 @@ func (fio *MergeOperator) Collector() {
 			}
 		}
 
-		entry := row.key
-		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
-			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
-			if err != nil {
-				logging.Verbosef("%v Collector got error: %v from projectKeys from heap", fio.logPrefix, err)
-				fio.heap.Destroy()
-				fio.errCh <- err
-				return
-			}
-		}
-
 		if fio.req.Offset != 0 && fio.rowsOffsetCount < uint64(fio.req.Offset) {
 			fio.rowsOffsetCount++
 			continue
+		}
+
+		entry := row.key
+		entry, err = fio.handleProjection(entry, row)
+		if err != nil {
+			fio.heap.Destroy()
+			fio.errCh <- err
+			return
 		}
 
 		err = fio.writeItem(entry)
@@ -1356,21 +1460,18 @@ func (fio *MergeOperator) rerankOnHeap() {
 				return
 			}
 		}
-		entry := row.key
-
-		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
-			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
-			if err != nil {
-				logging.Verbosef("%v Collector got error: %v from projectKeys from heap", fio.logPrefix, err)
-				fio.heap.Destroy()
-				fio.errCh <- err
-				return
-			}
-		}
 
 		if fio.req.Offset != 0 && fio.rowsOffsetCount < uint64(fio.req.Offset) {
 			fio.rowsOffsetCount++
 			continue
+		}
+
+		entry := row.key
+		entry, err = fio.handleProjection(entry, row)
+		if err != nil {
+			fio.heap.Destroy()
+			fio.errCh <- err
+			return
 		}
 
 		err = fio.writeItem(entry)
@@ -1402,6 +1503,43 @@ func (fio *MergeOperator) Wait() error {
 	case <-doneCh:
 		return nil
 	}
+}
+
+func (fio *MergeOperator) handleProjection(entry []byte, row *Row) ([]byte, error) {
+	var err error
+
+	if fio.req.Indexprojection != nil {
+
+		if fio.req.Indexprojection.projectSecKeys && !fio.req.Indexprojection.projectInclude {
+			// Include fields are not required in projection. Project only secExprs
+			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
+			if err != nil {
+				logging.Verbosef("%v Collector got error: %v from projectKeys", fio.logPrefix, err)
+				return nil, err
+			}
+		} else if fio.req.Indexprojection.projectSecKeys || fio.req.Indexprojection.projectInclude {
+			// Include fields are required in projection - Project both secExprs and include fields
+			entry, err = projectSecKeysAndInclude(nil, row.key, row.includeColumn, (*fio.buf)[:0], (*fio.includebuf)[:0], fio.req, fio.cktmp, fio.includecktmp)
+			if err != nil {
+				logging.Verbosef("%v Collector got error: %v from projectSecKeysAndInclude", fio.logPrefix, err)
+				return nil, err
+			}
+		} else {
+			// no-op since projectSecKeys == false (which means project everything) and
+			// projectInclude == false which means row.key can be used directly without any changes
+		}
+	} else if row.includeColumn != nil {
+		// project both secExprs and includecolumn together
+		entry, err = projectAllKeys(nil, row.key, row.includeColumn, (*fio.buf)[:0], fio.req)
+		if err != nil {
+			logging.Verbosef("%v Collector got error: %v from projectAllKeys", fio.logPrefix, err)
+			return nil, err
+		}
+	} else {
+		// no-op as req.IndexProjection == nil means project everything and row.includeColumn == nil
+		// means row.key can be used directly. So, no need to change the key for projection
+	}
+	return entry, nil
 }
 
 // ----------------
