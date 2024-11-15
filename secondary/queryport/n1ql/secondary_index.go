@@ -1934,6 +1934,13 @@ func (si *secondaryIndex6) MaxHeapSize() int {
 	return int(8192) //keep this as index config
 }
 
+// [VECTOR_TODO]: As of now, this is just a stub function
+// for query team to make changes. This function needs update
+// based on index definition
+func (si *secondaryIndex6) AllowRerank() bool {
+	return si.IsBhive()
+}
+
 // Scan6 implements Index6 interface
 func (si *secondaryIndex6) Scan6(
 	requestId string,
