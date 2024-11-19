@@ -340,6 +340,13 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.PersistFullVector = slice.sysconf["bhive.persistFullVector"].Bool()
 	cfg.UseVanama = slice.sysconf["bhive.useVanama"].Bool()
 	cfg.UseDistEncoded = slice.sysconf["bhive.useResidual"].Bool()
+	cfg.NumFlushBuffer = slice.sysconf["bhive.numFlushBuffer"].Int()
+	cfg.NumEvictor = slice.sysconf["bhive.numEvictor"].Int()
+	cfg.NumInitBuilder = slice.sysconf["bhive.numInitBuilder"].Int()
+	cfg.NumBuilder = slice.sysconf["bhive.numBuilder"].Int()
+	if cfg.NumBuilder == 0 {
+		cfg.NumBuilder = 1
+	}
 
 	cfg.NumWriters = slice.maxNumWriters
 
