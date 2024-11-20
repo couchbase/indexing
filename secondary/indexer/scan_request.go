@@ -2382,6 +2382,10 @@ func (r ScanRequest) String() string {
 		str += fmt.Sprintf(", limit:%d", r.Limit)
 	}
 
+	if r.ScanType == VectorScanReq {
+		str += fmt.Sprintf(", nprobe:%d", r.nprobes)
+	}
+
 	if r.Consistency != nil {
 		str += fmt.Sprintf(", consistency:%s", strings.ToLower(r.Consistency.String()))
 	}
