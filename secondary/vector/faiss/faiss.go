@@ -34,3 +34,5 @@ const (
 	QT_8bit_direct  = C.QT_8bit_direct
 	QT_6bit         = C.QT_6bit
 )
+
+const DEFAULT_EF_SEARCH = 16
