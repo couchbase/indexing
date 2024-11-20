@@ -710,6 +710,32 @@ func (r *ScanRequest) useHeapForVectorIndex() bool {
 func (r *ScanRequest) getNearestCentroids() error {
 	r.centroidMap = make(map[common.PartitionId][]int64)
 
+	pruneInvalidCentroids := func(centroids []int64) []int64 {
+		// Check if there is any invalid centroid
+		invalidCentroid := false
+		for _, val := range centroids {
+			if val == -1 {
+				invalidCentroid = true
+				break
+			}
+		}
+
+		//return if nothing found. This should be the common case.
+		if !invalidCentroid {
+			return centroids
+		}
+
+		//filter out the invalid centroids
+		index := 0
+		for _, val := range centroids {
+			if val != -1 {
+				centroids[index] = val
+				index++
+			}
+		}
+		return centroids[:index]
+	}
+
 	for pid, cb := range r.codebookMap {
 		t0 := time.Now()
 		centroids, err := cb.FindNearestCentroids(r.queryVector, int64(r.nprobes))
@@ -719,6 +745,7 @@ func (r *ScanRequest) getNearestCentroids() error {
 		if r.Stats != nil {
 			r.Stats.Timings.vtAssign.Put(time.Now().Sub(t0))
 		}
+		centroids = pruneInvalidCentroids(centroids)
 		r.centroidMap[pid] = centroids
 	}
 	return nil
