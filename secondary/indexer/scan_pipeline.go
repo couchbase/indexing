@@ -10,6 +10,7 @@ package indexer
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -501,7 +502,7 @@ loop:
 				break loop
 			}
 		} else if d.p.req.isBhiveScan {
-			if d.p.req.projectVectorDist {
+			if d.p.req.projectVectorDist || d.p.req.Indexprojection.projectInclude {
 				sk, docid, err = siSplitEntryCJson(row)
 				if err != nil {
 					d.CloseWithError(err)
@@ -960,8 +961,12 @@ func projectSecKeysAndInclude(compositekeys [][]byte, key, include, buf []byte, 
 
 	if !secKeyExplode {
 		// If for BHIVE scan, distance is not projected, key would be docid as
-		// distance is not substituted. Hence, use key directly
+		// distance is not substituted. Hence, use key directly. Encode the
+		// length of key as well when returning the buf to adhere to CJSON format
 		buf = append(buf, key...)
+		buf = append(buf, []byte{0, 0}...)
+		offset := len(buf) - 2
+		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(key)))
 	} else {
 		buf = append(buf, key[entry.lenKey():]...)
 	}
