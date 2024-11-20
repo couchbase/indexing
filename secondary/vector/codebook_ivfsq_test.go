@@ -27,7 +27,7 @@ var codebookIVFSQTestCases = []codebookIVFSQTestCase{
 
 	{"SQ4_L2", 128, METRIC_L2, false, 1000, common.SQ_4BIT, 10000, 10000},
 	{"SQ6_L2", 128, METRIC_L2, false, 1000, common.SQ_6BIT, 10000, 10000},
-	{"SQ8_L2", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000},
+	{"SQ8_L2", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 1000, 1000},
 	{"SQFP16_L2", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000},
 	{"SQ8_DOT", 128, METRIC_INNER_PRODUCT, false, 1000, common.SQ_8BIT, 10000, 10000},
 	{"SQ8_COSINE", 128, METRIC_INNER_PRODUCT, true, 1000, common.SQ_8BIT, 10000, 10000},
@@ -76,12 +76,12 @@ func TestCodebookIVFSQ(t *testing.T) {
 			//find the nearest centroid
 			query_vec := convertTo1D(vecs[:1])
 			t0 = time.Now()
-			label, err := codebook.FindNearestCentroids(query_vec, 3)
+			label, err := codebook.FindNearestCentroids(query_vec, 500)
 			delta = time.Now().Sub(t0)
 			t.Logf("Assign results %v %v", label, err)
 			t.Logf("Assign timing %v", delta)
 			for _, l := range label {
-				if l > int64(tc.nlist) {
+				if l > int64(tc.nlist) || l == -1 {
 					t.Errorf("Result label out of range. Total %v. Label %v", tc.nlist, l)
 				}
 			}
@@ -185,7 +185,7 @@ func TestCodebookIVFSQ(t *testing.T) {
 			t.Logf("EncodeAndAssign label %v", labels[0])
 
 			for _, l := range labels {
-				if l > int64(tc.nlist) {
+				if l > int64(tc.nlist) || l == -1 {
 					t.Errorf("Result label out of range. Total %v. Label %v", tc.nlist, l)
 				}
 			}
@@ -249,7 +249,7 @@ func TestCodebookIVFSQ(t *testing.T) {
 			label, err = newcb.FindNearestCentroids(query_vec, 3)
 			t.Logf("Assign results %v %v", label, err)
 			for _, l := range label {
-				if l > int64(tc.nlist) {
+				if l > int64(tc.nlist) || l == -1 {
 					t.Errorf("Result label out of range. Total %v. Label %v", tc.nlist, l)
 				}
 			}
