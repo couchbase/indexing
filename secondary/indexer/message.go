@@ -3067,7 +3067,7 @@ func (m *MsgMonitorSliceStatus) GetSliceList() []Slice {
 type MsgUpdateRebalancePhase struct {
 	GlobalRebalancePhase common.RebalancePhase
 	BucketTransferPhase  map[string]common.RebalancePhase
-	InstsTransferPhase   map[common.IndexInstId]common.RebalancePhase
+	InstsTransferPhase   map[common.IndexInstId]map[c.PartitionId]common.RebalancePhase
 }
 
 func (m *MsgUpdateRebalancePhase) GetMsgType() MsgType {
@@ -3082,8 +3082,38 @@ func (m *MsgUpdateRebalancePhase) GetBucketTransferPhase() map[string]common.Reb
 	return m.BucketTransferPhase
 }
 
-func (m *MsgUpdateRebalancePhase) GetInstsTransferPhase() map[c.IndexInstId]common.RebalancePhase {
+func (m *MsgUpdateRebalancePhase) GetInstsTransferPhase() map[c.IndexInstId]map[c.PartitionId]common.RebalancePhase {
 	return m.InstsTransferPhase
+}
+
+func (m *MsgUpdateRebalancePhase) String() string {
+	var str strings.Builder
+	fmt.Fprintf(&str, "\n\t\tGlobalRebalancePhase: %v", m.GlobalRebalancePhase.ShortString())
+	if len(m.BucketTransferPhase) > 0 {
+		fmt.Fprintf(&str, "\n\t\tBucketRebalancePhase: ")
+		for bucket, brp := range m.BucketTransferPhase {
+			fmt.Fprintf(&str, "%v:%v ", bucket, brp.ShortString())
+		}
+	}
+
+	if len(m.InstsTransferPhase) > 0 {
+		fmt.Fprintf(&str, "\n\t\tInstsRebalancePhase: ")
+		for instId, partnRP := range m.InstsTransferPhase {
+			fmt.Fprintf(&str, "%v: [", instId)
+			index := 0
+			for partnId, rp := range partnRP {
+				index++
+				fmt.Fprintf(&str, "%v:%v", partnId, rp.ShortString())
+				if index < len(partnRP) {
+					fmt.Fprintf(&str, ",")
+				}
+			}
+			fmt.Fprintf(&str, "],")
+		}
+	}
+
+	return str.String()
+
 }
 
 type MsgLockUnlockShards struct {
