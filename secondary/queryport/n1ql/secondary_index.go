@@ -1057,9 +1057,10 @@ type secondaryIndex struct {
 	numCentroids       int
 	numPartition       int
 
-	isBhive      bool
-	rerankFactor int
-	include      expression.Expressions
+	isBhive           bool
+	rerankFactor      int
+	persistFullVector bool // Only for BHIVE indexes
+	include           expression.Expressions
 }
 
 // for metadata-provider.
@@ -1159,6 +1160,8 @@ func newSecondaryIndexFromMetaData(
 		}
 
 		si.isBhive = indexDefn.VectorMeta.IsBhive
+		si.persistFullVector = indexDefn.VectorMeta.PersistFullVector
+
 		if len(indexDefn.Include) > 0 {
 			exprs := make(expression.Expressions, 0, len(indexDefn.Include))
 			for _, includeExpr := range indexDefn.Include {
@@ -1984,11 +1987,10 @@ func (si *secondaryIndex6) MaxHeapSize() int {
 	return int(8192) //keep this as index config
 }
 
-// [VECTOR_TODO]: As of now, this is just a stub function
-// for query team to make changes. This function needs update
-// based on index definition
 func (si *secondaryIndex6) AllowRerank() bool {
-	return si.IsBhive()
+
+	val := si.isBhive && si.persistFullVector
+	return val
 }
 
 func (si *secondaryIndex6) RerankFactor() int32 {

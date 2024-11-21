@@ -953,6 +953,13 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 			}
 			withExpr += fmt.Sprintf(" \"train_list\":%v", def.VectorMeta.TrainList)
 		}
+
+		if def.VectorMeta.PersistFullVector == false { // Check only for 'false' as default is true
+			if len(withExpr) != 0 {
+				withExpr += ","
+			}
+			withExpr += fmt.Sprintf(" \"persist_full_vector\":%v", def.VectorMeta.PersistFullVector)
+		}
 	}
 
 	if len(withExpr) != 0 {

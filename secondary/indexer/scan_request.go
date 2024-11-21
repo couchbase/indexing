@@ -665,8 +665,8 @@ func (r *ScanRequest) setRerankLimits(requestVector *protobuf.IndexVector) {
 		return
 	}
 
-	// Re-ranking is supported only for BHIVE indexes
-	if !r.isBhiveScan {
+	// Re-ranking is supported only for BHIVE indexes when full vector persistance is enabled
+	if !r.isBhiveScan || !r.IndexInst.Defn.VectorMeta.PersistFullVector {
 		r.enableReranking = false
 		return
 	}
