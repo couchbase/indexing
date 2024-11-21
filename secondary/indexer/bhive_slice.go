@@ -347,6 +347,7 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	if cfg.NumBuilder == 0 {
 		cfg.NumBuilder = 1
 	}
+	cfg.EvictThreshold = slice.sysconf["bhive.evictThreshold"].Int()
 
 	cfg.NumWriters = slice.maxNumWriters
 
