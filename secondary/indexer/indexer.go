@@ -244,8 +244,8 @@ type indexer struct {
 
 	// Shard rebalance related book-keeping
 	globalRebalPhase    common.RebalancePhase
-	instRebalPhase      map[c.IndexInstId]common.RebalancePhase
-	slicePendingClosure map[c.IndexInstId][]Slice
+	instRebalPhase      map[c.IndexInstId]map[c.PartitionId]common.RebalancePhase
+	slicePendingClosure map[c.IndexInstId]map[c.PartitionId][]Slice
 
 	//maintains bucket->bucketStateEnum mapping for pause state
 	bucketPauseState map[string]bucketStateEnum
@@ -3624,10 +3624,15 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 				//close all the slices
 				idx.sendMonitorSliceMsg(partnInst.Sc.GetAllSlices())
 				for _, slice := range partnInst.Sc.GetAllSlices() {
-					if idx.shouldSkipSliceClose(inst.Defn.Bucket, inst.InstId) {
+					partnId := slice.IndexPartnId()
+
+					if idx.shouldSkipSliceClose(inst.Defn.Bucket, inst.InstId, partnId) {
 						logging.Infof("PrunePartition: skipping slice closure as rebalance transfer is in progress for bucket: %v, instId: %v, partnId: %v",
 							inst.Defn.Bucket, inst.InstId, partnInst.Defn.GetPartitionId())
-						idx.slicePendingClosure[inst.InstId] = append(idx.slicePendingClosure[inst.InstId], slice)
+						if _, ok := idx.slicePendingClosure[inst.InstId]; !ok {
+							idx.slicePendingClosure[inst.InstId] = make(map[c.PartitionId][]Slice)
+						}
+						idx.slicePendingClosure[inst.InstId][partnId] = append(idx.slicePendingClosure[inst.InstId][partnId], slice)
 						continue
 					}
 
@@ -5759,10 +5764,15 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 
 				//close all the slices
 				for _, slice := range sc.GetAllSlices() {
-					if idx.shouldSkipSliceClose(indexInst.Defn.Bucket, indexInst.InstId) {
+					partnId := slice.IndexPartnId()
+					if idx.shouldSkipSliceClose(indexInst.Defn.Bucket, indexInst.InstId, partnId) {
 						logging.Infof("Indexer::cleanupIndexData skipping slice closure as rebalance transfer is in progress for bucket: %v instId: %v, partnId: %v",
 							indexInst.Defn.Bucket, indexInst.InstId, pid)
-						idx.slicePendingClosure[indexInst.InstId] = append(idx.slicePendingClosure[indexInst.InstId], slice)
+						if _, ok := idx.slicePendingClosure[indexInst.InstId]; !ok {
+							idx.slicePendingClosure[indexInst.InstId] = make(map[c.PartitionId][]Slice)
+						}
+
+						idx.slicePendingClosure[indexInst.InstId][partnId] = append(idx.slicePendingClosure[indexInst.InstId][partnId], slice)
 						continue
 					}
 
@@ -10637,9 +10647,9 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 				idx.globalRebalPhase = common.RebalanceInitated
 			}
 
-			idx.instRebalPhase = make(map[common.IndexInstId]common.RebalancePhase)
+			idx.instRebalPhase = make(map[common.IndexInstId]map[c.PartitionId]common.RebalancePhase)
 
-			idx.slicePendingClosure = make(map[common.IndexInstId][]Slice)
+			idx.slicePendingClosure = make(map[common.IndexInstId]map[c.PartitionId][]Slice)
 			idx.droppedIndexesDuringRebal = make(map[common.IndexInstId]bool) // reset the book-keeping
 
 			msg := &MsgClustMgrUpdate{mType: CLUST_MGR_REBALANCE_RUNNING}
@@ -12833,30 +12843,43 @@ func (idx *indexer) updateRebalancePhase(cmd Message) map[string]c.RebalancePhas
 	idx.globalRebalPhase = globalRebalPhase
 
 	// Update indexer level book-keeping about instances whose rebalance is in progress
-	for instId, transferPhase := range instsTransferPhase {
-		idx.instRebalPhase[instId] = transferPhase
+	for instId, partnTransferPhase := range instsTransferPhase {
+		if _, ok := idx.instRebalPhase[instId]; !ok {
+			idx.instRebalPhase[instId] = make(map[c.PartitionId]c.RebalancePhase)
+		}
+		for partnId, transferPhase := range partnTransferPhase {
+			idx.instRebalPhase[instId][partnId] = transferPhase
+		}
 	}
 
 	// If transfer is completed for any buckets, then close the slices
 	// of the index instances belonging to those buckets
-	for instId, transferPhase := range idx.instRebalPhase {
-		if sliceList, ok := idx.slicePendingClosure[instId]; ok {
-			if transferPhase >= common.RebalanceTransferDone {
-				idx.closeSlices(sliceList, "Indexer::updateRebalancePhase")
-				delete(idx.slicePendingClosure, instId)
+	for instId, partnTransferPhase := range idx.instRebalPhase {
+		for partnId, transferPhase := range partnTransferPhase {
+			if sliceList, ok := idx.slicePendingClosure[instId][partnId]; ok {
+				if transferPhase >= common.RebalanceTransferDone {
+					idx.closeSlices(sliceList, "Indexer::updateRebalancePhase")
+					delete(idx.slicePendingClosure[instId], partnId)
+				}
 			}
+		}
+
+		if len(idx.slicePendingClosure[instId]) == 0 {
+			delete(idx.slicePendingClosure, instId)
 		}
 	}
 
 	// For each bucket, build a bucket-transfer phase so that lifecycle
 	// manager can allow/dis-allow based on bucket transfer in progress
 	bucketTransferPhase := make(map[string]common.RebalancePhase)
-	for instId, transferPhase := range idx.instRebalPhase {
+	for instId, partnTransferPhase := range idx.instRebalPhase {
 		if inst, ok := idx.indexInstMap[instId]; ok {
 			bucket := inst.Defn.Bucket
 
-			if val, ok := bucketTransferPhase[bucket]; !ok || transferPhase < val {
-				bucketTransferPhase[bucket] = transferPhase
+			for _, transferPhase := range partnTransferPhase {
+				if val, ok := bucketTransferPhase[bucket]; !ok || transferPhase < val {
+					bucketTransferPhase[bucket] = transferPhase
+				}
 			}
 		}
 	}
@@ -12875,9 +12898,11 @@ func (idx *indexer) clearRebalancePhase(newRebal bool) {
 	if newRebal {
 		if len(idx.slicePendingClosure) > 0 {
 			var str string
-			for instId, sliceList := range idx.slicePendingClosure {
-				for _, slice := range sliceList {
-					str += fmt.Sprintf("InstId: %v, instId: %v, partnId: %v\n", instId, slice.IndexInstId(), slice.IndexPartnId())
+			for instId, partnSliceList := range idx.slicePendingClosure {
+				for _, sliceList := range partnSliceList {
+					for _, slice := range sliceList {
+						str += fmt.Sprintf("InstId: %v, instId: %v, partnId: %v\n", instId, slice.IndexInstId(), slice.IndexPartnId())
+					}
 				}
 			}
 			logging.Fatalf("Indexer::clearRebalancePhase slicePendingClosure has some slices waiting to be closed "+
@@ -12885,14 +12910,19 @@ func (idx *indexer) clearRebalancePhase(newRebal bool) {
 		}
 	}
 
-	for instId, sliceList := range idx.slicePendingClosure {
-		idx.closeSlices(sliceList, "Indexer::clearRebalancePhase")
-		delete(idx.slicePendingClosure, instId)
+	for instId, partnSliceList := range idx.slicePendingClosure {
+		for partnId, sliceList := range partnSliceList {
+			idx.closeSlices(sliceList, "Indexer::clearRebalancePhase")
+			delete(idx.slicePendingClosure[instId], partnId)
+		}
+		if len(idx.slicePendingClosure[instId]) == 0 {
+			delete(idx.slicePendingClosure, instId)
+		}
 	}
 	idx.slicePendingClosure = nil
 }
 
-func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstId) bool {
+func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstId, partnId c.PartitionId) bool {
 
 	if idx.globalRebalPhase == common.RebalanceInitated {
 		logging.Warnf("Indexer::shouldSkipSliceClose Skipping slice closure as rebalance is still in plan phase, inst: %v", instId)
@@ -12904,10 +12934,10 @@ func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstI
 	if idx.globalRebalPhase == common.RebalanceTransferInProgress {
 		// Slice closure is allowed on a bucket only after transfer is done
 
-		if instTransferPhase, ok := idx.instRebalPhase[instId]; ok {
+		if partnInstTransferPhase, ok := idx.instRebalPhase[instId][partnId]; ok {
 			// If bucket transfer has moved past the minimum rebalance phase
 			// required to allow the DDL on the bucket, then return true
-			if instTransferPhase >= common.RebalanceTransferDone {
+			if partnInstTransferPhase >= common.RebalanceTransferDone {
 				return false
 			}
 			return true
