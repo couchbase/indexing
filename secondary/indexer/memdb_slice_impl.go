@@ -648,8 +648,9 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	mdb.arrayBuf[workerId] = resizeArrayBuf(mdb.arrayBuf[workerId], len(keys)*3, szConf.allowLargeKeys)
 
 	if !szConf.allowLargeKeys && len(keys) > szConf.maxArrayIndexEntrySize {
-		logging.Errorf("MemDBSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
-			logging.TagStrUD(docid), mdb.id, len(keys), szConf.maxArrayIndexEntrySize)
+		logging.Errorf("MemDBSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v IndexInstId: %v PartitionId %v. "+
+			"Error: Encoded array key (size %v) too long (> %v). Skipped.",
+			logging.TagStrUD(docid), mdb.id, mdb.idxInstId, mdb.idxPartnId, len(keys), szConf.maxArrayIndexEntrySize)
 		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		return mdb.deleteSecArrayIndex(docid, workerId)
 	}
@@ -659,8 +660,8 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		mdb.arrayBuf[workerId], mdb.isArrayDistinct, mdb.isArrayFlattened, !szConf.allowLargeKeys, szConf)
 	mdb.arrayBuf[workerId] = resizeArrayBuf(mdb.arrayBuf[workerId], newbufLen, szConf.allowLargeKeys)
 	if err != nil {
-		logging.Errorf("MemDBSlice::insert Error indexing docid: %s in Slice: %v. Error in creating "+
-			"compostite new secondary keys %v. Skipped.", logging.TagStrUD(docid), mdb.id, err)
+		logging.Errorf("MemDBSlice::insert Error indexing docid: %s in Slice: %v IndexInstId: %v PartitionId %v. Error in creating "+
+			"composite new secondary keys %v. Skipped.", logging.TagStrUD(docid), mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
 		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		return mdb.deleteSecArrayIndex(docid, workerId)
 	}
