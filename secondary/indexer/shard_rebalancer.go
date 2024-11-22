@@ -1738,7 +1738,6 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 						tt.Destination, tt.Region, shardId, shardPaths, err)
 
 					// Invoke clean-up for all shards and codebook even if error is observed for one shard transfer
-					// TODO: Cleanup of local codebook data
 					sr.initiateLocalShardCleanup(ttid, shardPaths, tt)
 					sr.setTransferTokenError(ttid, tt, err.Error())
 					return
@@ -1792,7 +1791,6 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 						tt.Destination, tt.Region, codebookName, codebookPaths, err)
 
 					/* Invoke clean-up for all shards and codebook even if error is observed for one codebook transfer
-					TODO: Cleanup of local codebook data
 					sr.initiateLocalShardCleanup(ttid, shardPaths, tt)
 					*/
 					sr.setTransferTokenError(ttid, tt, err.Error())
