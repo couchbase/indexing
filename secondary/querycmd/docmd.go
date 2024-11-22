@@ -106,6 +106,8 @@ type Command struct {
 	IndexerPort string
 	UseLogLevel string
 	isBhive     bool
+
+	Include []string
 }
 
 type IndexCreate interface {
@@ -283,6 +285,17 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 			// where
 			if estmt.Where() != nil {
 				cmdOptions.WhereStr = expression.NewStringer().Visit(estmt.Where())
+			}
+
+			if estmt.Include() != nil {
+				include := []string{}
+				for _, exp := range estmt.Include().Expressions() {
+					includeField := expression.NewStringer().Visit(exp)
+					include = append(include, includeField)
+				}
+				if len(include) != 0 {
+					cmdOptions.Include = include
+				}
 			}
 
 			// secStrs
@@ -550,7 +563,7 @@ func HandleCommand(
 			var defnID uint64
 			defnID, err = client.CreateIndex6(iname, bucket, scope, collection, cmd.Using, cmd.ExprType,
 				cmd.WhereStr, cmd.SecStrs, cmd.Desc, cmd.VectorAttr, cmd.IndexMissingLeadingKey, cmd.IsPrimary, cmd.Scheme,
-				cmd.PartitionKeys, cmd.WithJson, nil, cmd.isBhive)
+				cmd.PartitionKeys, cmd.WithJson, cmd.Include, cmd.isBhive)
 			if err == nil {
 				fmt.Fprintf(w, "Index created: name: %q, isBhive:%v, ID: %v, WITH clause used: %q\n",
 					iname, cmd.isBhive, defnID, cmd.WithJson)
