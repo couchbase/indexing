@@ -348,6 +348,8 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 		cfg.NumBuilder = 1
 	}
 	cfg.EvictThreshold = slice.sysconf["bhive.evictThreshold"].Int()
+	cfg.CompressionType = slice.sysconf["bhive.compressType"].String()
+	cfg.CompressionLevel = slice.sysconf["bhive.compressLevel"].Int()
 
 	cfg.NumWriters = slice.maxNumWriters
 
