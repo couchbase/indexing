@@ -2,9 +2,11 @@ package planner
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -127,6 +129,12 @@ func TestBasicSlotAssignment(t *testing.T) {
 			dealer.slotsPerCategory,
 		)
 	}
+
+	err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+	if err != nil {
+		t.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
+			t.Name(), err)
+	}
 }
 
 func createDummyIndexerNode(nodeID string, num2iIndexes, numPrimaryIndexes, numVectorIndexes,
@@ -247,7 +255,6 @@ func TestSingleNodeAssignment(t *testing.T) {
 					t0.Name(), slotIDs, minShardsPerNode)
 			}
 
-			// TODO: temp. replace with `validateShardDealerInternals`
 			if len(dealer.partnSlots) != int(minShardsPerNode) {
 				t0.Fatalf(
 					"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
@@ -272,9 +279,15 @@ func TestSingleNodeAssignment(t *testing.T) {
 					minShardsPerNode,
 				)
 			}
+			assert.NoError(
+				t0,
+				validateShardDealerInternals(dealer, []*IndexerNode{indexerNode}),
+				"internal shard dealer validation failed for basic test",
+			)
 
-			var extraIndex = createDummyIndexUsage(minShardsPerNode+1, false, false, false, false)
+			var extraIndex = createDummyIndexUsage(minShardsPerNode+1, true, false, false, false)
 			extraIndex.initialNode = indexerNode
+			indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
 
 			var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
 			replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
@@ -288,6 +301,9 @@ func TestSingleNodeAssignment(t *testing.T) {
 					slotIDs,
 				)
 			}
+
+			assert.NoErrorf(t0, validateShardDealerInternals(dealer, []*IndexerNode{indexerNode}),
+				"internal shard dealer validation failed for basic test after adding extra index")
 		})
 
 		// Consider a scenario where we have minShardsPerNode as 5. New we have already created
@@ -351,7 +367,6 @@ func TestSingleNodeAssignment(t *testing.T) {
 					len(alternateShardIDs), alternateShardIDs)
 			}
 
-			// TODO: temp. replace with `validateShardDealerInternals`
 			if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
 				t0.Fatalf(
 					"%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
@@ -368,6 +383,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 					len(dealer.partnSlots),
 				)
 			}
+
+			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+			assert.NoErrorf(t0, err,
+				"%v internal shard dealer validation failed with err: \n\t\t%v",
+				t0.Name(), err)
+
 		})
 
 		// TODO: add partitioned index tests
@@ -410,7 +431,6 @@ func TestSingleNodeAssignment(t *testing.T) {
 					t0.Name(), slotIDs, minShardsPerNode)
 			}
 
-			// TODO: temp. replace with `validateShardDealerInternals`
 			if len(dealer.partnSlots) != int(minPartitionsPerShard) {
 				t0.Fatalf(
 					"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
@@ -435,6 +455,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
 				)
 			}
+
+			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+			assert.NoErrorf(t0, err,
+				"%v internal shard dealer validation failed with err: \n\t\t%v",
+				t0.Name(), err)
+
 		})
 
 		// This is similar to Pass-0 except here we also test that post creating minShardsPerNode
@@ -494,7 +520,6 @@ func TestSingleNodeAssignment(t *testing.T) {
 					alternateShardIDs)
 			}
 
-			// TODO: temp. replace with `validateShardDealerInternals`
 			// since all primary indexes are created before, we create all minShardsPerNode
 			// now when the new 2i indexes are created, we re-use the slots but we still end
 			// up creating new shards
@@ -514,6 +539,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 					len(dealer.partnSlots),
 				)
 			}
+
+			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+			assert.NoErrorf(t0, err,
+				"%v internal shard dealer validation failed with err: \n\t\t%v",
+				t0.Name(), err)
+
 		})
 
 		subt.Run("MixCategoryIndexes", func(t0 *testing.T) {
@@ -617,6 +648,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 				)
 			}
 
+			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+			if err != nil {
+				t0.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
+					t0.Name(), err)
+			}
+
 		})
 	})
 
@@ -655,7 +692,6 @@ func TestSingleNodeAssignment(t *testing.T) {
 					t0.Name(), len(slotIDs), slotIDs, shardCapacity/10)
 			}
 
-			// TODO: temp. replace with `validateShardDealerInternals`
 			if len(dealer.partnSlots) != len(slotIDs) {
 				t0.Fatalf(
 					"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
@@ -679,6 +715,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
 					len(slotIDs),
 				)
+			}
+
+			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+			if err != nil {
+				t0.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
+					t0.Name(), err)
 			}
 		})
 
@@ -740,7 +782,6 @@ func TestSingleNodeAssignment(t *testing.T) {
 				t0.Fatalf("%v expected to create %v shards we have %v (%v)",
 					t0.Name(), testShardCapacity, len(alternateShardIDs), alternateShardIDs)
 			}
-			// TODO: temp. replace with `validateShardDealerInternals`
 			if len(dealer.partnSlots) != int(testShardCapacity) {
 				t0.Fatalf(
 					"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
@@ -769,6 +810,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 			// create extra index. it should not create a new shard
 			var extraIndex = createDummyIndexUsage(shardCapacity+1, false, false, false, false)
 			extraIndex.initialNode = indexerNode
+			indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
 
 			var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
 			replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
@@ -782,6 +824,9 @@ func TestSingleNodeAssignment(t *testing.T) {
 					slotIDs,
 				)
 			}
+
+			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+			assert.NoErrorf(t0, err, "%v internal shard dealer validation failed with err: \n\t\t%v", t0.Name(), err)
 		})
 
 		subt.Run("MixCategoryIndexes", func(t0 *testing.T) {
@@ -886,6 +931,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 				)
 			}
 
+			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+			if err != nil {
+				t0.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
+					t0.Name(), err)
+			}
+
 		})
 	})
 
@@ -946,7 +997,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 			subt.Fatalf("%v expected to create %v shards we have %v (%v)",
 				subt.Name(), testShardCapacity, len(alternateShardIDs), alternateShardIDs)
 		}
-		// TODO: temp. replace with `validateShardDealerInternals`
+
 		if len(dealer.partnSlots) != len(indexerNode.Indexes) {
 			subt.Fatalf(
 				"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
@@ -975,6 +1026,7 @@ func TestSingleNodeAssignment(t *testing.T) {
 		// create extra index. it should not create a new shard
 		var extraIndex = createDummyIndexUsage(uint64(len(indexerNode.Indexes)), false, false, false, false)
 		extraIndex.initialNode = indexerNode
+		indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
 
 		var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
 		replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
@@ -987,6 +1039,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 		if _, exists := slotIDs[slotID]; !exists {
 			subt.Fatalf("%v extra slot created when it was not expected. New slot %v. All Slots %v",
 				subt.Name(), slotID, slotIDs)
+		}
+
+		err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+		if err != nil {
+			subt.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
+				subt.Name(), err)
 		}
 
 	})
@@ -1466,5 +1524,225 @@ func TestRecordIndexUsage(t *testing.T) {
 
 }
 
-// TODO: add tests for cluster level validation of dealer
-// func validateShardDealerInternals(*ShardDealer, []*IndexerNode) error
+func validateShardDealerInternals(sd *ShardDealer, cluster []*IndexerNode) error {
+	if sd == nil || len(cluster) == 0 {
+		return nil
+	}
+
+	// generate internal structures according to layout
+
+	var slotsPerCategory = make(map[ShardCategory]map[asSlotID]bool)
+	// cluster level picture
+	var slotsMap = make(map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer)
+	// <defnId, partnId> to slotID
+	var partnSlots = make(map[c.IndexDefnId]map[c.PartitionId]asSlotID)
+
+	// per node pic of which shard pair belongs to which node
+	var nodeToSlotMap = make(map[string]map[asSlotID]asReplicaID)
+	var nodeToShardCountMap = make(map[string]uint64)
+
+	for _, indexer := range cluster {
+		for _, partn := range indexer.Indexes {
+			if partn == nil || (len(partn.InitialAlternateShardIds) == 0 &&
+				len(partn.AlternateShardIds) == 0) {
+				continue
+			}
+
+			var alternateShardIDs = partn.InitialAlternateShardIds
+			if len(partn.AlternateShardIds) != 0 && len(alternateShardIDs) == 0 {
+				alternateShardIDs = partn.AlternateShardIds
+			} else if len(partn.AlternateShardIds) != 0 &&
+				alternateShardIDs[0] != partn.AlternateShardIds[0] {
+				return fmt.Errorf("InitialAlternateShardIDs != AlternateShardIDs (%v != %v) for index %v. dealer validation not deterministic",
+					alternateShardIDs, partn.AlternateShardIds, partn)
+			}
+
+			var alternateID, err = c.ParseAlternateId(alternateShardIDs[0])
+			if err != nil {
+				return fmt.Errorf("failed to parse alternateShardID for index %v with err (%v)",
+					partn, err)
+			}
+			var shardCategory = getIndexCategory(partn)
+			if shardCategory == InvalidShardCategory {
+				continue
+			}
+			if slotsPerCategory[shardCategory] == nil {
+				slotsPerCategory[shardCategory] = make(map[asSlotID]bool)
+			}
+			slotsPerCategory[shardCategory][alternateID.GetSlotId()] = true
+
+			if partnSlots[partn.DefnId] == nil {
+				partnSlots[partn.DefnId] = make(map[c.PartitionId]asSlotID)
+			}
+			partnSlots[partn.DefnId][partn.PartnId] = alternateID.GetSlotId()
+
+			if nodeToSlotMap[indexer.NodeUUID] == nil {
+				nodeToSlotMap[indexer.NodeUUID] = make(map[asSlotID]asReplicaID)
+			}
+			nodeToSlotMap[indexer.NodeUUID][alternateID.GetSlotId()] = alternateID.GetReplicaId()
+
+			var slotID = alternateID.GetSlotId()
+			var replicaID = alternateID.GetReplicaId()
+			var groupID = alternateID.GetGroupId()
+
+			if slotsMap[slotID] == nil {
+				slotsMap[slotID] = make(map[asReplicaID]map[asGroupID]*pseudoShardContainer)
+			}
+			if slotsMap[slotID][replicaID] == nil {
+				slotsMap[slotID][replicaID] = make(map[asGroupID]*pseudoShardContainer)
+			}
+			var newShardCount = 0
+			if slotsMap[slotID][replicaID][groupID] == nil {
+				slotsMap[slotID][replicaID][groupID] = newPseudoShardContainer()
+				newShardCount++
+			}
+			if len(alternateShardIDs) > 1 {
+				var backstoreAlternateID, err = c.ParseAlternateId(alternateShardIDs[1])
+				if err != nil {
+					return fmt.Errorf("failed to parse alternateShardID for index %v with err (%v)",
+						partn, err)
+				}
+				var bGroupID = backstoreAlternateID.GetGroupId()
+				if slotsMap[slotID][replicaID][bGroupID] == nil {
+					slotsMap[slotID][replicaID][bGroupID] = newPseudoShardContainer()
+					newShardCount++
+				}
+				slotsMap[slotID][replicaID][bGroupID].addInstToShardContainer(partn)
+			}
+			var isNew = slotsMap[slotID][replicaID][groupID].addInstToShardContainer(partn)
+			if isNew {
+				if _, exists := nodeToShardCountMap[indexer.NodeUUID]; !exists {
+					nodeToShardCountMap[indexer.NodeUUID] = 0
+				}
+				nodeToShardCountMap[indexer.NodeUUID] += uint64(newShardCount)
+			}
+		}
+
+	}
+
+	// validate internals
+	if !reflect.DeepEqual(slotsPerCategory, sd.slotsPerCategory) {
+		return fmt.Errorf(
+			"cluster slotsPerCategory does not match shard dealer - ([l: %v] %v != [l:%v] %v)",
+			len(slotsPerCategory),
+			slotsPerCategory,
+			len(sd.slotsPerCategory),
+			sd.slotsPerCategory,
+		)
+	}
+
+	if !reflect.DeepEqual(partnSlots, sd.partnSlots) {
+		return fmt.Errorf(
+			"cluster partnSlots does not match shard dealer - ([l: %v] %v != [l:%v] %v)",
+			len(partnSlots),
+			partnSlots,
+			len(sd.partnSlots),
+			sd.partnSlots,
+		)
+	}
+
+	if !reflect.DeepEqual(nodeToShardCountMap, sd.nodeToShardCountMap) {
+		return fmt.Errorf(
+			"cluster nodeToShardCountMap does not match shard dealer - ([l: %v] %v != [l:%v] %v)",
+			len(
+				nodeToShardCountMap,
+			),
+			nodeToShardCountMap,
+			len(sd.nodeToShardCountMap),
+			sd.nodeToShardCountMap,
+		)
+	}
+
+	if !reflect.DeepEqual(nodeToSlotMap, sd.nodeToSlotMap) {
+		return fmt.Errorf(
+			"cluster slotsPerCategory does not match shard dealer - ([l: %v] %v != [l:%v] %v)",
+			len(nodeToSlotMap),
+			nodeToSlotMap,
+			len(sd.nodeToSlotMap),
+			sd.nodeToSlotMap,
+		)
+	}
+
+	for slotID, clusterSlotMap := range slotsMap {
+		dealerSlotMap, exists := sd.slotsMap[slotID]
+		if !exists {
+			return fmt.Errorf("cluster slotsMap does not match shard dealer - (%v != %v)",
+				clusterSlotMap, dealerSlotMap)
+		}
+
+		for clusterSlotReplicaID, clusterSlotReplicaMap := range clusterSlotMap {
+			dealerSlotReplicaMap, exists := dealerSlotMap[clusterSlotReplicaID]
+			if !exists {
+				return fmt.Errorf(
+					"cluster replicaMap for slot %v does not match shard dealer - (%v != %v)",
+					clusterSlotReplicaID,
+					clusterSlotReplicaMap,
+					dealerSlotReplicaMap,
+				)
+			}
+
+			for clusterStoreID, clusterStoreShard := range clusterSlotReplicaMap {
+				dealerStoreShard, exists := dealerSlotReplicaMap[clusterStoreID]
+				if !exists || !clusterStoreShard.Equal(dealerStoreShard) {
+					return fmt.Errorf(
+						"cluster shardContainer does not match for slot-replica %v-%v-%v with shard dealer - (%v != %v)",
+						slotID,
+						clusterSlotReplicaID,
+						clusterStoreID,
+						clusterStoreShard,
+						dealerStoreShard,
+					)
+				}
+			}
+		}
+
+	}
+
+	return nil
+}
+
+func (psc1 *pseudoShardContainer) Equal(psc2 *pseudoShardContainer) bool {
+	if psc1 == nil && psc2 == nil {
+		return true
+	} else if (psc1 == nil && psc2 != nil) ||
+		(psc1 != nil && psc2 == nil) {
+		return false
+	}
+
+	if len(psc1.insts) != len(psc2.insts) ||
+		psc1.totalPartitions != psc2.totalPartitions ||
+		psc1.memUsage != psc2.memUsage ||
+		psc1.dataSize != psc2.dataSize ||
+		psc1.diskUsage != psc2.diskUsage {
+		return false
+	}
+
+	for instID, indexes1 := range psc1.insts {
+		indexes2, exists := psc2.insts[instID]
+		if !exists || len(indexes1) != len(indexes2) {
+			return false
+		}
+
+		for _, index1 := range indexes1 {
+			var found = false
+			for _, index2 := range indexes2 {
+				if index1.InstId == index2.InstId &&
+					index1.PartnId == index2.PartnId &&
+					index1.Instance.ReplicaId == index2.Instance.ReplicaId {
+					found = true
+				}
+			}
+			if !found {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func (psc1 *pseudoShardContainer) String() string {
+	return fmt.Sprintf("ShardContainer: {totalPartitions: %v, memUsage: %v,"+
+		"dataSize: %v, diskUsage: %v, insts: (%v)}", psc1.totalPartitions,
+		psc1.memUsage, psc1.dataSize, psc1.diskUsage, psc1.insts)
+}
