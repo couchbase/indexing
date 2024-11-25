@@ -1,12 +1,15 @@
 package dataport
 
-import "testing"
-import "time"
-import "fmt"
+import (
+	"fmt"
+	"testing"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
+)
 
 func TestTimeout(t *testing.T) {
 	logging.SetLogLevel(logging.Silent)
@@ -18,7 +21,7 @@ func TestTimeout(t *testing.T) {
 	appch := make(chan interface{}, mutChanSize)
 	prefix := "indexer.dataport."
 	dconfig := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	daemon, err := NewServer(raddr, maxvbuckets, dconfig, appch)
+	daemon, err := NewServer(raddr, dconfig, appch, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +116,7 @@ func TestLoopback(t *testing.T) {
 	appch := make(chan interface{}, mutChanSize)
 	prefix := "indexer.dataport."
 	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	daemon, err := NewServer(raddr, maxvbuckets, config, appch)
+	daemon, err := NewServer(raddr, config, appch, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +206,7 @@ func BenchmarkLoopback(b *testing.B) {
 	appch := make(chan interface{}, mutChanSize)
 	prefix := "indexer.dataport."
 	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	daemon, err := NewServer(raddr, maxvbuckets, config, appch)
+	daemon, err := NewServer(raddr, config, appch, nil, nil)
 	if err != nil {
 		b.Fatal(err)
 	}

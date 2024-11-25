@@ -137,6 +137,7 @@ type ScanRequest struct {
 	vectorScans           map[common.PartitionId]map[int64][]Scan
 	parallelCentroidScans int
 	indexOrder            *IndexKeyOrder
+	projectVectorDist     bool // set to true if vector distance has to be projected. false otherwise
 
 	// re-ranking support for BHIVE vector indexes
 	enableReranking bool // set to 'true' if re-ranking is enabled
@@ -544,6 +545,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 				return
 			}
 
+			r.projectVectorDist = r.ProjectVectorDist()
 			r.setRerankLimits()
 			protoIndexOrder := req.GetIndexOrder()
 			if r.indexOrder, err = validateIndexOrder(protoIndexOrder,
@@ -708,6 +710,32 @@ func (r *ScanRequest) useHeapForVectorIndex() bool {
 func (r *ScanRequest) getNearestCentroids() error {
 	r.centroidMap = make(map[common.PartitionId][]int64)
 
+	pruneInvalidCentroids := func(centroids []int64) []int64 {
+		// Check if there is any invalid centroid
+		invalidCentroid := false
+		for _, val := range centroids {
+			if val == -1 {
+				invalidCentroid = true
+				break
+			}
+		}
+
+		//return if nothing found. This should be the common case.
+		if !invalidCentroid {
+			return centroids
+		}
+
+		//filter out the invalid centroids
+		index := 0
+		for _, val := range centroids {
+			if val != -1 {
+				centroids[index] = val
+				index++
+			}
+		}
+		return centroids[:index]
+	}
+
 	for pid, cb := range r.codebookMap {
 		t0 := time.Now()
 		centroids, err := cb.FindNearestCentroids(r.queryVector, int64(r.nprobes))
@@ -717,6 +745,7 @@ func (r *ScanRequest) getNearestCentroids() error {
 		if r.Stats != nil {
 			r.Stats.Timings.vtAssign.Put(time.Now().Sub(t0))
 		}
+		centroids = pruneInvalidCentroids(centroids)
 		r.centroidMap[pid] = centroids
 	}
 	return nil
@@ -2378,6 +2407,10 @@ func (r ScanRequest) String() string {
 
 	if r.Limit > 0 {
 		str += fmt.Sprintf(", limit:%d", r.Limit)
+	}
+
+	if r.ScanType == VectorScanReq {
+		str += fmt.Sprintf(", nprobe:%d", r.nprobes)
 	}
 
 	if r.Consistency != nil {

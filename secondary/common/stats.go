@@ -370,3 +370,7 @@ func restGetStats(addr string, filter string, httpTimeoutSecs uint32) (*http.Res
 	}
 	return resp, nil
 }
+
+// 0-2ms, 2-10ms, 10-100ms, 100-500ms, 500ms-1s, 1-10s, 10-30s, 30s-Inf
+var PortBlockDist = []int64{0, 2, 10, 100, 500, 1000, 10000, 30000}
+var PortBlockdThresholdDur = int64(time.Duration(PortBlockDist[len(PortBlockDist)-1]) * time.Millisecond)

@@ -62,7 +62,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/stats"
 
 	"github.com/couchbase/cbauth"
 
@@ -152,6 +154,9 @@ type Server struct {
 	enableAuth   *uint32
 
 	mu sync.Mutex
+
+	// stats
+	portBlockHist *stats.Histogram
 }
 
 // NewServer creates a new dataport daemon.
@@ -159,7 +164,8 @@ func NewServer(
 	laddr string,
 	config c.Config,
 	appch chan<- interface{},
-	enableAuth *uint32) (s *Server, err error) {
+	enableAuth *uint32,
+	portBlockHist *stats.Histogram) (s *Server, err error) {
 
 	genChSize := config["genServerChanSize"].Int()
 	dataChSize := config["dataChanSize"].Int()
@@ -177,6 +183,9 @@ func NewServer(
 		maxPayload:   config["maxPayload"].Int(),
 		readDeadline: time.Duration(config["tcpReadDeadline"].Int()),
 		enableAuth:   enableAuth,
+
+		// stats
+		portBlockHist: portBlockHist,
 	}
 	s.logPrefix = fmt.Sprintf("DATP[->dataport %q]", laddr)
 
@@ -488,7 +497,14 @@ func (s *Server) startWorker(raddr string, reqMsg interface{}) {
 		return
 	}
 	logging.Tracef("%v starting worker for connection %q\n", s.logPrefix, raddr)
-	go doReceive(s.logPrefix, nc, s.maxPayload, s.readDeadline, s.datach, reqMsg)
+	go doReceive(s.logPrefix, // prefix string
+		nc,              // nc *netConn
+		s.maxPayload,    // maxPayload int
+		s.readDeadline,  // readDeadline time.Duration
+		s.datach,        // datach chan []interface{}
+		reqMsg,          // reqMsg interface{}
+		s.portBlockHist, // portBlockHis *Stats.Histogram
+	)
 	nc.active = true
 }
 
@@ -779,7 +795,8 @@ func doReceive(
 	nc *netConn,
 	maxPayload int, readDeadline time.Duration,
 	datach chan<- []interface{},
-	reqMsg interface{}) {
+	reqMsg interface{},
+	portBlockHist *stats.Histogram) {
 
 	conn, closeCh := nc.conn, nc.closeCh
 
@@ -789,12 +806,21 @@ func doReceive(
 	var duration time.Duration
 	var start time.Time
 	var blocked bool
+	var tick *time.Ticker
 
 	epoc := time.Now()
-	tick := time.NewTicker(time.Second * 5) // log every 5 second, if blocked
-	defer func() {
-		tick.Stop()
-	}()
+	if portBlockHist == nil {
+		tick = time.NewTicker(time.Second * 5) // log every 5 second, if blocked
+		defer func() {
+			tick.Stop()
+		}()
+	}
+
+	var logBlockedDuration = func() {
+		ratio := float64(duration) / float64(time.Since(epoc))
+		fmsg := "%v DATP -> Indexer %f%% blocked"
+		logging.Infof(fmsg, prefix, ratio*100)
+	}
 
 loop:
 	for {
@@ -840,15 +866,22 @@ loop:
 				break loop
 			}
 			if blocked {
-				duration += time.Since(start)
-				blocked = false
-				select {
-				case <-tick.C:
-					ratio := float64(duration) / float64(time.Since(epoc))
-					fmsg := "%v DATP -> Indexer %f%% blocked"
-					logging.Infof(fmsg, prefix, ratio*100)
-				default:
+				var currBlockDuration = int64(time.Since(start))
+				duration += time.Duration(currBlockDuration)
+				if portBlockHist != nil {
+					portBlockHist.Add(currBlockDuration)
+
+					if currBlockDuration > common.PortBlockdThresholdDur {
+						logBlockedDuration()
+					}
+				} else {
+					select {
+					case <-tick.C:
+						logBlockedDuration()
+					default:
+					}
 				}
+				blocked = false
 			}
 
 		} else {

@@ -77,12 +77,12 @@ func TestCodebookIVFPQ(t *testing.T) {
 			//find the nearest centroid
 			query_vec := convertTo1D(vecs[:1])
 			t0 = time.Now()
-			label, err := codebook.FindNearestCentroids(query_vec, 3)
+			label, err := codebook.FindNearestCentroids(query_vec, 500)
 			delta = time.Now().Sub(t0)
 			t.Logf("Assign results %v %v", label, err)
 			t.Logf("Assign timing %v", delta)
 			for _, l := range label {
-				if l > int64(tc.nlist) {
+				if l > int64(tc.nlist) || l == -1 {
 					t.Errorf("Result label out of range. Total %v. Label %v", tc.nlist, l)
 				}
 			}
@@ -167,7 +167,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 			t.Logf("EncodeAndAssign label %v", labels)
 
 			for _, l := range labels {
-				if l > int64(tc.nlist) {
+				if l > int64(tc.nlist) || l == -1 {
 					t.Errorf("Result label out of range. Total %v. Label %v", tc.nlist, l)
 				}
 			}
@@ -233,7 +233,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 			label, err = newcb.FindNearestCentroids(query_vec, 3)
 			t.Logf("Assign results %v %v", label, err)
 			for _, l := range label {
-				if l > int64(tc.nlist) {
+				if l > int64(tc.nlist) || l == -1 {
 					t.Errorf("Result label out of range. Total %v. Label %v", tc.nlist, l)
 				}
 			}

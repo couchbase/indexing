@@ -221,6 +221,19 @@ func (cb *codebookIVFPQ) FindNearestCentroids(vec []float32, k int64) ([]int64, 
 		faiss.RenormL2(cb.dim, nx, vec)
 	}
 
+	//If k is greater than default (efSearch=16), then set it
+	//to be 2x more than k. This ensures that the required number of
+	//centroids are always returned. If efSearch is smaller,
+	//assign may not be able to find enough centroids.
+	if k > faiss.DEFAULT_EF_SEARCH {
+		ps, err := faiss.NewParameterSpace()
+		if err != nil {
+			return nil, err
+		}
+		ps.SetIndexParameter(quantizer, "efSearch", float64(k*2))
+		ps.Delete()
+	}
+
 	labels, err := quantizer.Assign(vec, k)
 	if err != nil {
 		return nil, err
