@@ -1003,7 +1003,16 @@ func (o *MetadataProvider) scheduleIndexCreation(idxDefn *c.IndexDefn,
 			continue
 		}
 
-		nodes[strings.ToLower(w.getNodeAddr())] = w
+		watcherNodeAddr := strings.ToLower(w.getNodeAddr())
+		encryptedwatcherNodeAddr, _ := security.EncryptPortInAddr(watcherNodeAddr)
+
+		if !security.EncryptionEnabled() {
+			nodes[watcherNodeAddr] = w
+		} else if security.DisableNonSSLPort() {
+			nodes[encryptedwatcherNodeAddr] = w
+		} else {
+			nodes[encryptedwatcherNodeAddr] = w
+		}
 	}
 
 	if len(nodes) <= 0 {

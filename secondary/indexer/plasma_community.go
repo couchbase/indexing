@@ -65,3 +65,7 @@ func GetEmptyShardInfo() ([]common.ShardId, error) {
 func DestroyShard(shardId common.ShardId) error {
 	return nil
 }
+
+func GetRPCRootDir() string {
+	return ""
+}

@@ -625,6 +625,31 @@ func (rp RebalancePhase) String() string {
 	return "unknown"
 }
 
+func (rp RebalancePhase) ShortString() string {
+
+	switch rp {
+	case RebalanceNotRunning:
+		return "RNR"
+	case RebalanceInitated:
+		return "RI"
+	case RebalanceTransferInProgress:
+		return "RTIP"
+	case RebalanceTransferDone:
+		return "RTD"
+	case RebalanceRestoreInProgress:
+		return "RRIP"
+	case RebalanceRestoreDone:
+		return "RRD"
+	case RebalanceRecoveryInProgress:
+		return "RReIP"
+	case RebalanceRecoveryDone:
+		return "RReD"
+	case RebalanceDone:
+		return "RD"
+	}
+	return "unknown"
+}
+
 type RebalancePhaseRequest struct {
 	GlobalRebalPhase    RebalancePhase            `json:"globalRebalPhase,omitempty"`    // Overall rebalance phase
 	BucketTransferPhase map[string]RebalancePhase `json:"bucketTransferPhase,omitempty"` // Per-bucket rebalance phase

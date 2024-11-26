@@ -1738,7 +1738,6 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 						tt.Destination, tt.Region, shardId, shardPaths, err)
 
 					// Invoke clean-up for all shards and codebook even if error is observed for one shard transfer
-					// TODO: Cleanup of local codebook data
 					sr.initiateLocalShardCleanup(ttid, shardPaths, tt)
 					sr.setTransferTokenError(ttid, tt, err.Error())
 					return
@@ -1792,7 +1791,6 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 						tt.Destination, tt.Region, codebookName, codebookPaths, err)
 
 					/* Invoke clean-up for all shards and codebook even if error is observed for one codebook transfer
-					TODO: Cleanup of local codebook data
 					sr.initiateLocalShardCleanup(ttid, shardPaths, tt)
 					*/
 					sr.setTransferTokenError(ttid, tt, err.Error())
@@ -4172,13 +4170,21 @@ func (sr *ShardRebalancer) updateInstsTransferPhase(ttid string, tt *c.TransferT
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 
-	instsTransferPhase := make(map[c.IndexInstId]common.RebalancePhase)
+	instsTransferPhase := make(map[c.IndexInstId]map[c.PartitionId]common.RebalancePhase)
 	for i := range tt.IndexInsts {
+
+		instId := tt.InstIds[i]
 		if tt.RealInstIds[i] != 0 {
-			instsTransferPhase[tt.RealInstIds[i]] = tranfserPhase
-		} else {
-			instsTransferPhase[tt.InstIds[i]] = tranfserPhase
+			instId = tt.RealInstIds[i]
 		}
+
+		if _, ok := instsTransferPhase[instId]; !ok {
+			instsTransferPhase[instId] = make(map[c.PartitionId]c.RebalancePhase)
+		}
+		for _, partnId := range tt.IndexInsts[i].Defn.Partitions {
+			instsTransferPhase[instId][partnId] = tranfserPhase
+		}
+
 	}
 
 	// Incase of copy (replica repair cases), update the transfer phase for
@@ -4192,7 +4198,12 @@ func (sr *ShardRebalancer) updateInstsTransferPhase(ttid string, tt *c.TransferT
 					// Last 2 entires of splitPath[0] would be instanceID and partnID
 					newSplit := strings.Split(splitPath[0], "_")
 					origInstId, _ := strconv.ParseUint(newSplit[len(newSplit)-2], 10, 64)
-					instsTransferPhase[common.IndexInstId(origInstId)] = tranfserPhase
+					origPartnId, _ := strconv.ParseUint(newSplit[len(newSplit)-1], 10, 64)
+
+					if _, ok := instsTransferPhase[common.IndexInstId(origInstId)]; !ok {
+						instsTransferPhase[common.IndexInstId(origInstId)] = make(map[c.PartitionId]c.RebalancePhase)
+					}
+					instsTransferPhase[common.IndexInstId(origInstId)][c.PartitionId(origPartnId)] = tranfserPhase
 				} else {
 					logging.Fatalf("ShardRebalancer::updateInstsTransferPhase Invalid path seen for token: %v, "+
 						"path: %v, instRenameMap: %v", ttid, origPath, tt.InstRenameMap)

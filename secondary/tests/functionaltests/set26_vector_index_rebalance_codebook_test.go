@@ -276,14 +276,18 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_replica\":1, \"defer_build\":true};",
 			idxDedicatedReplica, BUCKET)
 		err := createWithDeferAndBuild(idxDedicatedReplica, BUCKET, "", "", stmt, defaultIndexActiveTimeout)
-		FailTestIfError(err, "Error in creating "+idxDedicatedReplica, t)
+		FailTestIfError(err, "Error in creating "+idxDedicatedReplica, subt)
 
+		startTime := time.Now()
 		stmt = fmt.Sprintf("CREATE INDEX %v"+
 			" ON `%v`.`%v`.`%v`(sift VECTOR)"+
 			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_replica\":1, \"defer_build\":true};",
 			idxSharedReplica, BUCKET, scope, coll)
 		err = createWithDeferAndBuild(idxSharedReplica, BUCKET, scope, coll, stmt, defaultIndexActiveTimeout)
-		FailTestIfError(err, "Error in creating "+idxSharedReplica, t)
+		FailTestIfError(err, "Error in creating "+idxSharedReplica, subt)
+		timeTaken := time.Since(startTime)
+
+		time.Sleep(timeTaken / 2)
 
 		defer func() {
 			log.Printf("%v: dropping replicated indices:%v", subt.Name(), []string{idxDedicatedReplica, idxSharedReplica})
@@ -325,6 +329,7 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		tc.HandleError(err, "Failed to activate testactions")
 
 		defer func() {
+			waitForRebalanceCleanup()
 			err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
 				clusterconfig.Username, clusterconfig.Password, kvaddress)
 			tc.HandleError(err, "Failed to activate testactions")
@@ -359,6 +364,7 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		tc.HandleError(err, "Failed to activate testactions")
 
 		defer func() {
+			waitForRebalanceCleanup()
 			err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
 				clusterconfig.Username, clusterconfig.Password, kvaddress)
 			tc.HandleError(err, "Failed to activate testactions")
@@ -393,6 +399,7 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		tc.HandleError(err, "Failed to activate testactions")
 
 		defer func() {
+			waitForRebalanceCleanup()
 			err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
 				clusterconfig.Username, clusterconfig.Password, kvaddress)
 			tc.HandleError(err, "Failed to activate testactions")
@@ -426,6 +433,7 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		tc.HandleError(err, "Failed to activate testactions")
 
 		defer func() {
+			waitForRebalanceCleanup()
 			err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
 				clusterconfig.Username, clusterconfig.Password, kvaddress)
 			tc.HandleError(err, "Failed to activate testactions")
@@ -463,6 +471,8 @@ func swapAndCheckForCleanup(t *testing.T, nidIn, nidOut int) {
 
 	performCodebookTransferValidation(t, []string{idxDedicated, idxShared})
 	validateVectorScan(t)
+
+	time.Sleep(10 * time.Second)
 }
 
 func validateReplicatedVectorScan(t *testing.T) {

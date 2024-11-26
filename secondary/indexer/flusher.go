@@ -546,12 +546,13 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 		slice := partnInst.Sc.GetSliceByIndexKey(mut.key)
 		if err := slice.Insert(mut.key, docid, mut.includeColumn, mut.vectors, mut.centroidPos, meta); err != nil {
 			logging.Errorf("Flusher::processUpsert Error indexing Key: %s "+
-				"docid: %s in Slice: %v. Error: %v. Skipped.",
-				logging.TagUD(mut.key), logging.TagStrUD(docid), slice.Id(), err)
+				"docid: %s in Slice: %v IndexInstId: %v, PartitionId: %v. Error: %v. Skipped.",
+				logging.TagUD(mut.key), logging.TagStrUD(docid), slice.Id(), slice.IndexInstId(), slice.IndexPartnId(), err)
 
 			if err2 := slice.Delete(docid, meta); err2 != nil {
 				logging.Errorf("Flusher::processUpsert Error removing entry due to error %v Key: %s "+
-					"docid: %s in Slice: %v. Error: %v", err, logging.TagUD(mut.key), logging.TagStrUD(docid), slice.Id(), err2)
+					"docid: %s in Slice: %v IndexInstId: %v, PartitionId: %v. Error: %v", err, logging.TagUD(mut.key),
+					logging.TagStrUD(docid), slice.Id(), slice.IndexInstId(), slice.IndexPartnId(), err2)
 			}
 		}
 	} else {
@@ -591,7 +592,8 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta)
 			slice := partnInst.Sc.GetSliceByIndexKey(mut.key)
 			if err := slice.Delete(docid, meta); err != nil {
 				logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
-					"from Slice: %v", logging.TagStrUD(docid), slice.Id())
+					"from Slice: %v, IndexInstId: %v, PartitionId: %v", logging.TagStrUD(docid), slice.Id(),
+					slice.IndexInstId(), slice.IndexPartnId())
 			}
 		} else {
 			logging.LazyDebug(func() string {
@@ -604,7 +606,8 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta)
 			slice := partnInst.Sc.GetSliceByIndexKey(mut.key)
 			if err := slice.Delete(docid, meta); err != nil {
 				logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
-					"from Slice: %v", logging.TagStrUD(docid), slice.Id())
+					"from Slice: %v, IndexInstId: %v, PartitionId: %v", logging.TagStrUD(docid), slice.Id(),
+					slice.IndexInstId(), slice.IndexPartnId())
 			}
 		}
 	}
@@ -632,7 +635,8 @@ func (f *flusher) processUpsertDelete(mut *Mutation, docid []byte, meta *Mutatio
 		slice := partnInst.Sc.GetSliceByIndexKey(mut.key)
 		if err := slice.Delete(docid, meta); err != nil {
 			logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
-				"from Slice: %v", logging.TagStrUD(docid), slice.Id())
+				"from Slice: %v, IndexInstId: %v, PartitionId: %v", logging.TagStrUD(docid),
+				slice.Id(), slice.IndexInstId(), slice.IndexPartnId())
 		}
 	}
 }
