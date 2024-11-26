@@ -3647,7 +3647,7 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.planner.use_shard_dealer": ConfigValue{
-		false,
+		true,
 		"Enable planner to use the shard dealer for assigning shards to indexes. The shard dealer uses " +
 			"3 pass algorithm to assign shards on a node. Use false to disable the shard dealer",
 		false,
@@ -3655,7 +3655,7 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.planner.internal.min_shards_per_node": ConfigValue{
-		uint64(3),
+		uint64(6),
 		"Minimum shards per node (uint64) for the shard dealer. Planner will not re-use shards until it " +
 			"creates atleast these many shards. This is ignored if the shard dealer is disabled.",
 		uint64(0),
