@@ -517,7 +517,7 @@ func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 	idxInstId common.IndexInstId, tsVbuuid *common.TsVbuuid, stats *IndexerStats,
 	hasAllSB bool, flushWasAborted bool, needsCommit bool,
 	forceCommit bool, wg *sync.WaitGroup, startTime int64,
-    logOncePerBucket *sync.Once) {
+	logOncePerBucket *sync.Once) {
 
 	idxInst := indexInstMap[idxInstId]
 	//process only if index belongs to the flushed keyspaceId and stream
@@ -1057,9 +1057,12 @@ func (sm *storageMgr) rollbackIndex(streamId common.StreamId, keyspaceId string,
 				return nil, nil
 			}
 
-			//if restartTs is lower than the minimum, use that
-			if !restartTs.AsRecentTs(minRestartTs) {
+			if minRestartTs == nil {
 				minRestartTs = restartTs
+			} else {
+				// compute the minimum timestamp for each vbucket and use that
+				// for restarting the streams
+				minRestartTs = common.ComputeMinTs(minRestartTs, restartTs)
 			}
 		}
 	}
