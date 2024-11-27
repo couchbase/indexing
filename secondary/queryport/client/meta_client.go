@@ -734,6 +734,16 @@ func (b *metadataClient) equivalentIndex(
 		return false
 	}
 
+	if len(d1.Include) != len(d2.Include) {
+		return false
+	}
+
+	for i := range d1.Include {
+		if d1.Include[i] != d2.Include[i] {
+			return false
+		}
+	}
+
 	if d1.IsVectorIndex != d2.IsVectorIndex {
 		return false
 	} else if d1.IsVectorIndex {
