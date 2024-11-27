@@ -14119,7 +14119,21 @@ func (idx *indexer) updateDropInstsDuringTrainingMap(instId common.IndexInstId, 
 	idx.muDropTraining.Lock()
 	defer idx.muDropTraining.Unlock()
 
-	idx.dropInstsDuringTraining[instId] = clientCh
+	if _, ok := idx.dropInstsDuringTraining[instId]; !ok {
+		idx.dropInstsDuringTraining[instId] = clientCh
+	} else {
+		errStr := "Index Drop Already In Progress."
+
+		logging.Errorf("Index Drop Already In Progress for instId: %v", instId)
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEX_DROP_IN_PROGRESS,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+	}
 }
 
 func (idx *indexer) removeFromDropInstsDuringTrainingMap(instId common.IndexInstId) {
