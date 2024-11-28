@@ -4334,6 +4334,27 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.bhive.evictThreshold": ConfigValue{
+		1,
+		"number of iterations before a graph is purged from cache",
+		1,
+		false,
+		false,
+	},
+	"indexer.bhive.compressType": ConfigValue{
+		"lz4",
+		"compression type",
+		"lz4",
+		false,
+		false,
+	},
+	"indexer.bhive.compressLevel": ConfigValue{
+		1,
+		"compression level",
+		1,
+		false,
+		false,
+	},
 	"projector.log_dir": ConfigValue{
 		"",
 		"Projector log directory",

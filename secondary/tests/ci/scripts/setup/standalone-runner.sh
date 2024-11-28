@@ -14,6 +14,8 @@ fi;
 
 echo "cloning custom repo into $WORKSPACE"
 cp -r /mnt/project/* $WORKSPACE
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
+cp secondary/tests/ci/scripts/* /home/bot/bin/
 
 echo "running standalone runner - $WORKSPACE"
 
