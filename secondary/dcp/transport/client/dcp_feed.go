@@ -128,7 +128,7 @@ func NewDcpFeed(
 		logPrefix:     name.StreamLogPrefix(),
 		stats:         &DcpStats{StreamNo: fmt.Sprintf("%v", name.StreamId)},
 		seqOrders:     make(map[uint16]transport.SeqOrderState),
-		closeMutQueue: make(chan bool),
+		closeMutQueue: make(chan bool, 1),
 		dequeueDoneCh: make(chan bool),
 	}
 
@@ -427,6 +427,10 @@ loop:
 				respch <- []interface{}{err}
 
 			case dfCmdClose:
+				if feed.useAtomicMutationQueue && feed.controlDataPathSeparation {
+					feed.closeMutQueue <- true
+					<-feed.dequeueDoneCh // wait for dequeueMutations to exit before sending streamEnds
+				}
 				feed.sendStreamEnd(feed.outch)
 				respch := msg[1].(chan []interface{})
 				respch <- []interface{}{nil}
@@ -1925,11 +1929,13 @@ func computeLatency(stream *DcpStream) int64 {
 func (feed *DcpFeed) doReceive(
 	rcvch chan []interface{}, finch chan bool, conn *Client) {
 
-	if !feed.useAtomicMutationQueue {
-		defer close(rcvch)
-	}
-
-	defer close(feed.closeMutQueue)
+	defer func() {
+		if !feed.useAtomicMutationQueue {
+			close(rcvch)
+		} else {
+			feed.closeMutQueue <- true // write to this channel so that DequeueMutations will exit
+		}
+	}()
 
 	var headerBuf [transport.HDR_LEN]byte
 	var duration time.Duration
