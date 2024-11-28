@@ -95,10 +95,11 @@ type DcpFeed struct {
 
 	truncName string
 
-	mutationQueue          *AtomicMutationQueue
-	useAtomicMutationQueue bool
-	closeMutQueue          chan bool
-	dequeueDoneCh          chan bool // DequeueMutations will close this channel upon exit
+	mutationQueue             *AtomicMutationQueue
+	useAtomicMutationQueue    bool
+	controlDataPathSeparation bool
+	closeMutQueue             chan bool
+	dequeueDoneCh             chan bool // DequeueMutations will close this channel upon exit
 
 	mu sync.Mutex // Avoid concurrent setting of connection deadline.
 
@@ -136,6 +137,10 @@ func NewDcpFeed(
 	if val, ok := config["useMutationQueue"]; ok {
 		feed.useAtomicMutationQueue = val.(bool)
 	}
+	if val, ok := config["mutation_queue.control_data_path_separation"]; ok {
+		feed.controlDataPathSeparation = val.(bool)
+	}
+
 	newFeedName, err := truncFeedName(name)
 	if err != nil {
 		logging.Infof("%v ##%x NewDcpFeed error truncating feed name %v",
@@ -172,7 +177,8 @@ func NewDcpFeed(
 	}
 	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch, config)
 	go feed.doReceive(rcvch, feed.finch, mc)
-	logging.Infof("%v ##%x feed started. useMutationQueue: %v ...", feed.logPrefix, opaque, feed.useAtomicMutationQueue)
+	logging.Infof("%v ##%x feed started. useMutationQueue: %v, controlDataPathSeparation: %v ...",
+		feed.logPrefix, opaque, feed.useAtomicMutationQueue, feed.controlDataPathSeparation)
 	return feed, nil
 }
 
@@ -281,18 +287,24 @@ func (feed *DcpFeed) DequeueMutations(rcvch chan []interface{}, abortCh chan boo
 		pkt, bytes := feed.mutationQueue.Dequeue(abortCh, feed.closeMutQueue)
 		if pkt != nil {
 
-			switch pkt.Opcode {
-			case transport.DCP_OPEN, transport.HELO,
-				transport.DCP_CONTROL:
-				respCh := feed.getSyncRespCh()
-				respCh <- []interface{}{pkt, bytes}
-				continue
-			}
+			// if control and data path separation is present, handlePacket in DequeueMutations()
+			// otherwise, handlePacket in genServer()
+			if feed.controlDataPathSeparation {
+				switch pkt.Opcode {
+				case transport.DCP_OPEN, transport.HELO,
+					transport.DCP_CONTROL:
+					respCh := feed.getSyncRespCh()
+					respCh <- []interface{}{pkt, bytes}
+					continue
+				}
 
-			switch feed.handlePacket(pkt, bytes) {
-			case "exit":
-				feed.sendStreamEnd(feed.outch)
-				return
+				switch feed.handlePacket(pkt, bytes) {
+				case "exit":
+					feed.sendStreamEnd(feed.outch)
+					return
+				}
+			} else {
+				rcvch <- []interface{}{pkt, bytes}
 			}
 
 			sendAck := false
@@ -891,7 +903,7 @@ func (feed *DcpFeed) getSyncRespCh() chan []interface{} {
 }
 
 func (feed *DcpFeed) resetSyncRespCh() {
-	if !feed.useAtomicMutationQueue {
+	if !(feed.useAtomicMutationQueue && feed.controlDataPathSeparation) {
 		return
 	}
 
@@ -908,7 +920,7 @@ func (feed *DcpFeed) resetSyncRespCh() {
 // DequeueMutations. DequeueMutations() will write to the channel returned
 // by this method
 func (feed *DcpFeed) initSyncRespCh(rcvch chan []interface{}) chan []interface{} {
-	if feed.useAtomicMutationQueue {
+	if feed.useAtomicMutationQueue && feed.controlDataPathSeparation {
 		respRcvCh := make(chan []interface{}, 1)
 		feed.addToSyncRespCh(respRcvCh)
 		return respRcvCh

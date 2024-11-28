@@ -1749,7 +1749,7 @@ func (feed *Feed) openFeeder(
 	} else {
 		dcpConfig["useMutationQueue"] = feed.config["dcp.useMutationQueue"].Bool()
 	}
-
+	dcpConfig["mutation_queue.control_data_path_separation"] = feed.config["dcp.mutation_queue.control_data_path_separation"].Bool()
 	dcpConfig["mutation_queue.connection_buffer_size"] = feed.config["dcp.mutation_queue.connection_buffer_size"].Int()
 	dcpConfig["connection_buffer_size"] = feed.config["dcp.connection_buffer_size"].Int()
 
@@ -2444,6 +2444,7 @@ func FeedConfigParams() []string {
 		"dcp.serverless.useMutationQueue",
 		"dcp.connection_buffer_size",
 		"dcp.mutation_queue.connection_buffer_size",
+		"dcp.mutation_queue.control_data_path_separation",
 		// dataport
 		"dataport.remoteBlock",
 		"dataport.keyChanSize",

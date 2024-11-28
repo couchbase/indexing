@@ -286,6 +286,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.dcp.mutation_queue.control_data_path_separation": ConfigValue{
+		true,
+		"When using atomic mutation queue, this flag is set to true to achieve " +
+			"complete control and data path separation for stream requests. Setting it to false will lead " +
+			"to a case where stream requests can be blocked on datapath if downstream is busy",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.dcp.serverless.useMutationQueue": ConfigValue{
 		true,
 		"Use atomic mutation queue at dcp_feed.go instead of golang channels " +
