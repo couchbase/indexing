@@ -23,6 +23,7 @@ var bucket = "default"
 var idx_sif10k = "idx_sift10k"
 var idx_sif10k_partn = "idx_sift10k_partn"
 var idx_base64 = "idx_base64"
+var vectorIndexActiveTimeout = int64(180) //3 min
 
 // Fist queryvector from SIFT10K
 var indexVector = &datastore.IndexVector{
@@ -1076,4 +1077,171 @@ func testScalarPredicates(t *testing.T, idx string) {
 				expectedVectorPosTop100[0:int(limit)], vectorPosReturned, scanResults)
 		})
 	}
+}
+
+// This test with two indexer nodes creates partitioned index.
+// Bucket is flushed and loaded with non-vector data.
+// Later second indexer is removed thus partitions move to available indexer.
+// Existing codebook should be used for new partitions getting merged. ErrTraining shouldn't be there.
+// If partitions are not successfully built on destination after removing second indexer, scan and test should fail.
+func TestVectorIndexDcpRebalCodebook(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	TestRebalanceSetupCluster(t)
+	vectorsLoaded = false
+
+	vectorSetup(t, bucket, "", "", 10000)
+
+	log.Printf("%v: Add Node %v to the cluster for partions to spread on two nodes", t.Name(), clusterconfig.Nodes[2])
+	addNodeAndRebalance(clusterconfig.Nodes[2], "index", t)
+
+	waitForRebalanceCleanup()
+
+	time.Sleep(1 * time.Second)
+
+	// Create Index
+	stmt := "CREATE INDEX idx_sif10k " +
+		" ON default(gender, sift VECTOR, docnum) PARTITION BY HASH(meta().id) " +
+		" WITH { \"num_partition\":8,\"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+
+	if _, err := execN1QL(bucket, stmt); err != nil {
+		log.Printf("Error while creating index : %v", err)
+		FailTestIfError(err, "Error in creating idx_sift10k", t)
+	}
+
+	time.Sleep(5 * time.Second)
+
+	err := secondaryindex.BuildIndexes([]string{"idx_sif10k"}, bucket, indexManagementAddress, vectorIndexActiveTimeout)
+	if err != nil {
+		log.Printf("Building Index failed err: %v", err)
+		FailTestIfError(err, "Error in building idx_sift10k", t)
+	}
+
+	// Test should succeed as the codebook was generated in build during index creation and for rebalance build,
+	// new sampling on bucket should have 0 qualifying documents.
+	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	docsToCreate := generateDocs(40000, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	kv.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	// Wait sothat test doesn't fail with error bucket items less than centroids.
+	time.Sleep(5 * time.Second)
+
+	removeNode(clusterconfig.Nodes[2], t)
+	expectedStatus := map[string][]string{clusterconfig.Nodes[0]: []string{"kv", "n1ql"}, clusterconfig.Nodes[1]: []string{"index"}}
+	validateClusterStatus(expectedStatus, t.Name(), t)
+
+	printClusterConfig(t.Name(), "exit")
+	waitForRebalanceCleanup()
+
+	time.Sleep(5 * time.Second)
+	state, err := secondaryindex.IndexState("idx_sif10k", bucket, indexManagementAddress)
+	FailTestIfError(err, "Error in retrieving state", t)
+	if state != "INDEX_STATE_ACTIVE" {
+		t.Fatalf("Index:%v, not found in the expected state:%v, found:%v", "idx_sif10k", "INDEX_STATE_ACTIVE", state)
+	}
+	log.Printf("Index:%v, found in the expected state:%v", "idx_sif10k", state)
+
+	vecIndexCreated = true
+
+	scans := qc.Scans{
+		&qc.Scan{
+			Filter: []*qc.CompositeElementFilter{
+				&qc.CompositeElementFilter{
+					Low:       "male",
+					High:      "male",
+					Inclusion: qc.Both,
+				},
+				&qc.CompositeElementFilter{},
+				&qc.CompositeElementFilter{
+					Low:       0,
+					High:      20000,
+					Inclusion: qc.Both,
+				},
+			},
+		},
+	}
+
+	limit := int64(5)
+	// Scan
+	scanResults, err := secondaryindex.Scan6("idx_sif10k", bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	FailTestIfError(err, "Error during secondary index scan", t)
+
+	vectorPosReturned := make([]uint32, 0)
+	for k, _ := range scanResults {
+		s := strings.Split(k, "_")
+		vps := s[1]
+		vp, err := strconv.Atoi(vps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		vectorPosReturned = append(vectorPosReturned, uint32(vp))
+	}
+
+	recall := recallAtR(expectedVectorPosTop100[0:int(limit)], vectorPosReturned, int(limit))
+	log.Printf("Recall: %v expected values: %v result: %v %+v", recall,
+		expectedVectorPosTop100[0:int(limit)], vectorPosReturned, scanResults)
+	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+}
+
+// Same as TestVectorIndexRebalCodebook.
+// Difference is there are total 3 indexers & partitioned index is created with num_replica:1.
+func TestVectorIndexDcpRebalCodebook2(t *testing.T) {
+	t.Skipf("Skipping test for now...")
+	skipIfNotPlasma(t)
+
+	TestRebalanceSetupCluster(t)
+	vectorsLoaded = false
+
+	vectorSetup(t, bucket, "", "", 40000)
+
+	log.Printf("%v: Add Node %v to the cluster.", t.Name(), clusterconfig.Nodes[2])
+	addNodeAndRebalance(clusterconfig.Nodes[2], "index", t)
+
+	log.Printf("%v: Add Node %v to the cluster.", t.Name(), clusterconfig.Nodes[3])
+	addNodeAndRebalance(clusterconfig.Nodes[3], "index", t)
+
+	waitForRebalanceCleanup()
+
+	time.Sleep(1 * time.Second)
+
+	// Create Index & ensure each node has at least one partition of single replica using nodes clause.
+	stmt := "CREATE INDEX idx_sif10k " +
+		" ON default(gender, sift VECTOR, docnum) PARTITION BY HASH(meta().id) " +
+		" WITH { \"nodes\":[\"127.0.0.1:9001\",\"127.0.0.1:9002\",\"127.0.0.1:9003\"], \"num_partition\":8,\"num_replica\":1,\"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+
+	if _, err := execN1QL(bucket, stmt); err != nil {
+		log.Printf("Error while creating index : %v", err)
+		FailTestIfError(err, "Error in creating idx_sift10k", t)
+	}
+
+	err := secondaryindex.BuildIndexes([]string{"idx_sif10k"}, bucket, indexManagementAddress, vectorIndexActiveTimeout)
+	if err != nil {
+		log.Printf("Building Index failed err: %v", err)
+		FailTestIfError(err, "Error in building idx_sift10k", t)
+	}
+
+	// Test should succeed as the codebook was generated in build during index creation and for rebalance build,
+	// new sampling on bucket should have 0 qualifying documents.
+	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	CreateDocs(40000)
+	// Wait sothat test doesn't fail with error bucket items less than centroids.
+	time.Sleep(15 * time.Second)
+
+	removeNodes([]string{clusterconfig.Nodes[3]}, t)
+	expectedStatus := map[string][]string{clusterconfig.Nodes[0]: []string{"kv", "n1ql"}, clusterconfig.Nodes[1]: []string{"index"}, clusterconfig.Nodes[2]: []string{"index"}}
+	validateClusterStatus(expectedStatus, t.Name(), t)
+
+	//
+	log.Printf("Removing node %v & rebalance successful.", clusterconfig.Nodes[3])
+
+	removeNodes([]string{clusterconfig.Nodes[2]}, t)
+	expectedStatus = map[string][]string{clusterconfig.Nodes[0]: []string{"kv", "n1ql"}, clusterconfig.Nodes[1]: []string{"index"}}
+	validateClusterStatus(expectedStatus, t.Name(), t)
+
+	printClusterConfig(t.Name(), "exit")
+	waitForRebalanceCleanup()
+
 }
