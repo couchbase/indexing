@@ -1170,7 +1170,7 @@ func (c *GsiClient) Scan3(
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.ScanInternal("scan3", defnID, requestId, scans, reverse, distinct,
 		projection, offset, limit, groupAggr, indexOrder,
-		nil, "", cons, tsvector, broker, scanParams,
+		nil, "", nil, cons, tsvector, broker, scanParams,
 		nil, time.Time{}, 0)
 }
 
@@ -1179,6 +1179,7 @@ func (c *GsiClient) Scan6(
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	indexKeyNames []string, inlineFilter string,
+	partnSets [][]interface{},
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, scanParams map[string]interface{},
 	indexVector *IndexVector) (err error) {
@@ -1187,7 +1188,7 @@ func (c *GsiClient) Scan6(
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.ScanInternal("scan6", defnID, requestId, scans, reverse, distinct,
 		projection, offset, limit, groupAggr, indexOrder,
-		indexKeyNames, inlineFilter, cons, tsvector, broker, scanParams,
+		indexKeyNames, inlineFilter, partnSets, cons, tsvector, broker, scanParams,
 		indexVector, time.Time{}, 0)
 }
 
@@ -1196,6 +1197,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	indexKeyNames []string, inlineFilter string,
+	partnSets [][]interface{},
 	cons common.Consistency, tsvector *TsConsistency,
 	broker *RequestBroker, scanParams map[string]interface{},
 	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration) (err error) {
@@ -1248,6 +1250,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 	broker.SetSorted(indexOrder != nil)
 	broker.SetDistinct(distinct)
 	broker.SetIndexOrder(indexOrder)
+	broker.SetPartnSets(partnSets)
 
 	_, err = c.doScan(defnID, requestId, broker)
 	if err != nil { // callback with error
@@ -1667,6 +1670,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 
 	broker.SetResponseTimer(c.bridge.Timeit)
 	skips := make(map[common.IndexDefnId]bool)
+	partnSets := broker.GetPartnSets()
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
@@ -1683,9 +1687,10 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 		}
 
 		if ok && index != nil {
+
 			start := time.Now()
 			count, scan_errs, partial, refresh := broker.scatter(c.makeScanClient, index, queryports, targetInstIds,
-				rollbackTimes, partitions, numPartitions, c.settings)
+				rollbackTimes, partitions, numPartitions, partnSets, c.settings)
 
 			if !refresh {
 				foundScanport = true

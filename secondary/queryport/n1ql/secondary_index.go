@@ -1135,7 +1135,7 @@ func newSecondaryIndexFromMetaData(
 		// By default "nprobes" is 1. If any value is specified in query,
 		// indexer will use it instead
 		si.nprobes = 1
-		if (indexDefn.VectorMeta.Nprobes != 0) {
+		if indexDefn.VectorMeta.Nprobes != 0 {
 			si.nprobes = indexDefn.VectorMeta.Nprobes
 		}
 
@@ -1765,7 +1765,7 @@ func (si *secondaryIndex3) Scan3(
 	err := client.ScanInternal("scan3",
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
 		gsiprojection, offset, limit, gsigroupaggr, indexorder,
-		nil, "", n1ql2GsiConsistency[cons], vector2ts(tsvector),
+		nil, "", nil, n1ql2GsiConsistency[cons], vector2ts(tsvector),
 		broker, scanParams, nil, reqDeadline, reqDeadlineSlack)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
@@ -1980,7 +1980,7 @@ func (si *secondaryIndex6) Scan6(
 	indexKeyNames []string,
 	inlineFilter string,
 	indexVector *datastore.IndexVector, // Used for passing vector field details
-	indexPartionSets datastore.IndexPartitionSets, // Used for paritition elimination on include fields
+	indexPartionSets datastore.IndexPartitionSets, // Used for paritition elimination
 	cons datastore.ScanConsistency,
 	tsvector timestamp.Vector,
 	conn *datastore.IndexConnection) {
@@ -2025,12 +2025,13 @@ func (si *secondaryIndex6) Scan6(
 	gsigroupaggr := n1qlgroupaggrtogsi(groupAggs)
 	indexorder := n1qlindexordertogsi(indexOrders)
 	gsiIndexVector := n1qlindexvectortogsi(indexVector)
+	gsiPartnSets := n1qlpartnsetstogsi(indexPartionSets)
 	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup,
 		&backfillSync, sender.Capacity())
 	err := client.ScanInternal("scan6",
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
 		gsiprojection, offset, limit, gsigroupaggr, indexorder,
-		indexKeyNames, inlineFilter,
+		indexKeyNames, inlineFilter, gsiPartnSets,
 		n1ql2GsiConsistency[cons], vector2ts(tsvector),
 		broker, scanParams, gsiIndexVector, reqDeadline, reqDeadlineSlack)
 	if err != nil {
@@ -2782,6 +2783,19 @@ func n1qlindexvectortogsi(indexVector *datastore.IndexVector) *qclient.IndexVect
 	}
 
 	return vec
+}
+
+func n1qlpartnsetstogsi(partnSets datastore.IndexPartitionSets) [][]interface{} {
+	gsiPartnSets := make([][]interface{}, len(partnSets))
+	for i := range partnSets {
+		partnSet := partnSets[i]
+		gsiPartnSets[i] = make([]interface{}, len(partnSet.ValueSet))
+		for j := range partnSet.ValueSet {
+			gsiPartnSets[i][j] = partnSet.ValueSet[j]
+		}
+	}
+
+	return gsiPartnSets
 }
 
 func gsistatston1ql(stats []map[string]interface{}) []map[datastore.IndexStatType]value.Value {
