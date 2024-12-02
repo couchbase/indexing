@@ -73,8 +73,11 @@ func GetOrCreateN1QLClient2(server, bucketName, scopeName, collectionName string
 		clientMapLock.Unlock()
 	}
 
-	nc.Refresh()
-	return nc, nil
+	err = nc.Refresh()
+	if err != nil {
+		log.Printf("GetOrCreateN1QLClient2 error in Refresh(). err:%v", err)
+	}
+	return nc, err
 }
 
 func RemoveN1QLClientForBucket(server, bucketName string) {
@@ -461,6 +464,9 @@ func N1QLScan6(indexName, bucketName, scope, coll, server string, scans qc.Scans
 	}
 	requestid := getrequestid()
 	index, err := client.IndexByName(indexName)
+	if err != nil {
+		return nil, err
+	}
 
 	var err1 error
 	index, err1 = WaitForIndexOnline(client, indexName, index)
