@@ -280,8 +280,18 @@ const (
 // If there are no mutations in the queue, then Dequeue would block
 // until mutations arrive
 func (feed *DcpFeed) DequeueMutations(rcvch chan []interface{}, abortCh chan bool) {
-	defer close(rcvch)
-	defer close(feed.dequeueDoneCh)
+
+	defer func() {
+		close(rcvch)
+		close(feed.dequeueDoneCh)
+
+		if feed.useAtomicMutationQueue && feed.controlDataPathSeparation {
+			syncRespCh := feed.getSyncRespCh()
+			if syncRespCh != nil {
+				close(syncRespCh)
+			}
+		}
+	}()
 
 	for {
 		pkt, bytes := feed.mutationQueue.Dequeue(abortCh, feed.closeMutQueue)
@@ -900,9 +910,6 @@ func (feed *DcpFeed) getSyncRespCh() chan []interface{} {
 	feed.syncRespMu.Lock()
 	defer feed.syncRespMu.Unlock()
 
-	if feed.syncRespCh == nil {
-		panic("DcpFeed::getSyncRespCh - Expected non-nil channel. Found nil channel")
-	}
 	return feed.syncRespCh
 }
 
