@@ -148,6 +148,7 @@ type topologyChange struct {
 	ShardIdMap common.PartnShardIdMap `json:"partnShardIdMap,omitempty"`
 
 	TrainingPhase common.TrainingPhase `json:"trainingPhase,omitempty"`
+	NumCentroids  int                  `json:"numCentroids,omitempty"`
 }
 
 type dropInstance struct {
@@ -2449,7 +2450,7 @@ func (m *LifecycleMgr) setScheduleFlagAndUpdateErr(defn *common.IndexDefn, inst 
 
 	if updateErr {
 		err := m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
-			common.NIL_STREAM, errStr, nil, inst.RState, nil, nil, -1, nil, inst.TrainingPhase)
+			common.NIL_STREAM, errStr, nil, inst.RState, nil, nil, -1, nil, inst.TrainingPhase, inst.NumCentroids)
 		if err != nil {
 			logging.Infof("LifecycleMgr::handleBuildIndexes: Failed to persist error in index instance (%v, %v, %v, %v, %v).",
 				defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
@@ -2660,7 +2661,7 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 		common.IndexDefnId(change.DefnId), common.IndexInstId(change.InstId),
 		common.IndexState(change.State), common.StreamId(change.StreamId), change.Error,
 		change.BuildTime, change.RState, change.Partitions, change.Versions,
-		change.InstVersion, change.ShardIdMap, change.TrainingPhase); err != nil {
+		change.InstVersion, change.ShardIdMap, change.TrainingPhase, change.NumCentroids); err != nil {
 		return err
 	}
 
@@ -4174,7 +4175,7 @@ func (m *LifecycleMgr) canRetryCreateError(err error) bool {
 func (m *LifecycleMgr) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, errStr string, buildTime []uint64, rState uint32,
 	partitions []uint64, versions []int, version int, partnShardIdMap common.PartnShardIdMap,
-	trainingPhase common.TrainingPhase) error {
+	trainingPhase common.TrainingPhase, numCentroids int) error {
 
 	topology, err := m.repo.CloneTopologyByCollection(bucket, scope, collection)
 	if err != nil {
@@ -4240,7 +4241,7 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket, scope, collection string, def
 		changed = topology.UpdateShardIdsForIndexPartn(defnId, instId, partnShardIdMap) || changed
 	}
 
-	changed = topology.UpdateTrainingPhaseForIndex(defnId, instId, trainingPhase) || changed
+	changed = topology.UpdateTrainingPhaseForIndex(defnId, instId, trainingPhase, numCentroids) || changed
 
 	if changed {
 		if err := m.repo.SetTopologyByCollection(bucket, defn.Scope, defn.Collection, topology); err != nil {

@@ -992,21 +992,21 @@ func CloseGsiKeyspace(gsi datastore.Indexer) {
 // secondaryIndex to hold meta data information, network-address for
 // a single secondary-index.
 type secondaryIndex struct {
-	gsi        *gsiKeyspace // back-reference to container.
-	bucketn    string
-	name       string // name of the index
-	defnID     uint64
-	isPrimary  bool
-	using      c.IndexType
-	partnExpr  expression.Expressions
-	secExprs   expression.Expressions
-	desc       []bool
-	vectorAttr []bool
-	whereExpr  expression.Expression
-	state      datastore.IndexState
-	err        string
-	deferred   bool
-	indexInfo  map[string]interface{}
+	gsi          *gsiKeyspace // back-reference to container.
+	bucketn      string
+	name         string // name of the index
+	defnID       uint64
+	isPrimary    bool
+	using        c.IndexType
+	partnExpr    expression.Expressions
+	secExprs     expression.Expressions
+	desc         []bool
+	vectorAttr   []bool
+	whereExpr    expression.Expression
+	state        datastore.IndexState
+	err          string
+	deferred     bool
+	indexInfo    map[string]interface{}
 
 	scheduled bool
 	schedFail bool
@@ -1022,6 +1022,8 @@ type secondaryIndex struct {
 	nprobes            int
 	vectorDescription  string
 	vectorTrainList    int
+	numCentroids	   int
+	numPartition       int
 
 	isBhive bool
 	include expression.Expressions
@@ -1121,6 +1123,11 @@ func newSecondaryIndexFromMetaData(
 		si.vectorDescription = indexDefn.VectorMeta.Quantizer.String()
 		si.vectorTrainList = indexDefn.VectorMeta.TrainList
 
+		si.numCentroids = indexDefn.VectorMeta.Quantizer.Nlist
+		if len(imd.Instances) > 0 && imd.Instances[0].NumCentroids != 0 {
+			si.numCentroids = imd.Instances[0].NumCentroids
+		}
+
 		// By default "nprobes" is 1. If any value is specified in query,
 		// indexer will use it instead
 		si.nprobes = 1
@@ -1134,6 +1141,12 @@ func newSecondaryIndexFromMetaData(
 			}
 			si.include = exprs
 		}
+	}
+
+	// Using Index Definition for NumPartitions is problematic because, during index creation,
+	// numPartitions is explicitly set to 0 and isn’t propagated back to the query client.
+	if len(imd.Instances) > 0 {
+		si.numPartition = int(imd.Instances[0].NumPartitions)
 	}
 
 	return si, nil
@@ -1919,9 +1932,8 @@ func (si *secondaryIndex6) VectorDescription() string {
 	return si.vectorDescription
 }
 
-// [VECTOR_TODO] stub function, needs to be updated
 func (si *secondaryIndex6) NumberOfCentroids() int {
-	return int(0)
+	return si.numCentroids
 }
 
 // [VECTOR_TODO] stub function, needs to be updated
