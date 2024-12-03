@@ -273,4 +273,27 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	if recall < 0.5 {
 		log.Printf("ANN scan results: %v, KNN scan results: %v", annScanResults, knnScanResults)
 	}
+
+	// Case-6: Include column fields are present in projection but not in filter
+	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, direction, docnum, ANN(sift, qvec, \"L2_SQUARED\", %v) "+
+		" from %v ORDER BY ANN(sift, qvec, \"L2_SQUARED\", %v) limit %v",
+		queryVectorStr, indexVector.Probes, bucket, indexVector.Probes, limit)
+	annScanResults, err = execN1QL(bucket, annScanStmt)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	validateScanStats(bucket, idx_bhive_include, 6, 6*limit, t)
+
+	// validate the results using KNN
+	knnScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, direction, docnum, KNN(sift, qvec, \"L2_SQUARED\") "+
+		" from %v ORDER BY KNN(sift, qvec, \"L2_SQUARED\") limit %v",
+		queryVectorStr, bucket, limit)
+
+	knnScanResults, err = execN1QL(bucket, knnScanStmt)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	validateScanStats(bucket, idx_bhive_include, 6, 6*limit, t) // The num-request should not change because of KNN scan
+
+	recall = computeRecallWithKNNResults(annScanResults, knnScanResults, 4, t)
+	log.Printf("TestBhiveIndexWithIncludeColumns:Case-6 recall observed is: %v", recall)
+	if recall < 0.5 {
+		log.Printf("ANN scan results: %v, KNN scan results: %v", annScanResults, knnScanResults)
+	}
 }
