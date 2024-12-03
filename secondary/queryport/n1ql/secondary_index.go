@@ -1131,6 +1131,9 @@ func newSecondaryIndexFromMetaData(
 		// By default "nprobes" is 1. If any value is specified in query,
 		// indexer will use it instead
 		si.nprobes = 1
+		if (indexDefn.VectorMeta.Nprobes != 0) {
+			si.nprobes = indexDefn.VectorMeta.Nprobes
+		}
 
 		si.isBhive = indexDefn.VectorMeta.IsBhive
 		if len(indexDefn.Include) > 0 {
