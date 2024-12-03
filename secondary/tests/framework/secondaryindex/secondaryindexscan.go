@@ -632,7 +632,7 @@ func Scan6(indexName, bucketName, scope, collection, server string, scans qc.Sca
 	qcIndexVector := datastoreIndexVectorToQc(indexVector)
 
 	connErr := client.Scan6(defnID, "2itest", scans, reverse, distinct, projection, offset, limit,
-		nil, indexOrder, nil, "", consistency, tsVector, callb, scanParams, qcIndexVector)
+		nil, indexOrder, nil, "", nil, consistency, tsVector, callb, scanParams, qcIndexVector)
 
 	elapsed := time.Since(start)
 
