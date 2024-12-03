@@ -196,9 +196,9 @@ func NewRebalanceServiceManager(genericMgr *GenericServiceManager, httpAddr stri
 	mgr.rebalanceToken = rebalanceToken
 	mgr.localhttp = httpAddr
 
-	if rebalanceToken != nil {
+	if rebalanceRunning || rebalanceToken != nil {
 		mgr.setCleanupPending(true)
-		if rebalanceToken.Source == RebalSourceClusterOp { // rebalance, not move
+		if rebalanceToken != nil && rebalanceToken.Source == RebalSourceClusterOp { // rebalance, not move
 			mgr.state.isBalanced = false
 		}
 	}
@@ -497,12 +497,6 @@ func (m *RebalanceServiceManager) prepareFailover(change service.TopologyChange)
 		return err
 	}
 
-	if m.rebalanceRunning && m.rebalanceToken.Source == RebalSourceClusterOp {
-		l.Infof("%v Found Node In Prepared State. Cleanup.", method)
-		err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
-		return err
-	}
-
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceMoveIndex {
 
 		l.Infof("%v Found Move Index In Progress %v. Aborting.", method, m.rebalanceToken)
@@ -541,6 +535,12 @@ func (m *RebalanceServiceManager) prepareFailover(change service.TopologyChange)
 			}
 		}
 
+		return err
+	}
+
+	if m.rebalanceRunning {
+		l.Infof("%v Found Node In Prepared State. Cleanup.", method)
+		err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
 		return err
 	}
 
