@@ -139,6 +139,7 @@ func getScanRequest1(dim, vectorKeyPos int, queryVector []float32) *ScanRequest 
 				VectorMeta: &c.VectorMetadata{
 					Dimension:  dim,
 					Similarity: common.L2_SQUARED,
+					Quantizer:  &c.VectorQuantizer{Type: common.SQ},
 				},
 				SecExprs: []string{"name", "age", "color"},
 			},
@@ -223,7 +224,7 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 
 		var j = ScanJob{
 			pid:      c.PartitionId(0),
-			cid:      0,
+			cid:      -1,
 			scan:     scans[0],
 			snap:     ssnap,
 			codebook: mcb,
@@ -363,7 +364,7 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 
 		var j1 = ScanJob{
 			pid:      c.PartitionId(0),
-			cid:      0,
+			cid:      -1,
 			scan:     scans1[0],
 			snap:     ssnap1,
 			codebook: mcb1,
@@ -373,7 +374,7 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 
 		var j2 = ScanJob{
 			pid:      c.PartitionId(0),
-			cid:      0,
+			cid:      -1,
 			scan:     scans2[0],
 			snap:     ssnap2,
 			codebook: mcb2,
@@ -589,7 +590,7 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 
 		var j1 = ScanJob{
 			pid:      c.PartitionId(0),
-			cid:      0,
+			cid:      -1,
 			scan:     scans1[0],
 			snap:     ssnap1,
 			codebook: mcb,
@@ -599,7 +600,7 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 
 		var j2 = ScanJob{
 			pid:      c.PartitionId(0),
-			cid:      0,
+			cid:      -1,
 			scan:     scans2[0],
 			snap:     ssnap2,
 			codebook: mcb,
