@@ -8,7 +8,6 @@ package faiss
 */
 import "C"
 import (
-	"runtime"
 	"unsafe"
 )
 
@@ -18,8 +17,8 @@ const (
 )
 
 func WriteIndexIntoBuffer(idx Index) ([]byte, error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// runtime.LockOSThread()
+	// defer runtime.UnlockOSThread()
 
 	// the values to be returned by the faiss APIs
 	tempBuf := (*C.uchar)(nil)
@@ -72,8 +71,8 @@ func WriteIndexIntoBuffer(idx Index) ([]byte, error) {
 }
 
 func ReadIndexFromBuffer(buf []byte, ioflags int) (*IndexImpl, error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// runtime.LockOSThread()
+	// defer runtime.UnlockOSThread()
 
 	ptr := (*C.uchar)(unsafe.Pointer(&buf[0]))
 	size := C.size_t(len(buf))
