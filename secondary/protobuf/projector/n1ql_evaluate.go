@@ -213,10 +213,9 @@ func N1QLTransformForVectorIndex(
 
 			if key.Type() == qvalue.MISSING && isLeadingKey {
 				return nil, nil, nil, nil, nil
-			} else if key.Type() == qvalue.MISSING {
+			} else if key.Type() == qvalue.MISSING { // Missing and non-leading
 				if keyPos == ie.vectorPos {
-					// If vector is missing/null, then skip indexing the document
-					return nil, nil, nil, nil, nil
+					vectors = append(vectors, nil) // index nil vector
 				}
 				arrValue = append(arrValue, key)
 			} else {
@@ -238,11 +237,13 @@ func N1QLTransformForVectorIndex(
 
 					if err != nil { // invalid vector entry
 						ie.stats.updateErrCount(err)
-						// If vector is missing/null, then skip indexing the document
-						// irrespective of expression with VECTOR attribute being leading
-						// key or not
-						return nil, nil, nil, nil, nil
-					} else {
+						if isLeadingKey { // Leading and invalid vector will not be indexed
+							return nil, nil, nil, nil, nil
+						} else {
+							vectors = append(vectors, nil)
+							arrValue = append(arrValue, qvalue.NULL_VALUE) // Invalid vectors will be indexed NULL
+						}
+					} else { // valid vector
 						vectors = append(vectors, vector)
 						arrValue = append(arrValue, dummy_centroid)
 					}
