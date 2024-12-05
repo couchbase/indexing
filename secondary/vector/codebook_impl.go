@@ -17,26 +17,6 @@ import (
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
-type MetricType int
-
-const (
-	METRIC_L2 MetricType = iota
-	METRIC_INNER_PRODUCT
-)
-
-func (m MetricType) String() string {
-
-	switch m {
-
-	case METRIC_L2:
-		return "L2"
-	case METRIC_INNER_PRODUCT:
-		return "INNER_PRODUCT"
-	}
-
-	return ""
-}
-
 type CodebookVer int
 
 const (
@@ -55,12 +35,12 @@ func RecoverCodebook(data []byte, qType string) (codebook.Codebook, error) {
 	return nil, codebook.ErrUnknownType
 }
 
-func convertToFaissMetric(metric MetricType) int {
+func convertToFaissMetric(metric codebook.MetricType) int {
 
 	switch metric {
-	case METRIC_L2:
+	case codebook.METRIC_L2:
 		return faiss.MetricL2
-	case METRIC_INNER_PRODUCT:
+	case codebook.METRIC_INNER_PRODUCT:
 		return faiss.MetricInnerProduct
 
 	}
@@ -68,25 +48,25 @@ func convertToFaissMetric(metric MetricType) int {
 	return faiss.MetricL2
 }
 
-func convertSimilarityToMetric(similarity common.VectorSimilarity) (MetricType, bool) {
+func convertSimilarityToMetric(similarity common.VectorSimilarity) (codebook.MetricType, bool) {
 	switch similarity {
 	case common.EUCLIDEAN_SQUARED, common.L2_SQUARED, common.EUCLIDEAN, common.L2:
-		return METRIC_L2, false // Default to L2
+		return codebook.METRIC_L2, false // Default to L2
 	case common.DOT:
-		return METRIC_INNER_PRODUCT, false
+		return codebook.METRIC_INNER_PRODUCT, false
 	case common.COSINE:
-		return METRIC_INNER_PRODUCT, true
+		return codebook.METRIC_INNER_PRODUCT, true
 	}
-	return METRIC_L2, false // Always default to L2
+	return codebook.METRIC_L2, false // Always default to L2
 }
 
 func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (codebook codebook.Codebook, err error) {
 	metric, useCosine := convertSimilarityToMetric(vectorMeta.Similarity)
 	switch vectorMeta.Quantizer.Type {
 	case common.PQ:
-		nsub :=  vectorMeta.Quantizer.SubQuantizers
+		nsub := vectorMeta.Quantizer.SubQuantizers
 		if vectorMeta.Quantizer.FastScan {
-			nsub =  vectorMeta.Quantizer.BlockSize
+			nsub = vectorMeta.Quantizer.BlockSize
 		}
 		codebook, err = NewCodebookIVFPQ(vectorMeta.Dimension, nsub, vectorMeta.Quantizer.Nbits,
 			nlist, metric, useCosine, vectorMeta.Quantizer.FastScan)
@@ -103,7 +83,7 @@ func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (codebook codeboo
 			return nil, err
 		}
 		logging.Infof("NewCodebookIVFSQ: Initialized codebook with dimension: %v, range: %v, nlist: %v, "+
-		 	"metric: %v, useCosine: %v",
+			"metric: %v, useCosine: %v",
 			vectorMeta.Dimension, vectorMeta.Quantizer.SQRange, nlist, metric, useCosine)
 
 	default:

@@ -150,6 +150,7 @@ func (mc *MockCodebook) Size() int64                                            
 func (mc *MockCodebook) Close() error                                                  { return nil }
 func (mc *MockCodebook) Marshal() ([]byte, error)                                      { return nil, nil }
 func (mc *MockCodebook) NumCentroids() int                                             { return 0 }
+func (mc *MockCodebook) MetricType() MetricType                                        { return METRIC_L2 }
 
 // -----------------
 // KMeans Clustering

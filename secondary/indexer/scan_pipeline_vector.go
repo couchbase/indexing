@@ -520,11 +520,12 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 	vecCount := len(w.currBatchRows)
 
 	qtype := w.r.IndexInst.Defn.VectorMeta.Quantizer.Type
+	metric := w.currJob.codebook.MetricType()
 
 	//ComputeDistanceEncoded is only implemented for SQ currently. It can only
 	//be used if all vectors in a batch belong to the same centroid. If cid < 0,
 	//it implies that scan is spanning across centroids.
-	if w.currJob.cid < 0 && qtype == c.SQ {
+	if w.currJob.cid >= 0 && qtype == c.SQ && metric == codebook.METRIC_L2 {
 
 		// Make list of vectors to calculate distance
 		for i := 0; i < vecCount; i++ {

@@ -11,6 +11,26 @@ var (
 	ErrUnsupportedMetric  = errors.New("Unsupported Distance Metric")
 )
 
+type MetricType int
+
+const (
+	METRIC_L2 MetricType = iota
+	METRIC_INNER_PRODUCT
+)
+
+func (m MetricType) String() string {
+
+	switch m {
+
+	case METRIC_L2:
+		return "L2"
+	case METRIC_INNER_PRODUCT:
+		return "INNER_PRODUCT"
+	}
+
+	return ""
+}
+
 type Codebook interface {
 	//Train the codebook using input vectors.
 	Train(vecs []float32) error
@@ -80,4 +100,6 @@ type Codebook interface {
 
 	// Number of centroids used in training the instance
 	NumCentroids() int
+
+	MetricType() MetricType
 }

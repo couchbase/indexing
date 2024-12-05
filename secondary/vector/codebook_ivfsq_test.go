@@ -6,14 +6,14 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
-	codebookpkg "github.com/couchbase/indexing/secondary/vector/codebook"
+	cbpkg "github.com/couchbase/indexing/secondary/vector/codebook"
 )
 
 type codebookIVFSQTestCase struct {
 	name string
 
 	dim       int
-	metric    MetricType
+	metric    cbpkg.MetricType
 	useCosine bool
 
 	nlist    int
@@ -25,13 +25,13 @@ type codebookIVFSQTestCase struct {
 
 var codebookIVFSQTestCases = []codebookIVFSQTestCase{
 
-	{"SQ4_L2", 128, METRIC_L2, false, 1000, common.SQ_4BIT, 10000, 10000},
-	{"SQ6_L2", 128, METRIC_L2, false, 1000, common.SQ_6BIT, 10000, 10000},
-	{"SQ8_L2", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 1000, 1000},
-	{"SQFP16_L2", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000},
-	{"SQ8_DOT", 128, METRIC_INNER_PRODUCT, false, 1000, common.SQ_8BIT, 10000, 10000},
-	{"SQ8_COSINE", 128, METRIC_INNER_PRODUCT, true, 1000, common.SQ_8BIT, 10000, 10000},
-	{"SQ8_L2 No Clustering", 128, METRIC_L2, false, 10000, common.SQ_8BIT, 10000, 10000},
+	{"SQ4_L2", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_4BIT, 10000, 10000},
+	{"SQ6_L2", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_6BIT, 10000, 10000},
+	{"SQ8_L2", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_8BIT, 1000, 1000},
+	{"SQFP16_L2", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000},
+	{"SQ8_DOT", 128, cbpkg.METRIC_INNER_PRODUCT, false, 1000, common.SQ_8BIT, 10000, 10000},
+	{"SQ8_COSINE", 128, cbpkg.METRIC_INNER_PRODUCT, true, 1000, common.SQ_8BIT, 10000, 10000},
+	{"SQ8_L2 No Clustering", 128, cbpkg.METRIC_L2, false, 10000, common.SQ_8BIT, 10000, 10000},
 }
 
 // Tests for CodebookIVFSQ
@@ -209,7 +209,7 @@ func TestCodebookIVFSQ(t *testing.T) {
 
 			//close again
 			err = codebook.Close()
-			if err != codebookpkg.ErrCodebookClosed {
+			if err != cbpkg.ErrCodebookClosed {
 				t.Errorf("Expected err while double closing codebook")
 			}
 
@@ -284,7 +284,7 @@ type sqTimingTestCase struct {
 	name string
 
 	dim       int
-	metric    MetricType
+	metric    cbpkg.MetricType
 	useCosine bool
 
 	nlist    int
@@ -300,16 +300,16 @@ type sqTimingTestCase struct {
 
 var sqTimingTestCases = []sqTimingTestCase{
 
-	{"SQ8 Batch 1 Concur 1", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 1, 1, 10000},
-	{"SQ8 Batch 1 Concur 10", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 1, 10, 10000},
-	{"SQ8 Batch 10 Concur 1", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 10, 1, 10000},
-	{"SQ8 Batch 10 Concur 10", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 10, 10, 10000},
-	{"SQ8 Batch 50 Concur 10", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 50, 10, 10000},
-	{"SQfp16 Batch 1 Concur 1", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 1, 1, 10000},
-	{"SQfp16 Batch 1 Concur 10", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 1, 10, 10000},
-	{"SQfp16 Batch 10 Concur 1", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 10, 1, 10000},
-	{"SQfp16 Batch 10 Concur 10", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 10, 10, 10000},
-	{"SQfp16 Batch 50 Concur 10", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 50, 10, 10000},
+	{"SQ8 Batch 1 Concur 1", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 1, 1, 10000},
+	{"SQ8 Batch 1 Concur 10", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 1, 10, 10000},
+	{"SQ8 Batch 10 Concur 1", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 10, 1, 10000},
+	{"SQ8 Batch 10 Concur 10", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 10, 10, 10000},
+	{"SQ8 Batch 50 Concur 10", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000, 50, 10, 10000},
+	{"SQfp16 Batch 1 Concur 1", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 1, 1, 10000},
+	{"SQfp16 Batch 1 Concur 10", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 1, 10, 10000},
+	{"SQfp16 Batch 10 Concur 1", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 10, 1, 10000},
+	{"SQfp16 Batch 10 Concur 10", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 10, 10, 10000},
+	{"SQfp16 Batch 50 Concur 10", 128, cbpkg.METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000, 50, 10, 10000},
 }
 
 func TestIVFSQTiming(t *testing.T) {

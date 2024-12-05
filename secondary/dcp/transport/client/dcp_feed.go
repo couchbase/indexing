@@ -65,11 +65,13 @@ var blockdThresholdDur = time.Duration(projBlockedDur[len(projBlockedDur)-1]) * 
 // DcpFeed represents an DCP feed. A feed contains a connection to a single
 // host and multiple vBuckets
 type DcpFeed struct {
-	conn      *Client // connection to DCP producer
-	name      *DcpFeedname2
-	opaque    uint16
-	outch     chan<- *DcpEvent      // Exported channel for receiving DCP events
-	vbstreams map[uint16]*DcpStream // vb->stream mapping
+	conn        *Client // connection to DCP producer
+	name        *DcpFeedname2
+	opaque      uint16
+	outch       chan<- *DcpEvent      // Exported channel for receiving DCP events
+	vbstreams   map[uint16]*DcpStream // vb->stream mapping
+	vbstreamsMu sync.RWMutex
+
 	// genserver
 	reqch     chan []interface{}
 	supvch    chan []interface{}
@@ -93,12 +95,16 @@ type DcpFeed struct {
 
 	truncName string
 
-	mutationQueue          *AtomicMutationQueue
-	useAtomicMutationQueue bool
-	closeMutQueue          chan bool
-	dequeueDoneCh          chan bool // DequeueMutations will close this channel upon exit
+	mutationQueue             *AtomicMutationQueue
+	useAtomicMutationQueue    bool
+	controlDataPathSeparation bool
+	closeMutQueue             chan bool
+	dequeueDoneCh             chan bool // DequeueMutations will close this channel upon exit
 
 	mu sync.Mutex // Avoid concurrent setting of connection deadline.
+
+	syncRespCh chan []interface{}
+	syncRespMu sync.Mutex
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -122,7 +128,7 @@ func NewDcpFeed(
 		logPrefix:     name.StreamLogPrefix(),
 		stats:         &DcpStats{StreamNo: fmt.Sprintf("%v", name.StreamId)},
 		seqOrders:     make(map[uint16]transport.SeqOrderState),
-		closeMutQueue: make(chan bool),
+		closeMutQueue: make(chan bool, 1),
 		dequeueDoneCh: make(chan bool),
 	}
 
@@ -131,6 +137,10 @@ func NewDcpFeed(
 	if val, ok := config["useMutationQueue"]; ok {
 		feed.useAtomicMutationQueue = val.(bool)
 	}
+	if val, ok := config["mutation_queue.control_data_path_separation"]; ok {
+		feed.controlDataPathSeparation = val.(bool)
+	}
+
 	newFeedName, err := truncFeedName(name)
 	if err != nil {
 		logging.Infof("%v ##%x NewDcpFeed error truncating feed name %v",
@@ -167,7 +177,8 @@ func NewDcpFeed(
 	}
 	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch, config)
 	go feed.doReceive(rcvch, feed.finch, mc)
-	logging.Infof("%v ##%x feed started. useMutationQueue: %v ...", feed.logPrefix, opaque, feed.useAtomicMutationQueue)
+	logging.Infof("%v ##%x feed started. useMutationQueue: %v, controlDataPathSeparation: %v ...",
+		feed.logPrefix, opaque, feed.useAtomicMutationQueue, feed.controlDataPathSeparation)
 	return feed, nil
 }
 
@@ -269,13 +280,43 @@ const (
 // If there are no mutations in the queue, then Dequeue would block
 // until mutations arrive
 func (feed *DcpFeed) DequeueMutations(rcvch chan []interface{}, abortCh chan bool) {
-	defer close(rcvch)
-	defer close(feed.dequeueDoneCh)
+
+	defer func() {
+		close(rcvch)
+		close(feed.dequeueDoneCh)
+
+		if feed.useAtomicMutationQueue && feed.controlDataPathSeparation {
+			syncRespCh := feed.getSyncRespCh()
+			if syncRespCh != nil {
+				close(syncRespCh)
+			}
+		}
+	}()
 
 	for {
 		pkt, bytes := feed.mutationQueue.Dequeue(abortCh, feed.closeMutQueue)
 		if pkt != nil {
-			rcvch <- []interface{}{pkt, bytes}
+
+			// if control and data path separation is present, handlePacket in DequeueMutations()
+			// otherwise, handlePacket in genServer()
+			if feed.controlDataPathSeparation {
+				switch pkt.Opcode {
+				case transport.DCP_OPEN, transport.HELO,
+					transport.DCP_CONTROL:
+					respCh := feed.getSyncRespCh()
+					respCh <- []interface{}{pkt, bytes}
+					continue
+				}
+
+				switch feed.handlePacket(pkt, bytes) {
+				case "exit":
+					feed.sendStreamEnd(feed.outch)
+					return
+				}
+			} else {
+				rcvch <- []interface{}{pkt, bytes}
+			}
+
 			sendAck := false
 			switch pkt.Opcode {
 			case transport.DCP_MUTATION,
@@ -358,7 +399,7 @@ loop:
 			case dfCmdGetFailoverlog:
 				opaque := msg[1].(uint16)
 				vblist, respch := msg[2].([]uint16), msg[3].(chan []interface{})
-				if len(feed.vbstreams) > 0 {
+				if feed.lenVbStreams() > 0 {
 					fmsg := "%v %##x active streams in doDcpGetFailoverLog"
 					logging.Errorf(fmsg, prefix, opaque)
 					respch <- []interface{}{nil, ErrorInvalidFeed}
@@ -396,6 +437,10 @@ loop:
 				respch <- []interface{}{err}
 
 			case dfCmdClose:
+				if feed.useAtomicMutationQueue && feed.controlDataPathSeparation {
+					feed.closeMutQueue <- true
+					<-feed.dequeueDoneCh // wait for dequeueMutations to exit before sending streamEnds
+				}
 				feed.sendStreamEnd(feed.outch)
 				respch := msg[1].(chan []interface{})
 				respch <- []interface{}{nil}
@@ -444,7 +489,7 @@ func (feed *DcpFeed) handlePacket(
 
 	sendAck := false
 	prefix := feed.logPrefix
-	stream := feed.vbstreams[vb]
+	stream, _ := feed.getFromVbStreams(vb)
 	if stream == nil {
 		feed.stats.TotalSpurious.Add(1)
 		// log first 10000 spurious messages
@@ -484,7 +529,7 @@ func (feed *DcpFeed) handlePacket(
 	case transport.DCP_STREAMEND:
 		event = newDcpEvent(pkt, stream)
 		sendAck = true
-		delete(feed.vbstreams, vb)
+		feed.deleteFromVbStreams(vb)
 		feed.supvch <- []interface{}{transport.DCP_STREAMEND, feed, vb}
 		fmsg := "%v ##%x DCP_STREAMEND for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
@@ -527,7 +572,7 @@ func (feed *DcpFeed) handlePacket(
 		}
 		event.Opcode = transport.DCP_STREAMEND // opcode re-write !!
 		event.Opaque = stream.AppOpaque        // opaque re-write !!
-		delete(feed.vbstreams, vb)
+		feed.deleteFromVbStreams(vb)
 		fmsg := "%v ##%x DCP_CLOSESTREAM for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 		feed.stats.TotalCloseStream.Add(1)
@@ -851,6 +896,49 @@ func (feed *DcpFeed) doDcpGetSeqnos(
 	return seqnos, nil
 }
 
+func (feed *DcpFeed) addToSyncRespCh(reqCh chan []interface{}) {
+	feed.syncRespMu.Lock()
+	defer feed.syncRespMu.Unlock()
+
+	if feed.syncRespCh != nil {
+		panic("DcpFeed::addToSyncRespCh - Expected nil channel before adding new channel. Found non-nil channel")
+	}
+	feed.syncRespCh = reqCh
+}
+
+func (feed *DcpFeed) getSyncRespCh() chan []interface{} {
+	feed.syncRespMu.Lock()
+	defer feed.syncRespMu.Unlock()
+
+	return feed.syncRespCh
+}
+
+func (feed *DcpFeed) resetSyncRespCh() {
+	if !(feed.useAtomicMutationQueue && feed.controlDataPathSeparation) {
+		return
+	}
+
+	feed.syncRespMu.Lock()
+	defer feed.syncRespMu.Unlock()
+
+	if feed.syncRespCh == nil {
+		panic("DcpFeed::resetSyncRespCh - Expected non-nil channel. Found nil channel")
+	}
+	feed.syncRespCh = nil
+}
+
+// When atomic mutation queue is used, the response to sync requests come via
+// DequeueMutations. DequeueMutations() will write to the channel returned
+// by this method
+func (feed *DcpFeed) initSyncRespCh(rcvch chan []interface{}) chan []interface{} {
+	if feed.useAtomicMutationQueue && feed.controlDataPathSeparation {
+		respRcvCh := make(chan []interface{}, 1)
+		feed.addToSyncRespCh(respRcvCh)
+		return respRcvCh
+	}
+	return rcvch
+}
+
 func (feed *DcpFeed) doDcpOpen(
 	name string, sequence, flags, bufsize uint32,
 	opaque uint16,
@@ -872,6 +960,7 @@ func (feed *DcpFeed) doDcpOpen(
 		}
 	}
 
+	respRcvCh := feed.initSyncRespCh(rcvch)
 	rq := &transport.MCRequest{
 		Opcode: transport.DCP_OPEN,
 		Key:    []byte(feed.truncName),
@@ -890,7 +979,7 @@ func (feed *DcpFeed) doDcpOpen(
 	}
 
 	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
-	msg, ok := <-rcvch
+	msg, ok := <-respRcvCh
 	if !ok {
 		logging.Errorf("%v ##%x doDcpOpen.rcvch closed", prefix, opaque)
 		return ErrorConnection
@@ -917,11 +1006,14 @@ func (feed *DcpFeed) doDcpOpen(
 		logging.Errorf(fmsg, prefix, opaque, req.Status)
 		return ErrorConnection
 	}
+	feed.resetSyncRespCh()
 
 	// send a DCP control message to set the window size for
 	// this connection
 	if bufsize > 0 {
 		logging.Infof("%v##%x using bufSize: %v", prefix, opaque, bufsize)
+
+		respRcvCh := feed.initSyncRespCh(rcvch)
 		rq := &transport.MCRequest{
 			Opcode: transport.DCP_CONTROL,
 			Key:    []byte("connection_buffer_size"),
@@ -935,7 +1027,7 @@ func (feed *DcpFeed) doDcpOpen(
 		}
 
 		feed.stats.LastMsgSend.Set(time.Now().UnixNano())
-		msg, ok := <-rcvch
+		msg, ok := <-respRcvCh
 		if !ok {
 			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.rcvch (connection_buffer_size) closed"
 			logging.Errorf(fmsg, prefix, opaque)
@@ -962,10 +1054,13 @@ func (feed *DcpFeed) doDcpOpen(
 		}
 
 		feed.maxAckBytes = uint32(bufferAckThreshold * float32(bufsize))
+		feed.resetSyncRespCh()
 	}
 
 	// send a DCP control message to enable_noop
 	if true /*enable_noop*/ {
+
+		respRcvCh := feed.initSyncRespCh(rcvch)
 		rq := &transport.MCRequest{
 			Opcode: transport.DCP_CONTROL,
 			Key:    []byte("enable_noop"),
@@ -979,7 +1074,7 @@ func (feed *DcpFeed) doDcpOpen(
 		}
 		feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 		logging.Infof("%v ##%x sending enable_noop", prefix, opaque)
-		msg, ok := <-rcvch
+		msg, ok := <-respRcvCh
 		if !ok {
 			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.rcvch (enable_noop) closed"
 			logging.Errorf(fmsg, prefix, opaque)
@@ -997,10 +1092,12 @@ func (feed *DcpFeed) doDcpOpen(
 			return ErrorConnection
 		}
 		logging.Infof("%v ##%x received enable_noop response", prefix, opaque)
+		feed.resetSyncRespCh()
 	}
 
 	// send a DCP control message to set_noop_interval
 	if true /*set_noop_interval*/ {
+		respRcvCh := feed.initSyncRespCh(rcvch)
 		rq := &transport.MCRequest{
 			Opcode: transport.DCP_CONTROL,
 			Key:    []byte("set_noop_interval"),
@@ -1015,7 +1112,7 @@ func (feed *DcpFeed) doDcpOpen(
 
 		feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 		logging.Infof("%v ##%x sending set_noop_interval", prefix, opaque)
-		msg, ok := <-rcvch
+		msg, ok := <-respRcvCh
 		if !ok {
 			fmsg := "%v ##%x doDcpOpen.rcvch (set_noop_interval) closed"
 			logging.Errorf(fmsg, prefix, opaque)
@@ -1034,6 +1131,7 @@ func (feed *DcpFeed) doDcpOpen(
 		}
 		fmsg := "%v ##%x received response for set_noop_interval"
 		logging.Infof(fmsg, prefix, opaque)
+		feed.resetSyncRespCh()
 	}
 
 	if feed.osoSnapshot {
@@ -1086,18 +1184,6 @@ func (feed *DcpFeed) doDcpRequestStream(
 		rq.Body = body
 	}
 
-	// Here, timeout can occur due to slow memcached. The error handling
-	// in the projector feed takes care of cleanning up of the connections.
-	// After closing connections, pressure on memcached may get eased, and
-	// retry (from indexer side) may succeed.
-
-	if err := feed.TransmitWithWriteDeadline(rq); err != nil {
-		fmsg := "%v ##%x doDcpRequestStream.Transmit(): for vb:%v %v"
-		logging.Errorf(fmsg, prefix, opaqueMSB, vbno, err)
-		return err
-	}
-
-	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	stream := &DcpStream{
 		AppOpaque:        opaqueMSB,
 		Vbucket:          vbno,
@@ -1107,13 +1193,26 @@ func (feed *DcpFeed) doDcpRequestStream(
 		CollectionsAware: feed.collectionsAware,
 		RequestValue:     requestValue,
 	}
-	feed.vbstreams[vbno] = stream
+	feed.addToVbStreams(vbno, stream)
+
+	// Here, timeout can occur due to slow memcached. The error handling
+	// in the projector feed takes care of cleanning up of the connections.
+	// After closing connections, pressure on memcached may get eased, and
+	// retry (from indexer side) may succeed.
+	if err := feed.TransmitWithWriteDeadline(rq); err != nil {
+		fmsg := "%v ##%x doDcpRequestStream.Transmit(): for vb:%v %v"
+		logging.Errorf(fmsg, prefix, opaqueMSB, vbno, err)
+		feed.deleteFromVbStreams(vbno)
+		return err
+	}
+
+	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	return nil
 }
 
 func (feed *DcpFeed) doDcpCloseStream(vbno, opaqueMSB uint16) error {
 	prefix := feed.logPrefix
-	stream, ok := feed.vbstreams[vbno]
+	stream, ok := feed.getFromVbStreams(vbno)
 	if !ok || stream == nil {
 		fmsg := "%v ##%x stream for vb %d is not active"
 		logging.Warnf(fmsg, prefix, opaqueMSB, vbno)
@@ -1144,6 +1243,8 @@ func (feed *DcpFeed) enableCollections(rcvch chan []interface{}) error {
 	prefix := feed.logPrefix
 	opaque := feed.opaque
 
+	respRcvCh := feed.initSyncRespCh(rcvch)
+
 	rq := &transport.MCRequest{
 		Opcode: transport.HELO,
 		Key:    []byte(feed.truncName),
@@ -1158,7 +1259,7 @@ func (feed *DcpFeed) enableCollections(rcvch chan []interface{}) error {
 
 	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	logging.Infof("%v ##%x sending DCP_HELO (feature_collections)", prefix, opaque)
-	msg, ok := <-rcvch
+	msg, ok := <-respRcvCh
 	if !ok {
 		fmsg := "%v ##%x doDcpOpen.rcvch (feature_collections) closed"
 		logging.Errorf(fmsg, prefix, opaque)
@@ -1177,6 +1278,7 @@ func (feed *DcpFeed) enableCollections(rcvch chan []interface{}) error {
 		logging.Errorf(fmsg, prefix, opaque, body)
 		return ErrorCollectionsNotEnabled
 	}
+	feed.resetSyncRespCh()
 
 	fmsg := "%v ##%x received response for DCP_HELO (feature_collections)"
 	logging.Infof(fmsg, prefix, opaque)
@@ -1187,6 +1289,7 @@ func (feed *DcpFeed) enableOSOSnapshot(rcvch chan []interface{}) error {
 	prefix := feed.logPrefix
 	opaque := feed.opaque
 
+	respRcvCh := feed.initSyncRespCh(rcvch)
 	rq := &transport.MCRequest{
 		Opcode: transport.DCP_CONTROL,
 		Key:    []byte("enable_out_of_order_snapshots"),
@@ -1201,7 +1304,7 @@ func (feed *DcpFeed) enableOSOSnapshot(rcvch chan []interface{}) error {
 
 	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	logging.Infof("%v ##%x sending DCP_CONTROL (enable_out_of_order_snapshots)", prefix, opaque)
-	msg, ok := <-rcvch
+	msg, ok := <-respRcvCh
 	if !ok {
 		fmsg := "%v ##%x doDcpOpen.rcvch (enable_out_of_order_snapshots) closed"
 		logging.Errorf(fmsg, prefix, opaque)
@@ -1221,6 +1324,7 @@ func (feed *DcpFeed) enableOSOSnapshot(rcvch chan []interface{}) error {
 		return ErrorConnection
 	}
 
+	feed.resetSyncRespCh()
 	fmsg := "%v ##%x received response for DCP_CONTROL (enable_out_of_order_snapshots)"
 	logging.Infof(fmsg, prefix, opaque)
 	return nil
@@ -1228,6 +1332,9 @@ func (feed *DcpFeed) enableOSOSnapshot(rcvch chan []interface{}) error {
 
 // generate stream end responses for all active vb streams
 func (feed *DcpFeed) sendStreamEnd(outch chan<- *DcpEvent) {
+	feed.vbstreamsMu.Lock()
+	defer feed.vbstreamsMu.Unlock()
+
 	if feed.vbstreams != nil {
 		for vb, stream := range feed.vbstreams {
 			feed.supvch <- []interface{}{transport.DCP_STREAMEND, feed, vb}
@@ -1254,14 +1361,14 @@ func (feed *DcpFeed) handleStreamRequest(
 		fmsg := "%v ##%x STREAMREQ(%v) invalid rollback: %v\n"
 		arg1 := logging.TagUD(res.Body)
 		logging.Errorf(fmsg, prefix, stream.AppOpaque, vb, arg1)
-		delete(feed.vbstreams, vb)
+		feed.deleteFromVbStreams(vb)
 
 	case res.Status == transport.ROLLBACK:
 		rollback := binary.BigEndian.Uint64(res.Body)
 		event.Status, event.Seqno = res.Status, rollback
 		fmsg := "%v ##%x STREAMREQ(%v) with rollback %d\n"
 		logging.Warnf(fmsg, prefix, stream.AppOpaque, vb, rollback)
-		delete(feed.vbstreams, vb)
+		feed.deleteFromVbStreams(vb)
 
 	case res.Status == transport.SUCCESS:
 		event.Status, event.Seqno = res.Status, stream.StartSeq
@@ -1282,13 +1389,13 @@ func (feed *DcpFeed) handleStreamRequest(
 		event.VBucket = vb
 		fmsg := "%v ##%x STREAMREQ(%v) with status: %v, stream request value: %+v\n"
 		logging.Errorf(fmsg, prefix, stream.AppOpaque, vb, res.Status, stream.RequestValue)
-		delete(feed.vbstreams, vb)
+		feed.deleteFromVbStreams(vb)
 	default:
 		event.Status = res.Status
 		event.VBucket = vb
 		fmsg := "%v ##%x STREAMREQ(%v) unexpected status: %v\n"
 		logging.Errorf(fmsg, prefix, stream.AppOpaque, vb, res.Status)
-		delete(feed.vbstreams, vb)
+		feed.deleteFromVbStreams(vb)
 	}
 	return
 }
@@ -1829,11 +1936,13 @@ func computeLatency(stream *DcpStream) int64 {
 func (feed *DcpFeed) doReceive(
 	rcvch chan []interface{}, finch chan bool, conn *Client) {
 
-	if !feed.useAtomicMutationQueue {
-		defer close(rcvch)
-	}
-
-	defer close(feed.closeMutQueue)
+	defer func() {
+		if !feed.useAtomicMutationQueue {
+			close(rcvch)
+		} else {
+			feed.closeMutQueue <- true // write to this channel so that DequeueMutations will exit
+		}
+	}()
 
 	var headerBuf [transport.HDR_LEN]byte
 	var duration time.Duration
@@ -1969,6 +2078,35 @@ loop:
 			}
 		}
 	}
+}
+
+func (feed *DcpFeed) addToVbStreams(vbno uint16, stream *DcpStream) {
+	feed.vbstreamsMu.Lock()
+	defer feed.vbstreamsMu.Unlock()
+
+	feed.vbstreams[vbno] = stream
+}
+
+func (feed *DcpFeed) getFromVbStreams(vbno uint16) (*DcpStream, bool) {
+	feed.vbstreamsMu.RLock()
+	defer feed.vbstreamsMu.RUnlock()
+
+	stream, ok := feed.vbstreams[vbno]
+	return stream, ok
+}
+
+func (feed *DcpFeed) deleteFromVbStreams(vbno uint16) {
+	feed.vbstreamsMu.Lock()
+	defer feed.vbstreamsMu.Unlock()
+
+	delete(feed.vbstreams, vbno)
+}
+
+func (feed *DcpFeed) lenVbStreams() int {
+	feed.vbstreamsMu.RLock()
+	defer feed.vbstreamsMu.RUnlock()
+
+	return len(feed.vbstreams)
 }
 
 // Truncate Feed Name:

@@ -28,8 +28,8 @@ type codebookIVFSQ struct {
 
 	isTrained bool
 
-	metric    MetricType //metric
-	useCosine bool       //use cosine similarity
+	metric    c.MetricType //metric
+	useCosine bool         //use cosine similarity
 
 	index *faiss.IndexImpl
 }
@@ -39,9 +39,9 @@ type codebookIVFSQ_IO struct {
 	SQRange common.ScalarQuantizerRange `json:"sqrange,omitempty"`
 	Nlist   int                         `json:"nlist,omitempty"`
 
-	IsTrained bool       `json:"istrained,omitempty"`
-	Metric    MetricType `json:"metric,omitempty"`
-	UseCosine bool       `json:"usecosine,omitempty"`
+	IsTrained bool         `json:"istrained,omitempty"`
+	Metric    c.MetricType `json:"metric,omitempty"`
+	UseCosine bool         `json:"usecosine,omitempty"`
 
 	Checksum    uint32      `json:"checksum,omitempty"`
 	CodebookVer CodebookVer `json:"codebookver,omitempty"`
@@ -49,11 +49,11 @@ type codebookIVFSQ_IO struct {
 	Index []byte `json:"index,omitempty"`
 }
 
-func NewCodebookIVFSQ(dim, nlist int, sqRange common.ScalarQuantizerRange, metric MetricType, useCosine bool) (c.Codebook, error) {
+func NewCodebookIVFSQ(dim, nlist int, sqRange common.ScalarQuantizerRange, metric c.MetricType, useCosine bool) (c.Codebook, error) {
 
 	var err error
 
-	if (useCosine && metric != METRIC_INNER_PRODUCT) || (metric != METRIC_L2 && metric != METRIC_INNER_PRODUCT) {
+	if (useCosine && metric != c.METRIC_INNER_PRODUCT) || (metric != c.METRIC_L2 && metric != c.METRIC_INNER_PRODUCT) {
 		return nil, c.ErrUnsupportedMetric
 	}
 
@@ -242,9 +242,9 @@ func (cb *codebookIVFSQ) DecodeVectors(n int, codes []byte, vecs []float32) erro
 
 // Compute the distance between a vector with another given set of vectors.
 func (cb *codebookIVFSQ) ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error {
-	if cb.metric == METRIC_L2 {
+	if cb.metric == c.METRIC_L2 {
 		return faiss.L2sqrNy(dist, qvec, fvecs, cb.dim)
-	} else if cb.metric == METRIC_INNER_PRODUCT {
+	} else if cb.metric == c.METRIC_INNER_PRODUCT {
 		if cb.useCosine {
 			err := faiss.CosineSimNy(dist, qvec, fvecs, cb.dim)
 			// Cosine distance is calculated as 1 - (cosine similarity).
@@ -365,6 +365,10 @@ func (cb *codebookIVFSQ) Marshal() ([]byte, error) {
 
 func (cb *codebookIVFSQ) NumCentroids() int {
 	return cb.nlist
+}
+
+func (cb *codebookIVFSQ) MetricType() c.MetricType {
+	return cb.metric
 }
 
 func recoverCodebookIVFSQ(data []byte) (c.Codebook, error) {
