@@ -1,6 +1,6 @@
 module github.com/couchbase/indexing
 
-go 1.21.6
+go 1.23
 
 replace github.com/couchbase/cbft => ../../../../../cbft
 
@@ -41,6 +41,7 @@ require (
 	github.com/couchbase/cbauth v0.1.12
 	github.com/couchbase/go-couchbase v0.1.1
 	github.com/couchbase/go-slab v0.0.0-20220303011136-e47646b420b3
+	github.com/couchbase/gocb/v2 v2.5.4
 	github.com/couchbase/goforestdb v0.0.0-20161215171854-0b501227de0e
 	github.com/couchbase/gometa v0.0.0-20220803182802-05cb6b2e299f
 	github.com/couchbase/goutils v0.1.2
@@ -62,28 +63,29 @@ require (
 
 require (
 	github.com/aws/aws-sdk-go v1.48.1 // indirect
+	github.com/benesch/cgosymbolizer v0.0.0-20190515212042-bec6fe6e597b // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/couchbase/clog v0.1.0 // indirect
 	github.com/couchbase/go_json v0.0.0-20220330123059-4473a21887c8 // indirect
-	github.com/couchbase/gocb/v2 v2.5.4 // indirect
-	github.com/couchbase/gocbcore/v10 v10.2.10 // indirect
+	github.com/couchbase/gocbcore/v10 v10.5.2 // indirect
 	github.com/couchbase/gocbcore/v9 v9.1.8 // indirect
 	github.com/couchbase/gomemcached v0.2.2-0.20230407174933-7d7ce13da8cc // indirect
 	github.com/couchbase/tools-common/cloud v1.0.0 // indirect
 	github.com/couchbase/tools-common/core v1.0.0 // indirect
-	github.com/couchbase/tools-common/fs v1.0.0 // indirect
+	github.com/couchbase/tools-common/fs v1.0.2 // indirect
 	github.com/couchbase/tools-common/strings v1.0.0 // indirect
 	github.com/couchbase/tools-common/sync v1.0.0 // indirect
-	github.com/couchbase/tools-common/testing v1.0.0 // indirect
-	github.com/couchbase/tools-common/types v1.0.0 // indirect
+	github.com/couchbase/tools-common/testing v1.0.1 // indirect
+	github.com/couchbase/tools-common/types v1.1.4 // indirect
 	github.com/couchbase/tools-common/utils v1.0.0 // indirect
 	github.com/couchbaselabs/c-forestdb v0.0.0-20160212203508-1b1267468faa // indirect
 	github.com/couchbaselabs/c-snappy v0.0.0-20160212203049-a52f87e8ffc5 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/edsrzf/mmap-go v1.1.0 // indirect
-	github.com/google/uuid v1.3.0 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/mux v1.8.0 // indirect
+	github.com/ianlancetaylor/cgosymbolizer v0.0.0-20241025222116-6b205f073fdd // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
@@ -96,16 +98,17 @@ require (
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/stretchr/testify v1.9.0 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20201027041543-1326539a0a0a // indirect
-	golang.org/x/crypto v0.15.0 // indirect
-	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
-	golang.org/x/net v0.17.0 // indirect
-	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4 // indirect
-	golang.org/x/sys v0.14.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
-	golang.org/x/time v0.3.0 // indirect
-	google.golang.org/protobuf v1.31.0 // indirect
+	golang.org/x/crypto v0.19.0 // indirect
+	golang.org/x/exp v0.0.0-20231226003508-02704c960a9b // indirect
+	golang.org/x/net v0.21.0 // indirect
+	golang.org/x/sync v0.8.0 // indirect
+	golang.org/x/sys v0.23.0 // indirect
+	golang.org/x/text v0.17.0 // indirect
+	golang.org/x/time v0.5.0 // indirect
+	google.golang.org/protobuf v1.32.0 // indirect
 	gopkg.in/couchbase/gocbcore.v7 v7.1.18 // indirect
 	gopkg.in/couchbaselabs/gocbconnstr.v1 v1.0.4 // indirect
+	gopkg.in/couchbaselabs/gojcbmock.v1 v1.0.4 // indirect
 	gopkg.in/couchbaselabs/jsonx.v1 v1.0.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
