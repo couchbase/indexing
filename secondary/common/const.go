@@ -4,6 +4,7 @@ package common
 
 import (
 	"errors"
+	"strings"
 )
 
 const ERR_TRAINING string = "ErrTraining: "
@@ -223,4 +224,8 @@ func IsVectorTrainingError(errStr string) bool {
 
 func IsBuildErrAfterTraining(errStr string) bool {
 	return len(errStr) > len(ERR_BUILD_AFTER_TRAINING) && errStr[0:len(ERR_BUILD_AFTER_TRAINING)] == ERR_BUILD_AFTER_TRAINING
+}
+
+func IsVectorTrainingErrorQualifyingDocs(errStr string) bool {
+	return IsVectorTrainingError(errStr) && strings.Contains(errStr, "Number of qualifying")
 }
