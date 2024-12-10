@@ -928,6 +928,10 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 	}
 
 	if def.IsVectorIndex {
+		if len(withExpr) != 0 {
+			withExpr += ","
+		}
+
 		withExpr += fmt.Sprintf(" \"dimension\":%v,", def.VectorMeta.Dimension)
 		withExpr += fmt.Sprintf(" \"similarity\":\"%v\",", def.VectorMeta.Similarity)
 		withExpr += fmt.Sprintf(" \"description\":\"%v\"", def.VectorMeta.Quantizer.String())
