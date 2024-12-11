@@ -1690,18 +1690,21 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 	minEncodeBufSize := len(key) + sha256.Size
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], minEncodeBufSize, szConf.allowLargeKeys)
 
+	var quantizedCode []byte
 	vec := vecs[0]
 
-	//[VECTOR_TODO] Revisit nil vector processing
-	quantizedCode, centroidId, err := mdb.getQuantizedCodeForVector(vec, mdb.codeSize, mdb.quantizedCodeBuf[workerId])
-	if err != nil {
-		logging.Errorf("plasmaSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
-			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
-		atomic.AddInt32(&mdb.numKeysSkipped, 1)
-		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
-	}
-
 	if vec != nil {
+		var centroidId int64
+		var err error
+
+		quantizedCode, centroidId, err = mdb.getQuantizedCodeForVector(vec, mdb.codeSize, mdb.quantizedCodeBuf[workerId])
+		if err != nil {
+			logging.Errorf("plasmaSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
+				"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+			atomic.AddInt32(&mdb.numKeysSkipped, 1)
+			panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
+		}
+
 		centroidPosInKey := -1
 		if centroidPos != nil {
 			centroidPosInKey = int(centroidPos[0])

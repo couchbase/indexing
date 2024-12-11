@@ -983,8 +983,8 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(start))
 	}()
 
-	if len(vecs) != 1 {
-		err := fmt.Errorf("Fatal - Expected only one vector for docId: %s, instance: %v. "+
+	if len(vecs) != 1 || vecs[0] == nil {
+		err := fmt.Errorf("Fatal - Expected only one non-nil vector for docId: %s, instance: %v. "+
 			"Found: %v vectors in the documents", logging.TagUD(docid), mdb.idxInstId, len(vecs))
 		logging.Fatalf("bhiveSlice::insertVectorIndex %v", err)
 		atomic.AddInt32(&mdb.numKeysSkipped, 1)

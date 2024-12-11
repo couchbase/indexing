@@ -111,29 +111,29 @@ func TestVectorIndexDCPRebalance(t *testing.T) {
 				report)
 		}
 
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
-		validateVectorScan(subt)
+		indexStatusResp := performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		validateVectorScan(subt, indexStatusResp)
 	})
 
 	t.Run("TestIndexNodeRebalanceOut", func(subt *testing.T) {
 		TestIndexNodeRebalanceOut(subt)
 
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
-		validateVectorScan(subt)
+		indexStatusResp := performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		validateVectorScan(subt, indexStatusResp)
 	})
 
 	t.Run("TestFailoverAndRebalance", func(subt *testing.T) {
 		TestFailoverAndRebalance(subt)
 
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
-		validateVectorScan(subt)
+		indexStatusResp := performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		validateVectorScan(subt, indexStatusResp)
 	})
 
 	t.Run("TestSwapRebalance", func(subt *testing.T) {
 		TestSwapRebalance(t)
 
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
-		validateVectorScan(subt)
+		indexStatusResp := performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		validateVectorScan(subt, indexStatusResp)
 	})
 }
 
@@ -227,33 +227,33 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 				report)
 		}
 
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		indexStatusResp := performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
 		performStagingCleanupValidation(subt)
-		validateVectorScan(subt)
+		validateVectorScan(subt, indexStatusResp)
 	})
 
 	t.Run("TestIndexNodeRebalanceOut", func(subt *testing.T) {
 		TestIndexNodeRebalanceOut(subt)
 
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		indexStatusResp := performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
 		performStagingCleanupValidation(subt)
-		validateVectorScan(subt)
+		validateVectorScan(subt, indexStatusResp)
 	})
 
 	t.Run("TestFailoverAndRebalance", func(subt *testing.T) {
 		TestFailoverAndRebalance(subt)
 
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		indexStatusResp := performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
 		performStagingCleanupValidation(subt)
-		validateVectorScan(subt)
+		validateVectorScan(subt, indexStatusResp)
 	})
 
 	t.Run("TestSwapRebalance", func(subt *testing.T) {
 		TestSwapRebalance(t)
 
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		indexStatusResp := performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
 		performStagingCleanupValidation(subt)
-		validateVectorScan(subt)
+		validateVectorScan(subt, indexStatusResp)
 	})
 
 	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index]
@@ -307,8 +307,8 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 
 		waitForRebalanceCleanup()
 
-		performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
-		validateReplicatedVectorScan(subt)
+		indexStatusResp := performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
+		validateVectorScan(subt, indexStatusResp)
 	})
 
 	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index]
@@ -469,20 +469,42 @@ func swapAndCheckForCleanup(t *testing.T, nidIn, nidOut int) {
 
 	waitForRebalanceCleanup()
 
-	performCodebookTransferValidation(t, []string{idxDedicated, idxShared})
-	validateVectorScan(t)
+	indexStatusResp := performCodebookTransferValidation(t, []string{idxDedicated, idxShared})
+	validateVectorScan(t, indexStatusResp)
 
 	time.Sleep(10 * time.Second)
 }
 
-func validateReplicatedVectorScan(t *testing.T) {
-	performVectorScanOnIndex(t, idxDedicatedReplica, "", "")
-	performVectorScanOnIndex(t, idxSharedReplica, scope, coll)
-}
+func validateVectorScan(t *testing.T, statuses *tc.IndexStatusResponse) {
 
-func validateVectorScan(t *testing.T) {
-	performVectorScanOnIndex(t, idxDedicated, "", "")
-	performVectorScanOnIndex(t, idxShared, scope, coll)
+	dedicatedNames := []string{idxDedicatedReplica, idxDedicated}
+	sharedNames := []string{idxSharedReplica, idxShared}
+
+	var foundDedicatedIdx []string
+	var foundSharedIdx []string
+
+OUTER:
+	for _, status := range statuses.Status {
+		for _, idxName := range dedicatedNames {
+			if status.Name == idxName {
+				foundDedicatedIdx = append(foundDedicatedIdx, idxName)
+				continue OUTER
+			}
+		}
+		for _, idxName := range sharedNames {
+			if status.Name == idxName {
+				foundSharedIdx = append(foundSharedIdx, idxName)
+				continue OUTER
+			}
+		}
+	}
+
+	for _, idxName := range foundDedicatedIdx {
+		performVectorScanOnIndex(t, idxName, "", "")
+	}
+	for _, idxName := range foundSharedIdx {
+		performVectorScanOnIndex(t, idxName, scope, coll)
+	}
 }
 
 func performVectorScanOnIndex(t *testing.T, idxName, scope, coll string) {
@@ -539,7 +561,7 @@ func getAllStorageDirs(t *testing.T) map[string]string {
 	return storageDirs
 }
 
-func performCodebookTransferValidation(subt *testing.T, idxNames []string) {
+func performCodebookTransferValidation(subt *testing.T, idxNames []string) *tc.IndexStatusResponse {
 
 	var statuses *tc.IndexStatusResponse
 	err := c.NewRetryHelper(10, 10*time.Millisecond, 5, func(attempts int, lastErr error) error {
@@ -586,10 +608,10 @@ func performCodebookTransferValidation(subt *testing.T, idxNames []string) {
 					FailTestIfError(fmt.Errorf("Expected codebook to exist for idx:%v, inst:%v, partnId:%v",
 						status.Name, status.InstId, c.PartitionId(partnId)), "Error while verifying codebook path", subt)
 				}
-
 			}
 		}
 	}
+	return statuses
 }
 
 func performStagingCleanupValidation(subt *testing.T) {

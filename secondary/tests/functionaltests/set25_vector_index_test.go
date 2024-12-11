@@ -1,11 +1,14 @@
 package functionaltests
 
 import (
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/queryport/client"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
@@ -90,6 +93,38 @@ func loadVectorData(t *testing.T, bucket, scope, coll string, numDocs int) error
 		SIFTFVecsFile:  "../../tools/randdocs/siftsmall/siftsmall_base.fvecs",
 	}
 	return randdocs.Run(cfg)
+}
+
+func loadCustomData(t *testing.T, fieldType string, bucket string, docid string, dimension int) {
+
+	doc := make(map[string]interface{})
+	doc["gender"] = "male"
+	docnum := 100000 + randomNum(1, 100)
+	doc["docnum"] = docnum
+	switch fieldType {
+	case "MISSING":
+		break // nothing to do as doc does not contain any
+	case "JSON_NULL":
+		doc["sift"] = nil
+	case "INVALID":
+		doc["sift"] = getRandomVector(dimension-1, 1, 1000) // Have one less dimension to make the vector invalid
+	}
+
+	var err error
+	b, err := common.ConnectBucket(clusterconfig.Nodes[0], "default", bucket)
+	if err != nil {
+		t.Fatalf("Error observed when connecting to bucket: %v, err: %v\n", bucket, err)
+	}
+	defer b.Close()
+
+	for i := 0; i < 10; i++ {
+		err = b.Set(docid, 0, doc)
+		if err != nil {
+			log.Printf("Error observed while setting doc: %v", err)
+			continue
+		}
+	}
+	FailTestIfError(err, "Error observed while loading custom data", t)
 }
 
 func TestVectorCreateIndex(t *testing.T) {
@@ -466,7 +501,6 @@ func TestVectorIndexMissingTrailing(t *testing.T) {
 		expectedVectorPosTop100[0:int(limit)], vectorPosReturned, scanResults)
 }
 
-
 func TestBase64VectorIndex(t *testing.T) {
 	skipIfNotPlasma(t)
 
@@ -481,8 +515,8 @@ func TestBase64VectorIndex(t *testing.T) {
 
 	// Create Index on encoded vector field
 	stmt := "CREATE INDEX " + idx_base64 +
-	" ON default(gender, DECODE_VECTOR(siftbase, false) VECTOR, docnum)" +
-	" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+		" ON default(gender, DECODE_VECTOR(siftbase, false) VECTOR, docnum)" +
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
 	err = createWithDeferAndBuild(idx_base64, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
 	FailTestIfError(err, "Error in creating idx_base64", t)
 
@@ -613,6 +647,85 @@ func TestVectorPartnIndexMultipleNodes(t *testing.T) {
 	TestVectorPartitionedIndex(t)
 
 	testScalarPredicates(t, idx_sif10k_partn)
+}
+
+// There are three possible combinations in this test.
+// a) Vector is leading: Missing, null and invalid vectors are skipped from indexing
+// b) Vector is non-leading: Missing is handled by indexing MISSING
+// c) Vector is non-leading: Null/invalid vectors are handled by indexing NULL
+func TestNullAndMissingForVectorIndex(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	// Case-1: Vector is leading
+	if !vectorsLoaded {
+		vectorSetup(t, bucket, "", "", 40000)
+	}
+
+	// Add three documents to the setup:
+	// a) vector field missing
+	// b) Vector field is json "null"
+	// c) Vector field is invalid
+	loadCustomData(t, "MISSING", BUCKET, "custom_missing", 128)
+	loadCustomData(t, "JSON_NULL", BUCKET, "custom_json_null", 128)
+	loadCustomData(t, "INVALID", BUCKET, "custom_invalid", 128)
+
+	// Create Index
+	idx_leadingVec_null_missing := "idx_leadingVec_null_missing"
+	stmt := "CREATE INDEX " + idx_leadingVec_null_missing +
+		" ON default(sift VECTOR, gender, docnum)" +
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+	err := createWithDeferAndBuild(idx_leadingVec_null_missing, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_leadingVec_null_missing", t)
+
+	// Scan on the index with MISSING should result in "0" requests to indexer
+	scanStmt := fmt.Sprintf("select meta().id from %v USE INDEX(`%v`) where sift is MISSING", BUCKET, idx_leadingVec_null_missing)
+	_, err = execN1QL(BUCKET, scanStmt)
+	if err != nil {
+		t.Fatalf("Error observed while scanning the index: %v for MISSING, err: %v", idx_leadingVec_null_missing, err)
+	}
+
+	scanStmt = fmt.Sprintf("select meta().id from %v USE INDEX(`%v`) where sift is NULL", BUCKET, idx_leadingVec_null_missing)
+	_, err = execN1QL(BUCKET, scanStmt)
+	if err != nil {
+		t.Fatalf("Error observed while scanning the index: %v for NULL err: %v", idx_leadingVec_null_missing, err)
+	}
+
+	// calculate the number of scan requests to indexer. This index should be having zero scan requests
+	time.Sleep(5 * time.Second)
+
+	// Validation-1: Index should contain only 40K items
+	stats := secondaryindex.GetPerPartnStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	items_count := stats[fmt.Sprintf("%v:%v:items_count", BUCKET, idx_leadingVec_null_missing)].(float64)
+	if items_count != 40000 {
+		t.Fatalf("Incorrect items in the index. Expected 40K. Actual: %v, stats: %v", items_count, stats)
+	}
+
+	num_requests := stats[fmt.Sprintf("%v:%v:num_requests", BUCKET, idx_leadingVec_null_missing)].(float64)
+	if num_requests != 0 {
+		t.Fatalf("Incorrect number of requests for the index. Expected 0. Actual: %v, stats: %v", num_requests, stats)
+	}
+
+	// Drop all indexes
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	idx_nonLeadingVec_null_missing := "idx_nonLeadingVec_null_missing"
+	// Create Index
+	stmt = "CREATE INDEX " + idx_nonLeadingVec_null_missing +
+		" ON default(gender, sift VECTOR, docnum)" +
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+	err = createWithDeferAndBuild(idx_nonLeadingVec_null_missing, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_nonLeadingVec_null_missing", t)
+
+	// calculate the number of scan requests to indexer. This index should be having zero scan requests
+	time.Sleep(5 * time.Second)
+
+	// Validation-1: Index should contain only 40003 items
+	stats = secondaryindex.GetPerPartnStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	items_count = stats[fmt.Sprintf("%v:%v:items_count", BUCKET, idx_nonLeadingVec_null_missing)].(float64)
+	if items_count != 40003 {
+		t.Fatalf("Incorrect items in the index. Expected 40003. Actual: %v, stats: %v", items_count, stats)
+	}
 }
 
 func TestVectorResetCluster(t *testing.T) {

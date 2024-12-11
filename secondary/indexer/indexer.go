@@ -13592,6 +13592,34 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		// Check for using already created codebook of other instances of definition
 		defnCodebook := getDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId)
 
+		// Set codebook for partitions to be merged from codebook of real instance slice.
+		isDCPRebalorResume := (reqCtx.ReqSource == common.DDLRequestSourceRebalance || reqCtx.ReqSource == common.DDLRequestSourceResume)
+
+		if idxInst.RealInstId != 0 && isDCPRebalorResume && defnCodebook == nil {
+			realPartnInstMap := indexPartnMap[idxInst.RealInstId]
+
+		loop:
+			for partnId, partnInst := range realPartnInstMap {
+				slices := partnInst.Sc.GetAllSlices()
+				var err error
+				var codebook []byte
+				for _, slice := range slices {
+					codebook, err = slice.SerializeCodebook()
+					if err == nil && codebook != nil {
+						// Reaching here implies that new codebook serialized for partition, ready to be shared
+						defnCodebook = codebook
+						setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, defnCodebook)
+						logging.Infof("Indexer::initiateTraining using serialized codebook for from real instance instId: %v, partnId: %v", instId, partnId)
+						break loop
+					}
+				}
+				if err != nil {
+					// Getting serialized codebook from existing partitions fails.
+					logging.Warnf("Indexer::initiateTraining getting serialized codebook from real instId: %v failed. err: %v", instId, err)
+				}
+			}
+		}
+
 		for partnId, partnInst := range partnInstMap {
 			slices := partnInst.Sc.GetAllSlices()
 
@@ -13624,7 +13652,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				if vm.Quantizer.Type == c.PQ {
 					minCentroids = max(1<<vm.Quantizer.Nbits, idxInst.Nlist[partnId])
 				}
-				if len(vectors[i]) < minCentroids {
+				if len(vectors[i]) < minCentroids && defnCodebook == nil {
 					errStr := c.ERR_TRAINING + fmt.Sprintf("Number of qualifying/valid vectors %v are less than the number "+
 						"of vectors %v required for training %v centroids", len(vectors[i]), minCentroids,
 						minCentroids)

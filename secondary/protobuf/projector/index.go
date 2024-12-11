@@ -275,7 +275,7 @@ func NewIndexEvaluator(
 		}
 
 		logging.Infof("NewIndexEvaluator: InstId: %v, isVectorIndex: %v, vectorPos: %v, arrayPos: %v, "+
-			"vectorPosInFlattenedArray: %v, dimension: %v, include: %v", ie.instance.InstId, ie.isVectorIndex,
+			"vectorPosInFlattenedArray: %v, dimension: %v, include: %v", ie.instance.GetInstId(), ie.isVectorIndex,
 			ie.vectorPos, ie.arrayPos, ie.vectorPosInFlattenedArray, ie.dimension, ie.includeExprs)
 
 	default:
