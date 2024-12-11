@@ -163,7 +163,8 @@ error_exit() {
   stop_cluster
   for patch_id in `cat ~/gerrit.list`; do
     ssh review.couchbase.org gerrit query change:${patch_id%,*} AND reviewer:self AND status:open | grep -qs 'rowCount: 0' && continue
-    ssh review.couchbase.org gerrit review --code-review 0 -m "'MAYBE FAIL $MODE with storage $STORAGE. See http://$CINAME.northscale.in/gsi-$TS.fail.html'" $patch_id
+    failure_str=$(echo -e "MAYBE FAIL $MODE with storage $STORAGE. See http://$CINAME.northscale.in/gsi-$TS.fail.html;\nFailure reason $1;\nTests failed - $2")
+    ssh review.couchbase.org gerrit review --code-review 0 -m "'$failure_str'" $patch_id
   done
   error_email
   exit 2
