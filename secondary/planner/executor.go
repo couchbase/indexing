@@ -1163,6 +1163,13 @@ func alternateShardExistsInCluster(index *IndexUsage) bool {
 // original shards then can we use Shard based movements; this ensures that
 // shard movement only happens on 7.6 or above nodes which are part of shard
 func shardMovementCompatCheck(index, realIndex *IndexUsage) bool {
+
+	// For pending build indexes, always generate DCP transfer tokens
+	if realIndex.pendingBuild && !realIndex.PendingDelete &&
+		(realIndex.Instance.State == common.INDEX_STATE_CREATED || realIndex.Instance.State == common.INDEX_STATE_READY) {
+		return false
+	}
+
 	// do shard rebalance if shard is undergoing movement
 	// if shard in not moving then rebuild indices under ASI on destNode via DCP
 	shardIsMoving := index.initialNode != nil &&
@@ -1388,6 +1395,8 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 						}
 					}
 
+					// If realIndex is pendingBuild, then DCP transfer token has to be generated
+					// for the index.
 					if realIndex.pendingBuild && !realIndex.PendingDelete &&
 						(childTokens[0].IndexInst.State == common.INDEX_STATE_CREATED ||
 							childTokens[0].IndexInst.State == common.INDEX_STATE_READY) {
