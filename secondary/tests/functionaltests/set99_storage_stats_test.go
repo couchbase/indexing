@@ -6,9 +6,11 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
+	"github.com/couchbase/query/datastore"
 )
 
 const CORRUPT_DATA_SUBDIR = ".corruptData"
@@ -580,4 +583,142 @@ func TestStats_StorageStatistics(t *testing.T) {
 	stats, err = secondaryindex.N1QLStorageStatistics("p1", bucketName, indexScanAddress)
 	FailTestIfError(err, "Error from N1QLStorageStatistics", t)
 	log.Printf("Stats from Index4 StorageStatistics for index %v are %v", "p1", stats)
+}
+
+func validateNonZeroLastResetTimeWithBaseTime(
+	stats map[uint64][]map[string]interface{},
+	beforeTime int64,
+) error {
+	if len(stats) == 0 {
+		return fmt.Errorf("stats map is empty")
+	}
+
+	for instID, allPartnStats := range stats {
+		for _, partnStats := range allPartnStats {
+			if lastResetTimeIface, ok := partnStats[string(datastore.IX_STAT_LAST_RESET_TS)]; ok {
+				var lastResetTime int64 = lastResetTimeIface.(int64)
+				if lastResetTime == 0 {
+					return fmt.Errorf("lastResetTime is 0 for instance %v", instID)
+				} else if lastResetTime < beforeTime {
+					return fmt.Errorf("lastResetTime is less than creation TS (%v) for instance %v (%v)",
+						beforeTime, instID, lastResetTime)
+				}
+			} else if !ok {
+				return fmt.Errorf("lastResetTime not found in stats for inst %v", instID)
+			}
+		}
+	}
+	return nil
+}
+
+func TestStats_DefnStorageStatistics(t *testing.T) {
+	if clusterconfig.IndexUsing != "plasma" {
+		t.Skipf("TestStats_DefnStorageStatistics is only applicable for plasma")
+		return
+	}
+
+	log.Printf("In TestStats_DefnStorageStatistics()")
+
+	bucketName := "default"
+
+	log.Println("*********Setup cluster*********")
+	err := secondaryindex.DropAllSecondaryIndexes(clusterconfig.Nodes[1])
+	tc.HandleError(err, "failed to drop all secondary indices")
+
+	time.Sleep(30 * time.Second)
+
+	beforeTime := time.Now().UnixMilli()
+
+	log.Println("*********Create Indexes*********")
+	err = secondaryindex.CreateSecondaryIndex("index_age", bucketName, indexManagementAddress, "", []string{"age"}, false, nil, false, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	stats, err := secondaryindex.N1QLDefnStorageStatistics("index_age", bucketName, indexScanAddress)
+	FailTestIfError(err, "Error from N1QLStorageStatistics", t)
+	log.Printf("Stats from Index6 StorageStatistics for index %v are %v", "index_age", stats)
+
+	err = validateNonZeroLastResetTimeWithBaseTime(stats, beforeTime)
+	FailTestIfError(err, "Error in TestStats_DefnStorageStatistics", t)
+
+	beforeTime = time.Now().UnixMilli()
+	err = secondaryindex.CreateSecondaryIndex("p1", bucketName, indexManagementAddress, "", nil, true, nil, false, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating primary index", t)
+
+	stats, err = secondaryindex.N1QLDefnStorageStatistics("p1", bucketName, indexScanAddress)
+	FailTestIfError(err, "Error from N1QLStorageStatistics", t)
+	log.Printf("Stats from Index6 StorageStatistics for index %v are %v", "p1", stats)
+
+	err = validateNonZeroLastResetTimeWithBaseTime(stats, beforeTime)
+	FailTestIfError(err, "Error in TestStats_DefnStorageStatistics", t)
+
+	getProcessPID := func(processCmd string) []int {
+		pids := make([]int, 0, 4)
+		procs, err := os.ReadDir("/proc")
+		if err != nil {
+			return pids
+		}
+
+		for _, proc := range procs {
+			if !proc.IsDir() {
+				continue
+			}
+
+			pid, err := strconv.Atoi(proc.Name())
+			if err != nil {
+				continue
+			}
+
+			cmdline, err := os.ReadFile(filepath.Join("/proc", proc.Name(), "cmdline"))
+			if err != nil {
+				continue
+			}
+
+			if strings.Contains(string(cmdline), processCmd) {
+				indexerCmd := filepath.Base(string(cmdline))
+				log.Printf("found process with %v in with pid %v cmd - '%v'", processCmd, pid, indexerCmd)
+				pids = append(pids, pid)
+			}
+		}
+
+		return pids
+	}
+
+	newBeforeTime := time.Now().UnixMilli()
+	pids := getProcessPID("/indexer") // always search for /indexer else we will kill ns_server too
+	if len(pids) == 0 {
+		t.Fatalf("indexer process not found")
+	}
+	for _, pid := range pids {
+		err = syscall.Kill(pid, syscall.SIGABRT)
+		FailTestIfError(err, "failed to kill indexer process", t)
+		log.Printf("%v killed pid %v", t.Name(), pid)
+	}
+
+	time.Sleep(10 * time.Second)
+
+	rh := c.NewRetryHelper(10, 10*time.Millisecond, 2, func(a int, err error) error {
+		log.Printf("Attempt %v: Check if stats are valid", a)
+		stats, err = secondaryindex.N1QLDefnStorageStatistics("index_age", bucketName, indexScanAddress)
+		log.Printf("Stats from Index6 StorageStatistics for index %v are %v", "index_age", stats)
+
+		err = validateNonZeroLastResetTimeWithBaseTime(stats, newBeforeTime)
+		if err != nil {
+			log.Printf("Stats for index %v are invalid. err - %v", "index_age", err)
+			return err
+		}
+
+		stats, err = secondaryindex.N1QLDefnStorageStatistics("p1", bucketName, indexScanAddress)
+		log.Printf("Stats from Index6 StorageStatistics for index %v are %v", "p1", stats)
+
+		err = validateNonZeroLastResetTimeWithBaseTime(stats, beforeTime)
+		if err != nil {
+			log.Printf("Stats for index %v are invalid. err - %v", "p1", err)
+			return err
+		}
+		log.Printf("Stats are valid")
+		return nil
+	})
+
+	err = rh.Run()
+	FailTestIfError(err, "Error from N1QLStorageStatistics", t)
 }
