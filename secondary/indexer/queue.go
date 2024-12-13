@@ -343,6 +343,7 @@ func (r *Row) copyForBhive(source *Row) {
 	r.last = source.last
 	r.dist = source.dist
 	r.copyKey(source.key)
+
 	if source.value != nil {
 		r.copyValue(source.value)
 	}
@@ -403,7 +404,6 @@ func (r *Row) copyValue(val []byte) {
 
 	r.value = r.value[:0]
 	r.value = append(r.value, val...)
-
 	return
 }
 
@@ -420,7 +420,7 @@ func (r *Row) copyInclude(include []byte) {
 	}
 
 	if len(include) > cap(r.includeColumn) {
-		r.value = make([]byte, 0, len(include))
+		r.includeColumn = make([]byte, 0, len(include))
 	}
 
 	r.includeColumn = r.includeColumn[:0]
@@ -459,6 +459,12 @@ func (r *Row) freeBuffers() {
 	if r.includeColumn != nil {
 		r.mem.put(r.includeColumn)
 		r.includeColumn = nil
+	}
+
+	if r.cid != nil {
+		// No need to put the memory back to buffer as this
+		// memory is not received from the buffer
+		r.cid = nil
 	}
 }
 
