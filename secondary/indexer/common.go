@@ -130,19 +130,20 @@ func (m MutationSnapshot) CanProcess() bool {
 
 // Represents storage stats for an index instance
 type IndexStorageStats struct {
-	InstId     common.IndexInstId
-	PartnId    common.PartitionId
-	Name       string
-	Bucket     string
-	Scope      string
-	Collection string
-	Stats      StorageStatistics
+	InstId        common.IndexInstId
+	PartnId       common.PartitionId
+	LastResetTime int64
+	Name          string
+	Bucket        string
+	Scope         string
+	Collection    string
+	Stats         StorageStatistics
 }
 
 func (s *IndexStorageStats) String() string {
-	return fmt.Sprintf("IndexInstId: %v Data:%v, Disk:%v, "+
+	return fmt.Sprintf("IndexInstId: %v (p: %v) Lct: %d Data:%v, Disk:%v, "+
 		"ExtraSnapshotData:%v, Fragmentation:%v%%",
-		s.InstId, s.Stats.DataSize, s.Stats.DiskSize,
+		s.InstId, s.PartnId, s.LastResetTime, s.Stats.DataSize, s.Stats.DiskSize,
 		s.Stats.ExtraSnapDataSize, s.GetFragmentation())
 }
 

@@ -90,14 +90,15 @@ type RequestBroker struct {
 	retry       bool
 
 	// scatter/gather
-	queues   []*Queue
-	notifych chan bool
-	closed   int32
-	killch   chan bool
-	bGather  bool
-	errMap   map[common.PartitionId]map[uint64]error
-	partial  int32
-	mutex    sync.Mutex
+	queues    []*Queue
+	notifych  chan bool
+	closed    int32
+	killch    chan bool
+	bGather   bool
+	errMap    map[common.PartitionId]map[uint64]error
+	partial   int32
+	mutex     sync.Mutex
+	partnSets [][]interface{}
 
 	//backfill
 	backfills []*os.File
@@ -147,9 +148,7 @@ const (
 	MetaIdPos = -1
 )
 
-//
 // New Request Broker
-//
 func NewRequestBroker(requestId string, size int64, concurrency int) *RequestBroker {
 
 	return &RequestBroker{
@@ -164,152 +163,116 @@ func NewRequestBroker(requestId string, size int64, concurrency int) *RequestBro
 	}
 }
 
-//
 // Set ResponseHandlerFactory
-//
 func (b *RequestBroker) SetResponseHandlerFactory(factory ResponseHandlerFactory) {
 
 	b.factory = factory
 }
 
-//
 // Set ScanRequestHandler
-//
 func (b *RequestBroker) SetScanRequestHandler(handler ScanRequestHandler) {
 
 	b.scan = handler
 }
 
-//
 // Set CountRequestHandler
-//
 func (b *RequestBroker) SetCountRequestHandler(handler CountRequestHandler) {
 
 	b.count = handler
 }
 
-//
 // Set ResponseSender
-//
 func (b *RequestBroker) SetResponseSender(sender ResponseSender) {
 
 	b.sender = sender
 }
 
-//
 // Set ResponseTimer
-//
 func (b *RequestBroker) SetResponseTimer(timer ResponseTimer) {
 
 	b.timer = timer
 }
 
-//
 // Set BackfillWaiter
-//
 func (b *RequestBroker) SetBackfillWaiter(waiter BackfillWaiter) {
 
 	b.waiter = waiter
 }
 
-//
 // Set Limit
-//
 func (b *RequestBroker) SetLimit(limit int64) {
 
 	b.limit = limit
 	b.pushdownLimit = limit
 }
 
-//
 // Set offset
-//
 func (b *RequestBroker) SetOffset(offset int64) {
 
 	b.offset = offset
 	b.pushdownOffset = offset
 }
 
-//
 // Set Distinct
-//
 func (b *RequestBroker) SetDistinct(distinct bool) {
 
 	b.distinct = distinct
 }
 
-//
 // Set sorted
-//
 func (b *RequestBroker) SetSorted(sorted bool) {
 
 	b.sorted = sorted
 	b.pushdownSorted = sorted
 }
 
-//
 // Get Limit
-//
 func (b *RequestBroker) GetLimit() int64 {
 
 	return b.pushdownLimit
 }
 
-//
 // Get offset
-//
 func (b *RequestBroker) GetOffset() int64 {
 
 	return b.pushdownOffset
 }
 
-//
 // Get Sort
-//
 func (b *RequestBroker) GetSorted() bool {
 
 	return b.pushdownSorted
 }
 
-//
 // Set Scans
-//
 func (b *RequestBroker) SetScans(scans Scans) {
 
 	b.scans = scans
 }
 
-//
 // Set GroupAggr
-//
 func (b *RequestBroker) SetGroupAggr(grpAggr *GroupAggr) {
 
 	b.grpAggr = grpAggr
 }
 
-//
 // Set Projection
 // Also reset indexOrderPosPruneMap. There should be analyzeOrderBy invoked
 // after SetProjection is called to ensure indexOrderPosPruneMap is
 // correctly populated
-//
 func (b *RequestBroker) SetProjection(projection *IndexProjection) {
 
 	b.projections = projection
 	b.indexOrderPosPruneMap = nil
 }
 
-//
 // Set Index Order
-//
 func (b *RequestBroker) SetIndexOrder(indexOrder *IndexKeyOrder) {
 
 	b.indexOrder = indexOrder
 }
 
-//
 // Retry
-//
 func (b *RequestBroker) SetRetry(retry bool) {
 	b.retry = retry
 }
@@ -318,9 +281,7 @@ func (b *RequestBroker) DoRetry() bool {
 	return b.retry
 }
 
-//
 // Close the broker on error
-//
 func (b *RequestBroker) Error(err error, instId uint64, partitions []common.PartitionId) {
 
 	b.mutex.Lock()
@@ -362,16 +323,12 @@ func (b *RequestBroker) Partial(partial bool) {
 	}
 }
 
-//
 // Close the broker when scan is done
-//
 func (b *RequestBroker) done() {
 	b.close()
 }
 
-//
 // Close the request broker
-//
 func (b *RequestBroker) close() {
 
 	if atomic.SwapInt32(&b.closed, 1) == 0 {
@@ -383,9 +340,7 @@ func (b *RequestBroker) close() {
 	}
 }
 
-//
 // Is the request broker closed
-//
 func (b *RequestBroker) IsClose() bool {
 
 	return atomic.LoadInt32(&b.closed) == 1
@@ -508,6 +463,14 @@ func (c *RequestBroker) GetBackfills() []*os.File {
 	return c.backfills
 }
 
+func (b *RequestBroker) SetPartnSets(partnSets [][]interface{}) {
+	b.partnSets = partnSets
+}
+
+func (b *RequestBroker) GetPartnSets() [][]interface{} {
+	return b.partnSets
+}
+
 func (b *RequestBroker) reset() {
 
 	// scatter/gather
@@ -518,6 +481,7 @@ func (b *RequestBroker) reset() {
 	b.bGather = false
 	b.errMap = make(map[common.PartitionId]map[uint64]error)
 	b.partial = 0 // false
+	b.partnSets = nil
 
 	// backfill
 	// do not reset backfills
@@ -540,12 +504,10 @@ func (b *RequestBroker) reset() {
 // scatter/gather
 //--------------------------
 
-//
 // Scatter requests over multiple connections
-//
 func (c *RequestBroker) scatter(clientMaker scanClientMaker, index *common.IndexDefn,
 	scanports []string, targetInstId []uint64, rollback []int64, partition [][]common.PartitionId,
-	numPartition uint32, settings *ClientSettings) (count int64,
+	numPartition uint32, partnSets [][]interface{}, settings *ClientSettings) (count int64,
 	err map[common.PartitionId]map[uint64]error, partial bool, refresh bool) {
 
 	defer func() {
@@ -563,7 +525,15 @@ func (c *RequestBroker) scatter(clientMaker scanClientMaker, index *common.Index
 
 	var ok bool
 	var client []*GsiScanClient
-	partition = c.filterPartitions(index, partition, numPartition)
+
+	if len(partnSets) > 0 {
+		// Filter based on partition sets
+		partition = c.filterPartitonSets(index, partition, numPartition, partnSets)
+	} else {
+		// Filter based on spans
+		partition = c.filterPartitions(index, partition, numPartition)
+	}
+
 	ok, client, targetInstId, rollback, partition = c.makeClients(clientMaker, concurrency, index, numPartition, scanports, targetInstId, rollback, partition)
 	if !ok {
 		return 0, nil, false, true
@@ -616,9 +586,7 @@ func (c *RequestBroker) makeErrorMap(targetInstIds []uint64, partitions [][]comm
 	return errMap
 }
 
-//
 // Make Scan client that are used in scans
-//
 func (c *RequestBroker) makeClients(maker scanClientMaker, max_concurrency int, index *common.IndexDefn, numPartition uint32,
 	scanports []string, targetInstIds []uint64, timestamps []int64, allPartitions [][]common.PartitionId) (bool, []*GsiScanClient,
 	[]uint64, []int64, [][]common.PartitionId) {
@@ -651,9 +619,7 @@ func (c *RequestBroker) makeClients(maker scanClientMaker, max_concurrency int, 
 	return true, newClient, newInstId, newTS, newPartition
 }
 
-//
 // split the clients until it reaches the maximum parallelism
-//
 func (c *RequestBroker) splitClients(maker scanClientMaker, max_concurrency int, scanports []string, clients []*GsiScanClient, instIds []uint64,
 	timestamps []int64, allPartitions [][]common.PartitionId) ([]*GsiScanClient, []uint64, []int64, [][]common.PartitionId) {
 
@@ -690,9 +656,7 @@ func (c *RequestBroker) splitClients(maker scanClientMaker, max_concurrency int,
 	return clients, instIds, timestamps, allPartitions
 }
 
-//
 // Scatter scan requests over multiple connections
-//
 func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.IndexDefn, targetInstId []uint64, rollback []int64, partition [][]common.PartitionId,
 	numPartition uint32, settings *ClientSettings) (err error, partial bool) {
 
@@ -830,9 +794,7 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 	return
 }
 
-//
 // Scatter count requests over multiple connections
-//
 func (c *RequestBroker) scatterCount(client []*GsiScanClient, index *common.IndexDefn, targetInstId []uint64, rollback []int64,
 	partition [][]common.PartitionId, numPartition uint32) (count int64, err map[common.PartitionId]map[uint64]error, partial bool) {
 
@@ -903,11 +865,9 @@ func (c *RequestBroker) sort(rows []Row, sorted []int) bool {
 	return true
 }
 
-//
 // Gather results from multiple connections
 // rows - buffer of rows from each scatter gorountine
 // sorted - sorted order of the rows
-//
 func (c *RequestBroker) pick(rows []Row, sorted []int) int {
 
 	size := len(c.queues)
@@ -965,7 +925,6 @@ func (c *RequestBroker) pick(rows []Row, sorted []int) int {
 	return Done
 }
 
-//
 // Gather results from multiple connections with sorting.
 // The gather routine must follow CBQ processing order:
 // 1) filter (where)
@@ -985,7 +944,6 @@ func (c *RequestBroker) pick(rows []Row, sorted []int) int {
 // list, since cbq will put all keys referenced in query into the
 // projection list for non-aggregate query.    For aggregate query,
 // only aggregate and group keys will be in projection.
-//
 func (c *RequestBroker) gather(donech chan bool) {
 
 	size := len(c.queues)
@@ -1080,9 +1038,7 @@ func (c *RequestBroker) gather(donech chan bool) {
 	}
 }
 
-//
 // Gather results from multiple connections without sorting
-//
 func (c *RequestBroker) forward(donech chan bool) {
 
 	size := len(c.queues)
@@ -1193,7 +1149,6 @@ func (c *RequestBroker) forward(donech chan bool) {
 // how they are defined in the index.  In addition, if
 // the key is in order-by, cbq will put it in the
 // projection list (even if the user does not ask for it).
-//
 func (c *RequestBroker) compareKey(key1, key2 []value.Value) int {
 
 	// Find shorter key len ln. Save key lens ln1, ln2 to avoid recomputes.
@@ -1233,9 +1188,7 @@ func (c *RequestBroker) comparePrimaryKey(k1 []byte, k2 []byte) int {
 	return bytes.Compare(k1, k2)
 }
 
-//
 // This function makes a scan request through a single connection.
-//
 func (c *RequestBroker) scanSingleNode(id ResponseHandlerId, client *GsiScanClient, index *common.IndexDefn, instId uint64,
 	rollback int64, partition []common.PartitionId, numPartition uint32, donech chan *doneStatus) {
 
@@ -1271,9 +1224,7 @@ func (c *RequestBroker) scanSingleNode(id ResponseHandlerId, client *GsiScanClie
 	donech <- &doneStatus{err: err, partial: partial}
 }
 
-//
 // This function makes a count request through a single connection.
-//
 func (c *RequestBroker) countSingleNode(id ResponseHandlerId, client *GsiScanClient, index *common.IndexDefn, instId uint64, rollback int64,
 	partition []common.PartitionId, numPartition uint32, donech chan *doneStatus, count *int64) {
 
@@ -1297,11 +1248,9 @@ func (c *RequestBroker) countSingleNode(id ResponseHandlerId, client *GsiScanCli
 	donech <- &doneStatus{err: err, partial: partial}
 }
 
-//
 // When a response is received from a connection, the response will first be passed to the caller so the caller
 // has a chance to handle the rows first (e.g. backfill).    The caller will then forward the rows back to the
 // broker for additional processing (e.g. gather).
-//
 func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte,
 	skeys *common.ScanResultEntries) (bool, error) {
 
@@ -1482,9 +1431,7 @@ func makeDefaultResponseHandler(id ResponseHandlerId, broker *RequestBroker, ins
 // Partition Elimination
 //--------------------------
 
-//
 // Filter partitions based on index partiton key
-//
 func (c *RequestBroker) filterPartitions(index *common.IndexDefn, partitions [][]common.PartitionId, numPartition uint32) [][]common.PartitionId {
 
 	if numPartition == 1 || (len(partitions) == 1 && len(partitions[0]) == 1) {
@@ -1509,11 +1456,9 @@ func (c *RequestBroker) filterPartitions(index *common.IndexDefn, partitions [][
 	return filterPartitionIds(partitions, filter)
 }
 
-//
 // Find out the position of parition key in the index key list
 // If there is any partition key cannot be found in the index key list,
 // this function returns nil
-//
 func partitionKeyPos(defn *common.IndexDefn) []int {
 
 	if defn.PartitionScheme == common.SINGLE {
@@ -1569,14 +1514,12 @@ func partitionKeyPos(defn *common.IndexDefn) []int {
 	return pos
 }
 
-//
 // Extract the partition key value from each scan (AND-predicate from where clause)
 // Scans is a OR-list of AND-predicate
 // Each scan (AND-predicate) has a list of filters, with each filter being a operator on a index key
 // The filters in the scan is sorted based on index order
 // For partition elimination to happen, the filters must contain all the partiton keys
 // If any scan does not have all the partition keys, then the request needs to be scatter-gather
-//
 func partitionKeyValues(requestId string, partnKeyPos []int, scans Scans) [][]interface{} {
 
 	partnKeyValues := make([][]interface{}, len(scans))
@@ -1647,9 +1590,7 @@ func partitionKeyValues(requestId string, partnKeyPos []int, scans Scans) [][]in
 	return partnKeyValues
 }
 
-//
 // Generate a list of partitonId from the partition key values of each scan
-//
 func partitionKeyHash(partnKeyValues [][]interface{}, scans Scans, numPartition uint32, hashScheme common.HashScheme) map[common.PartitionId]bool {
 
 	if len(partnKeyValues) != len(scans) {
@@ -1677,9 +1618,7 @@ func partitionKeyHash(partnKeyValues [][]interface{}, scans Scans, numPartition 
 	return result
 }
 
-//
 // Given the indexer-partitionId map, filter out the partitionId that are not used in the scans
-//
 func filterPartitionIds(allPartitions [][]common.PartitionId, filter map[common.PartitionId]bool) [][]common.PartitionId {
 
 	result := make([][]common.PartitionId, len(allPartitions))
@@ -1688,6 +1627,42 @@ func filterPartitionIds(allPartitions [][]common.PartitionId, filter map[common.
 			if filter[partition] {
 				result[i] = append(result[i], partition)
 			}
+		}
+	}
+
+	return result
+}
+
+func (c *RequestBroker) filterPartitonSets(index *common.IndexDefn, partitions [][]common.PartitionId, numPartition uint32, partnSets [][]interface{}) [][]common.PartitionId {
+	if numPartition == 1 || (len(partitions) == 1 && len(partitions[0]) == 1) {
+		return partitions
+	}
+
+	// partnSets is nothing but a list of partition key values
+	filter := partitionKeyHashForPartnSets(partnSets, numPartition, index.HashScheme)
+	if len(filter) == 0 {
+		return partitions
+	}
+
+	return filterPartitionIds(partitions, filter)
+
+}
+
+func partitionKeyHashForPartnSets(partnSets [][]interface{}, numPartition uint32, hashScheme common.HashScheme) map[common.PartitionId]bool {
+	result := make(map[common.PartitionId]bool)
+
+	for _, values := range partnSets {
+
+		v, e := qvalue.NewValue(values).MarshalJSON()
+		if e != nil {
+			return nil
+		}
+
+		partnId := common.HashKeyPartition(v, int(numPartition), hashScheme)
+		result[partnId] = true
+
+		if len(result) == int(numPartition) {
+			return result // all partitions are covered. Break the loop
 		}
 	}
 
@@ -1704,13 +1679,11 @@ func (c *RequestBroker) changePushdownParams(partitions [][]common.PartitionId, 
 	c.changeSorted(partitions, numPartition, index)
 }
 
-//
 // For aggregate query, cbq-engine will push down limit only if full aggregate results are needed.  Like range query, the limit
 // parameter will be rewritten before pushing down to indexer.   The limit will be applied in gathered when results are returning
 // from all indexers.
 //
 // For pre-aggregate result, cbq-engine will not push down limit, since limit can only apply after aggregation.
-//
 func (c *RequestBroker) changeLimit(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
 	c.pushdownLimit = c.limit
@@ -1768,13 +1741,11 @@ func (c *RequestBroker) changeLimit(partitions [][]common.PartitionId, numPartit
 
 }
 
-//
 // For aggregate query, cbq-engine will push down offset only if full aggregate results are needed.  Like range query, the offset
 // parameter will be rewritten before pushing down to indexer.   The offset will be applied in gathered when results are returning
 // from all indexers.
 //
 // For pre-aggregate result, cbq-engine will not push down offset, since limit can only apply after aggregation.
-//
 func (c *RequestBroker) changeOffset(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
 	c.pushdownOffset = c.offset
@@ -1825,9 +1796,7 @@ func (c *RequestBroker) changeOffset(partitions [][]common.PartitionId, numParti
 
 }
 
-//
 // Determine if the results from each indexer needs to be sorted based on index key order.
-//
 func (c *RequestBroker) changeSorted(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
 	c.pushdownSorted = c.sorted
@@ -1863,12 +1832,10 @@ func (c *RequestBroker) isPartitionedAggregate(index *common.IndexDefn) bool {
 	return false
 }
 
-//
 // For aggregate query, n1ql will expect full aggregate results for partitioned index if
 // 1) group-by keys matches the partition keys (order is not important)
 // 2) group keys are leading index keys
 // 3) partition keys are leading index keys
-//
 func (c *RequestBroker) isPartialAggregate(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) bool {
 
 	// non-partition index
@@ -1908,7 +1875,6 @@ func (c *RequestBroker) isPartialAggregate(partitions [][]common.PartitionId, nu
 	return false
 }
 
-//
 // We cannot sort if it is pre-aggregate result, so set sorted to false.  Otherwise, the result
 // is sorted if there is an order-by clause.
 //
@@ -1916,7 +1882,6 @@ func (c *RequestBroker) isPartialAggregate(partitions [][]common.PartitionId, nu
 // If it is a partitioned index, order-by will not push down unless it is full aggregate result.
 //
 // THIS FUNCTION IS NOT CALLED BECAUSE CBQ IS ALREADY HANDLING IT
-//
 func (c *RequestBroker) analyzeGroupBy(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
 	// non-partition index
@@ -1935,11 +1900,9 @@ func (c *RequestBroker) analyzeGroupBy(partitions [][]common.PartitionId, numPar
 	}
 }
 
-//
 // If sorted, then analyze the index order to see if we need to add index to projection list.
 // If it is a non-covering index, cbq-engine will not add order-by keys to the projection list. So Gsi client
 // will have to add the keys for sorting the scattered results.
-//
 func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
 	// non-partition index
@@ -1992,7 +1955,6 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 	}
 }
 
-//
 // If sorted, then analyze the projection to find out the sort order (asc/desc).
 //
 // Cbq-engine pushes order-by only if the order-by keys match the leading index keys.  If there is an expression in the order-by clause,
@@ -2001,7 +1963,6 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 // For aggregate query, the order-by keys need to match the group-key as well.  So if the group-key is based on an expression on an index key,
 // this means the order-by key also needs to have the same expression.  In this case, cbq will not push down order-by (violates rule above).
 // Cbq also will not allow if there is more order-by keys than group-keys.
-//
 func (c *RequestBroker) analyzeProjection(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
 	// non-partition index

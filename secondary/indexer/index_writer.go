@@ -35,6 +35,7 @@ type StorageStatistics struct {
 	DiskSize          int64
 	MemUsed           int64
 	ExtraSnapDataSize int64
+	LastResetTime     int64
 
 	GetBytes    int64
 	InsertBytes int64

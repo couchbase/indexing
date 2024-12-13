@@ -3580,6 +3580,7 @@ func (s *statsManager) getStorageStats(spec *statsSpec, creds cbauth.Creds) stri
 				sts.Bucket, sts.Scope, sts.Collection, sts.Name, sts.InstId, sts.PartnId))
 		}
 
+		result.WriteString(fmt.Sprintf("\"LastResetTime\":%d,\n", sts.LastResetTime))
 		result.WriteString(fmt.Sprintf("\"Stats\":\n"))
 		for _, data := range sts.GetInternalData() {
 			result.WriteString(data)

@@ -838,6 +838,11 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 		newRow = &Row{}
 		newRow.init(w.mem)
 		newRow.copy(&w.itrRow)
+
+		newRow.partnId = int(w.currJob.pid)
+		newRow.recordId = recordId
+		newRow.storeId = storeId
+		newRow.cid = w.currJob.scan.Low.Bytes()
 	}
 
 	select {
@@ -859,8 +864,15 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	//reset itrRow only if not using limit pushdown
 	if !w.r.useHeapForVectorIndex() {
 		w.itrRow.len = 0
+		w.itrRow.dist = 0
+		w.itrRow.last = false
 		w.itrRow.key = nil
 		w.itrRow.value = nil
+		w.itrRow.includeColumn = nil
+		w.itrRow.partnId = 0
+		w.itrRow.recordId = 0
+		w.itrRow.storeId = 0
+		w.itrRow.cid = nil
 	}
 
 	return nil

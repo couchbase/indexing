@@ -13,11 +13,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/stubs/nitro/bhive"
 	"math"
 	"math/rand"
 	"net"
 	"sync"
+
+	"github.com/couchbase/indexing/secondary/stubs/nitro/bhive"
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"

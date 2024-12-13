@@ -222,6 +222,8 @@ type plasmaSlice struct {
 	// Position of the vector field in the encoded key
 	// Derived from index defn
 	vectorPos int
+
+	lastResetTime int64
 }
 
 // newPlasmaSlice is the constructor for plasmaSlice.
@@ -642,6 +644,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 	var wg sync.WaitGroup
 	var mErr, bErr error
 	t0 := time.Now()
+	slice.lastResetTime = t0.UnixNano()
 
 	// Recover mainindex
 	wg.Add(1)
@@ -2694,6 +2697,7 @@ func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
 		readers = append(readers, <-mdb.readers)
 	}
 
+	mdb.lastResetTime = time.Now().UnixNano()
 	err := mdb.restore(o)
 	for i := 0; i < cap(mdb.readers); i++ {
 		mdb.readers <- readers[i]
@@ -3139,6 +3143,8 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 
 	var sts StorageStatistics
 
+	sts.LastResetTime = mdb.lastResetTime
+
 	var internalData []string
 	internalDataMap := make(map[string]interface{})
 
@@ -3338,6 +3344,7 @@ func (mdb *plasmaSlice) GetAlternateShardId(partnId common.PartitionId) string {
 func (mdb *plasmaSlice) handleN1QLStorageStatistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 
+	sts.LastResetTime = mdb.lastResetTime
 	pstats := mdb.mainstore.GetPreparedStats()
 	var avg_item_size, avg_page_size int64
 	if itemCnt := atomic.LoadInt64(&pstats.ItemCnt); itemCnt > 0 {

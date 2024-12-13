@@ -170,6 +170,9 @@ type BridgeAccessor interface {
 	// nodes.
 	Nodes() ([]*IndexerService, error)
 
+	// GetNode returns the indexerservice for the corresponding node
+	GetNode(common.IndexerId) (*IndexerService, error)
+
 	// CreateIndex and return defnID of created index.
 	// name
 	//      index name
@@ -1170,7 +1173,7 @@ func (c *GsiClient) Scan3(
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.ScanInternal("scan3", defnID, requestId, scans, reverse, distinct,
 		projection, offset, limit, groupAggr, indexOrder,
-		nil, "", cons, tsvector, broker, scanParams,
+		nil, "", nil, cons, tsvector, broker, scanParams,
 		nil, time.Time{}, 0)
 }
 
@@ -1179,6 +1182,7 @@ func (c *GsiClient) Scan6(
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	indexKeyNames []string, inlineFilter string,
+	partnSets [][]interface{},
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, scanParams map[string]interface{},
 	indexVector *IndexVector) (err error) {
@@ -1187,7 +1191,7 @@ func (c *GsiClient) Scan6(
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.ScanInternal("scan6", defnID, requestId, scans, reverse, distinct,
 		projection, offset, limit, groupAggr, indexOrder,
-		indexKeyNames, inlineFilter, cons, tsvector, broker, scanParams,
+		indexKeyNames, inlineFilter, partnSets, cons, tsvector, broker, scanParams,
 		indexVector, time.Time{}, 0)
 }
 
@@ -1196,6 +1200,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	indexKeyNames []string, inlineFilter string,
+	partnSets [][]interface{},
 	cons common.Consistency, tsvector *TsConsistency,
 	broker *RequestBroker, scanParams map[string]interface{},
 	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration) (err error) {
@@ -1248,6 +1253,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 	broker.SetSorted(indexOrder != nil)
 	broker.SetDistinct(distinct)
 	broker.SetIndexOrder(indexOrder)
+	broker.SetPartnSets(partnSets)
 
 	_, err = c.doScan(defnID, requestId, broker)
 	if err != nil { // callback with error
@@ -1263,10 +1269,11 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 // StorageStatistics implementation
 // -------------------------------------
 type StorageStats struct {
-	Index       string
-	Id          uint64
-	PartitionId common.PartitionId
-	Stats       map[string]interface{}
+	Index         string
+	Id            uint64
+	PartitionId   common.PartitionId
+	LastResetTime uint64
+	Stats         map[string]interface{}
 }
 
 const STAT_PARTITION_ID = "PARTITION_ID"
@@ -1277,6 +1284,7 @@ const STAT_NUM_INSERT = "NUM_INSERT"
 const STAT_NUM_DELETE = "NUM_DELETE"
 const STAT_AVG_ITEM_SIZE = "AVG_ITEM_SIZE"
 const STAT_AVG_PAGE_SIZE = "AVG_PAGE_SIZE"
+const STAT_LAST_RESET_TIME = "LAST_RESET_TIME"
 
 // A set of partitions for given index definition is chosen using metaclient's
 // GetScanport. It returns a set of target replica InstanceIds with corresponding
@@ -1333,42 +1341,127 @@ func (c *GsiClient) StorageStatistics(defnID uint64, requestId string) ([]map[st
 	return nil, errors.New("Unable to retrieve storage statistics from any replica index.")
 }
 
-func getStatsFromIndexerNodes(statUrls []string, targetInstIds []uint64,
-	partitions [][]common.PartitionId, storageMode string) ([]map[string]interface{}, error) {
+// DefnStorageStatistics is the new API for storage statistics. We get stats for all replicas
+// of a definition and return them to the query client per instance
+func (c *GsiClient) DefnStorageStatistics(defnID uint64, requestID string) (
+	map[common.IndexInstId][]map[string]interface{}, error) {
+
+	storageMode := c.Settings().StorageMode()
+
+	if storageMode == "forestdb" {
+		// StorageStatistics not supported for forestdb
+		return nil, nil
+	}
+
+	var insts = c.bridge.GetIndexReplica(defnID)
+
+	// urls is list of Stats REST endpoints for all indexer nodes
+	// hosting the requested index
+	statUrls := []string{}
+
+	var targetInstIDs = make([]uint64, 0, len(insts))
+	var nodesForInst = make(map[common.IndexerId]string)
+	for _, inst := range insts {
+		if inst != nil {
+			targetInstIDs = append(targetInstIDs, uint64(inst.InstId))
+			for _, nodeID := range inst.IndexerId {
+				if _, exists := nodesForInst[nodeID]; !exists {
+					node, err := c.bridge.GetNode(nodeID)
+					if err == nil {
+						nodesForInst[nodeID] = node.Httpport
+					} else {
+						logging.Warnf("DefnStorageStatistics: got err %v for node %v info",
+							err, nodeID)
+					}
+				}
+			}
+		}
+	}
+
+	for _, nodeHTTPPort := range nodesForInst {
+		url := "http://" + nodeHTTPPort + "/stats/storage?consumerFilter=n1qlStorageStats"
+		statUrls = append(statUrls, url)
+	}
+
+	var allNodeStats, err = restGetStatsFromIndexerNodes(statUrls, targetInstIDs)
+	if err != nil {
+		logging.Warnf("DefnStorageStatistics failed to read storage stats from indexers with error - %v, reqID %v",
+			err, requestID)
+		return nil, err
+	}
+
+	var res = make(map[common.IndexInstId][]map[string]interface{})
+	for _, nodeStats := range allNodeStats {
+		for _, nodeStat := range nodeStats {
+			var id = common.IndexInstId(nodeStat.Id)
+
+			if _, exists := res[id]; !exists {
+				res[id] = make([]map[string]interface{}, 0)
+			}
+
+			var partnStats = getStatsForPartition(nodeStat, storageMode)
+			res[id] = append(res[id], partnStats)
+		}
+	}
+
+	logging.Debugf("DefnStorageStatistics returning stats for index %v, reqID %v - \n%v",
+		defnID, requestID, res)
+	return res, nil
+}
+
+func restGetStatsFromIndexerNodes(statURLs []string, targetInstIDs []uint64) (
+	[][]StorageStats, error) {
 
 	statsSpec := &common.StatsIndexSpec{}
-	for _, targetInst := range targetInstIds {
+	for _, targetInst := range targetInstIDs {
 		statsSpec.Instances = append(statsSpec.Instances, common.IndexInstId(targetInst))
 	}
 
 	instBytes, err := json.Marshal(statsSpec)
 	if err != nil {
-		errStr := fmt.Sprintf("Error marshalling instIDs : %v, err: %v", targetInstIds, err)
+		errStr := fmt.Sprintf("Error marshalling instIDs : %v, err: %v",
+			targetInstIDs, err)
 		return nil, errors.New(errStr)
 	}
 
+	var res = make([][]StorageStats, 0, len(targetInstIDs))
+
 	bodyBuf := bytes.NewBuffer(instBytes)
+	for _, statURL := range statURLs {
 
-	storageStats := make([]map[string]interface{}, 0)
-	for i, statUrl := range statUrls {
-
-		resp, err := postWithAuth(statUrl, "application/json", bodyBuf, time.Duration(10)*time.Second)
+		resp, err := postWithAuth(statURL, "application/json", bodyBuf, time.Duration(10)*time.Second)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
 		bytes, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			errStr := fmt.Sprintf("Error reading stats from %v : %v", statUrl, err)
+			errStr := fmt.Sprintf("Error reading stats from %v : %v", statURL, err)
 			return nil, errors.New(errStr)
 		}
 
 		var nodeStats []StorageStats
 		err = commonjson.Unmarshal(bytes, &nodeStats)
 		if err != nil {
-			errStr := fmt.Sprintf("Error unmarshalling stats from %v : %v", statUrl, err)
+			errStr := fmt.Sprintf("Error unmarshalling stats from %v : %v", statURL, err)
 			return nil, errors.New(errStr)
 		}
+
+		res = append(res, nodeStats)
+	}
+
+	return res, nil
+}
+
+func getStatsFromIndexerNodes(statUrls []string, targetInstIds []uint64,
+	partitions [][]common.PartitionId, storageMode string) ([]map[string]interface{}, error) {
+
+	var allNodeStats, err = restGetStatsFromIndexerNodes(statUrls, targetInstIds)
+	if err != nil {
+		return nil, err
+	}
+	storageStats := make([]map[string]interface{}, 0)
+	for i, nodeStats := range allNodeStats {
 		for _, nodeStat := range nodeStats {
 			if targetInstIds[i] == nodeStat.Id && contains(partitions[i], nodeStat.PartitionId) {
 				partnStats := getStatsForPartition(nodeStat, storageMode)
@@ -1393,6 +1486,7 @@ func getStatsForPartition(instStats StorageStats, storageMode string) map[string
 	if storageMode == "plasma" {
 		storageStats := make(map[string]interface{})
 		storageStats[STAT_PARTITION_ID] = instStats.PartitionId
+		storageStats[STAT_LAST_RESET_TIME] = instStats.LastResetTime
 		stats := instStats.Stats
 		if _, ok := stats["MainStore"]; !ok {
 			return nil
@@ -1667,6 +1761,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 
 	broker.SetResponseTimer(c.bridge.Timeit)
 	skips := make(map[common.IndexDefnId]bool)
+	partnSets := broker.GetPartnSets()
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
@@ -1683,9 +1778,10 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 		}
 
 		if ok && index != nil {
+
 			start := time.Now()
 			count, scan_errs, partial, refresh := broker.scatter(c.makeScanClient, index, queryports, targetInstIds,
-				rollbackTimes, partitions, numPartitions, c.settings)
+				rollbackTimes, partitions, numPartitions, partnSets, c.settings)
 
 			if !refresh {
 				foundScanport = true

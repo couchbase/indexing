@@ -204,11 +204,21 @@ fi
 # Add 2ici_test to tag to compile "testcode" package for CI
 sed -i 's/SET (TAGS "jemalloc")/SET (TAGS "jemalloc 2ici_test")/' $WORKSPACE/goproj/src/github.com/couchbase/indexing/CMakeLists.txt
 
+error_exit() {
+  for patch_id in `cat ~/gerrit.list`; do
+    ssh review.couchbase.org gerrit query change:${patch_id%,*} AND reviewer:self AND status:open | grep -qs 'rowCount: 0' && continue
+
+    failure_str=$(printf "MAYBE FAIL %s with storage %s. See http://%s.northscale.in/gsi-%s.fail.html;\nFailure reason %s;\nBuild error - \n%b" "$MODE" "$STORAGE" "$CINAME" "$TS" "$1" "$(tail -n 20 "$WORKSPACE/make.log")")
+    ssh review.couchbase.org gerrit review --code-review 0 -m "'$failure_str'" $patch_id
+  done
+  exit $2
+}
+
 BUILD_ENTERPRISE=false builder # -forcex86 # add -forcex86 if build fail on arm64
-test $? -eq 0 || exit $?
+test $? -eq 0 || error_exit "CE build failed" $?
 # Building again will delete output from previous build
 builder # -forcex86 # add -forcex86 if build fail on arm64
-test $? -eq 0 || exit $?
+test $? -eq 0 || error_exit "EE build failed" $?
 
 cd $WORKSPACE
 repo manifest -r >current.xml

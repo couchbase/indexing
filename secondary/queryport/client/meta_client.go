@@ -282,6 +282,35 @@ func (b *metadataClient) Nodes() ([]*IndexerService, error) {
 	return services, nil
 }
 
+func (b *metadataClient) GetNode(nodeID common.IndexerId) (*IndexerService, error) {
+	// gather Indexer services
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	var node *IndexerService
+	for indexerID := range currmeta.topology {
+		if indexerID == nodeID {
+			a, q, h, err := b.mdClient.FindServiceForIndexer(indexerID)
+			if err == nil {
+				node = &IndexerService{
+					Adminport: a, Httpport: h, Queryport: q, Status: "initial",
+				}
+			}
+		}
+	}
+	if node == nil {
+		return nil, fmt.Errorf("failed to find indexer with ID %v", nodeID)
+	}
+	// gather indexer status
+	for _, indexer := range b.mdClient.CheckIndexerStatus() {
+		if node.Adminport == indexer.Adminport && indexer.Connected {
+			node.Status = "online"
+		}
+	}
+	if node.Status != "online" {
+		return nil, fmt.Errorf("node %v not online", nodeID)
+	}
+	return node, nil
+}
+
 // GetIndexDefn implements BridgeAccessor{} interface.
 func (b *metadataClient) GetIndexDefn(defnID uint64) *common.IndexDefn {
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
