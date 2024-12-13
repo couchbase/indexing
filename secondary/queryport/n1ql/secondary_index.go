@@ -2046,6 +2046,28 @@ func (si *secondaryIndex6) Scan6(
 
 }
 
+func (si *secondaryIndex6) DefnStorageStatistics(requestid string) (
+	map[uint64][]map[datastore.IndexStatType]value.Value,
+	errors.Error,
+) {
+
+	if si == nil {
+		return nil, ErrorIndexEmpty
+	}
+	client := si.gsi.gsiClient
+
+	if err := si.CheckScheduled(); err != nil {
+		return nil, n1qlError(client, err)
+	}
+
+	stats, e := client.DefnStorageStatistics(si.defnID, requestid)
+	if e != nil {
+		return nil, n1qlError(client, e)
+	}
+
+	return gsistatston1ql2(stats), nil
+}
+
 //-------------------------------------
 // private functions for secondaryIndex
 //-------------------------------------
@@ -2813,6 +2835,20 @@ func gsistatston1ql(stats []map[string]interface{}) []map[datastore.IndexStatTyp
 	return storageStats
 }
 
+func gsistatston1ql2(stats map[common.IndexInstId][]map[string]interface{},
+) map[uint64][]map[datastore.IndexStatType]value.Value {
+
+	storageStats := make(
+		map[uint64][]map[datastore.IndexStatType]value.Value, 0,
+	)
+
+	for instId, instStats := range stats {
+		storageStats[uint64(instId)] = gsistatston1ql(instStats)
+	}
+
+	return storageStats
+}
+
 func gsistatnameton1ql(name string) (datastore.IndexStatType, bool) {
 	switch name {
 	case qclient.STAT_PARTITION_ID:
@@ -2831,6 +2867,8 @@ func gsistatnameton1ql(name string) (datastore.IndexStatType, bool) {
 		return datastore.IX_STAT_AVG_ITEM_SIZE, true
 	case qclient.STAT_AVG_PAGE_SIZE:
 		return datastore.IX_STAT_AVG_PAGE_SIZE, true
+	case qclient.STAT_LAST_RESET_TIME:
+		return datastore.IX_STAT_LAST_RESET_TS, true
 	}
 	return datastore.IndexStatType(""), false
 }

@@ -1860,6 +1860,7 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 			var needUpgrade = false
 			var hasStats = false
 			var loggingDisabled = true
+			var lastResetTime int64
 
 			slices := partnInst.Sc.GetAllSlices()
 			nslices += int64(len(slices))
@@ -1883,6 +1884,7 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 				if err != nil {
 					break
 				}
+				lastResetTime = max(lastResetTime, sts.LastResetTime)
 
 				dataSz += sts.DataSize
 				dataSzOnDisk += sts.DataSizeOnDisk
@@ -1906,12 +1908,13 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 
 			if hasStats && err == nil {
 				stat := IndexStorageStats{
-					InstId:     idxInstId,
-					PartnId:    partnInst.Defn.GetPartitionId(),
-					Name:       inst.Defn.Name,
-					Bucket:     inst.Defn.Bucket,
-					Scope:      inst.Defn.Scope,
-					Collection: inst.Defn.Collection,
+					InstId:        idxInstId,
+					PartnId:       partnInst.Defn.GetPartitionId(),
+					Name:          inst.Defn.Name,
+					Bucket:        inst.Defn.Bucket,
+					Scope:         inst.Defn.Scope,
+					Collection:    inst.Defn.Collection,
+					LastResetTime: lastResetTime,
 					Stats: StorageStatistics{
 						DataSize:          dataSz,
 						DataSizeOnDisk:    dataSzOnDisk,

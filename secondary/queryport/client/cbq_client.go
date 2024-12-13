@@ -300,6 +300,10 @@ func (b *cbqClient) metaResponse(
 	return mresp, err
 }
 
+func (b *cbqClient) GetNode(_ common.IndexerId) (*IndexerService, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 // indexInfo describes an index.
 type indexInfo struct {
 	Name               string   `json:"name,omitempty"`
