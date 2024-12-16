@@ -13479,6 +13479,23 @@ func getSampleSizeForNthRetry(sampleSize int64, multiplier float64, retry int) i
 	return sampleSize * int64(math.Ceil(math.Pow(multiplier, float64(retry))))
 }
 
+func getInstCodebookIfExists(indexPartnMap PartitionInstMap) ([]byte, error, c.PartitionId) {
+
+	var err error
+	var codebook []byte
+
+	for partnId, partnInst := range indexPartnMap {
+		slices := partnInst.Sc.GetAllSlices()
+		for _, slice := range slices {
+			codebook, err = slice.SerializeCodebook()
+			if err == nil && codebook != nil {
+				return codebook, nil, partnId
+			}
+		}
+	}
+	return nil, err, -1
+}
+
 // [VECTOR_TODO]: Add a worker pool to take care of training
 // It is not a good idea to spawn a go-routine for each build statement
 func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
@@ -13609,24 +13626,36 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		if idxInst.RealInstId != 0 && isDCPRebalorResume && defnCodebook == nil {
 			realPartnInstMap := indexPartnMap[idxInst.RealInstId]
 
-		loop:
-			for partnId, partnInst := range realPartnInstMap {
-				slices := partnInst.Sc.GetAllSlices()
-				var err error
-				var codebook []byte
-				for _, slice := range slices {
-					codebook, err = slice.SerializeCodebook()
-					if err == nil && codebook != nil {
-						// Reaching here implies that new codebook serialized for partition, ready to be shared
-						defnCodebook = codebook
-						setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, defnCodebook)
-						logging.Infof("Indexer::initiateTraining using serialized codebook for from real instance instId: %v, partnId: %v", instId, partnId)
-						break loop
-					}
+			codebook, err, partnId := getInstCodebookIfExists(realPartnInstMap)
+			if err != nil {
+				logging.Warnf("Indexer::initiateTraining getting serialized codebook from real instance for instId: %v failed. err: %v", instId, err)
+			} else {
+				defnCodebook = codebook
+				setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, defnCodebook)
+				logging.Infof("Indexer::initiateTraining using serialized codebook from real instance for instId: %v, partnId: %v", instId, partnId)
+			}
+
+		} else if reqCtx.ReqSource == common.DDLRequestSourceUser && defnCodebook == nil {
+			// Alter Index ADD_REPLICA of partitioned index. Codebook of pre-existing active replica can be used.
+
+			var replicaInstId c.IndexInstId
+			for instanceId, instance := range indexInstMap {
+				if instance.Defn.DefnId == idxInst.Defn.DefnId && instanceId != instId && instance.State >= c.INDEX_STATE_ACTIVE {
+					//There is another active replica instance of same definition. Check if its codebook can be used for current vector instance to be built.
+					replicaInstId = instanceId
+					break
 				}
+			}
+
+			if replicaInstId != 0 {
+				partnInstMap := indexPartnMap[replicaInstId]
+				codebook, err, partnId := getInstCodebookIfExists(partnInstMap)
 				if err != nil {
-					// Getting serialized codebook from existing partitions fails.
-					logging.Warnf("Indexer::initiateTraining getting serialized codebook from real instId: %v failed. err: %v", instId, err)
+					logging.Warnf("Indexer::initiateTraining getting serialized codebook from replica for instId: %v failed. err: %v", instId, err)
+				} else {
+					defnCodebook = codebook
+					setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, defnCodebook)
+					logging.Infof("Indexer::initiateTraining using serialized codebook from replica instance for instId: %v, partnId: %v", instId, partnId)
 				}
 			}
 		}
@@ -13755,6 +13784,11 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 						continue
 					}
 					logging.Infof("Indexer::initiateTraining using serialized codebook for instId: %v, partnId: %v, elapsed: %v", instId, partnId, time.Since(start))
+					if idxInst.Defn.VectorMeta.Quantizer.Nlist == 0 {
+						nlist := slice.GetNlist()
+						idxInst.Nlist[partnId] = nlist
+						logging.Infof("Indexer::initiateTraining updating nlist=%v for instId: %v, partnId: %v ", nlist, instId, partnId)
+					}
 				}
 
 				// Persist codebook to disk
