@@ -42,7 +42,8 @@ type Row struct {
 	partnId int    // Used to identify snapshot and reader context for partitioned indexes
 	cid     []byte // CentroidID used for the scan
 
-	sortKey []byte // Used in order by
+	sortKey  []byte // Used in order by
+	workerId int    // User in order by when mergesort is needed
 
 	mem *allocator
 

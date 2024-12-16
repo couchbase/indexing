@@ -2638,6 +2638,30 @@ func (r *ScanRequest) getVectorCoarseSize() int {
 	return 0
 }
 
+func (r *ScanRequest) MultiPartnScan() bool {
+	// If index is not partitioned or if we are scanning only one parition in this
+	// request we will not neeed merging distinct scan ranges across partitions
+	if len(r.PartitionIds) == 1 {
+		return false
+	}
+	return true
+}
+
+func (r *ScanRequest) ScanRangeSequencing() bool {
+	// If Limit is pushed down merge sort is not needed as all the sorting happens
+	// while saving in the heap
+	if r.useHeapForVectorIndex() {
+		return false
+	}
+
+	// Index OrderBy is not pushed down so merge sort is not needed
+	if r.indexOrder == nil {
+		return false
+	}
+
+	return true
+}
+
 /////////////////////////////////////////////////////////////////////////
 //
 // IndexPoints Implementation

@@ -122,7 +122,8 @@ type ScanWorker struct {
 	senderBatchSize int // Batch size to process data in batches in sender
 
 	// Job related vars
-	jobsWg *sync.WaitGroup
+	jobsWg            *sync.WaitGroup
+	sendLastRowPerJob bool
 
 	// Buffers
 	buf    *[]byte
@@ -164,7 +165,7 @@ type ScanWorker struct {
 
 func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- *Row,
 	stopCh chan struct{}, errCh chan error, wg *sync.WaitGroup, senderChSize,
-	senderBatchSize int) *ScanWorker {
+	senderBatchSize int, sendLastRowPerJob bool) *ScanWorker {
 
 	w := &ScanWorker{
 		id:                   id,
@@ -180,6 +181,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		includeColumnDecode:  make([]bool, len(r.IndexInst.Defn.Include)),
 		includeColumncktemp:  make([][]byte, len(r.IndexInst.Defn.Include)),
 		includeColumndktemp:  make(n1qlval.Values, len(r.IndexInst.Defn.Include)),
+		sendLastRowPerJob:    sendLastRowPerJob,
 	}
 
 	//init temp buffers
@@ -339,6 +341,12 @@ func (w *ScanWorker) Scanner() {
 // finishJob marks the job as finished. There are currently 2 mechanisms to
 // track a job completion - a. job.doneCh b. jobsWg.
 func (w *ScanWorker) finishJob() {
+	if w.sendLastRowPerJob {
+		select {
+		case <-w.stopCh:
+		case w.outCh <- &Row{last: true, workerId: w.id}:
+		}
+	}
 	if w.currJob.doneCh != nil {
 		close(w.currJob.doneCh) // Mark the job done
 	}
@@ -418,6 +426,7 @@ func (w *ScanWorker) Sender() {
 		// Substitue distance in place centroidId and send to outCh
 		for i := 0; i < vecCount; i++ {
 			w.currBatchRows[i].dist = w.dists[i] // Add distance for sorting in heap
+			w.currBatchRows[i].workerId = w.id
 			select {
 			case <-w.stopCh:
 			case w.outCh <- w.currBatchRows[i]:
@@ -462,6 +471,7 @@ func (w *ScanWorker) flushLocalHeap() {
 			newRow.len = entry1.lenKey()
 			newRow.sortKey = row.sortKey
 		}
+		newRow.workerId = w.id
 
 		select {
 		case <-w.stopCh:
@@ -669,6 +679,7 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 		newRow.init(w.mem)
 		newRow.copy(&w.itrRow)
 	}
+	newRow.workerId = w.id
 
 	//store rows in the current batch buffer
 	select {
@@ -980,19 +991,36 @@ type WorkerPool struct {
 	workers    []*ScanWorker  // Array of workers
 	sendCh     chan *Row      // Channel to send data out for downstream processing
 	logPrefix  string
+	recvChList []chan *Row
+	mergeSort  bool
+	mergeHeap  *TopKRowHeap
+	r          *ScanRequest
 }
 
 // NewWorkerPool creates a new WorkerPool
-func NewWorkerPool(numWorkers int) *WorkerPool {
+func NewWorkerPool(r *ScanRequest, numWorkers int, mergeSort bool) (*WorkerPool, error) {
 	wp := &WorkerPool{
+		r:          r,
 		jobs:       make(chan *ScanJob, 0),
 		jobsWg:     sync.WaitGroup{},
 		errCh:      make(chan error),
 		numWorkers: numWorkers,
 		stopCh:     make(chan struct{}),
 		workers:    make([]*ScanWorker, numWorkers),
+		mergeSort:  mergeSort,
 	}
-	return wp
+	if wp.mergeSort {
+		wp.recvChList = make([]chan *Row, numWorkers)
+
+		var err error
+		rowCmp := r.getRowCompare()
+		wp.mergeHeap, err = NewTopKRowHeap(numWorkers, true, rowCmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	wp.logPrefix = fmt.Sprintf("%v[%v]WorkerPool", wp.r.LogPrefix, wp.r.RequestId)
+	return wp, nil
 }
 
 func (wp *WorkerPool) Close() {
@@ -1001,15 +1029,77 @@ func (wp *WorkerPool) Close() {
 	}
 }
 
-// Init starts the worker pool
-func (wp *WorkerPool) Init(r *ScanRequest, scanWorkerSenderChSize, scanWorkerBatchSize int) {
-	wp.sendCh = make(chan *Row, 20*wp.numWorkers)
-	wp.logPrefix = fmt.Sprintf("%v[%v]WorkerPool", r.LogPrefix, r.RequestId)
+func (wp *WorkerPool) Init(scanWorkerSenderChSize, scanWorkerBatchSize int) {
+	wp.sendCh = make(chan *Row, 50*wp.numWorkers)
+
+	var outCh chan<- *Row
+	if !wp.mergeSort {
+		outCh = wp.sendCh
+	}
 
 	for i := 0; i < wp.numWorkers; i++ {
-		wp.workers[i] = NewScanWorker(i, r, wp.jobs, wp.sendCh,
-			wp.stopCh, wp.errCh, &wp.jobsWg, scanWorkerSenderChSize,
-			scanWorkerBatchSize)
+		if wp.mergeSort {
+			wp.recvChList[i] = make(chan *Row, 50)
+			outCh = wp.recvChList[i]
+		}
+
+		wp.workers[i] = NewScanWorker(i, wp.r, wp.jobs, outCh, wp.stopCh, wp.errCh,
+			&wp.jobsWg, scanWorkerSenderChSize, scanWorkerBatchSize, wp.mergeSort)
+	}
+}
+
+// MergeSorter will sort data from recv channels and merge them and send to sendCh in sorted order
+// User will submit a batch of jobs and start merge sorter. Wait while waiting for batch of jobs will
+// wait for this merger sorter to finish too
+func (wp *WorkerPool) MergeSorter() {
+	if !wp.mergeSort {
+		return
+	}
+
+	wp.jobsWg.Add(1)
+	go wp.doMergeSort()
+}
+
+func (wp *WorkerPool) doMergeSort() {
+	defer wp.jobsWg.Done()
+
+	receivedLast := make([]bool, len(wp.recvChList))
+
+	// Populate heap from the all channels
+	activeChList := make(map[int]chan *Row, len(wp.recvChList))
+	for _, recvCh := range wp.recvChList {
+		var r *Row
+		select {
+		case <-wp.stopCh:
+			return
+		case r = <-recvCh:
+		}
+		wp.mergeHeap.Push(r)
+		activeChList[r.workerId] = recvCh
+	}
+
+	for wp.mergeHeap.Len() > 0 {
+		// Flush the min element into sendCh
+		smallestRow := wp.mergeHeap.Pop()
+
+		select {
+		case <-wp.stopCh:
+			return
+		case wp.sendCh <- smallestRow:
+		}
+
+		if receivedLast[smallestRow.workerId] {
+			continue
+		}
+
+		newRow, ok := <-activeChList[smallestRow.workerId]
+		if ok {
+			if newRow.last {
+				receivedLast[newRow.workerId] = true
+				continue
+			}
+			wp.mergeHeap.Push(newRow)
+		}
 	}
 }
 
@@ -1607,9 +1697,24 @@ func (s *IndexScanSource2) Routine() error {
 	scanWorkerBatchSize := s.p.config["scan.vector.scanworker_batch_size"].Int()
 	scanWorkerSenderChSize := s.p.config["scan.vector.scanworker_senderch_size"].Int()
 
+	// Merge sort of data across partitions is only needed when ordering and limit
+	// are pushed down and we are scanning multiple partitions in this scan
+	mergeSort := s.p.req.MultiPartnScan() && s.p.req.ScanRangeSequencing()
+
+	// We can scan one range per paritition at a time when we have orderby and limit
+	// pushed down and have barrier synchronization per range
+	if mergeSort {
+		readersPerPartition = 1
+	}
+
 	// Spawn Scan Workers
-	wp := NewWorkerPool(readersPerPartition * len(s.p.req.PartitionIds))
-	wp.Init(s.p.req, scanWorkerSenderChSize, scanWorkerBatchSize)
+	wp, err := NewWorkerPool(s.p.req, readersPerPartition*len(s.p.req.PartitionIds), mergeSort)
+	if err != nil {
+		s.CloseWithError(err)
+		return err
+	}
+
+	wp.Init(scanWorkerSenderChSize, scanWorkerBatchSize)
 	defer wp.Close()
 
 	wpOutCh := wp.GetOutCh() // Output of Workerpool is input of MergeOperator
@@ -1701,6 +1806,9 @@ func (s *IndexScanSource2) Routine() error {
 					stopped = true
 					break
 				}
+			}
+			if mergeSort {
+				wp.MergeSorter()
 			}
 			wpErr = wp.Wait()
 			if stopped || wpErr != nil {
