@@ -30,19 +30,28 @@ type SecuritySetting struct {
 	encryptionEnabled bool
 	disableNonSSLPort bool
 
-	// certificate: Is loaded from certFile.
+	// srvrCert: Is loaded from serverCertFile.
 	//              This is used to set tls.Config.Certificates
-	certificate *tls.Certificate
+	srvrCert *tls.Certificate
 
-	// certInBytes: Represents contents on the certFile.
+	// srvrCertInBytes: Represents contents on the serverCertFile.
 	//              This is used to set tls.Config.RootCAs or tls.Config.ClientCAs
 	//              These won't be useful if caInBytes is not empty
-	certInBytes []byte
+	srvrCertInBytes []byte
 
 	// caInBytes: Represents contents on the caFile.
 	//            This is used to set tls.Config.RootCAs or tls.Config.ClientCAs
 	//            This take precedence over certInBytes
 	caInBytes []byte
+
+	// clientCert: Is loaded from clientCertFile.
+	// 			This is used to set tls.Config.Certificates
+	clientCert *tls.Certificate
+
+	// clientCertInBytes: Represents contents on the clientCertFile.
+	//              This is used to set tls.Config.RootCAs or tls.Config.ClientCAs
+	//              These won't be useful if caInBytes is not empty
+	clientCertInBytes []byte
 
 	tlsPreference *cbauth.TLSConfig
 }
@@ -87,9 +96,11 @@ type SecurityContext struct {
 	isInitialized int32
 
 	// certificate
-	certFile string
-	keyFile  string
-	caFile   string
+	srvrCertFile   string
+	srvrKeyFile    string
+	caFile         string
+	clientCertFile string
+	clientKeyFile  string
 
 	// encryption for localhost
 	encryptLocalHost bool
@@ -125,7 +136,10 @@ func init() {
 	pSecurityContext.encryptPortRev.Store(0)
 }
 
-func InitSecurityContext(logger ConsoleLogger, localhost string, certFile, keyFile, caFile string, encryptLocalHost bool) (err error) {
+// InitSecurityContext initialises the global SecurityContext object with relevant cert files
+// and encryption port maps
+func InitSecurityContext(logger ConsoleLogger, localhost, srvrCertFile, srvrKeyFile, caFile,
+	clientCertFile, clientKeyFile string, encryptLocalHost bool) (err error) {
 
 	pContextInitializer.Do(func() {
 		var ips map[string]bool
@@ -136,8 +150,10 @@ func InitSecurityContext(logger ConsoleLogger, localhost string, certFile, keyFi
 
 		pSecurityContext = &SecurityContext{
 			logger:           logger,
-			certFile:         certFile,
-			keyFile:          keyFile,
+			srvrCertFile:     srvrCertFile,
+			srvrKeyFile:      srvrKeyFile,
+			clientCertFile:   clientCertFile,
+			clientKeyFile:    clientKeyFile,
 			caFile:           caFile,
 			initializedCh:    make(chan bool),
 			notifiers:        make(map[string]SecurityChangeNotifier),
@@ -174,8 +190,8 @@ func InitSecurityContextForClient(logger ConsoleLogger, localhost string, certFi
 		}
 
 		pSecurityContext.logger = logger
-		pSecurityContext.certFile = certFile
-		pSecurityContext.keyFile = keyFile
+		pSecurityContext.srvrCertFile = certFile
+		pSecurityContext.srvrKeyFile = keyFile
 		pSecurityContext.caFile = caFile
 		pSecurityContext.encryptLocalHost = encryptLocalHost
 		pSecurityContext.localhosts = ips
@@ -184,7 +200,8 @@ func InitSecurityContextForClient(logger ConsoleLogger, localhost string, certFi
 	return
 }
 
-func Refresh(tlsConfig cbauth.TLSConfig, encryptConfig cbauth.ClusterEncryptionConfig, certFile, keyFile, caFile string) {
+func Refresh(tlsConfig cbauth.TLSConfig, encryptConfig cbauth.ClusterEncryptionConfig,
+	srvrCertFile, srvrKeyFile, caFile, clientCertFile, clientKeyFile string) {
 
 	logging.Infof("Receive security change notification. encryption=%v", encryptConfig.EncryptData)
 
@@ -200,7 +217,14 @@ func Refresh(tlsConfig cbauth.TLSConfig, encryptConfig cbauth.ClusterEncryptionC
 	newSetting.encryptionEnabled = encryptConfig.EncryptData
 	newSetting.disableNonSSLPort = encryptConfig.DisableNonSSLPorts
 
-	if err := pSecurityContext.refreshCert(certFile, keyFile, caFile, newSetting); err != nil {
+	if err := pSecurityContext.refreshCert(
+		srvrCertFile,
+		srvrKeyFile,
+		caFile,
+		clientCertFile, //clientCertFile string
+		clientKeyFile,  // clientKeyFile string
+		newSetting,
+	); err != nil {
 		logging.Errorf("error in reading certifcate %v", err)
 		return
 	}
@@ -234,7 +258,7 @@ func SetTLSConfigAndCACert(tlsConfig *cbauth.TLSConfig,
 			logging.Errorf("Fail to load SSL certificate"+
 				" from File: %v, err; %v", certFile, err)
 		}
-		newSetting.certInBytes = certInBytes
+		newSetting.srvrCertInBytes = certInBytes
 	}
 
 	if caFile != "" {
@@ -355,7 +379,13 @@ func (p *SecurityContext) refresh(code uint64) error {
 			return err
 		}
 
-		if err := p.refreshCert(p.certFile, p.keyFile, p.caFile, newSetting); err != nil {
+		if err := p.refreshCert(p.srvrCertFile, // serverCertFile string
+			p.srvrKeyFile,    // serverKeyFile string
+			p.caFile,         // CAFile string
+			p.clientCertFile, // clientCertFile string
+			p.clientKeyFile,  // clientKeyFile string
+			newSetting,       // setting *SecuritySetting
+		); err != nil {
 			return err
 		}
 	}
@@ -427,9 +457,10 @@ func (p *SecurityContext) refreshConfig(setting *SecuritySetting) error {
 	return nil
 }
 
-func (p *SecurityContext) refreshCert(certFile, keyFile, caFile string, setting *SecuritySetting) error {
+func (p *SecurityContext) refreshCert(srvrCertFile, srvrKeyFile, caFile, clientCertFile,
+	clientKeyFile string, setting *SecuritySetting) error {
 
-	if len(certFile) == 0 || len(keyFile) == 0 {
+	if len(srvrCertFile) == 0 || len(srvrKeyFile) == 0 {
 		logging.Warnf("tls_setting: certifcate location is missing.  Cannot refresh certifcate")
 		return nil
 	}
@@ -453,8 +484,8 @@ func (p *SecurityContext) refreshCert(certFile, keyFile, caFile string, setting 
 		privateKeyPassphrase = setting.tlsPreference.PrivateKeyPassphrase
 	}
 
-	if len(certFile) > 0 && len(keyFile) > 0 {
-		cert, err := cbtls.LoadX509KeyPair(certFile, keyFile, privateKeyPassphrase)
+	if len(srvrCertFile) > 0 && len(srvrKeyFile) > 0 {
+		cert, err := cbtls.LoadX509KeyPair(srvrCertFile, srvrKeyFile, privateKeyPassphrase)
 		if err != nil {
 			err1 := fmt.Errorf("Fail to due generate SSL certificate: %v", err)
 			if p.logger != nil {
@@ -464,7 +495,7 @@ func (p *SecurityContext) refreshCert(certFile, keyFile, caFile string, setting 
 			return err
 		}
 
-		certInBytes, err := iowrap.Ioutil_ReadFile(certFile)
+		certInBytes, err := iowrap.Ioutil_ReadFile(srvrCertFile)
 		if err != nil {
 			err1 := fmt.Errorf("Fail to due load SSL certificate from file: %v", err)
 			if p.logger != nil {
@@ -474,11 +505,42 @@ func (p *SecurityContext) refreshCert(certFile, keyFile, caFile string, setting 
 			return err
 		}
 
-		setting.certInBytes = certInBytes
-		setting.certificate = &cert
+		setting.srvrCertInBytes = certInBytes
+		setting.srvrCert = &cert
 	}
 
-	logging.Infof("tls_setting: certificate refreshed successfully with certFile %v, keyFile %v, caFile %v", certFile, keyFile, caFile)
+	var clientPrivateKeyPassphrase []byte
+	if setting.tlsPreference != nil {
+		clientPrivateKeyPassphrase = setting.tlsPreference.ClientPrivateKeyPassphrase
+	}
+
+	if len(clientCertFile) > 0 && len(clientKeyFile) > 0 {
+		cert, err := cbtls.LoadX509KeyPair(clientCertFile, clientKeyFile, clientPrivateKeyPassphrase)
+		if err != nil {
+			err1 := fmt.Errorf("Fail to due generate SSL certificate: %v", err)
+			if p.logger != nil {
+				p.logger(err1)
+			}
+			logging.Fatalf(err1.Error())
+			return err
+		}
+
+		certInBytes, err := iowrap.Ioutil_ReadFile(clientCertFile)
+		if err != nil {
+			err1 := fmt.Errorf("Fail to due load SSL certificate from file: %v", err)
+			if p.logger != nil {
+				p.logger(err1)
+			}
+			logging.Fatalf(err1.Error())
+			return err
+		}
+
+		setting.clientCertInBytes = certInBytes
+		setting.clientCert = &cert
+	}
+
+	logging.Infof("tls_setting: certificate refreshed successfully with serverCertFile %v, serverKeyFile %v, caFile %v, clientCertFile %v, clientKeyFile %v",
+		srvrCertFile, srvrKeyFile, caFile, clientCertFile, clientKeyFile)
 
 	return nil
 }

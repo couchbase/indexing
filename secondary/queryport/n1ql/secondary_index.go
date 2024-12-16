@@ -212,12 +212,28 @@ func NewGSIIndexer2(clusterURL, namespace, bucket, scope, keyspace string,
 // change security setting
 func (gsi *gsiKeyspace) SetConnectionSecurityConfig(conf *datastore.ConnectionSecurityConfig) {
 
-	security.Refresh(conf.TLSConfig, conf.ClusterEncryptionConfig, conf.CertFile, conf.KeyFile, conf.CAFile)
+	security.Refresh(
+		conf.TLSConfig,               // tlsConfig *tls.Config
+		conf.ClusterEncryptionConfig, // encyptionConfig *c.ClusterEncryptionConfig
+		conf.CertFile,                // serverCertFile string
+		conf.KeyFile,                 // serverKeyFile string
+		conf.CAFile,                  // caFile string
+		conf.InternalClientCertFile,  // clientCertFile string
+		conf.InternalClientKeyFile,   // clientKeyFile string
+	)
 }
 
 // A global API that is independent of keyspace
 func SetConnectionSecurityConfig(conf *datastore.ConnectionSecurityConfig) {
-	security.Refresh(conf.TLSConfig, conf.ClusterEncryptionConfig, conf.CertFile, conf.KeyFile, conf.CAFile)
+	security.Refresh(
+		conf.TLSConfig,               // tlsConfig *tls.Config
+		conf.ClusterEncryptionConfig, // encyptionConfig *c.ClusterEncryptionConfig
+		conf.CertFile,                // serverCertFile string
+		conf.KeyFile,                 // serverKeyFile string
+		conf.CAFile,                  // caFile string
+		conf.InternalClientCertFile,  // clientCertFile string
+		conf.InternalClientKeyFile,   // clientKeyFile string
+	)
 }
 
 // Query calls this function on the startup
@@ -2575,8 +2591,15 @@ func getSingletonClient(clusterURL string, conf c.Config,
 		l.Infof("creating GsiClient for %v", clusterURL)
 
 		if securityconf != nil {
-			security.Refresh(securityconf.TLSConfig, securityconf.ClusterEncryptionConfig,
-				securityconf.CertFile, securityconf.KeyFile, securityconf.CAFile)
+			security.Refresh(
+				securityconf.TLSConfig,               // tlsConfig *tls.Config
+				securityconf.ClusterEncryptionConfig, // encryptionConfig *security.ClusterEncryptionConfig
+				securityconf.CertFile,                // serverCertFile string
+				securityconf.KeyFile,                 // serverKeyFile string
+				securityconf.CAFile,                  // caFile string
+				securityconf.InternalClientCertFile,  // clientCertFile string
+				securityconf.InternalClientKeyFile,   // clientKeyFile string
+			)
 		}
 
 		qconf := conf.SectionConfig("queryport.client.", true /*trim*/)

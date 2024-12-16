@@ -190,10 +190,18 @@ func main() {
 			}
 		}
 	*/
+	clientCertFile := options.clientCertFile
+	clientKeyFile := options.clientKeyFile
 
 	caFile := options.caFile
 
-	projector.NewProjector(config, certFile, keyFile, caFile)
+	projector.NewProjector(config,
+		certFile,
+		keyFile,
+		caFile,
+		clientCertFile,
+		clientKeyFile,
+	)
 
 	if c.IsServerlessDeployment() {
 		startRegulator()
