@@ -1338,36 +1338,8 @@ func (idx *indexer) listenAdminMsgs() {
 				// internalAdminRecvCh size is 1.   So it will blocked if the previous msg is being
 				// processed.
 				idx.internalAdminRecvCh <- msg
-				resp := <-idx.internalAdminRespCh
+				<-idx.internalAdminRespCh
 
-				// now that indexer has processed the message.  Let's make sure that
-				// the stream request is finished before processing the next admin
-				// msg.  This is done by acquiring a lock on the stream request for each
-				// bucket (on both streams).   The lock is FIFO, so if this function
-				// can get a lock, it will mean that previous stream request would have
-				// been cleared.
-
-				//create and build don't need to be checked
-				//create doesn't take stream lock. build only works
-				//on a fresh stream.
-				if msg.GetMsgType() == CLUST_MGR_DROP_INDEX_DDL ||
-					msg.GetMsgType() == CLUST_MGR_PRUNE_PARTITION {
-
-					if resp.GetMsgType() == MSG_SUCCESS_DROP {
-						streamId := resp.(*MsgSuccessDrop).GetStreamId()
-						keyspaceId := resp.(*MsgSuccessDrop).GetKeyspaceId()
-
-						f := func(streamId common.StreamId, keyspaceId string) {
-							lock := idx.acquireStreamRequestLock(keyspaceId, streamId)
-							defer idx.releaseStreamRequestLock(lock)
-							idx.waitStreamRequestLock(lock)
-						}
-
-						startStreamRequestLockTime := time.Now()
-						f(streamId, keyspaceId)
-						logStreamRequestLockTime(classMethod, msg, "adminRecvCh", time.Since(startStreamRequestLockTime))
-					}
-				}
 				logProcessingTime(classMethod, msg, "adminRecvCh", time.Since(receiveTime), true)
 			}
 		case <-idx.shutdownInitCh:
@@ -7451,7 +7423,7 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 		common.CrashOnError(respErr.cause)
 	}
 
-	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
+	reqLock := idx.acquireStreamRequestLock(keyspaceId, common.MAINT_STREAM)
 	collectionId := idx.streamKeyspaceIdCollectionId[common.MAINT_STREAM][bucket]
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)

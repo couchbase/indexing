@@ -803,6 +803,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 		//Before iterator close, these will be copied and sent down the pipeline.
 		newRow = w.rowBuf.Get()
 
+		newRow.len = len(entry)
 		newRow.key = entry
 		newRow.value = value
 		newRow.partnId = int(w.currJob.pid)
@@ -827,6 +828,10 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 		w.itrRow.len = len(entry)
 		w.itrRow.key = entry
 		w.itrRow.value = value
+		w.itrRow.partnId = int(w.currJob.pid)
+		w.itrRow.recordId = recordId
+		w.itrRow.storeId = storeId
+		w.itrRow.cid = w.currJob.scan.Low.Bytes()
 
 		// VECTOR_TODO: It is not at all optimal to use the unexploded includeColumn here
 		// as all rows are being push. Use exploded versions
@@ -837,12 +842,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 		// 2. Check if having a sync.Pool of Row objects per connCtx will help
 		newRow = &Row{}
 		newRow.init(w.mem)
-		newRow.copy(&w.itrRow)
-
-		newRow.partnId = int(w.currJob.pid)
-		newRow.recordId = recordId
-		newRow.storeId = storeId
-		newRow.cid = w.currJob.scan.Low.Bytes()
+		newRow.copyForBhive(&w.itrRow)
 	}
 
 	select {
