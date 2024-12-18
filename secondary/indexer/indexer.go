@@ -13645,6 +13645,13 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 				if defnCodebook == nil {
 
+					if err := testcode.TestActionAtTag(idx.config, testcode.BUILD_INDEX_TRAINING); err != nil {
+						slice.ResetCodebook()
+						logging.Errorf("Indexer::initiateTraining testAction induced error for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+						updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
+						continue
+					}
+
 					if err := slice.InitCodebook(); err != nil {
 						slice.ResetCodebook()
 						logging.Errorf("Indexer::initiateTraining error observed while initialising codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
