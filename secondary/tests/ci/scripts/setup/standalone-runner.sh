@@ -15,13 +15,15 @@ fi;
 echo "cloning custom repo into $WORKSPACE"
 cp -r /mnt/project/* $WORKSPACE
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
-cp secondary/tests/ci/scripts/* /home/bot/bin/
+cp -r secondary/tests/ci/scripts/* /home/bot/bin/
+
+export PATH=/home/bot/bin:$PATH
 
 echo "running standalone runner - $WORKSPACE"
 
 export TS="$(date +%d.%m.%Y-%H.%M)"
 echo '<html><head></head><body><pre>'
-echo 'Building...'
+echo 'Building using ' $(which builder) '...'
 
 cd $WORKSPACE
 make clean
@@ -37,7 +39,7 @@ echo "builder exit code $rc"
 test $rc -eq 0 || (cat $WORKSPACE/make.log && exit 2)
 
 echo 'Build done'
-echo 'Testing...'
+echo 'Testing using ' $(which dotest) '...'
 
 dotest
 rc=$?
