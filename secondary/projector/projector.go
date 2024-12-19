@@ -167,10 +167,12 @@ func NewProjector(config c.Config, certFile, keyFile, caFile string) *Projector 
 			return fmt.Errorf("Fail to register security callback: %v", e)
 		}
 
-		e = refreshSecurityContextOnTopology(p.clusterAddr)
+		e = common.RefreshSecurityContextOnTopology(p.clusterAddr)
 		if e != nil {
 			return fmt.Errorf("Fail to refresh security context: %v", e)
 		}
+
+		go common.MonitorServiceForPortChanges(p.clusterAddr)
 
 		return nil
 	}()
@@ -1197,7 +1199,7 @@ func (p *Projector) registerSecurityCallback() error {
 			os.Exit(1)
 		}
 
-		if err := refreshSecurityContextOnTopology(p.clusterAddr); err != nil {
+		if err := common.RefreshSecurityContextOnTopology(p.clusterAddr); err != nil {
 			return err
 		}
 
@@ -1215,35 +1217,9 @@ func (p *Projector) registerSecurityCallback() error {
 	return nil
 }
 
+// refreshSecurityContextOnTopology - DEPRECATED. use common.RefreshSecurityContextOnTopology
 func refreshSecurityContextOnTopology(clusterAddr string) error {
-
-	fn := func(r int, e error) error {
-		var cinfo *c.ClusterInfoCache
-		url, err := c.ClusterAuthUrl(clusterAddr)
-		if err != nil {
-			return err
-		}
-
-		cinfo, err = c.NewClusterInfoCache(url, "default")
-		cinfo.SetUserAgent("projector::refreshSecurityContextOnTopology")
-		if err != nil {
-			return err
-		}
-
-		cinfo.Lock()
-		defer cinfo.Unlock()
-
-		if err := cinfo.Fetch(); err != nil {
-			return err
-		}
-
-		security.SetEncryptPortMapping(cinfo.EncryptPortMapping())
-
-		return nil
-	}
-
-	helper := c.NewRetryHelper(10, time.Second, 1, fn)
-	return helper.Run()
+	return c.RefreshSecurityContextOnTopology(clusterAddr)
 }
 
 func (p *Projector) getNodeUUID() (string, error) {

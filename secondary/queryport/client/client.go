@@ -2172,43 +2172,19 @@ func (c *GsiClient) initSecurityContext(encryptLocalHost bool) (err error) {
 			return
 		}
 
-		if err = refreshSecurityContextOnTopology(c.cluster); err != nil {
+		if err = common.RefreshSecurityContextOnTopology(c.cluster); err != nil {
 			return
 		}
+
+		go common.MonitorServiceForPortChanges(c.cluster)
 	})
 
 	return
 }
 
+// refreshSecurityContextOnTopology - DEPRECATED. use common.RefreshSecurityContextOnTopology
 func refreshSecurityContextOnTopology(clusterAddr string) error {
-
-	fn := func(r int, e error) error {
-		var cinfo *common.ClusterInfoCache
-		url, err := common.ClusterAuthUrl(clusterAddr)
-		if err != nil {
-			return err
-		}
-
-		cinfo, err = common.NewClusterInfoCache(url, "default")
-		if err != nil {
-			return err
-		}
-		cinfo.SetUserAgent("client::refreshSecurityContextOnTopology")
-
-		cinfo.Lock()
-		defer cinfo.Unlock()
-
-		if err := cinfo.Fetch(); err != nil {
-			return err
-		}
-
-		security.SetEncryptPortMapping(cinfo.EncryptPortMapping())
-
-		return nil
-	}
-
-	helper := common.NewRetryHelper(10, time.Second, 1, fn)
-	return helper.Run()
+	return common.RefreshSecurityContextOnTopology(clusterAddr)
 }
 
 var watchingClusterVer uint32

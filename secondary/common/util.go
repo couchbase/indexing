@@ -2092,3 +2092,98 @@ func GetMinPartnsPerShardFromMap(memQuota uint64, minPartnsPerShardMap map[uint6
 		memQuota, result)
 	return result
 }
+
+// RefreshSecurityContextOnTopology refreshes the security context on the topology updates
+func RefreshSecurityContextOnTopology(clusterAddr string) error {
+
+	fn := func(_ int, _ error) error {
+		var cinfo *ClusterInfoCache
+		url, err := ClusterAuthUrl(clusterAddr)
+		if err != nil {
+			return err
+		}
+
+		cinfo, err = NewClusterInfoCache(url, "default")
+		cinfo.SetUserAgent("common::refreshSecurityContextOnTopology")
+		if err != nil {
+			return err
+		}
+
+		cinfo.Lock()
+		defer cinfo.Unlock()
+
+		if err := cinfo.FetchNodesAndSvsInfo(); err != nil {
+			return err
+		}
+
+		security.SetEncryptPortMapping(cinfo.EncryptPortMapping())
+
+		return nil
+	}
+
+	helper := NewRetryHelper(10, time.Second, 1, fn)
+	return helper.Run()
+}
+
+// UpdateOrRefreshSecurityContextOnTopologyChange updates the port mappings if endpointUpdate is not
+// nil otherwise it refreshes the security context by doing a cluster info fetch
+func UpdateOrRefreshSecurityContextOnTopologyChange(
+	clusterAddr string, endpointUpdate interface{},
+) error {
+	if endpointUpdate == nil {
+		return RefreshSecurityContextOnTopology(clusterAddr)
+	} else if serviceData, ok := endpointUpdate.(*couchbase.PoolServices); ok {
+		var portMapping = buildEncryptPortMapping(serviceData.NodesExt)
+		security.UpdateEncryptPortMapping(portMapping, int64(serviceData.Rev))
+		return nil
+	}
+
+	return RefreshSecurityContextOnTopology(clusterAddr)
+}
+
+var monitorServiceRestartCount = 0
+
+// MonitorServiceForPortChanges monitors the service change endpoint for port changes. it is a
+// blocking call so use go-routine to run this function
+func MonitorServiceForPortChanges(clusterAddr string) {
+	if monitorServiceRestartCount > 30 {
+		CrashOnError(fmt.Errorf("MonitorServiceForPortChanges failed to start port monitor after %v retries",
+			monitorServiceRestartCount))
+	}
+	var restart = func() {
+		time.Sleep(10 * time.Millisecond * time.Duration(monitorServiceRestartCount))
+		monitorServiceRestartCount++
+		go MonitorServiceForPortChanges(clusterAddr)
+	}
+	url, err := ClusterAuthUrl(clusterAddr)
+	if err != nil {
+		logging.Errorf("MonitorServiceForPortChanges failed to get cluster auth URL with err %v", err)
+		restart()
+		return
+	}
+
+	scn, err := NewServicesChangeNotifier(
+		url, "default", "MonitorServiceForPortChanges",
+	)
+	if err != nil {
+		logging.Errorf("MonitorServiceForPortChanges: error creating services change notifier: %v",
+			err)
+		restart()
+		return
+	}
+	monitorServiceRestartCount = 0
+	defer scn.Close()
+	logging.Infof("MonitorServiceForPortChanges: started...")
+	for {
+		notification, err := scn.Get()
+		if err != nil {
+			logging.Warnf("MonitorServiceForPortChanges: services change notifier closed with reason: %v",
+				err)
+			restart()
+			return
+		}
+		if notification.Type == ServiceChangeNotification {
+			UpdateOrRefreshSecurityContextOnTopologyChange(clusterAddr, notification.Msg)
+		}
+	}
+}
