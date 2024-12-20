@@ -77,6 +77,8 @@ func NewShardTransferManager(config common.Config, supvWrkrCh chan Message) *Sha
 }
 
 func (stm *ShardTransferManager) run() {
+
+	logging.Infof("ShardTransferManager::run starting...")
 	//main ShardTransferManager loop
 	ticker := time.NewTicker(time.Duration(1 * time.Second))
 loop:
@@ -107,6 +109,10 @@ func (stm *ShardTransferManager) ProcessCommand(cmd Message) {
 
 func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 
+	var forceLog = false
+	var executionStr = "run"
+	var start = time.Now()
+
 	switch cmd.GetMsgType() {
 
 	case CONFIG_SETTINGS_UPDATE:
@@ -121,15 +127,19 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 		}
 
 	case START_SHARD_TRANSFER:
+		executionStr = "async-run"
 		go stm.processShardTransferMessage(cmd)
 
 	case SHARD_TRANSFER_CLEANUP:
+		executionStr = "async-run"
 		go stm.processTransferCleanupMessage(cmd)
 
 	case SHARD_TRANSFER_STAGING_CLEANUP:
+		executionStr = "async-run"
 		go stm.processShardTransferStagingCleanupMessage(cmd)
 
 	case START_SHARD_RESTORE:
+		executionStr = "async-run"
 		go stm.processShardRestoreMessage(cmd)
 
 	case DESTROY_LOCAL_SHARD:
@@ -144,32 +154,47 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 			notifyChMap[shardId] = notifyCh
 		}
 
+		executionStr = "async-run"
 		go stm.processDestroyLocalShardMessage(cmd, notifyChMap)
 
 	case MONITOR_SLICE_STATUS:
 		stm.handleMonitorSliceStatusCommand(cmd)
 
 	case LOCK_SHARDS:
+		forceLog = true
 		stm.handleLockShardsCommand(cmd)
 
 	case UNLOCK_SHARDS:
+		forceLog = true
 		stm.handleUnlockShardsCommand(cmd)
 
 	case RESTORE_SHARD_DONE:
+		executionStr = "async-run"
 		go stm.handleRestoreShardDone(cmd)
 
 	case RESTORE_AND_UNLOCK_LOCKED_SHARDS:
+		executionStr = "async-run"
 		go stm.handleRestoreAndUnlockShards(cmd)
 
 	case INDEXER_SECURITY_CHANGE:
+		forceLog = true
 		stm.handleSecurityChange(cmd)
 
 	case START_PEER_SERVER:
+		forceLog = true
 		stm.handleStartPeerServer(cmd)
 
 	case STOP_PEER_SERVER:
+		forceLog = true
 		stm.handleStopPeerServer(cmd)
 	}
+	logProcessingTime(
+		"ShardTransferManager::handleStorageMgrCommands",
+		cmd,
+		executionStr,
+		time.Since(start),
+		forceLog,
+	)
 }
 
 func copyMeta(meta map[string]interface{}) map[string]interface{} {

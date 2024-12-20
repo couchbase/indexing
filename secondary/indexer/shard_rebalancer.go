@@ -4330,6 +4330,8 @@ func (sr *ShardRebalancer) sendPeerServerCommand(cmd MsgType, syncCh chan struct
 		}
 	}
 
+	logging.Infof("ShardRebalancer::sendPeerServerCommand: sending command %v for rebalance %v",
+		cmd, sr.rebalToken.RebalId)
 	sr.supvMsgch <- msg
 	select {
 	case <-doneCh:
@@ -4346,7 +4348,8 @@ func (sr *ShardRebalancer) sendPeerServerCommand(cmd MsgType, syncCh chan struct
 			logging.Errorf("ShardRebalancer::sendPeerServerCommand: failed command %v with error %v", cmd, err)
 			go sr.finishRebalance(err)
 		} else {
-			logging.Infof("ShardRebalancer::sendPeerServerCommand: command %v successful", cmd)
+			logging.Infof("ShardRebalancer::sendPeerServerCommand: command %v successful for rebalance %v",
+				cmd, sr.rebalToken.RebalId)
 		}
 	}
 }

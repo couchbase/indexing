@@ -195,6 +195,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 // from its supervisor(indexer)
 func (s *storageMgr) run() {
 
+	logging.Infof("storageMgr::run starting...")
 	//main Storage Manager loop
 loop:
 	for {
@@ -298,6 +299,11 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		STOP_PEER_SERVER:
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
+		} else {
+			common.CrashOnError(
+				fmt.Errorf("StorageMgr::handleSupervisorCommands ShardTransferManager Not Initialized during msg %v execution",
+					cmd),
+			)
 		}
 		s.supvCmdch <- &MsgSuccess{}
 
@@ -315,6 +321,11 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
+		} else {
+			common.CrashOnError(
+				fmt.Errorf("StorageMgr::handleSupervisorCommands ShardTransferManager Not Initialized during msg %v execution",
+					cmd),
+			)
 		}
 		s.supvCmdch <- &MsgSuccess{}
 
@@ -327,6 +338,11 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		s.ClearRebalanceRunning(cmd)
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
+		} else {
+			common.CrashOnError(
+				fmt.Errorf("StorageMgr::handleSupervisorCommands ShardTransferManager Not Initialized during msg %v execution",
+					cmd),
+			)
 		}
 		s.supvCmdch <- &MsgSuccess{}
 
@@ -2698,6 +2714,11 @@ func (s *storageMgr) handleShardTransfer(cmd Message) {
 	logging.Infof("StorageMgr::handleShardTransfer Updated book-keeping for shardIds: %v", shardIds)
 	if s.stm != nil {
 		s.stm.ProcessCommand(cmd)
+	} else {
+		common.CrashOnError(
+			fmt.Errorf("StorageMgr::handleShardTransfer ShardTransferManager Not Initialized during msg %v execution",
+				cmd),
+		)
 	}
 	s.supvCmdch <- &MsgSuccess{}
 }

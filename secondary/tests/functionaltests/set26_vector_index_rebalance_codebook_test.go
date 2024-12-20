@@ -2,13 +2,6 @@ package functionaltests
 
 import (
 	"fmt"
-	c "github.com/couchbase/indexing/secondary/common"
-	qc "github.com/couchbase/indexing/secondary/queryport/client"
-	"github.com/couchbase/indexing/secondary/testcode"
-	"github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
-	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
-	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	"log"
 	"os"
 	"path/filepath"
@@ -17,6 +10,14 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	qc "github.com/couchbase/indexing/secondary/queryport/client"
+	"github.com/couchbase/indexing/secondary/testcode"
+	"github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 )
 
 var VECTOR_INDEX_INDEXER_QUOTA = "512"
@@ -134,6 +135,62 @@ func TestVectorIndexDCPRebalance(t *testing.T) {
 
 		indexStatusResp := performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
 		validateVectorScan(subt, indexStatusResp)
+	})
+
+	t.Run("TestFailedTraining", func(subt *testing.T) {
+		log.Println("*********Setup cluster*********")
+		setupCluster(t)
+		var err error
+
+		err = clusterutility.SetDataAndIndexQuota(clusterconfig.Nodes[0], clusterconfig.Username, clusterconfig.Password, "1500", VECTOR_INDEX_INDEXER_QUOTA)
+		tc.HandleError(err, "Failed to set memory quota in cluster")
+		// wait for indexer to come up as the above step will cause a restart
+		secondaryindex.WaitTillAllIndexNodesActive(kvaddress, defaultIndexActiveTimeout)
+
+		err = secondaryindex.WaitForSystemIndices(kvaddress, 0)
+		tc.HandleError(err, "Waiting for indices in system scope")
+
+		vectorSetup(subt, BUCKET, "", "", 10000)
+
+		log.Printf("******** Create vector docs on scope and collection **********")
+
+		manifest := kvutility.CreateCollection(BUCKET, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
+		kvutility.GetCollectionID(BUCKET, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
+		kvutility.WaitForCollectionCreation(BUCKET, scope, coll, clusterconfig.Username, clusterconfig.Password, []string{kvaddress}, manifest)
+
+		e := loadVectorData(subt, BUCKET, scope, coll, 10000)
+		FailTestIfError(e, "Error in loading vector data", t)
+
+		log.Printf("********Create composite indices on scope and collection**********")
+
+		stmt := fmt.Sprintf("CREATE INDEX %v"+
+			" ON `%v`.`%v`.`%v`(sift VECTOR)"+
+			" PARTITION BY HASH(meta().id)"+
+			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_partition\":3, \"defer_build\":true};",
+			idxShared, BUCKET, scope, coll)
+		err = createWithDeferAndBuild(idxShared, BUCKET, scope, coll, stmt, defaultIndexActiveTimeout)
+		FailTestIfError(err, "Error in creating "+idxShared, t)
+
+		err = secondaryindex.ChangeMultipleIndexerSettings(map[string]interface{}{"indexer.shardRebalance.execTestAction": true},
+			clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+		tc.HandleError(err, "Failed to activate testactions")
+
+		defer func() {
+			err = secondaryindex.ChangeMultipleIndexerSettings(map[string]interface{}{"indexer.shardRebalance.execTestAction": false},
+				clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[2])
+			tc.HandleError(err, "Failed to de-activate testactions")
+		}()
+
+		tag := testcode.BUILD_INDEX_TRAINING
+		err = testcode.PostOptionsRequestToMetaKV2(clusterconfig.Nodes[2], clusterconfig.Username,
+			clusterconfig.Password, tag, testcode.INJECT_ERROR, "", 0, "Test Induced Training Error")
+		FailTestIfError(err, "Error while posting request to metaKV", subt)
+
+		addNode(clusterconfig.Nodes[2], "index", subt)
+		if err := clusterutility.RemoveNode(kvaddress, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1]); err == nil {
+			subt.Fatalf("%v expected rebalance to fail due to failed training but rebalance completed successfully", subt.Name())
+		}
+
 	})
 }
 

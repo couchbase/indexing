@@ -2459,81 +2459,87 @@ loop:
 			}
 
 			allTokensReady := true
-			lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _waitForIndexBuild, "")
-			for ttid, tt := range buildTokens {
-				if tt.State == c.TransferTokenReady || tt.State == c.TransferTokenCommit {
-					continue
-				}
-				allTokensReady = false
+			func() {
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _waitForIndexBuild, "")
+				defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _waitForIndexBuild, "")
 
-				if tt.State == c.TransferTokenMerge {
-					continue
-				}
-
-				indexState, err := getIndexStatusFromMeta(tt, localMeta)
-				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
-					if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
-						errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
-						goto cleanup
+				for ttid, tt := range buildTokens {
+					if tt.State == c.TransferTokenReady || tt.State == c.TransferTokenCommit {
+						continue
 					}
-					l.Infof("%v Could not get index status; bucket/scope/collection likely dropped."+
-						" Skipping. indexState %v, err %v, tt %v.", _waitForIndexBuild, indexState, err, tt)
-					tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
-					setTransferTokenInMetakv(ttid, tt)
-				} else if err != "" {
-					l.Errorf("%v Error Fetching Index Status %v %v", _waitForIndexBuild, r.localaddr, err)
-					if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
-						errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
-						goto cleanup
+					allTokensReady = false
+
+					if tt.State == c.TransferTokenMerge {
+						continue
 					}
-					break
-				}
 
-				defn := tt.IndexInst.Defn
-				defn.SetCollectionDefaults()
-				defnKey := getStatsDefnKey(tt)
-				defnStats := allStats.indexes[defnKey] // stats for current defn
-				if defnStats == nil {
-					l.Infof("%v Missing defnStats for instId %v. Retrying...", _waitForIndexBuild, defnKey)
-					break
-				}
+					indexState, err := getIndexStatusFromMeta(tt, localMeta)
+					if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
+						if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
+							errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
+							return
+						}
+						l.Infof("%v Could not get index status; bucket/scope/collection likely dropped."+
+							" Skipping. indexState %v, err %v, tt %v.", _waitForIndexBuild, indexState, err, tt)
+						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
+						setTransferTokenInMetakv(ttid, tt)
+					} else if err != "" {
+						l.Errorf("%v Error Fetching Index Status %v %v", _waitForIndexBuild, r.localaddr, err)
+						if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
+							errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
+						}
+						return
+					}
 
-				// Processing rate calculation and check is to ensure the destination index is not
-				// far behind in mutation processing when we redirect traffic from the old source.
-				// Indexes become active when they merge to MAINT_STREAM but may still be behind.
-				numDocsPending := defnStats.numDocsPending.GetValue().(int64)
-				numDocsQueued := defnStats.numDocsQueued.GetValue().(int64)
-				numDocsProcessed := defnStats.numDocsProcessed.GetValue().(int64)
+					defn := tt.IndexInst.Defn
+					defn.SetCollectionDefaults()
+					defnKey := getStatsDefnKey(tt)
+					defnStats := allStats.indexes[defnKey] // stats for current defn
+					if defnStats == nil {
+						l.Infof("%v Missing defnStats for instId %v. Retrying...", _waitForIndexBuild, defnKey)
+						return
+					}
 
-				elapsed := time.Since(buildStartTime).Seconds()
-				if elapsed == 0 {
-					elapsed = 1
-				}
-				processing_rate := float64(numDocsProcessed) / elapsed
-				tot_remaining := numDocsPending + numDocsQueued
-				remainingBuildTime := maxRemainingBuildTime
-				if processing_rate != 0 {
-					remainingBuildTime = uint64(float64(tot_remaining) / processing_rate)
-				}
-				if tot_remaining == 0 {
-					remainingBuildTime = 0
-				}
+					// Processing rate calculation and check is to ensure the destination index is not
+					// far behind in mutation processing when we redirect traffic from the old source.
+					// Indexes become active when they merge to MAINT_STREAM but may still be behind.
+					numDocsPending := defnStats.numDocsPending.GetValue().(int64)
+					numDocsQueued := defnStats.numDocsQueued.GetValue().(int64)
+					numDocsProcessed := defnStats.numDocsProcessed.GetValue().(int64)
 
-				now := time.Now()
-				if now.Sub(lastLogTime) > 30*time.Second {
-					lastLogTime = now
-					l.Infof("%v Index: %v:%v:%v:%v State: %v"+
-						" DocsPending: %v DocsQueued: %v DocsProcessed: %v, Rate: %v"+
-						" Remaining: %v EstTime: %v Partns: %v DestAddr: %v", _waitForIndexBuild,
-						defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
-						numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
-						tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
+					elapsed := time.Since(buildStartTime).Seconds()
+					if elapsed == 0 {
+						elapsed = 1
+					}
+					processing_rate := float64(numDocsProcessed) / elapsed
+					tot_remaining := numDocsPending + numDocsQueued
+					remainingBuildTime := maxRemainingBuildTime
+					if processing_rate != 0 {
+						remainingBuildTime = uint64(float64(tot_remaining) / processing_rate)
+					}
+					if tot_remaining == 0 {
+						remainingBuildTime = 0
+					}
+
+					now := time.Now()
+					if now.Sub(lastLogTime) > 30*time.Second {
+						lastLogTime = now
+						l.Infof("%v Index: %v:%v:%v:%v State: %v"+
+							" DocsPending: %v DocsQueued: %v DocsProcessed: %v, Rate: %v"+
+							" Remaining: %v EstTime: %v Partns: %v DestAddr: %v", _waitForIndexBuild,
+							defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
+							numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
+							tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
+					}
+					if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
+						r.destTokenToMergeOrReadyLOCKED(ttid, tt)
+					}
 				}
-				if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
-					r.destTokenToMergeOrReadyLOCKED(ttid, tt)
-				}
+			}()
+
+			if errStr != "" {
+				goto cleanup
 			}
-			c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _waitForIndexBuild, "")
 
 			if allTokensReady {
 				l.Infof("%v Batch Done", _waitForIndexBuild)
@@ -2601,101 +2607,107 @@ loop:
 				break
 			}
 
-			lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _waitForIndexBuildBatch, "")
 			allBuildsDone := true
 
-			for ttid, tt := range buildTokens {
+			func() {
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _waitForIndexBuildBatch, "")
+				defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _waitForIndexBuildBatch, "")
 
-				//token can get moved to commit state
-				//if bucket/scope/collection gets dropped.
-				//Add such tokens to tokenBuildDone
-				if tt.State == c.TransferTokenCommit {
-					if ok := tokenBuildDone[ttid]; !ok {
+				for ttid, tt := range buildTokens {
+
+					//token can get moved to commit state
+					//if bucket/scope/collection gets dropped.
+					//Add such tokens to tokenBuildDone
+					if tt.State == c.TransferTokenCommit {
+						if ok := tokenBuildDone[ttid]; !ok {
+							tokenBuildDone[ttid] = true
+						}
+					}
+
+					if done, ok := tokenBuildDone[ttid]; ok && done {
+						//skip checking for already done builds
+						continue
+					}
+
+					allBuildsDone = false
+
+					indexState, err := getIndexStatusFromMeta(tt, localMeta)
+					if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
+						if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
+							errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
+							return
+						}
+						l.Infof("%v Could not get index status; bucket/scope/collection likely dropped."+
+							" Skipping. indexState %v, err %v, tt %v.", _waitForIndexBuildBatch, indexState, err, tt)
+						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
+						setTransferTokenInMetakv(ttid, tt)
+					} else if err != "" {
+						l.Errorf("%v Error Fetching Index Status %v %v", _waitForIndexBuildBatch, r.localaddr, err)
+						if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
+							errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
+						}
+						return
+					}
+
+					defn := tt.IndexInst.Defn
+					defn.SetCollectionDefaults()
+					defnKey := getStatsDefnKey(tt)
+					defnStats := allStats.indexes[defnKey] // stats for current defn
+					if defnStats == nil {
+						l.Infof("%v Missing defnStats for instId %v. Retrying...", _waitForIndexBuildBatch, defnKey)
+						return
+					}
+
+					// Processing rate calculation and check is to ensure the destination index is not
+					// far behind in mutation processing when we redirect traffic from the old source.
+					// Indexes become active when they merge to MAINT_STREAM but may still be behind.
+					numDocsPending := defnStats.numDocsPending.GetValue().(int64)
+					numDocsQueued := defnStats.numDocsQueued.GetValue().(int64)
+					numDocsProcessed := defnStats.numDocsProcessed.GetValue().(int64)
+
+					elapsed := time.Since(buildStartTime).Seconds()
+					if elapsed == 0 {
+						elapsed = 1
+					}
+					processing_rate := float64(numDocsProcessed) / elapsed
+					tot_remaining := numDocsPending + numDocsQueued
+					remainingBuildTime := maxRemainingBuildTime
+					if processing_rate != 0 {
+						remainingBuildTime = uint64(float64(tot_remaining) / processing_rate)
+					}
+					if tot_remaining == 0 {
+						remainingBuildTime = 0
+					}
+
+					now := time.Now()
+					if now.Sub(lastLogTime) > 30*time.Second {
+						lastLogTime = now
+						l.Infof("%v Index: %v:%v:%v:%v State: %v"+
+							" DocsPending: %v DocsQueued: %v DocsProcessed: %v, Rate: %v"+
+							" Remaining: %v EstTime: %v Partns: %v DestAddr: %v", _waitForIndexBuildBatch,
+							defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
+							numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
+							tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
+					}
+					if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
+						logging.Infof("%v Index: %v:%v:%v:%v BuildDone", _waitForIndexBuildBatch, defn.Bucket,
+							defn.Scope, defn.Collection, defn.Name)
 						tokenBuildDone[ttid] = true
+						//Indicate that this token is ready for switch to rstate active
+						//This flag is used during recovery. If this flag is set to true,
+						//the index can be moved to rstate=ACTIVE on destination.
+						//Otherwise, the index will be cleaned up on the destination and
+						//retained on the source node.
+						tt.IsPendingReady = true
+						setTransferTokenInMetakv(ttid, tt)
 					}
 				}
 
-				if done, ok := tokenBuildDone[ttid]; ok && done {
-					//skip checking for already done builds
-					continue
-				}
+			}()
 
-				allBuildsDone = false
-
-				indexState, err := getIndexStatusFromMeta(tt, localMeta)
-				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
-					if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
-						errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
-						goto cleanup
-					}
-					l.Infof("%v Could not get index status; bucket/scope/collection likely dropped."+
-						" Skipping. indexState %v, err %v, tt %v.", _waitForIndexBuildBatch, indexState, err, tt)
-					tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
-					setTransferTokenInMetakv(ttid, tt)
-				} else if err != "" {
-					l.Errorf("%v Error Fetching Index Status %v %v", _waitForIndexBuildBatch, r.localaddr, err)
-					if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
-						errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
-						goto cleanup
-					}
-					break
-				}
-
-				defn := tt.IndexInst.Defn
-				defn.SetCollectionDefaults()
-				defnKey := getStatsDefnKey(tt)
-				defnStats := allStats.indexes[defnKey] // stats for current defn
-				if defnStats == nil {
-					l.Infof("%v Missing defnStats for instId %v. Retrying...", _waitForIndexBuildBatch, defnKey)
-					break
-				}
-
-				// Processing rate calculation and check is to ensure the destination index is not
-				// far behind in mutation processing when we redirect traffic from the old source.
-				// Indexes become active when they merge to MAINT_STREAM but may still be behind.
-				numDocsPending := defnStats.numDocsPending.GetValue().(int64)
-				numDocsQueued := defnStats.numDocsQueued.GetValue().(int64)
-				numDocsProcessed := defnStats.numDocsProcessed.GetValue().(int64)
-
-				elapsed := time.Since(buildStartTime).Seconds()
-				if elapsed == 0 {
-					elapsed = 1
-				}
-				processing_rate := float64(numDocsProcessed) / elapsed
-				tot_remaining := numDocsPending + numDocsQueued
-				remainingBuildTime := maxRemainingBuildTime
-				if processing_rate != 0 {
-					remainingBuildTime = uint64(float64(tot_remaining) / processing_rate)
-				}
-				if tot_remaining == 0 {
-					remainingBuildTime = 0
-				}
-
-				now := time.Now()
-				if now.Sub(lastLogTime) > 30*time.Second {
-					lastLogTime = now
-					l.Infof("%v Index: %v:%v:%v:%v State: %v"+
-						" DocsPending: %v DocsQueued: %v DocsProcessed: %v, Rate: %v"+
-						" Remaining: %v EstTime: %v Partns: %v DestAddr: %v", _waitForIndexBuildBatch,
-						defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
-						numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
-						tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
-				}
-				if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
-					logging.Infof("%v Index: %v:%v:%v:%v BuildDone", _waitForIndexBuildBatch, defn.Bucket,
-						defn.Scope, defn.Collection, defn.Name)
-					tokenBuildDone[ttid] = true
-					//Indicate that this token is ready for switch to rstate active
-					//This flag is used during recovery. If this flag is set to true,
-					//the index can be moved to rstate=ACTIVE on destination.
-					//Otherwise, the index will be cleaned up on the destination and
-					//retained on the source node.
-					tt.IsPendingReady = true
-					setTransferTokenInMetakv(ttid, tt)
-				}
+			if errStr != "" {
+				goto cleanup
 			}
-
-			c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _waitForIndexBuildBatch, "")
 
 			if allBuildsDone {
 				l.Infof("%v Batch Build Done", _waitForIndexBuildBatch)
