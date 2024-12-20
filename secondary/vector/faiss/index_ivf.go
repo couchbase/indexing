@@ -298,11 +298,11 @@ func (idx *IndexImpl) DecodeVectors(nx int, codes []byte, x []float32) (err erro
 	return err
 }
 
-// Compute the distance between a vector with a list of flat quantized codes.
-// This function needs a listno as input and all the codes must belong to
-// the same listno. The computed distances are returned in `dists`.
-func (idx *IndexImpl) ComputeDistanceEncodedSQ(qvec []float32,
-	nx int, codes []byte, dists []float32, listno int64, metric int, qt int, dim int) (err error) {
+//Compute the distance between a vector with a list of flat quantized codes.
+//This function needs a listno as input and all the codes must belong to
+//the same listno. The computed distances are returned in `dists`.
+func (idx *IndexImpl) ComputeDistanceEncoded(qvec []float32,
+	nx int, codes []byte, dists []float32, listno int64, metric int, dim int) (err error) {
 
 	// runtime.LockOSThread()
 	// defer runtime.UnlockOSThread()

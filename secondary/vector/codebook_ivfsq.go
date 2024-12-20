@@ -290,10 +290,8 @@ func (cb *codebookIVFSQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) 
 func (cb *codebookIVFSQ) ComputeDistanceEncoded(qvec []float32,
 	n int, codes []byte, dists []float32, listno int64) error {
 
-	return cb.index.ComputeDistanceEncodedSQ(qvec, n, codes, dists, listno,
-		convertToFaissMetric(cb.metric),
-		convertToFaissSqRange(cb.sqRange),
-		cb.dim)
+	return cb.index.ComputeDistanceEncoded(qvec, n, codes, dists, listno,
+		convertToFaissMetric(cb.metric), cb.dim)
 }
 
 // Size returns the memory size in bytes.

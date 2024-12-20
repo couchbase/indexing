@@ -310,8 +310,9 @@ func (cb *codebookIVFPQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) 
 // This function only works with vectors belonging to the same centroid(input as listno).
 func (cb *codebookIVFPQ) ComputeDistanceEncoded(qvec []float32,
 	n int, codes []byte, dists []float32, listno int64) error {
-	//Not yet implemented
-	return nil
+
+	return cb.index.ComputeDistanceEncoded(qvec, n, codes, dists, listno,
+		convertToFaissMetric(cb.metric), cb.dim)
 }
 
 // Size returns the memory size in bytes.
