@@ -454,6 +454,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 			return e
 		}
 
+		go common.MonitorServiceForPortChanges(clusterAddr)
+
 		return nil
 	}()
 	if err != nil {
@@ -695,41 +697,7 @@ func (idx *indexer) registerSecurityCallback() error {
 }
 
 func (idx *indexer) refreshSecurityContextOnTopology(clusterAddr string) error {
-
-	fn := func(r int, e error) error {
-		var cinfo *common.ClusterInfoCache
-		url, err := common.ClusterAuthUrl(clusterAddr)
-		if err != nil {
-			return err
-		}
-
-		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
-		if err != nil {
-			return err
-		}
-		cinfo.SetUserAgent("Indexer::refreshSecurityContextOnTopology")
-		cinfo.Lock()
-		defer cinfo.Unlock()
-
-		if err := cinfo.Fetch(); err != nil {
-			return err
-		}
-
-		// When adding the node during the init time. nodesvs will not have httpPort in it.
-		// Add Port mapping from command line if the mapping does not have port.
-		mapping := cinfo.EncryptPortMapping()
-		httpPort := idx.config["httpPort"].String()
-		if _, ok := mapping[httpPort]; !ok {
-			httpsPort := idx.config["httpsPort"].String()
-			mapping[httpPort] = httpsPort
-		}
-		security.SetEncryptPortMapping(mapping)
-
-		return nil
-	}
-
-	helper := common.NewRetryHelper(10, time.Second, 1, fn)
-	return helper.Run()
+	return c.RefreshSecurityContextOnTopology(clusterAddr)
 }
 
 func (idx *indexer) handleSecurityChange(msg Message) {

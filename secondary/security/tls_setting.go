@@ -98,6 +98,7 @@ type SecurityContext struct {
 	// TLS port mapping
 	encryptPortMap unsafe.Pointer
 	encryptPorts   unsafe.Pointer
+	encryptPortRev atomic.Int64
 
 	// notifier
 	mutex     sync.RWMutex
@@ -109,9 +110,10 @@ var pContextInitializer sync.Once
 
 func init() {
 	pSecurityContext = &SecurityContext{
-		initializedCh: make(chan bool),
-		notifiers:     make(map[string]SecurityChangeNotifier),
-		localhosts:    make(map[string]bool),
+		initializedCh:  make(chan bool),
+		notifiers:      make(map[string]SecurityChangeNotifier),
+		localhosts:     make(map[string]bool),
+		encryptPortRev: atomic.Int64{},
 	}
 
 	emptyMap1 := make(map[string]string, 0)
@@ -119,6 +121,8 @@ func init() {
 
 	emptyMap2 := make(map[string]bool, 0)
 	atomic.StorePointer(&pSecurityContext.encryptPorts, unsafe.Pointer(&emptyMap2))
+
+	pSecurityContext.encryptPortRev.Store(0)
 }
 
 func InitSecurityContext(logger ConsoleLogger, localhost string, certFile, keyFile, caFile string, encryptLocalHost bool) (err error) {
@@ -146,6 +150,8 @@ func InitSecurityContext(logger ConsoleLogger, localhost string, certFile, keyFi
 
 		emptyMap2 := make(map[string]bool, 0)
 		atomic.StorePointer(&pSecurityContext.encryptPorts, unsafe.Pointer(&emptyMap2))
+
+		pSecurityContext.encryptPortRev.Store(0)
 
 	})
 
@@ -515,12 +521,33 @@ func RegisterCallback(key string, cb SecurityChangeNotifier) {
 // - provide mapping from non-SSL port to SSL port
 //////////////////////////////////////////////////////
 
+func UpdateEncryptPortMapping(mapping map[string]string, rev int64) {
+	if rev <= pSecurityContext.encryptPortRev.Load() && rev > 0 {
+		return
+	}
+
+	pSecurityContext.encryptPortRev.Store(rev)
+	SetEncryptPortMapping(mapping)
+}
+
 func SetEncryptPortMapping(mapping map[string]string) {
 	ports := make(map[string]bool)
 	for _, encrypted := range mapping {
 		ports[encrypted] = true
 	}
 
+	/*
+		there are 2 cases when these maps can go out of sync with the readers -
+		* TLS config refresh
+		* cluster topology change
+
+		in both cases, readers can be susceptible to having shadow reads but it is fine. this will
+		lead to clients like projector/GSI client retrying the connection with the server by
+		creating a new connection which should then get the updated value of the map.
+
+		this problem only exists for setups which do not have default ports on indexer else in all
+		default cases these maps won't be undergoing changes
+	*/
 	atomic.StorePointer(&pSecurityContext.encryptPortMap, unsafe.Pointer(&mapping))
 	atomic.StorePointer(&pSecurityContext.encryptPorts, unsafe.Pointer(&ports))
 
