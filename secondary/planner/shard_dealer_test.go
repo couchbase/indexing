@@ -2,8 +2,10 @@ package planner
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"testing"
+	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/stretchr/testify/assert"
@@ -16,9 +18,10 @@ const (
 	maxDiskUsagePerShard  uint64 = 256 * 1024 * 1024
 )
 
-func createDummyIndexUsage(id uint64, isPrimary, isVector, isBhive, isMoi bool) *IndexUsage {
+// func createDummyIndexUsage(id uint64, isPrimary, isVector, isBhive, isMoi bool) *IndexUsage {
+func createDummyIndexUsage(params createIdxParam) *IndexUsage {
 	var storageMode = c.PlasmaDB
-	if isMoi {
+	if params.isMoi {
 		storageMode = c.MemDB
 	}
 	return &IndexUsage{
@@ -26,29 +29,67 @@ func createDummyIndexUsage(id uint64, isPrimary, isVector, isBhive, isMoi bool) 
 		Scope:      "scope",
 		Collection: "collection",
 
-		DefnId:  c.IndexDefnId(id),
-		InstId:  c.IndexInstId(id),
+		DefnId:  c.IndexDefnId(params.defnid),
+		InstId:  c.IndexInstId(params.defnid),
 		PartnId: c.PartitionId(0),
 
 		StorageMode: storageMode,
 
-		IsPrimary: isPrimary,
+		IsPrimary: params.isPrimary,
 
-		Name: fmt.Sprintf("index_%v", id),
+		Name: fmt.Sprintf("index_%v", params.defnid),
 
 		Instance: &c.IndexInst{
-			InstId:    c.IndexInstId(id),
+			InstId:    c.IndexInstId(params.defnid),
 			State:     c.INDEX_STATE_ACTIVE,
 			ReplicaId: 0,
 
 			Defn: c.IndexDefn{
-				IsVectorIndex: isVector || isBhive,
+				IsVectorIndex: params.isVector || params.isBhive,
 				VectorMeta: &c.VectorMetadata{
-					IsBhive: isBhive,
+					IsBhive: params.isBhive,
 				},
 			},
 		},
 	}
+}
+
+func createDummyReplicaIndexUsages(params createIdxParam) []*IndexUsage {
+	var indexes = make([]*IndexUsage, 0, params.numReplicas)
+	for i := 1; i <= params.numReplicas; i++ {
+		var index = createDummyIndexUsage(params)
+		index.InstId = c.IndexInstId(time.Now().UnixNano())
+		index.Instance.InstId = index.InstId
+		index.Instance.ReplicaId = i
+		index.Instance.Defn.NumReplica = uint32(params.numReplicas)
+	}
+	return indexes
+}
+
+func createDummyPartitionedIndexUsages(params createIdxParam) []*IndexUsage {
+	var partitions = make([]*IndexUsage, 0, params.numPartns)
+	for i := 1; i <= params.numPartns; i++ {
+		var partn = createDummyIndexUsage(params)
+		partn.PartnId = c.PartitionId(i)
+		partn.Instance.Defn.NumPartitions = uint32(params.numPartns)
+		partitions = append(partitions, partn)
+	}
+	return partitions
+}
+
+func createDummyReplicaPartitionedIndexUsage(params createIdxParam) [][]*IndexUsage {
+	var indexes = make([][]*IndexUsage, 0, params.numReplicas)
+	for i := 1; i <= params.numReplicas; i++ {
+		var instID = c.IndexInstId(time.Now().UnixNano())
+		var partitions = createDummyPartitionedIndexUsages(params)
+		for _, partn := range partitions {
+			partn.InstId = instID
+			partn.Instance.InstId = instID
+			partn.Instance.ReplicaId = i
+			partn.Instance.Defn.NumReplica = uint32(params.numReplicas)
+		}
+	}
+	return indexes
 }
 
 func createNewAlternateShardIDGenerator() func() (*c.AlternateShardId, error) {
@@ -71,7 +112,11 @@ func TestBasicSlotAssignment(t *testing.T) {
 		shardCapacity,
 		createNewAlternateShardIDGenerator(), nil)
 
-	var indexerNode = createDummyIndexerNode(t.Name(), 1, 1, 0, 0, 0)
+	var cips = []createIdxParam{
+		{count: 1, isPrimary: true},
+		{count: 1},
+	}
+	var indexerNode = createDummyIndexerNode(t.Name(), cips...)
 
 	for _, inst := range indexerNode.Indexes {
 		var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
@@ -137,55 +182,39 @@ func TestBasicSlotAssignment(t *testing.T) {
 	}
 }
 
-func createDummyIndexerNode(nodeID string, num2iIndexes, numPrimaryIndexes, numVectorIndexes,
-	numBhiveIndexes, numMoiIndexes uint64) *IndexerNode {
+type createIdxParam struct {
+	count                               uint64
+	isPrimary, isVector, isBhive, isMoi bool
+	numPartns, numReplicas              int
+	defnid                              uint64
+}
+
+func createDummyIndexerNode(nodeID string, cips ...createIdxParam) *IndexerNode {
 	var indexerNode = IndexerNode{
 		NodeId:   "indexer-node-id-" + nodeID,
 		NodeUUID: "indexer-node-uuid-" + nodeID,
 
-		Indexes: make([]*IndexUsage, 0, num2iIndexes),
+		Indexes: make([]*IndexUsage, 0),
 	}
 
 	var id uint64
+	for _, cip := range cips {
+		for i := uint64(0); i < cip.count; i++ {
+			cip.defnid = id
+			if cip.numPartns > 0 {
+				var newIndex = createDummyPartitionedIndexUsages(cip)
 
-	for i := uint64(0); i < numPrimaryIndexes; i++ {
-		var newIndex = createDummyIndexUsage(id, true, false, false, false)
-		newIndex.initialNode = &indexerNode
-
-		indexerNode.Indexes = append(indexerNode.Indexes, newIndex)
-		id++
-	}
-
-	for i := uint64(0); i < num2iIndexes; i++ {
-		var newIndex = createDummyIndexUsage(id, false, false, false, false)
-		newIndex.initialNode = &indexerNode
-
-		indexerNode.Indexes = append(indexerNode.Indexes, newIndex)
-		id++
-	}
-
-	for i := uint64(0); i < numVectorIndexes; i++ {
-		var newIndex = createDummyIndexUsage(id, false, true, false, false)
-		newIndex.initialNode = &indexerNode
-
-		indexerNode.Indexes = append(indexerNode.Indexes, newIndex)
-		id++
-	}
-
-	for i := uint64(0); i < numBhiveIndexes; i++ {
-		var newIndex = createDummyIndexUsage(id, false, false, true, false)
-		newIndex.initialNode = &indexerNode
-
-		indexerNode.Indexes = append(indexerNode.Indexes, newIndex)
-		id++
-	}
-
-	for i := uint64(0); i < numMoiIndexes; i++ {
-		var newIndex = createDummyIndexUsage(id, false, false, false, true)
-		newIndex.initialNode = &indexerNode
-
-		indexerNode.Indexes = append(indexerNode.Indexes, newIndex)
-		id++
+				for _, partn := range newIndex {
+					partn.initialNode = &indexerNode
+				}
+				indexerNode.Indexes = append(indexerNode.Indexes, newIndex...)
+			} else {
+				var newIndex = createDummyIndexUsage(cip)
+				newIndex.initialNode = &indexerNode
+				indexerNode.Indexes = append(indexerNode.Indexes, newIndex)
+			}
+			id++
+		}
 	}
 
 	return &indexerNode
@@ -217,102 +246,107 @@ func getReplicaMapsForIndexerNode(
 	return defnMap
 }
 
-func TestSingleNodeAssignment(t *testing.T) {
+func TestSingleNodePass0(t *testing.T) {
 	t.Parallel()
 
-	t.Run("Pass-0", func(subt *testing.T) {
-		subt.Run("Basic-AllPrimary", func(t0 *testing.T) {
-			t0.Parallel()
+	t.Run("Basic-AllPrimary", func(t0 *testing.T) {
+		t0.Parallel()
 
-			var dealer = NewShardDealer(
-				minShardsPerNode,
-				minPartitionsPerShard,
-				maxDiskUsagePerShard,
-				shardCapacity,
-				createNewAlternateShardIDGenerator(), nil)
+		var dealer = NewShardDealer(
+			minShardsPerNode,
+			minPartitionsPerShard,
+			maxDiskUsagePerShard,
+			shardCapacity,
+			createNewAlternateShardIDGenerator(), nil)
 
-			var indexerNode = createDummyIndexerNode(t0.Name(), 0, minShardsPerNode, 0, 0, 0)
+		var cip = createIdxParam{count: minShardsPerNode, isPrimary: true}
+		var indexerNode = createDummyIndexerNode(t0.Name(), cip)
 
-			var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
 
-			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
 
-			for defnID, repMaps := range replicaMaps {
-				for partnID, repmap := range repMaps {
-					slotID := dealer.GetSlot(defnID, partnID, repmap)
+		for defnID, repMaps := range replicaMaps {
+			for partnID, repmap := range repMaps {
+				slotID := dealer.GetSlot(defnID, partnID, repmap)
 
-					if slotID == 0 {
-						t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
-							t0.Name(), repmap)
-					}
-
-					slotIDs[slotID] = true
+				if slotID == 0 {
+					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+						t0.Name(), repmap)
 				}
-			}
 
-			if len(slotIDs) != int(minShardsPerNode) {
-				t0.Fatalf("%v slots created are %v but should have been only %v slots",
-					t0.Name(), slotIDs, minShardsPerNode)
+				slotIDs[slotID] = true
 			}
+		}
 
-			if len(dealer.partnSlots) != int(minShardsPerNode) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(),
-					dealer.partnSlots,
-					minShardsPerNode,
-				)
-			}
-			if len(dealer.slotsMap) != int(minShardsPerNode) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
-					t0.Name(),
-					dealer.slotsMap,
-					minShardsPerNode,
-				)
-			}
-			if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != minShardsPerNode {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
-					t0.Name(),
-					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-					minShardsPerNode,
-				)
-			}
-			assert.NoError(
-				t0,
-				validateShardDealerInternals(dealer, []*IndexerNode{indexerNode}),
-				"internal shard dealer validation failed for basic test",
+		if len(slotIDs) != int(minShardsPerNode) {
+			t0.Fatalf("%v slots created are %v but should have been only %v slots",
+				t0.Name(), slotIDs, minShardsPerNode)
+		}
+
+		if len(dealer.partnSlots) != int(minShardsPerNode) {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+				t0.Name(),
+				dealer.partnSlots,
+				minShardsPerNode,
 			)
+		}
+		if len(dealer.slotsMap) != int(minShardsPerNode) {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
+				t0.Name(),
+				dealer.slotsMap,
+				minShardsPerNode,
+			)
+		}
+		if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != minShardsPerNode {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
+				t0.Name(),
+				dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+				minShardsPerNode,
+			)
+		}
+		assert.NoError(
+			t0,
+			validateShardDealerInternals(dealer, []*IndexerNode{indexerNode}),
+			"internal shard dealer validation failed for basic test",
+		)
 
-			var extraIndex = createDummyIndexUsage(minShardsPerNode+1, true, false, false, false)
-			extraIndex.initialNode = indexerNode
-			indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
+		cip = createIdxParam{defnid: minShardsPerNode + 1, isPrimary: true}
+		var extraIndex = createDummyIndexUsage(cip)
+		extraIndex.initialNode = indexerNode
+		indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
 
-			var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
-			replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
-			replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
-			slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap)
-			if _, exists := slotIDs[slotID]; slotID != 0 && !exists {
-				t0.Fatalf(
-					"%v extra slot created when it was not expected. New slot %v. All Slots %v",
-					t0.Name(),
-					slotID,
-					slotIDs,
-				)
-			}
+		var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
+		replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
+		replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
+		slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap)
+		if _, exists := slotIDs[slotID]; slotID != 0 && !exists {
+			t0.Fatalf(
+				"%v extra slot created when it was not expected. New slot %v. All Slots %v",
+				t0.Name(),
+				slotID,
+				slotIDs,
+			)
+		}
 
-			assert.NoErrorf(t0, validateShardDealerInternals(dealer, []*IndexerNode{indexerNode}),
-				"internal shard dealer validation failed for basic test after adding extra index")
-		})
+		assert.NoErrorf(t0, validateShardDealerInternals(dealer, []*IndexerNode{indexerNode}),
+			"internal shard dealer validation failed for basic test after adding extra index")
+	})
 
-		// Consider a scenario where we have minShardsPerNode as 5. New we have already created
-		// 4 shards and then we get a request to create a non-primary index. since node is under
-		// limit, we can create new slot. so we create 2 shards taking total shard count to 6
-		// this test verifies the same. - with pass 1
-		subt.Run("PrimaryAndSecondary", func(t0 *testing.T) {
-			t0.Parallel()
+	// Consider a scenario where we have minShardsPerNode as 5. New we have already created
+	// 4 shards and then we get a request to create a non-primary index. since node is under
+	// limit, we can create new slot. so we create 2 shards taking total shard count to 6
+	// and the inverse also that we create 2 2i indexes and then we create 2 prim indexes
+	// this test verifies the same. - with pass 0
+	t.Run("PrimaryAndSecondary", func(t0 *testing.T) {
+		t0.Parallel()
 
+		// PRIMARY: minShardsPerNode - 1
+		// 2i: 1
+		{
 			var dealer = NewShardDealer(
 				minShardsPerNode,
 				minPartitionsPerShard,
@@ -320,7 +354,11 @@ func TestSingleNodeAssignment(t *testing.T) {
 				shardCapacity,
 				createNewAlternateShardIDGenerator(), nil)
 
-			var indexerNode = createDummyIndexerNode(t0.Name(), minShardsPerNode, minShardsPerNode, 0, 0, 0)
+			var cips = []createIdxParam{
+				{count: minShardsPerNode - 1, isPrimary: true},
+				{count: 1},
+			}
+			var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
 
 			var alternateShardIDs = make(map[string]bool)
 
@@ -360,28 +398,158 @@ func TestSingleNodeAssignment(t *testing.T) {
 				}
 			}
 
-			if len(alternateShardIDs) != int(minShardsPerNode)*2 {
-				// t0.Logf("Shard Dealer internal - %v", )
-				t0.Fatalf("%v expected %v alternate shard ids but the we have (%v) %v",
-					t0.Name(), minShardsPerNode*2,
-					len(alternateShardIDs), alternateShardIDs)
+			assert.Equalf(t0, int(minShardsPerNode+1), len(alternateShardIDs),
+				"%v expected %v alternate shard ids but the we have (%v) %v",
+				t0.Name(), minShardsPerNode+1, len(alternateShardIDs), alternateShardIDs)
+
+			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+			assert.NoErrorf(t0, err,
+				"%v internal shard dealer validation failed with err: \n\t\t%v",
+				t0.Name(), err)
+		}
+
+		// INVERSE SCENARIO
+		// 2i: 2
+		// prim: 2
+		{
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				minPartitionsPerShard,
+				maxDiskUsagePerShard,
+				shardCapacity,
+				createNewAlternateShardIDGenerator(), nil)
+
+			var num2i = uint64(math.Ceil(float64(minShardsPerNode) / 4))
+			var cips = []createIdxParam{
+				{count: num2i},
+				{count: num2i * 2, isPrimary: true},
+			}
+			var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
+
+			var alternateShardIDs = make(map[string]bool)
+
+			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+
+			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
+				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
+
+					if slotID == 0 {
+						t0.Fatalf("%v failed to get slot id for replica map %v in 0th pass",
+							t0.Name(), repmap)
+					}
+
+					for _, nodeMap := range repmap {
+						for _, inst := range nodeMap {
+							var expectedAlternateShardIDCount = 2
+							if inst.IsPrimary {
+								expectedAlternateShardIDCount = 1
+							}
+
+							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
+								t0.Fatalf(
+									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+									t0.Name(),
+									inst.IsPrimary,
+									expectedAlternateShardIDCount,
+									inst.AlternateShardIds,
+								)
+							}
+
+							for _, asi := range inst.AlternateShardIds {
+								alternateShardIDs[asi] = true
+							}
+						}
+					}
+				}
 			}
 
-			if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
-					t0.Name(),
-					len(alternateShardIDs),
-					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-				)
+			assert.Equalf(t0, int(minShardsPerNode), len(alternateShardIDs),
+				"%v expected %v alternate shard ids but the we have (%v) %v",
+				t0.Name(), minShardsPerNode, len(alternateShardIDs), alternateShardIDs)
+
+			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+			assert.NoErrorf(t0, err,
+				"%v internal shard dealer validation failed with err: \n\t\t%v",
+				t0.Name(), err)
+
+		}
+
+	})
+
+	// TODO: add partitioned index tests
+	// same as above test but we here use partitions instead of multiple indexes
+	t.Run("PartitionedIndexes", func(t0 *testing.T) {
+		t0.Parallel()
+
+		// PRIMARY: numPartns = minShards - 1
+		// 2i: 1
+		{
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				minPartitionsPerShard,
+				maxDiskUsagePerShard,
+				shardCapacity,
+				createNewAlternateShardIDGenerator(), nil)
+
+			var cips = []createIdxParam{
+				{count: 1, isPrimary: true, numPartns: int(minShardsPerNode - 1)},
+				{count: 1},
 			}
-			if len(dealer.partnSlots) != len(indexerNode.Indexes) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - expected %v index defns but it has %v",
-					t0.Name(),
-					len(indexerNode.Indexes),
-					len(dealer.partnSlots),
-				)
+			var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
+
+			var alternateShardIDs = make(map[string]bool)
+
+			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+
+			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
+				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
+
+					if slotID == 0 {
+						t0.Fatalf("%v failed to get slot id for replica map %v in 0th pass",
+							t0.Name(), repmap)
+					}
+
+					for _, nodeMap := range repmap {
+						for _, inst := range nodeMap {
+							var expectedAlternateShardIDCount = 2
+							if inst.IsPrimary {
+								expectedAlternateShardIDCount = 1
+							}
+
+							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
+								t0.Fatalf(
+									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+									t0.Name(),
+									inst.IsPrimary,
+									expectedAlternateShardIDCount,
+									inst.AlternateShardIds,
+								)
+							}
+
+							for _, asi := range inst.AlternateShardIds {
+								alternateShardIDs[asi] = true
+							}
+						}
+					}
+				}
+			}
+
+			assert.Equalf(t0, int(minShardsPerNode+1), len(alternateShardIDs),
+				"%v expected %v alternate shard ids but the we have (%v) %v",
+				t0.Name(), minShardsPerNode+1, len(alternateShardIDs), alternateShardIDs)
+
+			var defnIDpartnCheck = make(map[c.IndexDefnId]bool)
+			for _, partn := range indexerNode.Indexes {
+				var defnID = partn.DefnId
+				if !defnIDpartnCheck[defnID] && partn.PartnId != 0 {
+					var numPartitions = partn.Instance.Defn.NumPartitions
+					assert.Equalf(t0, int(numPartitions), len(dealer.partnSlots[defnID]),
+						"%v expected defn %v to have %v partitions but it has only %v",
+						t0.Name(), defnID, numPartitions, len(dealer.partnSlots[defnID]))
+					defnIDpartnCheck[defnID] = true
+				}
 			}
 
 			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
@@ -389,17 +557,12 @@ func TestSingleNodeAssignment(t *testing.T) {
 				"%v internal shard dealer validation failed with err: \n\t\t%v",
 				t0.Name(), err)
 
-		})
+		}
 
-		// TODO: add partitioned index tests
-		// TODO: add partitioned replicated index tests (replica index tests are not valid for
-		// 	single node)
-	})
-
-	t.Run("Pass-1", func(subt *testing.T) {
-		subt.Run("Basic-AllPrimary", func(t0 *testing.T) {
-			t0.Parallel()
-
+		// INVERSE SCENARIO
+		// 2i: numPartns = 2
+		// prim: numPartns = 2
+		{
 			var dealer = NewShardDealer(
 				minShardsPerNode,
 				minPartitionsPerShard,
@@ -407,561 +570,580 @@ func TestSingleNodeAssignment(t *testing.T) {
 				shardCapacity,
 				createNewAlternateShardIDGenerator(), nil)
 
-			var indexerNode = createDummyIndexerNode(t0.Name(), 0, minPartitionsPerShard, 0, 0, 0)
+			var num2iPartns = int(math.Ceil(float64(minShardsPerNode) / 4))
+			var cips = []createIdxParam{
+				{count: 1, numPartns: num2iPartns},
+				{count: 1, isPrimary: true, numPartns: num2iPartns * 2},
+			}
+			var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
 
-			var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+			var alternateShardIDs = make(map[string]bool)
 
 			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
 
-			for defnID, repMaps := range replicaMaps {
-				for partnID, repmap := range repMaps {
-					slotID := dealer.GetSlot(defnID, partnID, repmap)
+			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
+				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
 
 					if slotID == 0 {
-						t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+						t0.Fatalf("%v failed to get slot id for replica map %v in 0th pass",
 							t0.Name(), repmap)
 					}
 
-					slotIDs[slotID] = true
+					for _, nodeMap := range repmap {
+						for _, inst := range nodeMap {
+							var expectedAlternateShardIDCount = 2
+							if inst.IsPrimary {
+								expectedAlternateShardIDCount = 1
+							}
+
+							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
+								t0.Fatalf(
+									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+									t0.Name(),
+									inst.IsPrimary,
+									expectedAlternateShardIDCount,
+									inst.AlternateShardIds,
+								)
+							}
+
+							for _, asi := range inst.AlternateShardIds {
+								alternateShardIDs[asi] = true
+							}
+						}
+					}
 				}
 			}
 
-			if len(slotIDs) != int(minShardsPerNode) {
-				t0.Fatalf("%v slots created are %v but should have been only %v slots",
-					t0.Name(), slotIDs, minShardsPerNode)
-			}
-
-			if len(dealer.partnSlots) != int(minPartitionsPerShard) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(),
-					dealer.partnSlots,
-					minPartitionsPerShard,
-				)
-			}
-			if len(dealer.slotsMap) != int(minShardsPerNode) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
-					t0.Name(),
-					dealer.slotsMap,
-					minShardsPerNode,
-				)
-			}
-			if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != minShardsPerNode {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
-					t0.Name(),
-					minShardsPerNode,
-					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-				)
-			}
+			assert.Equalf(t0, int(minShardsPerNode), len(alternateShardIDs),
+				"%v expected %v alternate shard ids but the we have (%v) %v",
+				t0.Name(), minShardsPerNode, len(alternateShardIDs), alternateShardIDs)
 
 			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
 			assert.NoErrorf(t0, err,
 				"%v internal shard dealer validation failed with err: \n\t\t%v",
 				t0.Name(), err)
-
-		})
-
-		// This is similar to Pass-0 except here we also test that post creating minShardsPerNode
-		// shards, we reuse existing shards
-		subt.Run("PrimaryAndSecondary", func(t0 *testing.T) {
-			t0.Parallel()
-
-			var dealer = NewShardDealer(
-				minShardsPerNode,
-				minPartitionsPerShard,
-				maxDiskUsagePerShard,
-				shardCapacity,
-				createNewAlternateShardIDGenerator(), nil)
-
-			var indexerNode = createDummyIndexerNode(t0.Name(), minShardsPerNode*2, minShardsPerNode*2, 0, 0, 0)
-
-			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
-			var alternateShardIDs = make(map[string]bool)
-
-			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
-				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
-
-					if slotID == 0 {
-						t0.Fatalf("%v expected to get a valid slot for replica map %v but got 0",
-							t0.Name(), repmap)
-					}
-
-					for _, nodeMap := range repmap {
-						for _, inst := range nodeMap {
-							var expectedAlternateShardIDCount = 2
-							if inst.IsPrimary {
-								expectedAlternateShardIDCount = 1
-							}
-
-							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
-								t0.Fatalf(
-									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
-									t0.Name(),
-									inst.IsPrimary,
-									expectedAlternateShardIDCount,
-									inst.AlternateShardIds,
-								)
-							}
-
-							for _, asi := range inst.AlternateShardIds {
-								alternateShardIDs[asi] = true
-							}
-						}
-					}
-				}
-			}
-
-			if len(alternateShardIDs) != int(minShardsPerNode)*2 {
-				t0.Fatalf("%v expected %v alternate shard ids but the we have %v (%v)",
-					t0.Name(), 2*minShardsPerNode, len(alternateShardIDs),
-					alternateShardIDs)
-			}
-
-			// since all primary indexes are created before, we create all minShardsPerNode
-			// now when the new 2i indexes are created, we re-use the slots but we still end
-			// up creating new shards
-			if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != 2*minShardsPerNode {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
-					t0.Name(),
-					2*minShardsPerNode,
-					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-				)
-			}
-			if len(dealer.partnSlots) != int(minShardsPerNode)*4 {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - expected %v index defns but it has %v",
-					t0.Name(),
-					minShardsPerNode*4,
-					len(dealer.partnSlots),
-				)
-			}
-
-			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
-			assert.NoErrorf(t0, err,
-				"%v internal shard dealer validation failed with err: \n\t\t%v",
-				t0.Name(), err)
-
-		})
-
-		subt.Run("MixCategoryIndexes", func(t0 *testing.T) {
-			t0.Parallel()
-
-			var dealer = NewShardDealer(
-				minShardsPerNode,
-				minPartitionsPerShard,
-				maxDiskUsagePerShard,
-				shardCapacity,
-				createNewAlternateShardIDGenerator(), nil)
-
-			var indexerNode = createDummyIndexerNode(t0.Name(), 1, 1, 1, 1, 0)
-
-			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
-			var alternateShardIDs = make(map[string]bool)
-
-			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
-				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
-
-					if slotID == 0 {
-						t0.Fatalf("%v failed to get slot for replica map %v",
-							t0.Name(), repmap)
-					}
-
-					for _, nodeMap := range repmap {
-						for _, inst := range nodeMap {
-							var expectedAlternateShardIDCount = 2
-							if inst.IsPrimary {
-								expectedAlternateShardIDCount = 1
-							}
-
-							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
-								t0.Fatalf(
-									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
-									t0.Name(),
-									inst.IsPrimary,
-									expectedAlternateShardIDCount,
-									inst.AlternateShardIds,
-								)
-							}
-
-							for _, asi := range inst.AlternateShardIds {
-								alternateShardIDs[asi] = true
-							}
-						}
-					}
-				}
-			}
-
-			if len(alternateShardIDs) != 7 {
-				t0.Fatalf("%v expected %v alternate shards but we have only %v (%v)",
-					t0.Name(), 7, len(alternateShardIDs), alternateShardIDs)
-			}
-
-			if len(dealer.slotsPerCategory) != 3 {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - expected %v categories but we have %v",
-					t0.Name(),
-					3,
-					dealer.slotsPerCategory,
-				)
-			}
-
-			if len(dealer.slotsPerCategory[StandardShardCategory]) != 2 {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(),
-					StandardShardCategory,
-					dealer.slotsPerCategory[StandardShardCategory],
-					minShardsPerNode*2,
-				)
-			}
-
-			if len(dealer.slotsPerCategory[VectorShardCategory]) != 1 {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(),
-					VectorShardCategory,
-					dealer.slotsPerCategory[VectorShardCategory],
-					1,
-				)
-			}
-			if len(dealer.slotsPerCategory[BhiveShardCategory]) != 1 {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(),
-					BhiveShardCategory,
-					dealer.slotsPerCategory[BhiveShardCategory],
-					1,
-				)
-			}
-
-			if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - node has more shards %v than expected %v",
-					t0.Name(),
-					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-					len(alternateShardIDs),
-				)
-			}
-
-			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
-			if err != nil {
-				t0.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
-					t0.Name(), err)
-			}
-
-		})
+		}
 	})
+}
 
-	t.Run("Pass-2", func(subt *testing.T) {
-		subt.Run("Basic-AllPrimary", func(t0 *testing.T) {
-			t0.Parallel()
+func TestSingleNodePass1(t *testing.T) {
+	t.Parallel()
 
-			var dealer = NewShardDealer(
-				minShardsPerNode,
-				1,
-				maxDiskUsagePerShard,
-				shardCapacity,
-				createNewAlternateShardIDGenerator(), nil)
+	t.Run("Basic-AllPrimary", func(t0 *testing.T) {
+		t0.Parallel()
 
-			var indexerNode = createDummyIndexerNode(t0.Name(), 0, shardCapacity/10, 0, 0, 0)
-
-			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
-
-			var slotIDs = make(map[c.AlternateShard_SlotId]bool)
-
-			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
-				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
-
-					if slotID == 0 {
-						t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
-							t0.Name(), repmap)
-					}
-
-					slotIDs[slotID] = true
-				}
-			}
-
-			if len(slotIDs) != int(shardCapacity/10) {
-				t0.Fatalf("%v slots created are (%v) %v but should have been only %v slots",
-					t0.Name(), len(slotIDs), slotIDs, shardCapacity/10)
-			}
-
-			if len(dealer.partnSlots) != len(slotIDs) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(),
-					dealer.partnSlots,
-					minShardsPerNode,
-				)
-			}
-			if len(dealer.slotsMap) != len(slotIDs) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
-					t0.Name(),
-					dealer.slotsMap,
-					len(slotIDs),
-				)
-			}
-			if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(slotIDs) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
-					t0.Name(),
-					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-					len(slotIDs),
-				)
-			}
-
-			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
-			if err != nil {
-				t0.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
-					t0.Name(), err)
-			}
-		})
-
-		subt.Run("MaxShards", func(t0 *testing.T) {
-			t0.Parallel()
-
-			var testShardCapacity uint64 = 10
-			var dealer = NewShardDealer(minShardsPerNode,
-				1,
-				maxDiskUsagePerShard,
-				testShardCapacity,
-				createNewAlternateShardIDGenerator(), nil)
-
-			var indexerNode = createDummyIndexerNode(t0.Name(), testShardCapacity, 0, 0, 0, 0)
-
-			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
-			var slotIDs = make(map[c.AlternateShard_SlotId]bool)
-			var alternateShardIDs = make(map[string]bool)
-
-			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
-				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
-					var slotID = dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
-
-					if slotID == 0 {
-						t0.Fatalf("%v failed to get slot for replica map %v",
-							t0.Name(), repmap)
-					}
-					slotIDs[slotID] = true
-					for _, nodeMap := range repmap {
-						for _, inst := range nodeMap {
-							var expectedAlternateShardIDCount = 2
-							if inst.IsPrimary {
-								expectedAlternateShardIDCount = 1
-							}
-
-							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
-								t0.Fatalf(
-									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
-									t0.Name(),
-									inst.IsPrimary,
-									expectedAlternateShardIDCount,
-									inst.AlternateShardIds,
-								)
-							}
-
-							for _, asi := range inst.AlternateShardIds {
-								alternateShardIDs[asi] = true
-							}
-						}
-					}
-				}
-			}
-
-			if len(slotIDs) != int(testShardCapacity)/2 {
-				t0.Fatalf("%v expected to create %v slots we have %v (%v)",
-					t0.Name(), testShardCapacity, len(slotIDs), slotIDs)
-			}
-			if len(alternateShardIDs) != int(testShardCapacity) {
-				t0.Fatalf("%v expected to create %v shards we have %v (%v)",
-					t0.Name(), testShardCapacity, len(alternateShardIDs), alternateShardIDs)
-			}
-			if len(dealer.partnSlots) != int(testShardCapacity) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-					t0.Name(),
-					dealer.partnSlots,
-					testShardCapacity,
-				)
-			}
-			if len(dealer.slotsMap) != len(slotIDs) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
-					t0.Name(),
-					dealer.slotsMap,
-					len(slotIDs),
-				)
-			}
-			if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
-					t0.Name(),
-					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-					len(slotIDs),
-				)
-			}
-
-			// create extra index. it should not create a new shard
-			var extraIndex = createDummyIndexUsage(shardCapacity+1, false, false, false, false)
-			extraIndex.initialNode = indexerNode
-			indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
-
-			var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
-			replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
-			replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
-			slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap)
-			if _, exists := slotIDs[slotID]; slotID != 0 && !exists {
-				t0.Fatalf(
-					"%v extra slot created when it was not expected. New slot %v. All Slots %v",
-					t0.Name(),
-					slotID,
-					slotIDs,
-				)
-			}
-
-			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
-			assert.NoErrorf(t0, err, "%v internal shard dealer validation failed with err: \n\t\t%v", t0.Name(), err)
-		})
-
-		subt.Run("MixCategoryIndexes", func(t0 *testing.T) {
-			t0.Parallel()
-
-			var dealer = NewShardDealer(
-				minShardsPerNode,
-				minPartitionsPerShard,
-				maxDiskUsagePerShard,
-				shardCapacity,
-				createNewAlternateShardIDGenerator(), nil)
-
-			var indexerNode = createDummyIndexerNode(t0.Name(), minShardsPerNode, minShardsPerNode, 1, 1, 0)
-
-			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
-			var alternateShardIDs = make(map[string]bool)
-
-			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
-				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
-
-					if slotID == 0 {
-						t0.Fatalf("%v failed to get slot for replica map %v",
-							t0.Name(), repmap)
-					}
-
-					for _, nodeMap := range repmap {
-						for _, inst := range nodeMap {
-							var expectedAlternateShardIDCount = 2
-							if inst.IsPrimary {
-								expectedAlternateShardIDCount = 1
-							}
-
-							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
-								t0.Fatalf(
-									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
-									t0.Name(),
-									inst.IsPrimary,
-									expectedAlternateShardIDCount,
-									inst.AlternateShardIds,
-								)
-							}
-
-							for _, asi := range inst.AlternateShardIds {
-								alternateShardIDs[asi] = true
-							}
-						}
-					}
-				}
-			}
-
-			// 1 shard-pair for vec-index, 1 for bhive, 2 shard pairs for std indexes, 2 shards for
-			// primary indexes
-			if len(alternateShardIDs) != int(minShardsPerNode)*2+4 {
-				t0.Fatalf("%v expected %v alternate shards but we have only %v (%v)",
-					t0.Name(), minShardsPerNode*2, len(alternateShardIDs), alternateShardIDs)
-			}
-
-			if len(dealer.slotsPerCategory) != 3 {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - expected %v categories but we have %v",
-					t0.Name(),
-					3,
-					dealer.slotsPerCategory,
-				)
-			}
-
-			if len(dealer.slotsPerCategory[StandardShardCategory]) != int(minShardsPerNode) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(),
-					StandardShardCategory,
-					dealer.slotsPerCategory[StandardShardCategory],
-					minShardsPerNode,
-				)
-			}
-			if len(dealer.slotsPerCategory[VectorShardCategory]) != 1 {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(),
-					VectorShardCategory,
-					dealer.slotsPerCategory[VectorShardCategory],
-					1,
-				)
-			}
-			if len(dealer.slotsPerCategory[BhiveShardCategory]) != 1 {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
-					t0.Name(),
-					BhiveShardCategory,
-					dealer.slotsPerCategory[BhiveShardCategory],
-					1,
-				)
-			}
-
-			if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
-				t0.Fatalf(
-					"%v shard dealer book keeping mismatch - node has more shards %v than expected %v",
-					t0.Name(),
-					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
-					len(alternateShardIDs),
-				)
-			}
-
-			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
-			if err != nil {
-				t0.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
-					t0.Name(), err)
-			}
-
-		})
-	})
-
-	t.Run("Pass-3", func(subt *testing.T) {
-		var testShardCapacity uint64 = 10
 		var dealer = NewShardDealer(
 			minShardsPerNode,
+			minPartitionsPerShard,
+			maxDiskUsagePerShard,
+			shardCapacity,
+			createNewAlternateShardIDGenerator(), nil)
+
+		var cip = createIdxParam{count: minPartitionsPerShard, isPrimary: true}
+
+		var indexerNode = createDummyIndexerNode(t0.Name(), cip)
+
+		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+
+		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+
+		for defnID, repMaps := range replicaMaps {
+			for partnID, repmap := range repMaps {
+				slotID := dealer.GetSlot(defnID, partnID, repmap)
+
+				if slotID == 0 {
+					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+						t0.Name(), repmap)
+				}
+
+				slotIDs[slotID] = true
+			}
+		}
+
+		if len(slotIDs) != int(minShardsPerNode) {
+			t0.Fatalf("%v slots created are %v but should have been only %v slots",
+				t0.Name(), slotIDs, minShardsPerNode)
+		}
+
+		if len(dealer.partnSlots) != int(minPartitionsPerShard) {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+				t0.Name(),
+				dealer.partnSlots,
+				minPartitionsPerShard,
+			)
+		}
+		if len(dealer.slotsMap) != int(minShardsPerNode) {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
+				t0.Name(),
+				dealer.slotsMap,
+				minShardsPerNode,
+			)
+		}
+		if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != minShardsPerNode {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
+				t0.Name(),
+				minShardsPerNode,
+				dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+			)
+		}
+
+		err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+		assert.NoErrorf(t0, err,
+			"%v internal shard dealer validation failed with err: \n\t\t%v",
+			t0.Name(), err)
+
+	})
+
+	// This is similar to Pass-0 except here we also test that post creating minShardsPerNode
+	// shards, we reuse existing shards
+	t.Run("PrimaryAndSecondary", func(t0 *testing.T) {
+		t0.Parallel()
+
+		var dealer = NewShardDealer(
+			minShardsPerNode,
+			minPartitionsPerShard,
+			maxDiskUsagePerShard,
+			shardCapacity,
+			createNewAlternateShardIDGenerator(), nil)
+
+		var cips = []createIdxParam{
+			{count: minShardsPerNode * 2, isPrimary: true},
+			{count: minShardsPerNode * 2},
+		}
+
+		var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
+
+		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var alternateShardIDs = make(map[string]bool)
+
+		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
+			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
+
+				if slotID == 0 {
+					t0.Fatalf("%v expected to get a valid slot for replica map %v but got 0",
+						t0.Name(), repmap)
+				}
+
+				for _, nodeMap := range repmap {
+					for _, inst := range nodeMap {
+						var expectedAlternateShardIDCount = 2
+						if inst.IsPrimary {
+							expectedAlternateShardIDCount = 1
+						}
+
+						if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
+							t0.Fatalf(
+								"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+								t0.Name(),
+								inst.IsPrimary,
+								expectedAlternateShardIDCount,
+								inst.AlternateShardIds,
+							)
+						}
+
+						for _, asi := range inst.AlternateShardIds {
+							alternateShardIDs[asi] = true
+						}
+					}
+				}
+			}
+		}
+
+		if len(alternateShardIDs) != int(minShardsPerNode)*2 {
+			t0.Fatalf("%v expected %v alternate shard ids but the we have %v (%v)",
+				t0.Name(), 2*minShardsPerNode, len(alternateShardIDs),
+				alternateShardIDs)
+		}
+
+		// since all primary indexes are created before, we create all minShardsPerNode
+		// now when the new 2i indexes are created, we re-use the slots but we still end
+		// up creating new shards
+		if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != 2*minShardsPerNode {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - expected %v alternate shard ids but the we have %v",
+				t0.Name(),
+				2*minShardsPerNode,
+				dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+			)
+		}
+		if len(dealer.partnSlots) != int(minShardsPerNode)*4 {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - expected %v index defns but it has %v",
+				t0.Name(),
+				minShardsPerNode*4,
+				len(dealer.partnSlots),
+			)
+		}
+
+		err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+		assert.NoErrorf(t0, err,
+			"%v internal shard dealer validation failed with err: \n\t\t%v",
+			t0.Name(), err)
+
+	})
+
+	// This is similar to Pass-0 except here we also test that post creating minShardsPerNode
+	// shards, we test reuse of existing shards
+	t.Run("PartitionedIndexes", func(t0 *testing.T) {
+		t0.Parallel()
+
+		// PRIMARY: numPartns = minPartitionsPerShard, count = minShardsPerNode - 1
+		// 2i: count = 1, numPartns = minPartitionsPerShard
+		{
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				minPartitionsPerShard,
+				maxDiskUsagePerShard,
+				shardCapacity,
+				createNewAlternateShardIDGenerator(), nil)
+
+			var cips = []createIdxParam{
+				{count: minShardsPerNode - 1, isPrimary: true, numPartns: int(minPartitionsPerShard)},
+				{count: 1, numPartns: int(minPartitionsPerShard)},
+			}
+			var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
+
+			var alternateShardIDs = make(map[string]bool)
+
+			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+
+			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
+				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
+
+					if slotID == 0 {
+						t0.Fatalf("%v failed to get slot id for replica map %v in 0th pass",
+							t0.Name(), repmap)
+					}
+
+					for _, nodeMap := range repmap {
+						for _, inst := range nodeMap {
+							var expectedAlternateShardIDCount = 2
+							if inst.IsPrimary {
+								expectedAlternateShardIDCount = 1
+							}
+
+							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
+								t0.Fatalf(
+									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+									t0.Name(),
+									inst.IsPrimary,
+									expectedAlternateShardIDCount,
+									inst.AlternateShardIds,
+								)
+							}
+
+							for _, asi := range inst.AlternateShardIds {
+								alternateShardIDs[asi] = true
+							}
+						}
+					}
+				}
+			}
+
+			assert.Equalf(t0, int(minShardsPerNode*2), len(alternateShardIDs),
+				"%v expected %v alternate shard ids but the we have (%v) %v",
+				t0.Name(), minShardsPerNode*2, len(alternateShardIDs), alternateShardIDs)
+
+			var defnIDpartnCheck = make(map[c.IndexDefnId]bool)
+			for _, partn := range indexerNode.Indexes {
+				var defnID = partn.DefnId
+				if !defnIDpartnCheck[defnID] && partn.PartnId != 0 {
+					var numPartitions = partn.Instance.Defn.NumPartitions
+					assert.Equalf(t0, int(numPartitions), len(dealer.partnSlots[defnID]),
+						"%v expected defn %v to have %v partitions but it has only %v",
+						t0.Name(), defnID, numPartitions, len(dealer.partnSlots[defnID]))
+					defnIDpartnCheck[defnID] = true
+				}
+			}
+
+			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+			assert.NoErrorf(t0, err,
+				"%v internal shard dealer validation failed with err: \n\t\t%v",
+				t0.Name(), err)
+		}
+
+		// INVERSE SCENARIO
+		// 2i: count = 2, numPartns = minPartitionsPerShard
+		// prim: count = 1 numPartns = minPartitionsPerShard
+		{
+			var dealer = NewShardDealer(
+				minShardsPerNode,
+				minPartitionsPerShard,
+				maxDiskUsagePerShard,
+				shardCapacity,
+				createNewAlternateShardIDGenerator(), nil)
+
+			var cips = []createIdxParam{
+				{count: 2, numPartns: int(minPartitionsPerShard)},
+				{count: 1, isPrimary: true, numPartns: int(minPartitionsPerShard)},
+			}
+			var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
+
+			var alternateShardIDs = make(map[string]bool)
+
+			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+
+			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
+				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
+
+					if slotID == 0 {
+						t0.Fatalf("%v failed to get slot id for replica map %v in 0th pass",
+							t0.Name(), repmap)
+					}
+
+					for _, nodeMap := range repmap {
+						for _, inst := range nodeMap {
+							var expectedAlternateShardIDCount = 2
+							if inst.IsPrimary {
+								expectedAlternateShardIDCount = 1
+							}
+
+							if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
+								t0.Fatalf(
+									"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+									t0.Name(),
+									inst.IsPrimary,
+									expectedAlternateShardIDCount,
+									inst.AlternateShardIds,
+								)
+							}
+
+							for _, asi := range inst.AlternateShardIds {
+								alternateShardIDs[asi] = true
+							}
+						}
+					}
+				}
+			}
+
+			assert.Equalf(t0, int(minShardsPerNode), len(alternateShardIDs),
+				"%v expected %v alternate shard ids but the we have (%v) %v",
+				t0.Name(), minShardsPerNode, len(alternateShardIDs), alternateShardIDs)
+
+			err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+			assert.NoErrorf(t0, err,
+				"%v internal shard dealer validation failed with err: \n\t\t%v",
+				t0.Name(), err)
+		}
+	})
+
+	t.Run("MixCategoryIndexes", func(t0 *testing.T) {
+		t0.Parallel()
+
+		var dealer = NewShardDealer(
+			minShardsPerNode,
+			minPartitionsPerShard,
+			maxDiskUsagePerShard,
+			shardCapacity,
+			createNewAlternateShardIDGenerator(), nil)
+
+		var cips = []createIdxParam{
+			{count: 1, isPrimary: true},
+			{count: 1},
+			{count: 1, isVector: true},
+			{count: 1, isBhive: true},
+		}
+		var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
+
+		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var alternateShardIDs = make(map[string]bool)
+
+		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
+			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
+
+				if slotID == 0 {
+					t0.Fatalf("%v failed to get slot for replica map %v",
+						t0.Name(), repmap)
+				}
+
+				for _, nodeMap := range repmap {
+					for _, inst := range nodeMap {
+						var expectedAlternateShardIDCount = 2
+						if inst.IsPrimary {
+							expectedAlternateShardIDCount = 1
+						}
+
+						if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
+							t0.Fatalf(
+								"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+								t0.Name(),
+								inst.IsPrimary,
+								expectedAlternateShardIDCount,
+								inst.AlternateShardIds,
+							)
+						}
+
+						for _, asi := range inst.AlternateShardIds {
+							alternateShardIDs[asi] = true
+						}
+					}
+				}
+			}
+		}
+
+		if len(alternateShardIDs) != 7 {
+			t0.Fatalf("%v expected %v alternate shards but we have only %v (%v)",
+				t0.Name(), 7, len(alternateShardIDs), alternateShardIDs)
+		}
+
+		if len(dealer.slotsPerCategory) != 3 {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - expected %v categories but we have %v",
+				t0.Name(),
+				3,
+				dealer.slotsPerCategory,
+			)
+		}
+
+		if len(dealer.slotsPerCategory[StandardShardCategory]) != 2 {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
+				t0.Name(),
+				StandardShardCategory,
+				dealer.slotsPerCategory[StandardShardCategory],
+				minShardsPerNode*2,
+			)
+		}
+
+		if len(dealer.slotsPerCategory[VectorShardCategory]) != 1 {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
+				t0.Name(),
+				VectorShardCategory,
+				dealer.slotsPerCategory[VectorShardCategory],
+				1,
+			)
+		}
+		if len(dealer.slotsPerCategory[BhiveShardCategory]) != 1 {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
+				t0.Name(),
+				BhiveShardCategory,
+				dealer.slotsPerCategory[BhiveShardCategory],
+				1,
+			)
+		}
+
+		if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - node has more shards %v than expected %v",
+				t0.Name(),
+				dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+				len(alternateShardIDs),
+			)
+		}
+
+		err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+		if err != nil {
+			t0.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
+				t0.Name(), err)
+		}
+
+	})
+}
+
+func TestSingleNodePass2(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Basic-AllPrimary", func(t0 *testing.T) {
+		t0.Parallel()
+
+		var dealer = NewShardDealer(
+			minShardsPerNode,
+			1,
+			maxDiskUsagePerShard,
+			shardCapacity,
+			createNewAlternateShardIDGenerator(), nil)
+
+		var cip = createIdxParam{count: shardCapacity / 10, isPrimary: true}
+		var indexerNode = createDummyIndexerNode(t0.Name(), cip)
+
+		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+
+		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+
+		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
+			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
+
+				if slotID == 0 {
+					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+						t0.Name(), repmap)
+				}
+
+				slotIDs[slotID] = true
+			}
+		}
+
+		if len(slotIDs) != int(shardCapacity/10) {
+			t0.Fatalf("%v slots created are (%v) %v but should have been only %v slots",
+				t0.Name(), len(slotIDs), slotIDs, shardCapacity/10)
+		}
+
+		if len(dealer.partnSlots) != len(slotIDs) {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+				t0.Name(),
+				dealer.partnSlots,
+				minShardsPerNode,
+			)
+		}
+		if len(dealer.slotsMap) != len(slotIDs) {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
+				t0.Name(),
+				dealer.slotsMap,
+				len(slotIDs),
+			)
+		}
+		if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(slotIDs) {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
+				t0.Name(),
+				dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+				len(slotIDs),
+			)
+		}
+
+		err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+		if err != nil {
+			t0.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
+				t0.Name(), err)
+		}
+	})
+
+	t.Run("MaxShards", func(t0 *testing.T) {
+		t0.Parallel()
+
+		var testShardCapacity uint64 = 10
+		var dealer = NewShardDealer(minShardsPerNode,
 			1,
 			maxDiskUsagePerShard,
 			testShardCapacity,
 			createNewAlternateShardIDGenerator(), nil)
 
-		var indexerNode = createDummyIndexerNode(subt.Name(), testShardCapacity, testShardCapacity, testShardCapacity/4, testShardCapacity/4, 0)
+		var cip = createIdxParam{count: testShardCapacity}
+		var indexerNode = createDummyIndexerNode(t0.Name(), cip)
 
 		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
 		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
 		var alternateShardIDs = make(map[string]bool)
 
-		for defnID := len(indexerNode.Indexes); defnID >= 0; defnID-- {
+		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 				var slotID = dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
 
 				if slotID == 0 {
-					subt.Fatalf("%v failed to get slot for replica map %v",
-						subt.Name(), repmap)
+					t0.Fatalf("%v failed to get slot for replica map %v",
+						t0.Name(), repmap)
 				}
 				slotIDs[slotID] = true
 				for _, nodeMap := range repmap {
@@ -972,9 +1154,9 @@ func TestSingleNodeAssignment(t *testing.T) {
 						}
 
 						if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
-							subt.Fatalf(
+							t0.Fatalf(
 								"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
-								subt.Name(),
+								t0.Name(),
 								inst.IsPrimary,
 								expectedAlternateShardIDCount,
 								inst.AlternateShardIds,
@@ -990,41 +1172,41 @@ func TestSingleNodeAssignment(t *testing.T) {
 		}
 
 		if len(slotIDs) != int(testShardCapacity)/2 {
-			subt.Fatalf("%v expected to create %v slots we have %v (%v)",
-				subt.Name(), testShardCapacity, len(slotIDs), slotIDs)
+			t0.Fatalf("%v expected to create %v slots we have %v (%v)",
+				t0.Name(), testShardCapacity, len(slotIDs), slotIDs)
 		}
 		if len(alternateShardIDs) != int(testShardCapacity) {
-			subt.Fatalf("%v expected to create %v shards we have %v (%v)",
-				subt.Name(), testShardCapacity, len(alternateShardIDs), alternateShardIDs)
+			t0.Fatalf("%v expected to create %v shards we have %v (%v)",
+				t0.Name(), testShardCapacity, len(alternateShardIDs), alternateShardIDs)
 		}
-
-		if len(dealer.partnSlots) != len(indexerNode.Indexes) {
-			subt.Fatalf(
+		if len(dealer.partnSlots) != int(testShardCapacity) {
+			t0.Fatalf(
 				"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
-				subt.Name(),
+				t0.Name(),
 				dealer.partnSlots,
-				len(indexerNode.Indexes),
+				testShardCapacity,
 			)
 		}
 		if len(dealer.slotsMap) != len(slotIDs) {
-			subt.Fatalf(
+			t0.Fatalf(
 				"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
-				subt.Name(),
+				t0.Name(),
 				dealer.slotsMap,
 				len(slotIDs),
 			)
 		}
 		if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
-			subt.Fatalf(
+			t0.Fatalf(
 				"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
-				subt.Name(),
+				t0.Name(),
 				dealer.nodeToShardCountMap[indexerNode.NodeUUID],
 				len(slotIDs),
 			)
 		}
 
+		cip = createIdxParam{defnid: shardCapacity + 1}
 		// create extra index. it should not create a new shard
-		var extraIndex = createDummyIndexUsage(uint64(len(indexerNode.Indexes)), false, false, false, false)
+		var extraIndex = createDummyIndexUsage(cip)
 		extraIndex.initialNode = indexerNode
 		indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
 
@@ -1032,29 +1214,326 @@ func TestSingleNodeAssignment(t *testing.T) {
 		replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
 		replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
 		slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap)
-		if slotID == 0 {
-			subt.Fatalf("%v failed to get slot id for replicaMap %v",
-				subt.Name(), replicaMap)
+		if _, exists := slotIDs[slotID]; slotID != 0 && !exists {
+			t0.Fatalf(
+				"%v extra slot created when it was not expected. New slot %v. All Slots %v",
+				t0.Name(),
+				slotID,
+				slotIDs,
+			)
 		}
-		if _, exists := slotIDs[slotID]; !exists {
-			subt.Fatalf("%v extra slot created when it was not expected. New slot %v. All Slots %v",
-				subt.Name(), slotID, slotIDs)
+
+		err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+		assert.NoErrorf(t0, err, "%v internal shard dealer validation failed with err: \n\t\t%v", t0.Name(), err)
+	})
+
+	t.Run("MixCategoryIndexes", func(t0 *testing.T) {
+		t0.Parallel()
+
+		var dealer = NewShardDealer(
+			minShardsPerNode,
+			minPartitionsPerShard,
+			maxDiskUsagePerShard,
+			shardCapacity,
+			createNewAlternateShardIDGenerator(), nil)
+
+		var cips = []createIdxParam{
+			{count: minShardsPerNode, isPrimary: true},
+			{count: minShardsPerNode},
+			{count: 1, isVector: true},
+			{count: 1, isBhive: true},
+		}
+		var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
+
+		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var alternateShardIDs = make(map[string]bool)
+
+		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
+			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
+
+				if slotID == 0 {
+					t0.Fatalf("%v failed to get slot for replica map %v",
+						t0.Name(), repmap)
+				}
+
+				for _, nodeMap := range repmap {
+					for _, inst := range nodeMap {
+						var expectedAlternateShardIDCount = 2
+						if inst.IsPrimary {
+							expectedAlternateShardIDCount = 1
+						}
+
+						if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
+							t0.Fatalf(
+								"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+								t0.Name(),
+								inst.IsPrimary,
+								expectedAlternateShardIDCount,
+								inst.AlternateShardIds,
+							)
+						}
+
+						for _, asi := range inst.AlternateShardIds {
+							alternateShardIDs[asi] = true
+						}
+					}
+				}
+			}
+		}
+
+		// 1 shard-pair for vec-index, 1 for bhive, 2 shard pairs for std indexes, 2 shards for
+		// primary indexes
+		if len(alternateShardIDs) != int(minShardsPerNode)*2+4 {
+			t0.Fatalf("%v expected %v alternate shards but we have only %v (%v)",
+				t0.Name(), minShardsPerNode*2, len(alternateShardIDs), alternateShardIDs)
+		}
+
+		if len(dealer.slotsPerCategory) != 3 {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - expected %v categories but we have %v",
+				t0.Name(),
+				3,
+				dealer.slotsPerCategory,
+			)
+		}
+
+		if len(dealer.slotsPerCategory[StandardShardCategory]) != int(minShardsPerNode) {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
+				t0.Name(),
+				StandardShardCategory,
+				dealer.slotsPerCategory[StandardShardCategory],
+				minShardsPerNode,
+			)
+		}
+		if len(dealer.slotsPerCategory[VectorShardCategory]) != 1 {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
+				t0.Name(),
+				VectorShardCategory,
+				dealer.slotsPerCategory[VectorShardCategory],
+				1,
+			)
+		}
+		if len(dealer.slotsPerCategory[BhiveShardCategory]) != 1 {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
+				t0.Name(),
+				BhiveShardCategory,
+				dealer.slotsPerCategory[BhiveShardCategory],
+				1,
+			)
+		}
+
+		if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - node has more shards %v than expected %v",
+				t0.Name(),
+				dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+				len(alternateShardIDs),
+			)
 		}
 
 		err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
 		if err != nil {
-			subt.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
-				subt.Name(), err)
+			t0.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
+				t0.Name(), err)
 		}
 
 	})
+
+	// We create load of upto pass-1 and then add another index to test if new slot is created
+	t.Run("PartitionedIndexes", func(t0 *testing.T) {
+		t0.Parallel()
+
+		var dealer = NewShardDealer(
+			minShardsPerNode,
+			minPartitionsPerShard,
+			maxDiskUsagePerShard,
+			shardCapacity,
+			createNewAlternateShardIDGenerator(), nil)
+
+		var cips = []createIdxParam{
+			{count: 2, numPartns: int(minPartitionsPerShard)},
+			{count: 1, isPrimary: true, numPartns: int(minPartitionsPerShard)},
+			{count: 1, numPartns: 5},
+		}
+		var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
+
+		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var alternateShardIDs = make(map[string]bool)
+
+		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
+			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
+
+				if slotID == 0 {
+					t0.Fatalf("%v failed to get slot for replica map %v",
+						t0.Name(), repmap)
+				}
+
+				for _, nodeMap := range repmap {
+					for _, inst := range nodeMap {
+						var expectedAlternateShardIDCount = 2
+						if inst.IsPrimary {
+							expectedAlternateShardIDCount = 1
+						}
+
+						if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
+							t0.Fatalf(
+								"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+								t0.Name(),
+								inst.IsPrimary,
+								expectedAlternateShardIDCount,
+								inst.AlternateShardIds,
+							)
+						}
+
+						for _, asi := range inst.AlternateShardIds {
+							alternateShardIDs[asi] = true
+						}
+					}
+				}
+			}
+		}
+
+		assert.Equalf(t0, 4, len(dealer.slotsMap),
+			"%v expected cluster to have %v slots but it has %v - %v",
+			t0.Name(), 4, len(dealer.slotsMap), dealer.slotsMap,
+		)
+
+		err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+		assert.NoError(t0, err, t0.Name(), "expected to have all shard dealer internals validated")
+
+	})
+
+}
+
+func TestSingleNodePass3(t *testing.T) {
+	t.Parallel()
+
+	var testShardCapacity uint64 = 10
+	var dealer = NewShardDealer(
+		minShardsPerNode,
+		1,
+		maxDiskUsagePerShard,
+		testShardCapacity,
+		createNewAlternateShardIDGenerator(), nil)
+
+	var cips = []createIdxParam{
+		{count: testShardCapacity, isPrimary: true},
+		{count: testShardCapacity},
+		{count: testShardCapacity / 4, isVector: true},
+		{count: testShardCapacity / 4, isBhive: true},
+	}
+	var indexerNode = createDummyIndexerNode(t.Name(), cips...)
+
+	var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+	var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+	var alternateShardIDs = make(map[string]bool)
+
+	for defnID := len(indexerNode.Indexes); defnID >= 0; defnID-- {
+		for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
+			var slotID = dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap)
+
+			if slotID == 0 {
+				t.Fatalf("%v failed to get slot for replica map %v",
+					t.Name(), repmap)
+			}
+			slotIDs[slotID] = true
+			for _, nodeMap := range repmap {
+				for _, inst := range nodeMap {
+					var expectedAlternateShardIDCount = 2
+					if inst.IsPrimary {
+						expectedAlternateShardIDCount = 1
+					}
+
+					if len(inst.AlternateShardIds) != expectedAlternateShardIDCount {
+						t.Fatalf(
+							"%v expected index (IsPrimary %v?) to have %v AlternateShardIDs but it has %v",
+							t.Name(),
+							inst.IsPrimary,
+							expectedAlternateShardIDCount,
+							inst.AlternateShardIds,
+						)
+					}
+
+					for _, asi := range inst.AlternateShardIds {
+						alternateShardIDs[asi] = true
+					}
+				}
+			}
+		}
+	}
+
+	if len(slotIDs) != int(testShardCapacity)/2 {
+		t.Fatalf("%v expected to create %v slots we have %v (%v)",
+			t.Name(), testShardCapacity, len(slotIDs), slotIDs)
+	}
+	if len(alternateShardIDs) != int(testShardCapacity) {
+		t.Fatalf("%v expected to create %v shards we have %v (%v)",
+			t.Name(), testShardCapacity, len(alternateShardIDs), alternateShardIDs)
+	}
+
+	if len(dealer.partnSlots) != len(indexerNode.Indexes) {
+		t.Fatalf(
+			"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+			t.Name(),
+			dealer.partnSlots,
+			len(indexerNode.Indexes),
+		)
+	}
+	if len(dealer.slotsMap) != len(slotIDs) {
+		t.Fatalf(
+			"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
+			t.Name(),
+			dealer.slotsMap,
+			len(slotIDs),
+		)
+	}
+	if int(dealer.nodeToShardCountMap[indexerNode.NodeUUID]) != len(alternateShardIDs) {
+		t.Fatalf(
+			"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
+			t.Name(),
+			dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+			len(slotIDs),
+		)
+	}
+
+	var cip = createIdxParam{defnid: uint64(len(indexerNode.Indexes))}
+	// create extra index. it should not create a new shard
+	var extraIndex = createDummyIndexUsage(cip)
+	extraIndex.initialNode = indexerNode
+	indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
+
+	var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
+	replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
+	replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
+	slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap)
+	if slotID == 0 {
+		t.Fatalf("%v failed to get slot id for replicaMap %v",
+			t.Name(), replicaMap)
+	}
+	if _, exists := slotIDs[slotID]; !exists {
+		t.Fatalf("%v extra slot created when it was not expected. New slot %v. All Slots %v",
+			t.Name(), slotID, slotIDs)
+	}
+
+	err := validateShardDealerInternals(dealer, []*IndexerNode{indexerNode})
+	if err != nil {
+		t.Fatalf("%v internal shard dealer validation failed with err: \n\t\t%v",
+			t.Name(), err)
+	}
+
 }
 
 func TestGetShardCategory(t *testing.T) {
 	t.Parallel()
 
+	var moiCip = createIdxParam{defnid: 1, isMoi: true}
 	// MOI index
-	var moiIndex = createDummyIndexUsage(0, false, false, false, true)
+	var moiIndex = createDummyIndexUsage(moiCip)
 	var shardCategory = getIndexCategory(moiIndex)
 	if shardCategory != InvalidShardCategory {
 		t.Fatalf(
@@ -1064,7 +1543,8 @@ func TestGetShardCategory(t *testing.T) {
 		)
 	}
 
-	var plasmaIndex = createDummyIndexUsage(0, true, false, false, false)
+	var plasmaCip = createIdxParam{defnid: 0, isPrimary: true}
+	var plasmaIndex = createDummyIndexUsage(plasmaCip)
 	shardCategory = getIndexCategory(plasmaIndex)
 	if shardCategory != StandardShardCategory {
 		t.Fatalf(
@@ -1074,7 +1554,8 @@ func TestGetShardCategory(t *testing.T) {
 		)
 	}
 
-	plasmaIndex = createDummyIndexUsage(0, false, false, false, false)
+	plasmaCip = createIdxParam{defnid: 0}
+	plasmaIndex = createDummyIndexUsage(plasmaCip)
 	shardCategory = getIndexCategory(plasmaIndex)
 	if shardCategory != StandardShardCategory {
 		t.Fatalf(
@@ -1084,7 +1565,8 @@ func TestGetShardCategory(t *testing.T) {
 		)
 	}
 
-	var compositeVectorIndex = createDummyIndexUsage(0, false, true, false, false)
+	var vecCip = createIdxParam{defnid: 0, isVector: true}
+	var compositeVectorIndex = createDummyIndexUsage(vecCip)
 	shardCategory = getIndexCategory(compositeVectorIndex)
 	if shardCategory != VectorShardCategory {
 		t.Fatalf(
@@ -1094,7 +1576,8 @@ func TestGetShardCategory(t *testing.T) {
 		)
 	}
 
-	var bhiveIndex = createDummyIndexUsage(0, false, false, true, false)
+	var bhiveCip = createIdxParam{defnid: 0, isBhive: true}
+	var bhiveIndex = createDummyIndexUsage(bhiveCip)
 	shardCategory = getIndexCategory(bhiveIndex)
 	if shardCategory != BhiveShardCategory {
 		t.Fatalf(
@@ -1118,7 +1601,8 @@ func TestRecordIndexUsage(t *testing.T) {
 		t.Fatalf("expected nil error on nil index but got %v", err)
 	}
 
-	var moiIndex = createDummyIndexUsage(0, false, false, false, true)
+	var moiCip = createIdxParam{defnid: 0, isMoi: true}
+	var moiIndex = createDummyIndexUsage(moiCip)
 	err = dealer.RecordIndexUsage(moiIndex, nil, true)
 	if err != nil {
 		t.Fatalf("expected nil error on MoI index but got %v", err)
@@ -1148,7 +1632,8 @@ func TestRecordIndexUsage(t *testing.T) {
 		)
 	}
 
-	var plasmaIndex = createDummyIndexUsage(0, false, false, false, false)
+	var plasmaCip = createIdxParam{}
+	var plasmaIndex = createDummyIndexUsage(plasmaCip)
 	err = dealer.RecordIndexUsage(plasmaIndex, nil, false)
 	if err != nil {
 		t.Fatalf(
@@ -1175,7 +1660,8 @@ func TestRecordIndexUsage(t *testing.T) {
 		)
 	}
 
-	plasmaIndex = createDummyIndexUsage(1, false, false, false, false)
+	plasmaCip = createIdxParam{defnid: 1}
+	plasmaIndex = createDummyIndexUsage(plasmaCip)
 	var mainAlternateID, _ = c.NewAlternateId()
 	mainAlternateID.SetSlotId(1)    // dont use `0` here
 	mainAlternateID.SetReplicaId(1) // dont use `0` here
@@ -1195,7 +1681,7 @@ func TestRecordIndexUsage(t *testing.T) {
 			dealer.slotsMap[mainAlternateID.GetSlotId()])
 	}
 
-	var indexer = createDummyIndexerNode("0", 0, 0, 0, 0, 0)
+	var indexer = createDummyIndexerNode("0")
 	indexer.Indexes = append(indexer.Indexes, plasmaIndex)
 
 	err = dealer.RecordIndexUsage(plasmaIndex, indexer, true)
@@ -1346,7 +1832,8 @@ func TestRecordIndexUsage(t *testing.T) {
 	}
 
 	var oldPlasmaIndex = plasmaIndex
-	plasmaIndex = createDummyIndexUsage(2, false, false, false, false)
+	plasmaCip = createIdxParam{defnid: 2}
+	plasmaIndex = createDummyIndexUsage(plasmaCip)
 	mainAlternateID.SetSlotId(2)
 	backAlternateID.SetSlotId(2)
 
@@ -1746,3 +2233,8 @@ func (psc1 *pseudoShardContainer) String() string {
 		"dataSize: %v, diskUsage: %v, insts: (%v)}", psc1.totalPartitions,
 		psc1.memUsage, psc1.dataSize, psc1.diskUsage, psc1.insts)
 }
+
+// TODO: add multinode replica index based tests
+// TODO: add multinode partitioned index tests
+// TODO: add multinode replicated partitioned index tests
+// TODO: add tests for disk usage check in recordIndex
