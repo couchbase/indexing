@@ -923,7 +923,7 @@ func (gsi *gsiKeyspace) delIndex(id string) {
 func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.Index {
 
-	if clusterVersion >= c.INDEXER_77_VERSION {
+	if clusterVersion >= c.INDEXER_80_VERSION {
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := &secondaryIndex3{secondaryIndex2: *si2}
 		si4 := &secondaryIndex4{secondaryIndex3: *si3}
@@ -949,7 +949,7 @@ func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.PrimaryIndex {
 
-	if clusterVersion >= c.INDEXER_77_VERSION {
+	if clusterVersion >= c.INDEXER_80_VERSION {
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := &secondaryIndex3{secondaryIndex2: *si2}
 		si4 := &secondaryIndex4{secondaryIndex3: *si3}
