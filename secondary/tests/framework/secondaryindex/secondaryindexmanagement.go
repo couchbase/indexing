@@ -468,6 +468,30 @@ func IndexState(indexName, bucketName, server string) (string, error) {
 	return state.String(), nil
 }
 
+func IndexState2(indexName, bucketName, scope, coll, server string) (string, error) {
+
+	if scope == "" {
+		scope = c.DEFAULT_SCOPE
+	}
+	if coll == "" {
+		coll = c.DEFAULT_COLLECTION
+	}
+
+	client, e := GetOrCreateClient(server, "2itest")
+	if e != nil {
+		return "", e
+	}
+
+	defnID, _ := GetDefnID2(client, bucketName, scope, coll, indexName)
+	state, e := client.IndexState(defnID)
+	if e != nil {
+		log.Printf("Error while fetching index state for defnID %v", defnID)
+		return "", e
+	}
+
+	return state.String(), nil
+}
+
 func IndexExists(indexName, bucketName, server string) (bool, error) {
 	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {

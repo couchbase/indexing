@@ -1491,6 +1491,21 @@ func createWithDeferAndBuildAsync(idxName, bucket, scope, coll, stmt string, ind
 	return err
 }
 
+func issueBuildStatement(bucket, scope, coll string, indexNames []string) (err error) {
+	if scope == "" {
+		scope = c.DEFAULT_SCOPE
+	}
+	if coll == "" {
+		coll = c.DEFAULT_COLLECTION
+	}
+
+	stmt := fmt.Sprintf("BUILD INDEX ON `%v`.`%v`.`%v`(`%v`)",
+		bucket, scope, coll, strings.Join(indexNames, "`,`"))
+
+	_, err = execN1QL(bucket, stmt)
+	return err
+}
+
 func waitForRebalanceCleanupStatus(nodeAddr string, t *testing.T) {
 	indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username, clusterconfig.Password, nodeAddr)
 	if indexerAddr == "" {
@@ -1597,4 +1612,43 @@ func waitForTokenCleanup(nodeAddr string, t *testing.T) {
 	}
 	// todo : error out if response is error
 	tc.HandleError(finalErr, "Get listRebalanceTokens")
+}
+
+func waitForIndexStatuses(bucket, scope, collection string, indexMap map[string]bool, indexStatus string, t *testing.T) {
+	waitCh := time.After(time.Duration(3*len(indexMap)) * time.Minute)
+
+	for {
+		select {
+		case <-waitCh:
+			t.Fatalf("Index: %v, bucket: %v, scope: %v, collection: %v did not become active after 3 minutes",
+				indexMap, bucket, scope, collection)
+			break
+		default:
+			status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
+			if status != nil && err == nil {
+				indexes := status["indexes"].([]interface{})
+				for _, indexEntry := range indexes {
+					entry := indexEntry.(map[string]interface{})
+
+					if bucket != entry["bucket"].(string) ||
+						scope != entry["scope"].(string) ||
+						collection != entry["collection"].(string) {
+						continue
+					}
+
+					if index, ok := indexMap[entry["index"].(string)]; ok {
+						if strings.ToLower(indexStatus) == strings.ToLower(entry["status"].(string)) {
+							log.Printf("Index status is: %v for index: %v, bucket: %v, scope: %v, collection: %v",
+								indexStatus, index, bucket, scope, collection)
+						}
+						delete(indexMap, entry["index"].(string))
+					}
+				}
+			}
+			if err != nil {
+				log.Printf("waitForIndexActive:: Error while retrieving GetIndexStatus, err: %v", err)
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}
 }
