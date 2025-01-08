@@ -1111,10 +1111,22 @@ func (mdb *bhiveSlice) deleteVectorIndex(docid []byte, vector []float32, fields 
 		shaVec := common.ComputeSHA256ForFloat32Array(vector)
 		shaField := common.ComputeSHA256ForByteArray(fields)
 
-		docSeqno = binary.LittleEndian.Uint64(backEntry[0:8])
-		backShaVec := backEntry[8:sha256.Size]
-		backShaField := backEntry[sha256.Size : sha256.Size*2]
-		centroidId := backEntry[sha256.Size*2:]
+		offset := 0
+		docSeqno = binary.LittleEndian.Uint64(backEntry[offset:8])
+
+		offset += 8
+		backShaVec := backEntry[offset:offset + sha256.Size]
+
+		offset += sha256.Size
+		backShaField := backEntry[offset:offset + sha256.Size]
+
+		offset += sha256.Size
+		centroidId := backEntry[offset:]
+
+		// backEntry points to shared magma work context buffer which can get reused
+		// It is safer to copy the centroid
+		var cid [8]byte
+		binary.LittleEndian.PutUint64(cid[:], binary.LittleEndian.Uint64(centroidId))
 
 		// back entry has not changed
 		if bytes.Equal(shaVec, backShaVec) && bytes.Equal(shaField, backShaField) {
@@ -1133,7 +1145,7 @@ func (mdb *bhiveSlice) deleteVectorIndex(docid []byte, vector []float32, fields 
 		mdb.mainWriters[workerId].Begin()
 		defer mdb.mainWriters[workerId].End()
 
-		err = mdb.mainWriters[workerId].Delete(docSeqno, centroidId, docid)
+		err = mdb.mainWriters[workerId].Delete(docSeqno, cid[:], docid)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 
 		// TODO: Cannot update rawDataSize for main index
@@ -1797,7 +1809,7 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, mErr)
 			// panic to let recovery to kick in to keep checkpoint consistent
 			// TODO: remove panic after making recovery more resilient
-			panic(err.Error())
+			panic(mErr.Error())
 		}
 	}()
 
@@ -1816,7 +1828,7 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, bErr)
 			// panic to let recovery to kick in to keep checkpoint consistent
 			// TODO: remove panic after making recovery more resilient
-			panic(err.Error())
+			panic(bErr.Error())
 		}
 	}()
 
