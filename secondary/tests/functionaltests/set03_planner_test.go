@@ -623,6 +623,7 @@ func TestTenantAwarePlanner(t *testing.T) {
 }
 
 func TestPlanDuringHeterogenousScaleup(t *testing.T) {
+	t.Skipf("Skipping TestPlanDuringHeterogenousScaleup(). Enable once heterogenous scale up is supported")
 	log.Printf("In TestPlanDuringHeterogenousScaleup()")
 
 	logging.SetLogLevel(logging.Info)
