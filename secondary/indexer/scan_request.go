@@ -135,7 +135,6 @@ type ScanRequest struct {
 	centroidMap              map[common.PartitionId][]int64
 	protoScans               []*protobuf.Scan
 	vectorScans              map[common.PartitionId]map[int64][]Scan
-	parallelCentroidScans    int
 	indexOrder               *IndexKeyOrder
 	projectVectorDist        bool // set to true if vector distance has to be projected. false otherwise
 	perPartnScanParallelism  int  // Parallelism inherent in scan after generating ranges
