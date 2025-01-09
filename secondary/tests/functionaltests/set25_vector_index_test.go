@@ -127,6 +127,32 @@ func loadCustomData(t *testing.T, fieldType string, bucket string, docid string,
 	FailTestIfError(err, "Error observed while loading custom data", t)
 }
 
+func vectorSetup2(t *testing.T, numdocs int) {
+	skipIfNotPlasma(t)
+
+	// Drop all indexes from earlier tests
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	// Load Data
+	cfg := randdocs.Config{
+		ClusterAddr:    "127.0.0.1:9000",
+		Bucket:         bucket,
+		NumDocs:        numdocs,
+		Iterations:     1,
+		Threads:        8,
+		OpsPerSec:      100000,
+		UseSIFTSmall:   true,
+		SkipNormalData: true,
+		SIFTFVecsFile:  "../../tools/randdocs/siftsmall/siftsmall_base.fvecs",
+	}
+	randdocs.Run(cfg)
+
+	vectorsLoaded = true
+}
+
 func TestVectorCreateIndex(t *testing.T) {
 	skipIfNotPlasma(t)
 
@@ -732,6 +758,79 @@ func TestVectorResetCluster(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	resetCluster(t)
+}
+
+// This test covers case where we need to increase sample size nearer to items_count
+// because number of docs with vector field(300) is close to number of centroids(256)
+func TestVectorIndexRetry(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	numVectorFieldDocs := 256
+	totalDocs := 100000
+
+	vectorSetup2(t, numVectorFieldDocs)
+
+	docsToCreate := generateDocs(totalDocs-numVectorFieldDocs, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	kv.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	time.Sleep(2 * time.Second)
+	log.Printf("Executing Create Index ...")
+	// Create Index
+	stmt := "CREATE INDEX idx_sif10k " +
+		" ON default(gender, sift VECTOR, docnum)" +
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+
+	if _, err := execN1QL(bucket, stmt); err != nil {
+		log.Printf("Error while creating index : %v", err)
+		FailTestIfError(err, "Error in creating idx_sift10k", t)
+	}
+
+	err := secondaryindex.BuildIndexes([]string{"idx_sif10k"}, bucket, indexManagementAddress, indexActiveTimeout)
+	if err != nil {
+		log.Printf("Building Index failed err: %v", err)
+		FailTestIfError(err, "Error in building idx_sift10k", t)
+	}
+
+	vectorSetup(t, bucket, "", "", 40000)
+}
+
+// This test creates vector index after loading bucket with num qualifying docs(248) < centroids (256)
+// When index is in error state, total 256 qualifying docs are loaded and build is issued.
+func TestVectorIndexRetry2(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	numVectorFieldDocs := 248
+	totalDocs := 100000
+
+	vectorSetup2(t, numVectorFieldDocs)
+
+	docsToCreate := generateDocs(totalDocs-numVectorFieldDocs, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	kv.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	time.Sleep(2 * time.Second)
+	log.Printf("Executing Create Index ...")
+	// Create Index
+	stmt := "CREATE INDEX idx_sif10k " +
+		" ON default(gender, sift VECTOR, docnum)" +
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\"};"
+
+	if _, err := execN1QL(bucket, stmt); err != nil {
+		log.Printf("Error while creating index : %v", err)
+	}
+	log.Printf("Now increasing qualifying docs before issuing build index")
+
+	e := loadVectorData(t, bucket, "", "", 256)
+	FailTestIfError(e, "Error in loading vector data", t)
+
+	err := secondaryindex.BuildIndexes([]string{"idx_sif10k"}, bucket, indexManagementAddress, indexActiveTimeout)
+	if err != nil {
+		log.Printf("Building Index failed err: %v", err)
+		FailTestIfError(err, "Error in building idx_sift10k", t)
+	}
+
+	vectorSetup(t, bucket, "", "", 40000)
 }
 
 // =================

@@ -818,6 +818,8 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 
 	buildMap := make(map[common.IndexDefnId]bool)
 	deleteMap := make(map[string]*mc.CreateCommandToken)
+	vectorMap := make(map[common.IndexDefnId]bool)
+	errorMap := make(map[common.IndexDefnId]bool)
 
 	for entry, token := range entries {
 
@@ -859,6 +861,10 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 				for _, defn := range definitions {
 					var newPartitionList []common.PartitionId
 					var newVersionList []int
+
+					if defn.IsVectorIndex {
+						vectorMap[defn.DefnId] = true
+					}
 
 					defn.SetCollectionDefaults()
 
@@ -919,6 +925,10 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 							index.State == common.INDEX_STATE_CATCHUP ||
 							index.State == common.INDEX_STATE_ACTIVE) {
 							buildMap[defn.DefnId] = true
+						}
+
+						if index != nil && index.Error != "" && common.IsVectorTrainingErrorQualifyingDocs(index.Error) {
+							errorMap[defn.DefnId] = true
 						}
 					}
 
@@ -981,10 +991,18 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 		}
 
 		buildList := make([]common.IndexDefnId, 0, len(buildMap))
+		skipBuildList := make([]common.IndexDefnId, 0)
 		for id, _ := range buildMap {
+			if vectorMap[id] && errorMap[id] {
+				skipBuildList = append(skipBuildList, id)
+				continue
+			}
 			buildList = append(buildList, id)
 		}
 
+		if len(skipBuildList) > 0 {
+			logging.Infof("DDLServiceMgr: Build Index Skipped for Index Defn List: %v", skipBuildList)
+		}
 		logging.Infof("DDLServiceMgr: Build Index.  Index Defn List: %v", buildList)
 
 		if err := provider.SendBuildIndexRequest(m.indexerId, buildList, m.localAddr); err != nil {

@@ -220,7 +220,7 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 		errCh := make(chan error, 1)
 		doneCh := make(chan struct{})
 
-		NewScanWorker(1, r, workCh, recvCh, stopCh, errCh, nil, senderChSize, senderBatchSize)
+		NewScanWorker(1, r, workCh, recvCh, stopCh, errCh, nil, senderChSize, senderBatchSize, false)
 
 		var j = ScanJob{
 			pid:      c.PartitionId(0),
@@ -358,8 +358,8 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		wp := NewWorkerPool(2)
-		wp.Init(r, 20, 1)
+		wp, _ := NewWorkerPool(r, 2, false)
+		wp.Init(20, 1)
 		recvCh := wp.GetOutCh()
 
 		var j1 = ScanJob{
@@ -584,8 +584,8 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		wp := NewWorkerPool(2)
-		wp.Init(r, 100, 50)
+		wp, _ := NewWorkerPool(r, 2, false)
+		wp.Init(100, 50)
 		recvCh := wp.GetOutCh()
 
 		var j1 = ScanJob{

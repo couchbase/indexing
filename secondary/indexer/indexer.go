@@ -13345,7 +13345,7 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 			common.CrashOnError(err)
 
 			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap),
-				keyspaceId, idx.config.Clone(), reqcid, reqCtx, itemsCount)
+				keyspaceId, idx.config.Clone(), reqcid, reqCtx, itemsCount, 0, nil, 0)
 
 			return nil // Return nil so that handleBuildIndex does not take the build further
 		}
@@ -13462,22 +13462,67 @@ func setDefnCodebook(indexDefnCodebookMap IndexDefnCodebookMap, defnId common.In
 	}
 }
 
+// Function returns multiplier(x) for to sample size such that until last retry all sampleSize will be greater than or equal to itemsCount.
+// initial max_sample_size * x ^ (max_retry) >= itemsCount
+//
+// For i >= 1
+// i'th retry max_sample_size = initial max_sample_size * x ^ (i)
+func getMultiplierForSample(itemsCount uint64, maxRetry int, sampleSize int64) float64 {
+	return math.Pow(10, math.Log10(float64(itemsCount)/float64(sampleSize))/float64(maxRetry))
+}
+
+func getRetryNumberForGivenSampleSize(sampleSize int64, givenSampleSize, multiplier float64) int {
+	return int(math.Log(float64(givenSampleSize)/float64(sampleSize)) / math.Log(multiplier))
+}
+
+func getSampleSizeForNthRetry(sampleSize int64, multiplier float64, retry int) int64 {
+	return sampleSize * int64(math.Ceil(math.Pow(multiplier, float64(retry))))
+}
+
+func getInstCodebookIfExists(indexPartnMap PartitionInstMap) ([]byte, error, c.PartitionId) {
+
+	var err error
+	var codebook []byte
+
+	for partnId, partnInst := range indexPartnMap {
+		slices := partnInst.Sc.GetAllSlices()
+		for _, slice := range slices {
+			codebook, err = slice.SerializeCodebook()
+			if err == nil && codebook != nil {
+				return codebook, nil, partnId
+			}
+		}
+	}
+	return nil, err, -1
+}
+
 // [VECTOR_TODO]: Add a worker pool to take care of training
 // It is not a good idea to spawn a go-routine for each build statement
 func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap,
 	keyspaceId string, config common.Config, cid string,
-	reqCtx *c.MetadataRequestContext, itemsCount uint64) {
+	reqCtx *c.MetadataRequestContext, itemsCount uint64, retry int, retryTrainingInstRatioMap map[common.IndexInstId]int, initialSampleSize int64) {
 
 	errMap := make(map[common.IndexInstId]map[common.PartitionId]error)
+	retryingMap := make(map[common.IndexInstId]map[common.PartitionId]bool)
 	successMap := make(map[common.IndexInstId]bool)
 	droppedInsts := make(map[common.IndexInstId]bool)
+	if retryTrainingInstRatioMap == nil {
+		retryTrainingInstRatioMap = make(map[common.IndexInstId]int)
+	}
 
 	updateErrMap := func(instId common.IndexInstId, partnId common.PartitionId, err error) {
 		if _, ok := errMap[instId]; !ok {
 			errMap[instId] = make(map[c.PartitionId]error)
 		}
 		errMap[instId][partnId] = err
+	}
+
+	updateRetryingMap := func(instId common.IndexInstId, partnId common.PartitionId, retrying bool) {
+		if _, ok := retryingMap[instId]; !ok {
+			retryingMap[instId] = make(map[c.PartitionId]bool)
+		}
+		retryingMap[instId][partnId] = retrying
 	}
 
 	getBucketScopeAndCollFromKeyspaceId := func(keyspaceId string) (string, string, string) {
@@ -13500,6 +13545,47 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 	overSamplePercent := config["vector.over_sample_percent"].Int()
 
+	if retry == 0 || initialSampleSize == 0 {
+		// Use first retry maxSampleSize as initialSampleSize because after first retry it can change
+		// as few of indexes can get built in first attempt and will not be
+		// included in indexInstMap of getMaxSampleSize().
+		initialSampleSize = maxSampleSize
+	}
+
+	//Following parameters will be used for retrying sampling for indexes.
+	maxRetry := config["vector.index_max_training_retry"].Int()
+	multiplier := getMultiplierForSample(itemsCount, maxRetry, initialSampleSize)
+	maxRatio := 1
+
+	if retry > 0 {
+
+		for _, ratio := range retryTrainingInstRatioMap {
+			maxRatio = max(maxRatio, ratio)
+		}
+
+		retrySampleSize := getSampleSizeForNthRetry(initialSampleSize, multiplier, retry)
+
+		//If sample size becomes >= itemsCount, further retries should not happen.
+		if uint64(retrySampleSize) >= itemsCount || uint64(initialSampleSize)*uint64(maxRatio) >= itemsCount {
+			maxSampleSize = int64(itemsCount)
+			if retry < maxRetry {
+				retry = maxRetry
+			}
+		} else if initialSampleSize*int64(maxRatio) > retrySampleSize {
+			//Find nearest retry to maxSampleSize*maxRatio, this will ensure that we skip few retries with sampleSize which might not provide enough vectors.
+			retryNum := getRetryNumberForGivenSampleSize(initialSampleSize, float64(initialSampleSize*int64(maxRatio)), multiplier)
+			if retryNum > maxRetry {
+				retry = maxRetry
+				maxSampleSize = int64(itemsCount)
+			} else {
+				retry = retryNum
+				maxSampleSize = initialSampleSize * int64(maxRatio)
+			}
+		} else {
+			maxSampleSize = retrySampleSize
+		}
+	}
+
 	// Retrieve vectors from data service for training
 	vectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, vectorInsts, maxSampleSize, int64(overSamplePercent))
 	if err != nil {
@@ -13521,6 +13607,8 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		return
 	}
 
+	logging.Infof("Indexer::initiateTraining retry:%v maxSampleSize:%v maxRatio:%v multiplier:%v", retry, maxSampleSize, maxRatio, multiplier)
+
 	// This map will hold serialized codebook of current training
 	// attempt for sharing on partitions of definition including replicas
 	indexDefnCodebookMap := make(map[common.IndexDefnId][]byte)
@@ -13538,24 +13626,36 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		if idxInst.RealInstId != 0 && isDCPRebalorResume && defnCodebook == nil {
 			realPartnInstMap := indexPartnMap[idxInst.RealInstId]
 
-		loop:
-			for partnId, partnInst := range realPartnInstMap {
-				slices := partnInst.Sc.GetAllSlices()
-				var err error
-				var codebook []byte
-				for _, slice := range slices {
-					codebook, err = slice.SerializeCodebook()
-					if err == nil && codebook != nil {
-						// Reaching here implies that new codebook serialized for partition, ready to be shared
-						defnCodebook = codebook
-						setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, defnCodebook)
-						logging.Infof("Indexer::initiateTraining using serialized codebook for from real instance instId: %v, partnId: %v", instId, partnId)
-						break loop
-					}
+			codebook, err, partnId := getInstCodebookIfExists(realPartnInstMap)
+			if err != nil {
+				logging.Warnf("Indexer::initiateTraining getting serialized codebook from real instance for instId: %v failed. err: %v", instId, err)
+			} else {
+				defnCodebook = codebook
+				setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, defnCodebook)
+				logging.Infof("Indexer::initiateTraining using serialized codebook from real instance for instId: %v, partnId: %v", instId, partnId)
+			}
+
+		} else if reqCtx.ReqSource == common.DDLRequestSourceUser && defnCodebook == nil {
+			// Alter Index ADD_REPLICA of partitioned index. Codebook of pre-existing active replica can be used.
+
+			var replicaInstId c.IndexInstId
+			for instanceId, instance := range indexInstMap {
+				if instance.Defn.DefnId == idxInst.Defn.DefnId && instanceId != instId && instance.State >= c.INDEX_STATE_ACTIVE {
+					//There is another active replica instance of same definition. Check if its codebook can be used for current vector instance to be built.
+					replicaInstId = instanceId
+					break
 				}
+			}
+
+			if replicaInstId != 0 {
+				partnInstMap := indexPartnMap[replicaInstId]
+				codebook, err, partnId := getInstCodebookIfExists(partnInstMap)
 				if err != nil {
-					// Getting serialized codebook from existing partitions fails.
-					logging.Warnf("Indexer::initiateTraining getting serialized codebook from real instId: %v failed. err: %v", instId, err)
+					logging.Warnf("Indexer::initiateTraining getting serialized codebook from replica for instId: %v failed. err: %v", instId, err)
+				} else {
+					defnCodebook = codebook
+					setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, defnCodebook)
+					logging.Infof("Indexer::initiateTraining using serialized codebook from replica instance for instId: %v, partnId: %v", instId, partnId)
 				}
 			}
 		}
@@ -13592,14 +13692,30 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				if vm.Quantizer.Type == c.PQ {
 					minCentroids = max(1<<vm.Quantizer.Nbits, idxInst.Nlist[partnId])
 				}
-				if len(vectors[i]) < minCentroids && defnCodebook == nil {
-					errStr := c.ERR_TRAINING + fmt.Sprintf("Number of qualifying/valid vectors %v are less than the number "+
-						"of vectors %v required for training %v centroids", len(vectors[i]), minCentroids,
-						minCentroids)
+
+				if len(vectors[i])/vm.Dimension < minCentroids && defnCodebook == nil {
+					errStr := c.ERR_TRAINING + fmt.Sprintf("Number of qualifying or valid vectors / dimension = %v/%v = %v  are less than the number "+
+						"of %v centroids. Retry will happen in background.", len(vectors[i]), vm.Dimension, len(vectors[i])/vm.Dimension, minCentroids)
+
+					//Add instance for training retry
+					if len(vectors[i]) == 0 {
+						retryTrainingInstRatioMap[instId] = 1
+					} else {
+						retryTrainingInstRatioMap[instId] = int(math.Ceil(float64(minCentroids) / float64(len(vectors[i])/vm.Dimension) * float64(maxSampleSize) / float64(initialSampleSize)))
+					}
 
 					logging.Errorf("Indexer::initiateTraining instId: %v, partnId: %v err: %v", instId, partnId, errStr)
-					updateErrMap(instId, partnId, errors.New(errStr))
+					if retry >= maxRetry {
+						updateErrMap(instId, partnId, errors.New(errStr))
+					} else {
+						updateRetryingMap(instId, partnId, true)
+					}
 					continue
+				} else {
+					//Delete instId if it is present in retryTrainingInstRatioMap to avoid from retry.
+					if retryTrainingInstRatioMap != nil || len(retryTrainingInstRatioMap) > 0 {
+						delete(retryTrainingInstRatioMap, instId)
+					}
 				}
 
 				if slice.IsTrained() {
@@ -13668,6 +13784,11 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 						continue
 					}
 					logging.Infof("Indexer::initiateTraining using serialized codebook for instId: %v, partnId: %v, elapsed: %v", instId, partnId, time.Since(start))
+					if idxInst.Defn.VectorMeta.Quantizer.Nlist == 0 {
+						nlist := slice.GetNlist()
+						idxInst.Nlist[partnId] = nlist
+						logging.Infof("Indexer::initiateTraining updating nlist=%v for instId: %v, partnId: %v ", nlist, instId, partnId)
+					}
 				}
 
 				// Persist codebook to disk
@@ -13687,9 +13808,10 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		// the instance is not dropped
 		_, ok1 := errMap[instId]
 		_, ok2 := droppedInsts[instId]
-		if !ok1 && !ok2 {
+		_, ok3 := retryingMap[instId]
+		if !ok1 && !ok2 && !ok3 {
 			successMap[instId] = true
-		} else {
+		} else if !ok3 {
 			// Remove the codebook dir (if any exists) for erroneous instances
 			for instId, partnErrMap := range errMap {
 				idxInst := indexInstMap[instId]
@@ -13720,6 +13842,24 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 			reqCtx:       reqCtx,
 			errMap:       errMap,
 			droppedInsts: droppedInsts,
+		}
+	}
+
+	//for retryTrainingInstRatioMap initiate retry
+	retryInsts := make([]common.IndexInstId, 0)
+	for inst, _ := range retryTrainingInstRatioMap {
+		if _, ok := droppedInsts[inst]; !ok {
+			retryInsts = append(retryInsts, inst)
+		}
+	}
+	if len(retryInsts) > 0 {
+		if retry < maxRetry && uint64(maxSampleSize) < itemsCount {
+			idx.initiateTraining(retryInsts, indexInstMap, indexPartnMap, keyspaceId, config, cid, reqCtx, itemsCount, retry+1, retryTrainingInstRatioMap, initialSampleSize)
+		} else if retry == maxRetry || uint64(maxSampleSize) < itemsCount {
+			logging.Infof("Indexer::initiateTraining retries over, checking if number of centroids can be changed.")
+			//VECTOR_TODO: Modify centroids if not explicitly provided by user in idx defn.
+		} else if retry > maxRetry {
+			logging.Errorf("Indexer::initiateTraining training failed after retries for instIds: %v", retryInsts)
 		}
 	}
 }

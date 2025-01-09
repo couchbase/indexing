@@ -126,18 +126,20 @@ type ScanRequest struct {
 	User             string // For read metering
 	SkipReadMetering bool
 
-	nprobes               int
-	vectorPos             int
-	isVectorScan          bool
-	isBhiveScan           bool
-	queryVector           []float32
-	codebookMap           map[common.PartitionId]codebook.Codebook
-	centroidMap           map[common.PartitionId][]int64
-	protoScans            []*protobuf.Scan
-	vectorScans           map[common.PartitionId]map[int64][]Scan
-	parallelCentroidScans int
-	indexOrder            *IndexKeyOrder
-	projectVectorDist     bool // set to true if vector distance has to be projected. false otherwise
+	nprobes                  int
+	vectorPos                int
+	isVectorScan             bool
+	isBhiveScan              bool
+	queryVector              []float32
+	codebookMap              map[common.PartitionId]codebook.Codebook
+	centroidMap              map[common.PartitionId][]int64
+	protoScans               []*protobuf.Scan
+	vectorScans              map[common.PartitionId]map[int64][]Scan
+	parallelCentroidScans    int
+	indexOrder               *IndexKeyOrder
+	projectVectorDist        bool // set to true if vector distance has to be projected. false otherwise
+	perPartnScanParallelism  int  // Parallelism inherent in scan after generating ranges
+	perPartnParallelCIDScans int  // Max Parallelism configured by user in the config
 
 	// re-ranking support for BHIVE vector indexes
 	enableReranking bool // set to 'true' if re-ranking is enabled
@@ -220,6 +222,8 @@ type Scan struct {
 	ScanType ScanFilterType
 	Filters  []Filter // A collection qualifying filters
 	Equals   IndexKey // TODO: Remove Equals
+
+	MultiCentroid bool // Set to true when one scan filters data of multiple centroids
 }
 
 type Filter struct {
@@ -230,6 +234,9 @@ type Filter struct {
 	High             IndexKey
 	Inclusion        Inclusion
 	ScanType         ScanFilterType
+
+	centroidOffsetLowKey, centroidOffsetHighKey int
+	centroidLenLowKey, centroidLenHighKey       int
 }
 
 type ScanFilterType string
@@ -397,7 +404,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 
 	r.keySzCfg = getKeySizeConfig(cfg)
 
-	r.parallelCentroidScans = cfg["scan.vector.parallel_centroid_scans"].Int()
+	r.perPartnParallelCIDScans = cfg["scan.vector.parallel_centroid_scans"].Int()
 
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
@@ -751,6 +758,34 @@ func (r *ScanRequest) getNearestCentroids() error {
 	return nil
 }
 
+// setReaderCtxMap gets readers needed per partition and map of partition id to reader contexts
+// This function will release the readers that are not needed.
+// For BHive  -> perPartnScanParallelism will be number of centroids
+// For Plasma -> perPartnScanParallelism will be number of independent scan ranges
+func (r *ScanRequest) setReaderCtxMap() {
+
+	// Make map of partition to reader contexts i.e. readers per parition
+	ctxs := make(map[common.PartitionId][]IndexReaderContext)
+	for i, pid := range r.PartitionIds {
+		ctxs[pid] = make([]IndexReaderContext, 0)
+		for j := 0; j < r.readersPerPartition; j++ {
+			ctx := r.Ctxs[i*r.readersPerPartition+j]
+			// If more than needed readers are available release them
+			if j < r.perPartnScanParallelism {
+				ctxs[pid] = append(ctxs[pid], ctx)
+			} else {
+				ctx.Done()
+			}
+		}
+	}
+	r.perPartnReaderCtx = ctxs
+
+	// As more than needed readers are released reset this value
+	if r.readersPerPartition > r.perPartnScanParallelism {
+		r.readersPerPartition = r.perPartnScanParallelism
+	}
+}
+
 // fillVectorScans must be called after getNearestCentroids as this function uses centroidIDs
 func (r *ScanRequest) fillVectorScans() (localErr error) {
 
@@ -766,46 +801,46 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 				scansForCentroids[cid] = append(scansForCentroids[cid], scan)
 			}
 			scansForPartns[partnId] = scansForCentroids
+			r.perPartnScanParallelism = len(centroidIdList)
 		}
 		r.vectorScans = scansForPartns
 		return nil
 	}
 
-	// Scans for composite vector index will be processed here
-	substituteCentroidID := func(centroidId int64) error {
-		for _, scan := range r.protoScans {
-			for filterPos, compFilter := range scan.Filters {
-				if filterPos == r.vectorPos {
-					centroidStr := common.GetCentroidIdStr(centroidId)
-					centroidIdBytes, err := json.Marshal(centroidStr)
-					if err != nil {
-						return err
-					}
-
-					compFilter.Low = centroidIdBytes
-					compFilter.High = centroidIdBytes
-					compFilter.Inclusion = proto.Uint32(uint32(Both))
-				}
-			}
-		}
-		return nil
-	}
-
 	scansForPartns := make(map[common.PartitionId]map[int64][]Scan)
 	for partnId, centroidIdList := range r.centroidMap {
-		scansForCentroids := make(map[int64][]Scan)
-		for _, cid := range centroidIdList {
-			localErr = substituteCentroidID(cid)
-			if localErr != nil {
-				return localErr
-			}
-			logging.Verbosef("Susbstituted ProtoScans: %v", r.protoScans)
-			scansForCentroids[cid], localErr = r.makeScans(r.protoScans)
-			if localErr != nil {
-				return localErr
-			}
+		cidStrList := make([]string, len(centroidIdList))
+		for i, cid := range centroidIdList {
+			cidStrList[i] = common.GetCentroidIdStr(cid)
 		}
-		scansForPartns[partnId] = scansForCentroids
+		sort.Strings(cidStrList)
+
+		centroidProtoScans := make([]*protobuf.Scan, 0)
+		for _, cidStr := range cidStrList {
+			cidBytes, localErr := json.Marshal(cidStr)
+			if localErr != nil {
+				return localErr
+			}
+
+			clonedProtoScans := cloneProtoScans(r.protoScans)
+			localErr = substituteCentroidID(cidBytes, clonedProtoScans, r.vectorPos)
+			if localErr != nil {
+				return localErr
+			}
+
+			centroidProtoScans = append(centroidProtoScans, clonedProtoScans...)
+		}
+
+		scansGenerated, localErr := r.makeScans(centroidProtoScans)
+		if localErr != nil {
+			return localErr
+		}
+		scansForPartns[partnId] = make(map[int64][]Scan)
+		r.perPartnScanParallelism = len(scansGenerated)
+
+		for id, scan := range scansGenerated {
+			scansForPartns[partnId][int64(id)] = []Scan{scan}
+		}
 	}
 	r.vectorScans = scansForPartns
 	return nil
@@ -959,9 +994,16 @@ func (r *ScanRequest) fillFilterLowHigh(compFilters []CompositeElementFilter, fi
 		var l, h []byte
 		codec := collatejson.NewCodec(16)
 		if joinLowKey {
-			for _, f := range compFilters {
+			for pos, f := range compFilters {
 				if f.Low == MinIndexKey {
 					break
+				}
+				if r.isVectorScan && !r.isBhiveScan {
+					if pos < r.vectorPos {
+						filter.centroidOffsetLowKey += len(f.Low.Bytes())
+					} else if pos == r.vectorPos {
+						filter.centroidLenLowKey = len(f.Low.Bytes())
+					}
 				}
 				lows = append(lows, f.Low.Bytes())
 			}
@@ -973,12 +1015,20 @@ func (r *ScanRequest) fillFilterLowHigh(compFilters []CompositeElementFilter, fi
 			}
 			r.sharedBufferLen += len(l)
 			lowKey := secondaryKey(l)
+			filter.centroidOffsetLowKey += 1 // TypeArray
 			filter.Low = &lowKey
 		}
 		if joinHighKey {
-			for _, f := range compFilters {
+			for pos, f := range compFilters {
 				if f.High == MaxIndexKey {
 					break
+				}
+				if r.isVectorScan && !r.isBhiveScan {
+					if pos < r.vectorPos {
+						filter.centroidOffsetHighKey += len(f.High.Bytes())
+					} else if pos == r.vectorPos {
+						filter.centroidLenHighKey = len(f.High.Bytes())
+					}
 				}
 				highs = append(highs, f.High.Bytes())
 			}
@@ -990,6 +1040,7 @@ func (r *ScanRequest) fillFilterLowHigh(compFilters []CompositeElementFilter, fi
 			}
 			r.sharedBufferLen += len(h)
 			highKey := secondaryKey(h)
+			filter.centroidOffsetHighKey += 1 // TypeArray
 			filter.High = &highKey
 		}
 		return nil
@@ -1036,7 +1087,14 @@ func (r *ScanRequest) fillFilterLowHigh(compFilters []CompositeElementFilter, fi
 	var lowKey, highKey IndexKey
 	if len(lows2) > 0 {
 		var lows2bytes [][]byte
-		for _, l := range lows2 {
+		for pos, l := range lows2 {
+			if r.isVectorScan && !r.isBhiveScan && r.vectorPos == pos {
+				if pos < r.vectorPos {
+					filter.centroidOffsetLowKey += len(lows2bytes)
+				} else if pos == r.vectorPos {
+					filter.centroidLenLowKey += len(l.Bytes())
+				}
+			}
 			lows2bytes = append(lows2bytes, l.Bytes())
 		}
 		if joinedLow, e = r.joinKeys(lows2bytes); e != nil {
@@ -1046,13 +1104,21 @@ func (r *ScanRequest) fillFilterLowHigh(compFilters []CompositeElementFilter, fi
 		if e != nil {
 			return e
 		}
+		filter.centroidOffsetLowKey += 1 // TypeArray
 	} else {
 		lowKey = MinIndexKey
 	}
 
 	if len(highs2) > 0 {
 		var highs2bytes [][]byte
-		for _, l := range highs2 {
+		for pos, l := range highs2 {
+			if r.isVectorScan && !r.isBhiveScan && r.vectorPos == pos {
+				if pos < r.vectorPos {
+					filter.centroidOffsetHighKey += len(l.Bytes())
+				} else if pos == r.vectorPos {
+					filter.centroidLenHighKey += len(l.Bytes())
+				}
+			}
 			highs2bytes = append(highs2bytes, l.Bytes())
 		}
 		if joinedHigh, e = r.joinKeys(highs2bytes); e != nil {
@@ -1062,6 +1128,7 @@ func (r *ScanRequest) fillFilterLowHigh(compFilters []CompositeElementFilter, fi
 		if e != nil {
 			return e
 		}
+		filter.centroidOffsetHighKey += 1 // TypeArray
 	} else {
 		highKey = MaxIndexKey
 	}
@@ -1133,9 +1200,11 @@ func (r *ScanRequest) composeScans(points []IndexPoint, filters []Filter) []Scan
 	filtersMap := make(map[int]bool)
 	var filtersList []int
 	var low IndexKey
+	var lowPoint IndexPoint
 	for _, p := range points {
 		if len(filtersMap) == 0 {
 			low = p.Value
+			lowPoint = p
 		}
 		filterid := p.FilterId
 		if _, present := filtersMap[filterid]; present {
@@ -1160,7 +1229,26 @@ func (r *ScanRequest) composeScans(points []IndexPoint, filters []Filter) []Scan
 					for _, fl := range filtersList {
 						scan.Filters = append(scan.Filters, filters[fl])
 					}
-
+					if r.isVectorScan && !r.isBhiveScan {
+						lowFilter := filters[lowPoint.FilterId]
+						highFilter := filters[p.FilterId]
+						var clo, cll, cho, chl int
+						if lowPoint.Type == "low" {
+							clo = lowFilter.centroidOffsetLowKey
+							cll = lowFilter.centroidLenLowKey
+						} else {
+							clo = lowFilter.centroidOffsetHighKey
+							cll = lowFilter.centroidLenHighKey
+						}
+						if p.Type == "low" {
+							cho = highFilter.centroidOffsetLowKey
+							chl = highFilter.centroidLenLowKey
+						} else {
+							cho = highFilter.centroidOffsetHighKey
+							chl = highFilter.centroidLenHighKey
+						}
+						scan.setMultiCentroidScan(clo, cll, cho, chl)
+					}
 					scans = append(scans, scan)
 					filtersList = nil
 				}
@@ -1482,6 +1570,19 @@ func (r *ScanRequest) makeScans(protoScans []*protobuf.Scan) (s []Scan, localErr
 	return scans, nil
 }
 
+func (s *Scan) setMultiCentroidScan(centroidOffsetLowKey, centroidLenLowKey, centroidOffsetHighKey, centroidLenHighKey int) {
+	// One the keys before centroid was either Min or Max
+	if centroidLenLowKey == 0 || centroidLenHighKey == 0 {
+		s.MultiCentroid = true
+		return
+	}
+
+	lowBytes := s.Low.Bytes()
+	highBytes := s.High.Bytes()
+	s.MultiCentroid = bytes.Compare(lowBytes[centroidOffsetLowKey:centroidOffsetLowKey+centroidLenLowKey],
+		highBytes[centroidOffsetHighKey:centroidOffsetHighKey+centroidLenHighKey]) != 0
+}
+
 // Populate list of positions of keys which need to be
 // exploded for composite filtering and index projection
 func (r *ScanRequest) setExplodePositions() {
@@ -1581,7 +1682,7 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 
 	var indexInst *common.IndexInst
 
-	ctxsPerPartition := 1
+	r.readersPerPartition = 1
 	stats := r.sco.stats.Get()
 
 	if r.isVectorScan {
@@ -1591,13 +1692,13 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 			return
 		}
 
-		r.nprobes, ctxsPerPartition, localErr = computeNprobesAndCtxs(indexInst, r.nprobes, r.parallelCentroidScans)
+		r.nprobes, r.readersPerPartition, localErr = computeNprobesAndCtxs(indexInst, r.nprobes, r.perPartnParallelCIDScans)
 		if localErr != nil {
 			return
 		}
 	}
 	indexInst, r.Ctxs, localErr = r.sco.findIndexInstance(r.DefnID, r.PartitionIds,
-		r.User, r.SkipReadMetering, ctxsPerPartition, true)
+		r.User, r.SkipReadMetering, r.readersPerPartition, true)
 
 	if localErr == nil {
 		r.isPrimary = indexInst.Defn.IsPrimary
@@ -2308,7 +2409,9 @@ func compileN1QLExpression(expr string) (expression.Expression, error) {
 func (req *ScanRequest) GetReadUnits() (ru uint64) {
 	if len(req.Ctxs) != 0 {
 		for _, ctx := range req.Ctxs {
-			ru += ctx.ReadUnits()
+			if ctx != nil {
+				ru += ctx.ReadUnits()
+			}
 		}
 	}
 	return
@@ -2535,6 +2638,30 @@ func (r *ScanRequest) getVectorCoarseSize() int {
 	return 0
 }
 
+func (r *ScanRequest) MultiPartnScan() bool {
+	// If index is not partitioned or if we are scanning only one parition in this
+	// request we will not neeed merging distinct scan ranges across partitions
+	if len(r.PartitionIds) == 1 {
+		return false
+	}
+	return true
+}
+
+func (r *ScanRequest) ScanRangeSequencing() bool {
+	// If Limit is pushed down merge sort is not needed as all the sorting happens
+	// while saving in the heap
+	if r.useHeapForVectorIndex() {
+		return false
+	}
+
+	// Index OrderBy is not pushed down so merge sort is not needed
+	if r.indexOrder == nil {
+		return false
+	}
+
+	return true
+}
+
 /////////////////////////////////////////////////////////////////////////
 //
 // IndexPoints Implementation
@@ -2714,4 +2841,43 @@ func (c *ConnectionContext) ResetCache() {
 			delete(c.cache, key)
 		}
 	}
+}
+
+// Util functions
+
+func substituteCentroidID(centroidIdBytes []byte, protoScans []*protobuf.Scan, vectorPos int) error {
+	for _, scan := range protoScans {
+		for filterPos, compFilter := range scan.Filters {
+			if filterPos == vectorPos {
+				compFilter.Low = centroidIdBytes
+				compFilter.High = centroidIdBytes
+				compFilter.Inclusion = proto.Uint32(uint32(Both))
+			}
+		}
+	}
+	return nil
+}
+
+func cloneProtoScans(protoScans []*protobuf.Scan) (newProtoScans []*protobuf.Scan) {
+	newProtoScans = make([]*protobuf.Scan, len(protoScans))
+	for i, scan := range protoScans {
+		newProtoScans[i] = &protobuf.Scan{
+			Filters: make([]*protobuf.CompositeElementFilter, len(scan.Filters)),
+		}
+		for j, fil := range scan.Filters {
+			newFil := &protobuf.CompositeElementFilter{
+				Inclusion: proto.Uint32(fil.GetInclusion()),
+			}
+			if fil.Low != nil {
+				newFil.Low = make([]byte, len(fil.Low))
+				copy(newFil.Low, fil.Low)
+			}
+			if fil.High != nil {
+				newFil.High = make([]byte, len(fil.High))
+				copy(newFil.High, fil.High)
+			}
+			newProtoScans[i].Filters[j] = newFil
+		}
+	}
+	return
 }
