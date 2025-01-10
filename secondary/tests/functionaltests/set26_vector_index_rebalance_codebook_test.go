@@ -381,14 +381,18 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		printClusterConfig(subt.Name(), "entry")
 
 		log.Print("** Setting TestAction REBALANCE_CANCEL for SOURCE_SHARDTOKEN_AFTER_TRANSFER")
-		err := secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", true,
-			clusterconfig.Username, clusterconfig.Password, kvaddress)
+		configChanges := map[string]interface{}{
+			"indexer.shardRebalance.execTestAction": true,
+		}
+		err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 		tc.HandleError(err, "Failed to activate testactions")
 
 		defer func() {
 			waitForRebalanceCleanup()
-			err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
-				clusterconfig.Username, clusterconfig.Password, kvaddress)
+			configChanges := map[string]interface{}{
+				"indexer.shardRebalance.execTestAction": false,
+			}
+			err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 			tc.HandleError(err, "Failed to activate testactions")
 
 			removeNode(clusterconfig.Nodes[3], subt)
@@ -416,14 +420,18 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		printClusterConfig(subt.Name(), "entry")
 
 		log.Print("** Setting TestAction REBALANCE_CANCEL for DEST_SHARDTOKEN_AFTER_RESTORE")
-		err := secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", true,
-			clusterconfig.Username, clusterconfig.Password, kvaddress)
+		configChanges := map[string]interface{}{
+			"indexer.shardRebalance.execTestAction": true,
+		}
+		err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 		tc.HandleError(err, "Failed to activate testactions")
 
 		defer func() {
 			waitForRebalanceCleanup()
-			err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
-				clusterconfig.Username, clusterconfig.Password, kvaddress)
+			configChanges := map[string]interface{}{
+				"indexer.shardRebalance.execTestAction": false,
+			}
+			err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 			tc.HandleError(err, "Failed to activate testactions")
 
 			removeNode(clusterconfig.Nodes[3], subt)
@@ -451,14 +459,18 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		printClusterConfig(subt.Name(), "entry")
 
 		log.Print("** Setting TestAction REBALANCE_CANCEL for DEST_INDEXER_BEFORE_INDEX_RECOVERY")
-		err := secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", true,
-			clusterconfig.Username, clusterconfig.Password, kvaddress)
+		configChanges := map[string]interface{}{
+			"indexer.shardRebalance.execTestAction": true,
+		}
+		err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 		tc.HandleError(err, "Failed to activate testactions")
 
 		defer func() {
 			waitForRebalanceCleanup()
-			err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
-				clusterconfig.Username, clusterconfig.Password, kvaddress)
+			configChanges := map[string]interface{}{
+				"indexer.shardRebalance.execTestAction": false,
+			}
+			err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 			tc.HandleError(err, "Failed to activate testactions")
 
 			removeNode(clusterconfig.Nodes[3], subt)
@@ -485,14 +497,18 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		printClusterConfig(subt.Name(), "entry")
 
 		log.Print("** Setting TestAction REBALANCE_CANCEL for DEST_INDEXER_AFTER_INDEX_RECOVERY")
-		err := secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", true,
-			clusterconfig.Username, clusterconfig.Password, kvaddress)
+		configChanges := map[string]interface{}{
+			"indexer.shardRebalance.execTestAction": true,
+		}
+		err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 		tc.HandleError(err, "Failed to activate testactions")
 
 		defer func() {
 			waitForRebalanceCleanup()
-			err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
-				clusterconfig.Username, clusterconfig.Password, kvaddress)
+			configChanges := map[string]interface{}{
+				"indexer.shardRebalance.execTestAction": false,
+			}
+			err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 			tc.HandleError(err, "Failed to activate testactions")
 
 			removeNode(clusterconfig.Nodes[3], subt)
