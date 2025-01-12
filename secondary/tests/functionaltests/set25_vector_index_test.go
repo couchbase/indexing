@@ -834,6 +834,55 @@ func TestVectorIndexRetry2(t *testing.T) {
 	vectorSetup(t, bucket, "", "", 40000)
 }
 
+// This test ensures that if build fails due to non availability of qualifying documents, rebalance doesn't wait indefinitely.
+// Rebalance should not wait/fail & index should be in error state.
+func TestVectorIndexRebalTrainFail(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	TestRebalanceSetupCluster(t)
+	vectorsLoaded = false
+
+	vectorSetup(t, bucket, "", "", 9999)
+
+	log.Printf("%v: Add Node %v to the cluster for partions to spread on two nodes", t.Name(), clusterconfig.Nodes[2])
+	addNodeAndRebalance(clusterconfig.Nodes[2], "index", t)
+
+	waitForRebalanceCleanup()
+
+	time.Sleep(1 * time.Second)
+
+	// Create Index
+	stmt := "CREATE INDEX idx_sif10k " +
+		" ON default(gender, sift VECTOR, docnum)" +
+		" WITH { \"nodes\":[\"127.0.0.1:9002\"] ,\"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+
+	if _, err := execN1QL(bucket, stmt); err != nil {
+		log.Printf("Error while creating index : %v", err)
+		FailTestIfError(err, "Error in creating idx_sift10k", t)
+	}
+
+	err := secondaryindex.BuildIndexes([]string{"idx_sif10k"}, bucket, indexManagementAddress, vectorIndexActiveTimeout)
+	if err != nil {
+		log.Printf("Building Index failed err: %v", err)
+		FailTestIfError(err, "Error in building idx_sift10k", t)
+	}
+
+	// Test should succeed as the codebook was generated in build during index creation and for rebalance build,
+	// new sampling on bucket should have 0 qualifying documents.
+	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	CreateDocs(9999)
+	// Wait sothat test doesn't fail with error bucket items less than centroids.
+	time.Sleep(5 * time.Second)
+
+	removeNode(clusterconfig.Nodes[2], t)
+	expectedStatus := map[string][]string{clusterconfig.Nodes[0]: []string{"kv", "n1ql"}, clusterconfig.Nodes[1]: []string{"index"}}
+	validateClusterStatus(expectedStatus, t.Name(), t)
+
+	printClusterConfig(t.Name(), "exit")
+	waitForRebalanceCleanup()
+
+}
+
 // =================
 // Utility Functions
 // =================
