@@ -402,9 +402,6 @@ func (s *Solution) clone() *Solution {
 	r.slotMap = s.slotMap
 
 	r.shardDealer = s.shardDealer
-	if s.shardDealer != nil {
-		r.shardDealer.SetMoveInstanceCallback(r.shardDealerMoveInstCallback)
-	}
 
 	return r
 }

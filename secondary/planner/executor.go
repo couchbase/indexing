@@ -6186,6 +6186,10 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 	// partnId -> replicaId -> indexerNode to corresponding index usage
 	indexesPartnDist, allPartnDist := getPartnDistribution(solution, indexes)
 
+	if solution.shardDealer != nil {
+		solution.shardDealer.SetMoveInstanceCallback(solution.shardDealerMoveInstCallback)
+	}
+
 	getTargetNodes := func(defnId common.IndexDefnId, partnId common.PartitionId) map[*IndexerNode]map[*IndexUsage]bool {
 		targetNodes := make(map[*IndexerNode]map[*IndexUsage]bool)
 		if replicaDist, ok := indexesPartnDist[defnId][partnId]; ok {
@@ -7081,12 +7085,19 @@ func newPlanFromSolution(plan *Plan, solution *Solution) *Plan {
 	return newPlan
 }
 
-func (solution *Solution) shardDealerMoveInstCallback(srcNodeUUID, destNodeUUID string,
-	partn *IndexUsage) error {
+func (solution *Solution) shardDealerMoveInstCallback(
+	srcNodeUUID, destNodeUUID string,
+	partn *IndexUsage,
+) (map[*IndexerNode]*IndexUsage, error) {
 	var srcNode, destNode *IndexerNode
 	for _, node := range solution.Placement {
 		switch node.NodeUUID {
 		case srcNodeUUID:
+			if srcNode != nil {
+				err := fmt.Errorf("duplicate source node with id %v", srcNodeUUID)
+				logging.Errorf("Solution::shardDealerMoveInstCallback %v", err)
+				return nil, err
+			}
 			srcNode = node
 		case destNodeUUID:
 			destNode = node
@@ -7094,9 +7105,16 @@ func (solution *Solution) shardDealerMoveInstCallback(srcNodeUUID, destNodeUUID 
 	}
 
 	if srcNode == nil || destNode == nil {
-		return fmt.Errorf("couldn't find node %v/%v in solution to move",
+		return nil, fmt.Errorf("couldn't find node %v/%v in solution to move",
 			srcNodeUUID, destNodeUUID)
 	}
 
-	return solution.moveIndex(srcNode, partn, destNode, false)
+	var err = solution.moveIndex(srcNode, partn, destNode, false)
+	var layoutMap (map[*IndexerNode]*IndexUsage)
+	if err == nil {
+		layoutMap = make(map[*IndexerNode]*IndexUsage)
+		delete(layoutMap, srcNode)
+		layoutMap[destNode] = partn
+	}
+	return layoutMap, err
 }
