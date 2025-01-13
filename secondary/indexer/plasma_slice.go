@@ -4361,6 +4361,12 @@ func (s *plasmaSnapshot) Range(ctx IndexReaderContext, low, high IndexKey,
 	return s.Iterate(ctx, low, high, inclusion, cmpFn, callb, fincb)
 }
 
+func (s *plasmaSnapshot) Range2(ctx IndexReaderContext, low, high IndexKey,
+	inclusion Inclusion, callb EntryCallback, fincb FinishCallback,
+	inlineFilterCb InlineFilterCallback) error { // Supported only for BHIVE storage engine
+	return nil
+}
+
 func (s *plasmaSnapshot) All(ctx IndexReaderContext, callb EntryCallback, fincb FinishCallback) error {
 	return s.Range(ctx, MinIndexKey, MaxIndexKey, Both, callb, fincb)
 }

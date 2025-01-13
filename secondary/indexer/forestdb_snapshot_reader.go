@@ -24,6 +24,7 @@ var (
 type CmpEntry func(IndexKey, IndexEntry) int
 type EntryCallback func(key, value []byte) error
 type FinishCallback func()
+type InlineFilterCallback func([]byte, []byte) (bool, error) // input: include column, docid
 
 // Approximate items count
 func (s *fdbSnapshot) StatCountTotal() (uint64, error) {
@@ -186,6 +187,12 @@ func (s *fdbSnapshot) Range(ctx IndexReaderContext, low, high IndexKey,
 	}
 
 	return s.Iterate(ctx, low, high, inclusion, cmpFn, callb)
+}
+
+func (s *fdbSnapshot) Range2(ctx IndexReaderContext, low, high IndexKey,
+	inclusion Inclusion, callb EntryCallback, fincb FinishCallback,
+	inlineFilterCb InlineFilterCallback) error { // Supported only for BHIVE storage engine
+	return nil
 }
 
 func (s *fdbSnapshot) All(ctx IndexReaderContext, callb EntryCallback, fincb FinishCallback) error {

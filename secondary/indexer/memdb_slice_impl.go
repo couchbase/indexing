@@ -2313,6 +2313,12 @@ func (s *memdbSnapshot) Range(ctx IndexReaderContext, low, high IndexKey, inclus
 	return s.Iterate(ctx, low, high, inclusion, cmpFn, callb)
 }
 
+func (s *memdbSnapshot) Range2(ctx IndexReaderContext, low, high IndexKey,
+	inclusion Inclusion, callb EntryCallback, fincb FinishCallback,
+	inlineFilterCb InlineFilterCallback) error { // Supported only for BHIVE storage engine
+	return nil
+}
+
 func (s *memdbSnapshot) All(ctx IndexReaderContext, callb EntryCallback, fincb FinishCallback) error {
 	return s.Range(ctx, MinIndexKey, MaxIndexKey, Both, callb, fincb)
 }

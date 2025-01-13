@@ -54,6 +54,7 @@ type Looker interface {
 type Ranger interface {
 	Looker
 	Range(IndexReaderContext, IndexKey, IndexKey, Inclusion, EntryCallback, FinishCallback) error
+	Range2(IndexReaderContext, IndexKey, IndexKey, Inclusion, EntryCallback, FinishCallback, InlineFilterCallback) error
 }
 
 // RangeCounter is a class of algorithms that can count a range efficiently
