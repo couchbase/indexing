@@ -42,6 +42,8 @@ type IndexerNode struct {
 	MandatoryQuota    uint64  `json:"mandatoryQuota"`
 	NumTenants        uint64  `json:"numTenants"`
 
+	ActualCodebookMemUsage uint64 `json:"actualCodebookMemUsage"`
+
 	// input: index residing on the node
 	Indexes []*IndexUsage `json:"indexes"`
 
@@ -218,6 +220,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.ShardLimitPerTenant = o.ShardLimitPerTenant
 	r.ShardTenantMultiplier = o.ShardTenantMultiplier
 	r.UseShardStats = o.UseShardStats
+	r.ActualCodebookMemUsage = o.ActualCodebookMemUsage
 
 	r.ShardStats = o.ShardStats
 	r.ShardCompatVersion = o.ShardCompatVersion
@@ -298,14 +301,24 @@ func (o *IndexerNode) GetMemOverhead(useLive bool) uint64 {
 	return o.MemOverhead
 }
 
+// Get total memory taken by all the codebook present on this Node - only for Composite Vector Index
+func (o *IndexerNode) GetCodebookMemUsage(useLive bool) uint64 {
+
+	if useLive {
+		return o.ActualCodebookMemUsage
+	}
+	// currently there is no estimation for Codebook mem usage
+	return 0
+}
+
 // Get memory total
 func (o *IndexerNode) GetMemTotal(useLive bool) uint64 {
 
 	if useLive {
-		return o.ActualMemUsage + o.ActualMemOverhead
+		return o.ActualMemUsage + o.ActualMemOverhead + o.GetCodebookMemUsage(useLive)
 	}
 
-	return o.MemUsage + o.MemOverhead
+	return o.MemUsage + o.MemOverhead + o.GetCodebookMemUsage(useLive)
 }
 
 // Get memory min
@@ -319,12 +332,13 @@ func (o *IndexerNode) GetMemMin(useLive bool) uint64 {
 }
 
 // Add memory
-func (o *IndexerNode) AddMemUsageOverhead(s *Solution, usage uint64, overhead uint64, min uint64) {
+func (o *IndexerNode) AddMemUsageOverhead(s *Solution, usage uint64, overhead uint64, min uint64, codebookMemUsage uint64) {
 
 	if s.UseLiveData() {
 		o.ActualMemUsage += usage
 		o.ActualMemOverhead += overhead
 		o.ActualMemMin += min
+		o.ActualCodebookMemUsage += codebookMemUsage
 	} else {
 		o.MemUsage += usage
 		o.MemOverhead += overhead
@@ -341,12 +355,13 @@ func (o *IndexerNode) AddMemUsage(s *Solution, usage uint64) {
 }
 
 // Subtract memory
-func (o *IndexerNode) SubtractMemUsageOverhead(s *Solution, usage uint64, overhead uint64, min uint64) {
+func (o *IndexerNode) SubtractMemUsageOverhead(s *Solution, usage uint64, overhead uint64, min uint64, codebookMemUsage uint64) {
 
 	if s.UseLiveData() {
 		o.ActualMemUsage -= usage
 		o.ActualMemOverhead -= overhead
 		o.ActualMemMin -= min
+		o.ActualCodebookMemUsage -= codebookMemUsage
 	} else {
 		o.MemUsage -= usage
 		o.MemOverhead -= overhead

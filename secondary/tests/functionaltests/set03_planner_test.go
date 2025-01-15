@@ -1827,7 +1827,7 @@ func cleanupEstimation(s *planner.Solution) {
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
 			if index.NeedsEstimation() {
-				indexer.SubtractMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage)
+				indexer.SubtractMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage, 0)
 				indexer.SubtractDataSize(s, index.EstimatedDataSize)
 				index.EstimatedMemUsage = 0
 				index.EstimatedDataSize = 0

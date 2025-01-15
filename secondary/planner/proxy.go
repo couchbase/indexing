@@ -945,6 +945,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		indexer.ActualMemOverhead += index.ActualMemOverhead
 		indexer.ActualDiskUsage += index.ActualDiskUsage
 		indexer.ActualMemMin += index.ActualMemMin
+		indexer.ActualCodebookMemUsage += index.ActualCodebookMemUsage
 	}
 
 	// Compute the estimated cpu usage for each index.  This also computes the aggregated indexer cpu usage.

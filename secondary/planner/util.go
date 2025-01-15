@@ -456,11 +456,13 @@ func ValidateSolution(s *Solution) error {
 		totalMem := uint64(0)
 		totalOverhead := uint64(0)
 		totalCpu := float64(0)
+		totalCodebookMem := uint64(0)
 
 		for _, index := range indexer.Indexes {
 			totalMem += index.GetMemUsage(s.UseLiveData())
 			totalOverhead += index.GetMemOverhead(s.UseLiveData())
 			totalCpu += index.GetCpuUsage(s.UseLiveData())
+			totalCodebookMem += index.GetCodebookMemUsage(s.UseLiveData())
 		}
 
 		if !s.UseLiveData() {
@@ -479,7 +481,12 @@ func ValidateSolution(s *Solution) error {
 			return errors.New("validation fails: memory overhead of indexer does not match sum of index memory overhead")
 		}
 
-		if indexer.GetMemTotal(s.UseLiveData()) != indexer.GetMemUsage(s.UseLiveData())+indexer.GetMemOverhead(s.UseLiveData()) {
+		if indexer.GetCodebookMemUsage(s.UseLiveData()) != totalCodebookMem {
+			return errors.New("validation fails: codebook memory of indexer does not match sum of index codebook memory")
+		}
+
+		if indexer.GetMemTotal(s.UseLiveData()) !=
+			indexer.GetMemUsage(s.UseLiveData())+indexer.GetMemOverhead(s.UseLiveData())+indexer.GetCodebookMemUsage(s.UseLiveData()) {
 			return errors.New("validation fails: total indexer memory does not match sum of indexer memory usage + overhead")
 		}
 	}
