@@ -2179,7 +2179,7 @@ func (b *metadataClient) watchClusterChanges() {
 }
 
 func postWithAuth(url string, bodyType string, body io.Reader, timeout time.Duration) (*http.Response, error) {
-	params := &security.RequestParams{Timeout: time.Duration(timeout) * time.Second}
+	params := &security.RequestParams{Timeout: timeout}
 	return security.PostWithAuth(url, bodyType, body, params)
 }
 
