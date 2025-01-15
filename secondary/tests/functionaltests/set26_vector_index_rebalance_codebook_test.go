@@ -328,6 +328,7 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		printClusterConfig(subt.Name(), "entry")
 
 		// Create Replicated Vector Instances - shared and dedicated
+		// NOTE: don't drop these indexes as next test will use these
 		stmt := fmt.Sprintf("CREATE INDEX %v"+
 			" ON `%v`(sift VECTOR)"+
 			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_replica\":1, \"defer_build\":true};",
@@ -346,12 +347,6 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 
 		time.Sleep(timeTaken / 2)
 
-		defer func() {
-			log.Printf("%v: dropping replicated indices:%v", subt.Name(), []string{idxDedicatedReplica, idxSharedReplica})
-			dropIndex(idxDedicatedReplica, BUCKET, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, subt)
-			dropIndex(idxSharedReplica, BUCKET, scope, coll, subt)
-		}()
-
 		// Failover Node 2 - Replica is lost
 		log.Printf("%v: Failing over index node %v", subt.Name(), clusterconfig.Nodes[2])
 		failoverNode(clusterconfig.Nodes[2], t)
@@ -368,6 +363,8 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		validateVectorScan(subt, indexStatusResp)
 	})
 
+	// NOTE: The replicated index from the previous test ensure that atleast one Index is
+	// present on the NodeOut
 	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index]
 	t.Run("TestRebalanceCancelIndexerAfterTransfer", func(subt *testing.T) {
 
