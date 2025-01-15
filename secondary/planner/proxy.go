@@ -900,6 +900,13 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			combinedMemSzIdx = uint64(combinedMemSzIdxVal.(float64))
 		}
 
+		// check if the index is a composite vector index and non-deferred
+		if index.IsPlasma() && index.Instance != nil && !index.Instance.Defn.Deferred && index.Instance.Defn.IsVectorIndex && !index.Instance.Defn.IsBhive() {
+			if codebookMemUsageVal, ok := GetIndexStat(index, "codebook_mem_usage", statsMap, true, clusterVersion); ok {
+				index.ActualCodebookMemUsage = uint64(codebookMemUsageVal.(float64))
+			}
+		}
+
 		minRatio := config["indexer.planner.minResidentRatio"].Float64()
 		if (clusterVersion < common.INDEXER_71_VERSION) && (minRatio == 0.1) {
 			// Note: corner case of overriding customer value, where customer themselves set config to 10% and are
@@ -920,7 +927,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 				}
 				memSize := index.ActualMemUsage - combinedMemSzIdx
 				scaledMem := float64(memSize+index.ActualMemOverhead) / ratio
-				index.ActualMemMin = combinedMemSzIdx + uint64(scaledMem*minRatio)
+				index.ActualMemMin = combinedMemSzIdx + uint64(scaledMem*minRatio) + index.ActualCodebookMemUsage
 			} else if index.ActualNumDocs > 0 {
 				// If index has no resident memory but it has keys, then estimate using sizing equation.
 				dataSize := index.ActualDataSize
@@ -929,7 +936,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 						dataSize = dataSize * 3
 					}
 				}
-				index.ActualMemMin = uint64(float64(dataSize) * minRatio)
+				index.ActualMemMin = uint64(float64(dataSize)*minRatio) + index.ActualCodebookMemUsage
 			}
 		}
 
