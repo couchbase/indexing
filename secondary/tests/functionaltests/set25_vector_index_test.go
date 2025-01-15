@@ -1294,3 +1294,166 @@ func TestVectorIndexDcpRebalCodebook2(t *testing.T) {
 	waitForRebalanceCleanup()
 
 }
+
+// This test ensures that if centroids for index are not provided by user and centroids set by indexer are greater than qualifying documents in keyspace.
+// After Index creation and build and last training retry, index should become active.
+func TestVectorIndexDynamicCentroidPQ(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	TestRebalanceSetupCluster(t)
+	vectorsLoaded = false
+
+	numVectorFieldDocs := 64
+	totalDocs := 100000
+
+	vectorSetup2(t, numVectorFieldDocs)
+
+	docsToCreate := generateDocs(totalDocs-numVectorFieldDocs, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	kv.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	time.Sleep(2 * time.Second)
+
+	// Create Index
+	stmt := "CREATE INDEX idx_sif10k " +
+		" ON default(gender, sift VECTOR, docnum)" +
+		" WITH { \"dimension\":128, \"description\": \"IVF,PQ32x4\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+
+	if _, err := execN1QL(bucket, stmt); err != nil {
+		log.Printf("Error while creating index : %v", err)
+		FailTestIfError(err, "Error in creating idx_sift10k", t)
+	}
+
+	err := secondaryindex.BuildIndexes([]string{"idx_sif10k"}, bucket, indexManagementAddress, int64(180))
+	if err != nil {
+		log.Printf("Building Index failed err: %v", err)
+		FailTestIfError(err, "Error in building idx_sift10k", t)
+	}
+
+	vecIndexCreated = true
+
+	// Restricting the scan to first two iteratiosn of 10K docs using the filter on docnum
+	// Due to the Filter on male the search space reduced for second 10K items loaded
+	// So all docIds returned should have 1_{vecNum} and {vecNums} is used on calclulation
+	// of recall
+	scans := qc.Scans{
+		&qc.Scan{
+			Filter: []*qc.CompositeElementFilter{
+				&qc.CompositeElementFilter{
+					Low:       "male",
+					High:      "male",
+					Inclusion: qc.Both,
+				},
+				&qc.CompositeElementFilter{},
+				&qc.CompositeElementFilter{
+					Low:       0,
+					High:      20000,
+					Inclusion: qc.Both,
+				},
+			},
+		},
+	}
+
+	limit := int64(5)
+	// Scan
+	scanResults, err := secondaryindex.Scan6("idx_sif10k", bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	FailTestIfError(err, "Error during secondary index scan", t)
+
+	vectorPosReturned := make([]uint32, 0)
+	for k, _ := range scanResults {
+		s := strings.Split(k, "_")
+		vps := s[1]
+		vp, err := strconv.Atoi(vps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		vectorPosReturned = append(vectorPosReturned, uint32(vp))
+	}
+
+	recall := recallAtR(expectedVectorPosTop100[0:int(limit)], vectorPosReturned, int(limit))
+	log.Printf("Recall: %v expected values: %v result: %v %+v", recall,
+		expectedVectorPosTop100[0:int(limit)], vectorPosReturned, scanResults)
+	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+}
+
+// Similar to TestVectorIndexDynamicCentroidPQ
+func TestVectorIndexDynamicCentroidSQ(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	TestRebalanceSetupCluster(t)
+	vectorsLoaded = false
+
+	numVectorFieldDocs := 8
+	totalDocs := 100000
+
+	vectorSetup2(t, numVectorFieldDocs)
+
+	docsToCreate := generateDocs(totalDocs-numVectorFieldDocs, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	kv.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	time.Sleep(2 * time.Second)
+
+	// Create Index
+	stmt := "CREATE INDEX idx_sif10k " +
+		" ON default(gender, sift VECTOR, docnum)" +
+		" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+
+	if _, err := execN1QL(bucket, stmt); err != nil {
+		log.Printf("Error while creating index : %v", err)
+		FailTestIfError(err, "Error in creating idx_sif10k", t)
+	}
+
+	err := secondaryindex.BuildIndexes([]string{"idx_sif10k"}, bucket, indexManagementAddress, int64(180))
+	if err != nil {
+		log.Printf("Building Index failed err: %v", err)
+		FailTestIfError(err, "Error in building idx_sif10k", t)
+	}
+
+	vecIndexCreated = true
+
+	// Restricting the scan to first two iteratiosn of 10K docs using the filter on docnum
+	// Due to the Filter on male the search space reduced for second 10K items loaded
+	// So all docIds returned should have 1_{vecNum} and {vecNums} is used on calclulation
+	// of recall
+	scans := qc.Scans{
+		&qc.Scan{
+			Filter: []*qc.CompositeElementFilter{
+				&qc.CompositeElementFilter{
+					Low:       "male",
+					High:      "male",
+					Inclusion: qc.Both,
+				},
+				&qc.CompositeElementFilter{},
+				&qc.CompositeElementFilter{
+					Low:       0,
+					High:      20000,
+					Inclusion: qc.Both,
+				},
+			},
+		},
+	}
+
+	limit := int64(5)
+	// Scan
+	scanResults, err := secondaryindex.Scan6("idx_sif10k", bucket, "", "", kvaddress, scans, false, false, nil, 0, limit, nil, c.AnyConsistency, nil, indexVector)
+	FailTestIfError(err, "Error during secondary index scan", t)
+
+	vectorPosReturned := make([]uint32, 0)
+	for k, _ := range scanResults {
+		s := strings.Split(k, "_")
+		vps := s[1]
+		vp, err := strconv.Atoi(vps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		vectorPosReturned = append(vectorPosReturned, uint32(vp))
+	}
+
+	recall := recallAtR(expectedVectorPosTop100[0:int(limit)], vectorPosReturned, int(limit))
+	log.Printf("Recall: %v expected values: %v result: %v %+v", recall,
+		expectedVectorPosTop100[0:int(limit)], vectorPosReturned, scanResults)
+
+	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+}
