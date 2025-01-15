@@ -569,11 +569,12 @@ func (s *Solution) PrintLayout() {
 					index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId,
 					index.IsShardProxy, index.NumInstances, index.AlternateShardIds, index.ShardIds)
 			}
-			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
+			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), codebookMem:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
 				index.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemOverhead(s.UseLiveData()))),
 				index.GetMemMin(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemMin(s.UseLiveData()))),
+				index.GetCodebookMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetCodebookMemUsage(s.UseLiveData()))),
 				index.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(index.GetDataSize(s.UseLiveData()))),
 				index.GetCpuUsage(s.UseLiveData()),
 				index.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetDiskUsage(s.UseLiveData()))),
@@ -591,11 +592,12 @@ func (s *Solution) PrintLayout() {
 					subIndex.initialNode == nil || subIndex.initialNode.NodeId != indexer.NodeId,
 					subIndex.IsShardProxy, subIndex.NumInstances, subIndex.AlternateShardIds,
 					subIndex.InitialAlternateShardIds, subIndex.ShardIds, subIndex.Instance.Defn.ShardIdsForDest)
-				logging.Infof("\t\t\t Sub-Index total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
+				logging.Infof("\t\t\t Sub-Index total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), codebookMem:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 					subIndex.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemTotal(s.UseLiveData()))),
 					subIndex.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemUsage(s.UseLiveData()))),
 					subIndex.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemOverhead(s.UseLiveData()))),
 					subIndex.GetMemMin(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemMin(s.UseLiveData()))),
+					subIndex.GetCodebookMemUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetCodebookMemUsage(s.UseLiveData()))),
 					subIndex.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetDataSize(s.UseLiveData()))),
 					subIndex.GetCpuUsage(s.UseLiveData()),
 					subIndex.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetDiskUsage(s.UseLiveData()))),
@@ -649,11 +651,12 @@ func (s *Solution) PrintCompactLayout() {
 					index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId,
 					index.IsShardProxy, index.NumInstances, index.AlternateShardIds, index.ShardIds)
 			}
-			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
+			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), codebookMem:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
 				index.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemOverhead(s.UseLiveData()))),
 				index.GetMemMin(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemMin(s.UseLiveData()))),
+				index.GetCodebookMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetCodebookMemUsage(s.UseLiveData()))),
 				index.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(index.GetDataSize(s.UseLiveData()))),
 				index.GetCpuUsage(s.UseLiveData()),
 				index.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetDiskUsage(s.UseLiveData()))),

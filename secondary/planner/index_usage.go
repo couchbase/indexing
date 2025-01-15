@@ -65,6 +65,8 @@ type IndexUsage struct {
 	ActualScanRate        uint64 `json:"actualScanRate"`
 	ActualMemMin          uint64 `json:"actualMemMin"`
 	ActualUnitsUsage      uint64 `json:"actualUnitsUsage"`
+	// For composite Vector Index, this will be populated, for other cases, this will be zero value
+	ActualCodebookMemUsage uint64 `json:"actualCodebookMemUsage"`
 
 	// Available from 7.6+ version of server
 
@@ -286,6 +288,21 @@ func (o *IndexUsage) GetMemOverhead(useLive bool) uint64 {
 	return o.MemOverhead
 }
 
+// Get the memory taken by codebook of Composite Vector Indexes
+func (o *IndexUsage) GetCodebookMemUsage(useLive bool) uint64 {
+
+	// currently there is no estimation for Codebook mem usage. Return 0 mem usage
+	if o.NeedsEstimation() {
+		return 0
+	}
+
+	if useLive {
+		return o.ActualCodebookMemUsage
+	}
+	// if no live data is present, return 0
+	return 0
+}
+
 // Get total memory
 func (o *IndexUsage) GetMemTotal(useLive bool) uint64 {
 
@@ -294,10 +311,10 @@ func (o *IndexUsage) GetMemTotal(useLive bool) uint64 {
 	}
 
 	if useLive {
-		return o.ActualMemUsage + o.ActualMemOverhead
+		return o.ActualMemUsage + o.ActualMemOverhead + o.GetCodebookMemUsage(useLive)
 	}
 
-	return o.MemUsage + o.MemOverhead
+	return o.MemUsage + o.MemOverhead + o.GetCodebookMemUsage(useLive)
 }
 
 // Get data size
@@ -674,6 +691,8 @@ func (o *IndexUsage) Union(in *IndexUsage) {
 	o.TotalRecords += in.TotalRecords
 	// For proxied shards, we will recalculate this value from ShardStats
 	o.ActualDiskSize += in.ActualDiskSize
+	// Accumulate the codebook memory for the Indexes present on the Shard Proxy
+	o.ActualCodebookMemUsage += in.ActualCodebookMemUsage
 
 	// If the first index in the list is a primay index, then we can end-up
 	// copying only one shardId. Hence, always copy until we see a secondary
