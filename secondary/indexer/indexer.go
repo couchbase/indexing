@@ -13347,7 +13347,7 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 			common.CrashOnError(err)
 
 			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap),
-				keyspaceId, idx.config.Clone(), reqcid, reqCtx, itemsCount, 0, nil, 0)
+				keyspaceId, idx.config.Clone(), reqcid, reqCtx, itemsCount, 0, nil, 0, nil)
 
 			return nil // Return nil so that handleBuildIndex does not take the build further
 		}
@@ -13507,7 +13507,7 @@ func getInstCodebookIfExists(indexPartnMap PartitionInstMap) ([]byte, error, c.P
 func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap,
 	keyspaceId string, config common.Config, cid string,
-	reqCtx *c.MetadataRequestContext, itemsCount uint64, retry int, retryTrainingInstRatioMap map[common.IndexInstId]int, initialSampleSize int64) {
+	reqCtx *c.MetadataRequestContext, itemsCount uint64, retry int, retryTrainingInstRatioMap map[common.IndexInstId]int, initialSampleSize int64, nlistMap map[common.IndexInstId]map[common.PartitionId]int) {
 
 	errMap := make(map[common.IndexInstId]map[common.PartitionId]error)
 	retryingMap := make(map[common.IndexInstId]map[common.PartitionId]bool)
@@ -13618,6 +13618,8 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 	logging.Infof("Indexer::initiateTraining retry:%v maxSampleSize:%v maxRatio:%v multiplier:%v", retry, maxSampleSize, maxRatio, multiplier)
 
+	instVectorsMap := make(map[common.IndexInstId]int, 0)
+
 	// This map will hold serialized codebook of current training
 	// attempt for sharing on partitions of definition including replicas
 	indexDefnCodebookMap := make(map[common.IndexDefnId][]byte)
@@ -13701,6 +13703,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				if vm.Quantizer.Type == c.PQ {
 					minCentroids = max(1<<vm.Quantizer.Nbits, idxInst.Nlist[partnId])
 				}
+				instVectorsMap[instId] = len(vectors[i]) / vm.Dimension
 
 				if len(vectors[i])/vm.Dimension < minCentroids && defnCodebook == nil {
 					errStr := c.ERR_TRAINING + fmt.Sprintf("Number of qualifying or valid vectors / dimension = %v/%v = %v  are less than the number "+
@@ -13714,8 +13717,15 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					}
 
 					logging.Errorf("Indexer::initiateTraining instId: %v, partnId: %v err: %v", instId, partnId, errStr)
-					if retry >= maxRetry {
+					if retry > maxRetry {
 						updateErrMap(instId, partnId, errors.New(errStr))
+					} else if retry == maxRetry {
+						//Change error states of indexes which will be excluded in last retry where centroids will be modified
+						if idxInst.Defn.VectorMeta.Quantizer.Nlist > 0 || (idxInst.Defn.VectorMeta.Quantizer.Type == c.PQ && (1<<idxInst.Defn.VectorMeta.Quantizer.Nbits > instVectorsMap[instId])) || (idxInst.Defn.VectorMeta.Quantizer.Type == c.SQ && instVectorsMap[instId] == 0) {
+							updateErrMap(instId, partnId, errors.New(errStr))
+						} else {
+							updateRetryingMap(instId, partnId, true)
+						}
 					} else {
 						updateRetryingMap(instId, partnId, true)
 					}
@@ -13846,11 +13856,12 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 	if len(successMap) > 0 || len(errMap) > 0 {
 		idx.internalRecvCh <- &MsgIndexTrainingDone{
-			keyspaceId:   keyspaceId,
-			successMap:   successMap,
-			reqCtx:       reqCtx,
-			errMap:       errMap,
-			droppedInsts: droppedInsts,
+			keyspaceId:       keyspaceId,
+			successMap:       successMap,
+			reqCtx:           reqCtx,
+			errMap:           errMap,
+			droppedInsts:     droppedInsts,
+			nlistInstPartMap: nlistMap,
 		}
 	}
 
@@ -13863,12 +13874,50 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	}
 	if len(retryInsts) > 0 {
 		if retry < maxRetry && uint64(maxSampleSize) < itemsCount {
-			idx.initiateTraining(retryInsts, indexInstMap, indexPartnMap, keyspaceId, config, cid, reqCtx, itemsCount, retry+1, retryTrainingInstRatioMap, initialSampleSize)
+			idx.initiateTraining(retryInsts, indexInstMap, indexPartnMap, keyspaceId, config, cid, reqCtx, itemsCount, retry+1, retryTrainingInstRatioMap, initialSampleSize, nil)
 		} else if retry == maxRetry || uint64(maxSampleSize) < itemsCount {
-			logging.Infof("Indexer::initiateTraining retries over, checking if number of centroids can be changed.")
-			//VECTOR_TODO: Modify centroids if not explicitly provided by user in idx defn.
+			logging.Infof("Indexer::initiateTraining retries over, checking if number of centroids can be changed for retryInsts: %v.", retryInsts)
+
+			retryInstsFinal := make([]common.IndexInstId, 0)
+			newNlistMap := make(map[common.IndexInstId]map[common.PartitionId]int)
+			for _, instId := range retryInsts {
+				inst, exists := indexInstMap[instId]
+				if exists {
+					instVectors := instVectorsMap[instId]
+					if _, ok := newNlistMap[instId]; !ok {
+						newNlistMap[instId] = make(map[c.PartitionId]int)
+					}
+
+					if inst.Defn.VectorMeta.Quantizer.Nlist > 0 {
+						logging.Infof("Indexer::initiateTraining skipping changing number of centroids for instance:%v since centroids are provided in the definition.", inst.InstId)
+						continue
+					} else if instVectors == 0 {
+						logging.Infof("Indexer::initiateTraining skipping changing number of centroids for instance:%v since 0 vectors were sampled for the definition.", inst.InstId)
+						continue
+					}
+
+					if (inst.Defn.VectorMeta.Quantizer.Type == c.PQ) && (1<<inst.Defn.VectorMeta.Quantizer.Nbits > instVectors) {
+						logging.Infof("Indexer::initiateTraining skipping changing number of centroids for instance:%v since vectors doesn't follow nbits criteria for PQ Quantization.", inst.InstId)
+						continue
+					}
+
+					for partnId, _ := range inst.Nlist {
+						//Update centroids for local indexInstMap which will be used in initiateTraining()
+						inst.Nlist[partnId] = instVectors
+						newNlistMap[instId][partnId] = instVectors
+					}
+					logging.Infof("Indexer::initiateTraining changing number of centroids:%v for instance:%v", instVectors, inst.InstId)
+
+					//Add instance to retry list
+					retryInstsFinal = append(retryInstsFinal, instId)
+
+				} else {
+					logging.Warnf("Indexer::initiateTraining instId:%v not found in indexInstMap", instId)
+				}
+			}
+			idx.initiateTraining(retryInstsFinal, indexInstMap, indexPartnMap, keyspaceId, config, cid, reqCtx, itemsCount, retry+1, retryTrainingInstRatioMap, initialSampleSize, newNlistMap)
 		} else if retry > maxRetry {
-			logging.Errorf("Indexer::initiateTraining training failed after retries for instIds: %v", retryInsts)
+			logging.Errorf("Indexer::initiateTraining training failed after retry:%v maxRetry:%v for instIds: %v", retry, maxRetry, retryInsts)
 		}
 	}
 }
@@ -13943,6 +13992,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	keyspaceId := msg.GetKeyspaceId()
 	reqCtx := msg.GetReqCtx()
 	dropMap := msg.GetDropMap()
+	nlistInstPartMap := msg.GetNlistMap()
 
 	if dropMap == nil {
 		dropMap = make(map[c.IndexInstId]MsgChannel)
@@ -13993,6 +14043,15 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		}
 
 		inst.Error = "" // Reset any error observed from earlier iterations
+		if nlistInstPartMap != nil && nlistInstPartMap[instId] != nil {
+			newNlist := 0
+			for pid, nlist := range nlistInstPartMap[instId] {
+				inst.Nlist[pid] = nlist
+				newNlist = nlist
+			}
+			logging.Infof("Indexer::handleIndexTrainingDone: updating centroids for instId:%v to nlist:%v", instId, newNlist)
+		}
+
 		idx.indexInstMap[instId] = inst
 		toBuildInstIds = append(toBuildInstIds, instId)
 		allInsts = append(allInsts, instId)
