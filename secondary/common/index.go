@@ -543,6 +543,13 @@ func (defn *IndexDefn) IsBhive() bool {
 	return false
 }
 
+func (defn *IndexDefn) NonBhiveVectorIndex() bool {
+	if defn.IsVectorIndex && defn.VectorMeta != nil && defn.VectorMeta.IsBhive == false {
+		return true
+	}
+	return false
+}
+
 func (idx IndexInst) IsProxy() bool {
 	return idx.RealInstId != 0
 }
