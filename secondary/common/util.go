@@ -2030,6 +2030,8 @@ func ComputeMinPartitionMapFromConfig(cv ConfigValue) map[uint64]uint64 {
 	}
 
 	if !ok {
+		logging.Warnf("ComputeMinPartitionMapFromConfig:: value not a map[string]interface{} as expected but %T. compute failed",
+			cv.Value)
 		return nil
 	}
 
@@ -2045,14 +2047,38 @@ func ComputeMinPartitionMapFromConfig(cv ConfigValue) map[uint64]uint64 {
 		}
 
 		switch minPartitions := minPartitionsIntf.(type) {
-		case int64:
-			minPartitionsPerShard[quota] = uint64(minPartitions)
 		case int:
+			minPartitionsPerShard[quota] = uint64(minPartitions)
+		case int8:
+			minPartitionsPerShard[quota] = uint64(minPartitions)
+		case int16:
+			minPartitionsPerShard[quota] = uint64(minPartitions)
+		case int32:
+			minPartitionsPerShard[quota] = uint64(minPartitions)
+		case int64:
 			minPartitionsPerShard[quota] = uint64(minPartitions)
 		case uint:
 			minPartitionsPerShard[quota] = uint64(minPartitions)
+		case uint8:
+			minPartitionsPerShard[quota] = uint64(minPartitions)
+		case uint16:
+			minPartitionsPerShard[quota] = uint64(minPartitions)
+		case uint32:
+			minPartitionsPerShard[quota] = uint64(minPartitions)
 		case uint64:
 			minPartitionsPerShard[quota] = minPartitions
+		case float32:
+			minPartitionsPerShard[quota] = uint64(minPartitions)
+		case float64:
+			minPartitionsPerShard[quota] = uint64(minPartitions)
+		case string:
+			parsedValue, err := strconv.ParseUint(minPartitions, 10, 64)
+			if err != nil {
+				logging.Warnf("ComputeMinPartitionMapFromConfig:: value `%v` for quota `%v` failed to convert from string to uint64 with err %v. compute failed",
+					minPartitionsIntf, quota, err)
+				return nil
+			}
+			minPartitionsPerShard[quota] = parsedValue
 		default:
 			logging.Warnf("ComputeMinPartitionMapFromConfig:: value `%v` for quota `%v` not int/uint but %T. compute failed",
 				minPartitionsIntf, quota, minPartitionsIntf)

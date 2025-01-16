@@ -658,13 +658,15 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 func (idx *indexer) initSecurityContext(encryptLocalHost bool) error {
 
-	certFile := idx.config["certFile"].String()
-	keyFile := idx.config["keyFile"].String()
+	srvrCertFile := idx.config["certFile"].String()
+	srvrKeyFile := idx.config["keyFile"].String()
+	clientCertFile := idx.config["clientCertFile"].String()
+	clientKeyFile := idx.config["clientKeyFile"].String()
 	caFile := idx.config["caFile"].String()
 	clusterAddr := idx.config["clusterAddr"].String()
 	logger := func(err error) { common.Console(clusterAddr, err.Error()) }
-	if err := security.InitSecurityContext(logger, clusterAddr, certFile, keyFile,
-		caFile, encryptLocalHost); err != nil {
+	if err := security.InitSecurityContext(logger, clusterAddr, srvrCertFile, srvrKeyFile,
+		caFile, clientCertFile, clientKeyFile, encryptLocalHost); err != nil {
 		return err
 	}
 	return nil

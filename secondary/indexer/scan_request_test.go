@@ -330,6 +330,11 @@ func TestScanRequest_setIndexParams(t *testing.T) {
 					PartitionScheme: common.HASH,
 				},
 				ReplicaId: 0,
+				Nlist: map[c.PartitionId]int{
+					common.PartitionId(1): 20,
+					common.PartitionId(3): 20,
+					common.PartitionId(5): 20,
+				},
 			},
 			common.IndexInstId(22): common.IndexInst{
 				InstId: common.IndexInstId(22),
@@ -340,6 +345,11 @@ func TestScanRequest_setIndexParams(t *testing.T) {
 					PartitionScheme: common.HASH,
 				},
 				ReplicaId: 1,
+				Nlist: map[c.PartitionId]int{
+					common.PartitionId(2): 20,
+					common.PartitionId(4): 20,
+					common.PartitionId(6): 20,
+				},
 			},
 		},
 		indexDefnMap: map[common.IndexDefnId][]common.IndexInstId{
@@ -412,13 +422,13 @@ func TestScanRequest_setIndexParams(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := &ScanRequest{
-				DefnID:                uint64(defnId),
-				PartitionIds:          tt.PartitionIds,
-				User:                  "random",
-				SkipReadMetering:      false,
-				nprobes:               tt.nprobes,
-				isVectorScan:          tt.isVectorScan,
-				parallelCentroidScans: tt.parallelCentroidScans,
+				DefnID:                   uint64(defnId),
+				PartitionIds:             tt.PartitionIds,
+				User:                     "random",
+				SkipReadMetering:         false,
+				nprobes:                  tt.nprobes,
+				isVectorScan:             tt.isVectorScan,
+				perPartnParallelCIDScans: tt.parallelCentroidScans,
 			}
 			r.sco = sco
 			if tt.instId != 0 {
@@ -428,7 +438,7 @@ func TestScanRequest_setIndexParams(t *testing.T) {
 			}
 			r.sco.setIndexerState(tt.indexerState)
 			if err := r.setIndexParams(); err != tt.wantErr {
-				if strings.Contains(err.Error(), tt.wantErr.Error()) {
+				if tt.wantErr != nil && strings.Contains(err.Error(), tt.wantErr.Error()) {
 					return
 				}
 				t.Fatalf("ScanRequest.setIndexParams() error = %v, wantErr %v", err, tt.wantErr)

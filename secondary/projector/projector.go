@@ -63,9 +63,11 @@ type Projector struct {
 	cinfoProvider     common.ClusterInfoProvider
 	cinfoProviderLock sync.RWMutex
 
-	certFile             string
-	keyFile              string
+	srvrCertFile         string
+	srvrKeyFile          string
 	caFile               string
+	clientCertFile       string
+	clientKeyFile        string
 	reqch                chan apcommon.Request
 	enableSecurityChange chan bool
 	//Statistics
@@ -84,14 +86,19 @@ type Projector struct {
 
 // NewProjector creates a news projector instance and
 // starts a corresponding adminport.
-func NewProjector(config c.Config, certFile, keyFile, caFile string) *Projector {
+func NewProjector(config c.Config,
+	srvrCertFile, srvrKeyFile, caFile,
+	clientCertFile, clientKeyFile string,
+) *Projector {
 	p := &Projector{
 		topics:               make(map[string]*Feed),
 		topicSerialize:       make(map[string]*sync.Mutex),
 		pooln:                "default", // TODO: should this be configurable ?
-		certFile:             certFile,
-		keyFile:              keyFile,
+		srvrCertFile:         srvrCertFile,
+		srvrKeyFile:          srvrKeyFile,
 		caFile:               caFile,
+		clientCertFile:       clientCertFile,
+		clientKeyFile:        clientKeyFile,
 		enableSecurityChange: make(chan bool),
 		statsCmdCh:           make(chan []interface{}, 1),
 		statsStopCh:          make(chan bool, 1),
@@ -1181,8 +1188,8 @@ func requestRead(r io.Reader, data []byte) (err error) {
 func (p *Projector) initSecurityContext(encryptLocalHost bool) error {
 
 	logger := func(err error) { c.Console(p.clusterAddr, err.Error()) }
-	if err := security.InitSecurityContext(logger, p.clusterAddr, p.certFile, p.keyFile,
-		p.caFile, encryptLocalHost); err != nil {
+	if err := security.InitSecurityContext(logger, p.clusterAddr, p.srvrCertFile, p.srvrKeyFile,
+		p.caFile, p.clientCertFile, p.clientKeyFile, encryptLocalHost); err != nil {
 		return err
 	}
 	return nil
