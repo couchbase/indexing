@@ -5,15 +5,16 @@ services:
     build:
       dockerfile: ci_machine.dockerfile
       args:
-        PEGGED: $PEGGED
-        # RELEASE: 8.0.0
-        # MANIFEST: couchbase-server/morpheus/8.0.0.xml
+        PEGGED: ${PEGGED:-1000}
+        RELEASE: ${RELEASE:-8.0.0}
+        MANIFEST: ${MANIFEST:-couchbase-server/morpheus/8.0.0.xml}
         CIBOT: false
-        MODE: "unit,functional"
-        USERNAME: $GITHUB_USERNAME # gerrit username
+        MODE: ${MODE:-"unit,functional"}
+        USERNAME: ${GITHUB_USERNAME:-git} # gerrit username
+        TEST_NAME: ${TEST_NAME:-}
       tags:
         - ci_machine:latest
-        - ci_machine:$PEGGED
+        - ci_machine:${PEGGED:-1000}
       secrets:
         - github_key
         - gerrit_key
@@ -33,7 +34,7 @@ services:
       - var-www:/var/www:rw
       - $HOME/testdata:/home/bot/testdata
       # set your cb server root as $WORKSPACE to run CI tests on current set of scripts
-      - $WORKSPACE:/mnt/project
+      - ${WORKSPACE:-./../../../../../}:/mnt/project
     entrypoint: /home/bot/.ciscripts/secondary/tests/ci/scripts/setup/standalone-runner.sh
     extra_hosts:
       - "host.docker.internal:host-gateway"
