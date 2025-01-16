@@ -354,6 +354,12 @@ func (ms *mockSnapshot) Range(ctx IndexReaderContext, start IndexKey, end IndexK
 	return nil
 }
 
+func (s *mockSnapshot) Range2(ctx IndexReaderContext, low, high IndexKey,
+	inclusion Inclusion, callb EntryCallback, fincb FinishCallback,
+	inlineFilterCb InlineFilterCallback) error { // Supported only for BHIVE storage engine
+	return nil
+}
+
 func (ms *mockSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error) {
 	return ms.count, ms.err
 }
