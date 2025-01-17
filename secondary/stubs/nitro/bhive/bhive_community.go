@@ -1,3 +1,4 @@
+//go:build community
 // +build community
 
 package bhive
@@ -10,6 +11,10 @@ type StubType int
 var Diag StubType
 
 func SetMemoryQuota(_ int64) {
+}
+
+func GetMandatoryQuota() int64 {
+	return 0
 }
 
 func (d *StubType) HandleHttp(w http.ResponseWriter, r *http.Request) {

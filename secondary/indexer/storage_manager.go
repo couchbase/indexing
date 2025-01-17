@@ -2947,30 +2947,53 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64) {
 	// Storage takes 90% of the quota
 	storageQuota := int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC)
 
-	// TODO: replace below with GetMandatoryQuota and GetUsageRate based distribution
+	pMandQuota := plasma.GetMandatoryQuota()
+	if pMandQuota < 0 {
+		pMandQuota = 0
+	}
+	bMandQuota := bhive.GetMandatoryQuota()
+	if bMandQuota < 0 {
+		bMandQuota = 0
+	}
 
-	// Find the proportion of bhive indexes to total indexes
-	var numIdxs, numBhives int64
-	for _, inst := range s.indexInstMap.Get() {
+	var bhiveQuota, plasmaQuota int64
 
-		numIdxs++
+	remainingQuota := storageQuota
+	if (pMandQuota + bMandQuota) > storageQuota {
+		// there is not enough to satisfy even the mandatory
 
-		if inst.Defn.VectorMeta != nil && inst.Defn.VectorMeta.IsBhive {
-			numBhives++
+		if bMandQuota < remainingQuota {
+			// give at least bhive the mandatory
+			bhiveQuota = bMandQuota
+			remainingQuota -= bMandQuota
+
+		} else {
+			// not enough even for bhive to get mandatory
+			bhiveQuota = remainingQuota
+			remainingQuota = 0
+
 		}
-	}
 
-	var plasmaQuota, bhiveQuota int64
-	if numIdxs > 0 {
-		bhiveQuota = (storageQuota * numBhives) / numIdxs
+		plasmaQuota = remainingQuota
+		remainingQuota = 0
+
 	} else {
-		bhiveQuota = storageQuota / 2
+		// there is enough to give mandatory to both
+		plasmaQuota = pMandQuota
+		remainingQuota -= pMandQuota
+
+		bhiveQuota = remainingQuota
+		remainingQuota = 0
 	}
-	plasmaQuota = storageQuota - bhiveQuota
 
-	logging.Infof("storageMgr:redistributeMemoryQuota: bhiveQuota[%d] plasmaQuota[%d] numBhives[%d] numIdxs[%d]",
-		bhiveQuota, plasmaQuota, numBhives, numIdxs)
+	logging.Infof("storageMgr:redistributeMemoryQuota: bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d]",
+		bhiveQuota, plasmaQuota, storageQuota)
 
-	bhive.SetMemoryQuota(bhiveQuota)
-	plasma.SetMemoryQuota(plasmaQuota)
+	if bhiveQuota > 0 {
+		bhive.SetMemoryQuota(bhiveQuota)
+	}
+
+	if plasmaQuota > 0 {
+		plasma.SetMemoryQuota(plasmaQuota)
+	}
 }

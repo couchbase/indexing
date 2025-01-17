@@ -1,3 +1,4 @@
+//go:build !community
 // +build !community
 
 package plasma
@@ -10,6 +11,10 @@ var Diag = &ee.Diag
 
 func SetMemoryQuota(sz int64) {
 	ee.SetMemoryQuota(sz)
+}
+
+func GetMandatoryQuota() int64 {
+	return ee.GetMandatoryQuota()
 }
 
 func SetLogReclaimBlockSize(sz int64) {
