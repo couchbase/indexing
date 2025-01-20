@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
@@ -152,6 +153,10 @@ type ShardRebalancer struct {
 	batchBuildReqChCloseOnce sync.Once
 
 	droppedInstsInRebal map[c.IndexInstId]bool
+
+	localMeta          unsafe.Pointer
+	localMetaWaiterCnt atomic.Int32
+	localMetaError     atomic.Bool
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -255,6 +260,8 @@ func (sr *ShardRebalancer) observeRebalance() {
 
 	<-sr.waitForTokenPublish
 	<-sr.rpcCommandSyncChannel
+
+	go sr.localMetaFetcher()
 
 	err := metakv.RunObserveChildren(RebalanceMetakvDir, sr.processShardTokens, sr.metakvCancel)
 	if err != nil {
@@ -513,6 +520,46 @@ func (sr *ShardRebalancer) genPeerDestination(nodeUuid string) (string, error) {
 	}
 
 	return fmt.Sprintf("%v%v/", sr.transferScheme, addr), nil
+}
+
+func (sr *ShardRebalancer) localMetaFetcher() {
+	ticker := time.NewTicker(900 * time.Millisecond)
+	defer ticker.Stop()
+
+	refreshLocalMeta := func() {
+		newLocalMeta, err := getLocalMeta(sr.localaddr)
+		if err != nil {
+			l.Errorf("%v Error Fetching Local Meta %v %v", "ShardRebalancer::localMetaFetcher", sr.localaddr, err)
+			sr.localMetaError.Store(true)
+			return
+		}
+		newptr := unsafe.Pointer(newLocalMeta)
+		done := atomic.CompareAndSwapPointer(&sr.localMeta, atomic.LoadPointer(&sr.localMeta), newptr)
+		if !done {
+			l.Errorf("%v Error Updating Local Meta %v", "ShardRebalancer::localMetaFetcher", sr.localaddr)
+			sr.localMetaError.Store(true)
+		}
+		sr.localMetaError.Store(false)
+	}
+
+	for {
+		select {
+		case <-sr.cancel:
+			l.Infof("ShardRebalancer::initRebalAsync Cancel Received")
+			refreshLocalMeta()
+			return
+
+		case <-sr.done:
+			l.Infof("ShardRebalancer::initRebalAsync Done Received")
+			refreshLocalMeta()
+			return
+
+		case <-ticker.C:
+			if sr.localMetaWaiterCnt.Load() > 0 {
+				refreshLocalMeta()
+			}
+		}
+	}
 }
 
 func getTransferScheme(cfg c.Config) string {
@@ -1951,6 +1998,9 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		logging.Infof("ShardRebalancer::startShardRecovery Done with recovery for ttid: %v", ttid)
 	}()
 
+	sr.localMetaWaiterCnt.Add(1)
+	defer sr.localMetaWaiterCnt.Add(-1)
+
 	if err := lockShards(tt.ShardIds, sr.supvMsgch, true); err != nil {
 		logging.Errorf("ShardRebalancer::startShardRecovery, error observed while locking shards: %v, err: %v", tt.ShardIds, err)
 
@@ -2209,6 +2259,9 @@ func (sr *ShardRebalancer) startShardRecoveryNonServerless(ttid string, tt *c.Tr
 
 	start := time.Now()
 	logging.Infof("ShardRebalancer::startShardRecovery Starting to recover index instance for ttid: %v", ttid)
+
+	sr.localMetaWaiterCnt.Add(1)
+	defer sr.localMetaWaiterCnt.Add(-1)
 
 	defer func() {
 		logging.Infof("ShardRebalancer::startShardRecovery Done with recovery for ttid: %v, elapsed: %v", ttid, time.Since(start))
@@ -2520,6 +2573,7 @@ func (sr *ShardRebalancer) waitForIndexState(expectedState c.IndexState,
 
 	retryInterval := time.Duration(1)
 	retryCount := 0
+	retryOnce := true
 loop:
 	for {
 
@@ -2557,14 +2611,18 @@ loop:
 				return err
 			}
 
-			localMeta, err := getLocalMeta(sr.localaddr)
-			if err != nil {
-				l.Errorf("ShardRebalancer::waitForIndexState Error Fetching Local Meta %v %v", sr.localaddr, err)
-				retryCount++
+			localMeta := (*manager.LocalIndexMetadata)(atomic.LoadPointer(&sr.localMeta))
 
-				if retryCount > 5 {
-					return err // Return after 5 unsuccessful attempts
+			if localMeta == nil || sr.localMetaError.Load() {
+				if sr.localMetaError.Load() {
+					err := fmt.Errorf("ShardRebalancer::waitForIndexState Error Fetching Local Meta %v", sr.localaddr)
+					retryCount++
+
+					if retryCount > 5 {
+						return err // Return after 5 unsuccessful attempts
+					}
 				}
+
 				time.Sleep(retryInterval * time.Second)
 				goto loop
 			}
@@ -2589,6 +2647,13 @@ loop:
 					logging.Warnf("ShardRebalancer::waitForIndexState, Could not get index status. "+
 						"scope/collection/index are likely dropped. Skipping instId: %v, indexState: %v, "+
 						"ttid: %v", instId, indexState, ttid)
+
+					if retryOnce {
+						retryOnce = false
+						time.Sleep(retryInterval * time.Second)
+						goto loop // Retry
+					}
+
 					continue
 				} else if err != "" {
 					l.Errorf("ShardRebalancer::waitForIndexState Error Fetching Index Status %v %v", sr.localaddr, err)
