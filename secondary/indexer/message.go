@@ -229,6 +229,7 @@ const (
 	STOP_PEER_SERVER
 
 	CODEBOOK_TRANSFER_RESPONSE
+	BHIVE_GRAPH_READY
 )
 
 type Message interface {
@@ -3389,6 +3390,28 @@ func (m *MsgIndexTrainingDone) GetNlistMap() map[common.IndexInstId]map[common.P
 	return m.nlistInstPartMap
 }
 
+type MsgBhiveGraphReady struct {
+	idxDefnId  common.IndexDefnId
+	idxInstId  common.IndexInstId
+	idxPartnId common.PartitionId
+}
+
+func (m *MsgBhiveGraphReady) GetMsgType() MsgType {
+	return BHIVE_GRAPH_READY
+}
+
+func (m *MsgBhiveGraphReady) GetDefnId() common.IndexDefnId {
+	return m.idxDefnId
+}
+
+func (m *MsgBhiveGraphReady) GetInstId() common.IndexInstId {
+	return m.idxInstId
+}
+
+func (m *MsgBhiveGraphReady) GetPartnId() common.PartitionId {
+	return m.idxPartnId
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3731,6 +3754,8 @@ func (m MsgType) String() string {
 		return "INDEX_TRAINING_DONE"
 	case CODEBOOK_TRANSFER_RESPONSE:
 		return "CODEBOOK_TRANSFER_RESPONSE"
+	case BHIVE_GRAPH_READY:
+		return "BHIVE_GRAPH_READY"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

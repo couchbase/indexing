@@ -1509,10 +1509,17 @@ func (s *storageMgr) notifyBuildDone(oldIndexInstMap common.IndexInstMap) {
 		for _, partnInst := range partnMap {
 			slices := partnInst.Sc.GetAllSlices()
 			for _, slice := range slices {
-				slice.BuildDone()
+				slice.BuildDone(s.buildDoneCallback)
 			}
 		}
 	}
+}
+
+type BuildDoneCallback func(Message)
+
+func (s *storageMgr) buildDoneCallback(msg Message) {
+	//forward the message to the supervisor
+	s.supvRespch <- msg
 }
 
 func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {

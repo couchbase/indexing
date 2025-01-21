@@ -3767,7 +3767,7 @@ func (mdb *plasmaSlice) RecoveryDone() {
 	plasma.RecoveryDone()
 }
 
-func (mdb *plasmaSlice) BuildDone() {
+func (mdb *plasmaSlice) BuildDone(callb BuildDoneCallback) {
 	mdb.mainstore.BuildDone()
 	if !mdb.isPrimary {
 		mdb.backstore.BuildDone()

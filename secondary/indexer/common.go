@@ -211,6 +211,8 @@ type MetaUpdateFields struct {
 	version         bool
 	partnShardIdMap common.PartnShardIdMap
 	trainingPhase   bool
+
+	partnBhiveGraphStatus map[common.PartitionId]bool
 }
 
 type EncodeCompatMode int

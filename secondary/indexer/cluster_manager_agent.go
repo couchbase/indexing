@@ -225,6 +225,9 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		updatedShardIds := make(common.PartnShardIdMap)
 		partnShardMap := updatedFields.partnShardIdMap
 
+		partnBhiveGraphStatus := updatedFields.partnBhiveGraphStatus
+		updatedBhiveGraphStatus := make(map[common.PartitionId]bool)
+
 		if updatedFields.state {
 			updatedState = index.State
 		}
@@ -255,20 +258,26 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		updatedTrainingPhase := index.TrainingPhase
 		numCentroids := index.GetNumCentroids()
 
+		if len(partnBhiveGraphStatus) > 0 {
+			for partnId, ready := range partnBhiveGraphStatus {
+				updatedBhiveGraphStatus[partnId] = ready
+			}
+		}
+
 		var err error
 		if syncUpdate {
 			go func() {
 				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
 					index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
 					updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds,
-					updatedTrainingPhase, numCentroids)
+					updatedTrainingPhase, numCentroids, updatedBhiveGraphStatus)
 				respCh <- err
 			}()
 		} else {
 			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
 				index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
 				updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds,
-				updatedTrainingPhase, numCentroids)
+				updatedTrainingPhase, numCentroids, updatedBhiveGraphStatus)
 		}
 		common.CrashOnError(err)
 	}

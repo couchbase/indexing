@@ -67,6 +67,8 @@ type IndexPartDistribution struct {
 	KeyPartition      IndexKeyPartDistribution    `json:"keyPartition,omitempty"`
 	ShardIds          []common.ShardId            `json:"shardIds,omitempty"`
 	AlternateShardIds []string                    `json:"alternateShardIds,omitempty"`
+
+	BhiveGraphReady bool `json:"bhiveGraphReady,omitempty"`
 }
 
 type IndexSinglePartDistribution struct {
@@ -332,6 +334,36 @@ func (t *IndexTopology) UpdateTrainingPhaseForIndex(defnId common.IndexDefnId, i
 		}
 	}
 	return false
+}
+
+// Update bhive graph status
+func (t *IndexTopology) UpdateBhiveGraphStatusForIndexPartn(defnId common.IndexDefnId,
+	instId common.IndexInstId, bhiveGraphStatusMap map[common.PartitionId]bool) bool {
+
+	changed := false
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					partitions := t.Definitions[i].Instances[j].Partitions
+					for ipartnId, ready := range bhiveGraphStatusMap {
+						for k, partn := range partitions {
+							if uint64(ipartnId) == partn.PartId {
+								t.Definitions[i].Instances[j].Partitions[k].BhiveGraphReady = ready
+								logging.Debugf("IndexTopology.UpdateBhiveGraphStatusForIndexPartn(): Update index '%v' inst '%v' partnId '%v' with bhiveGraphReady '%v'",
+									defnId, t.Definitions[i].Instances[j].InstId, ipartnId, ready)
+								changed = true
+							}
+						}
+						if !changed {
+							logging.Warnf("IndexTopology.UpdateBhiveGraphStatusForIndexPartn(): No matching partition index '%v' inst '%v' partnId '%v' for update '%v'", defnId, t.Definitions[i].Instances[j].InstId, ipartnId, bhiveGraphStatusMap)
+						}
+					}
+				}
+			}
+		}
+	}
+	return changed
 }
 
 // Update shardIds on instance
