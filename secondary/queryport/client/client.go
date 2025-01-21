@@ -138,10 +138,10 @@ type IndexKeyOrder struct {
 }
 
 type IndexVector struct {
-	QueryVector  []float32 // query vector
-	IndexKeyPos  int       // vector key pos in index
-	Probes       int       // nprobes
-	ActualVector bool      // Use actual vector
+	QueryVector []float32 // query vector
+	IndexKeyPos int       // vector key pos in index
+	Probes      int       // nprobes
+	Rerank      bool      // Enable reranking by using actual vector
 }
 
 const (

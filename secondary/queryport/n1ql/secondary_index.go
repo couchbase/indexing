@@ -2836,10 +2836,10 @@ func n1qlindexvectortogsi(indexVector *datastore.IndexVector) *qclient.IndexVect
 	}
 
 	vec := &qclient.IndexVector{
-		QueryVector:  make([]float32, len(indexVector.QueryVector)),
-		IndexKeyPos:  indexVector.IndexKeyPos,
-		Probes:       indexVector.Probes,
-		ActualVector: indexVector.ActualVector,
+		QueryVector: make([]float32, len(indexVector.QueryVector)),
+		IndexKeyPos: indexVector.IndexKeyPos,
+		Probes:      indexVector.Probes,
+		Rerank:      indexVector.ReRank,
 	}
 
 	for i, o := range indexVector.QueryVector {

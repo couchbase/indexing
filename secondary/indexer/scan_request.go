@@ -554,7 +554,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			}
 
 			r.projectVectorDist = r.ProjectVectorDist()
-			r.setRerankLimits()
+			r.setRerankLimits(req.GetIndexVector())
 			protoIndexOrder := req.GetIndexOrder()
 			if r.indexOrder, err = validateIndexOrder(protoIndexOrder,
 				r.IndexInst.Defn.Desc, r.vectorPos); err != nil {
@@ -656,7 +656,13 @@ func (r *ScanRequest) setVectorIndexParamsFromDefn() (err error) {
 	return nil
 }
 
-func (r *ScanRequest) setRerankLimits() {
+func (r *ScanRequest) setRerankLimits(requestVector *protobuf.IndexVector) {
+
+	if requestVector != nil && requestVector.GetRerank() == false {
+		r.enableReranking = false
+		return
+	}
+
 	// Re-ranking is supported only for BHIVE indexes
 	if !r.isBhiveScan {
 		r.enableReranking = false
