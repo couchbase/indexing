@@ -1,3 +1,4 @@
+//go:build community
 // +build community
 
 package plasma
@@ -12,6 +13,10 @@ type StubType int
 var Diag StubType
 
 func SetMemoryQuota(_ int64) {
+}
+
+func GetMandatoryQuota() int64 {
+	return 0
 }
 
 func SetLogReclaimBlockSize(_ int64) {

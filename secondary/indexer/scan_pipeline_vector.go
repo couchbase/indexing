@@ -319,7 +319,11 @@ func (w *ScanWorker) Scanner() {
 		} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
 			err = snap.Range(ctx, scan.Low, scan.High, scan.Incl, handler, fincb)
 		} else if w.r.isBhiveScan {
-			err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, handler, fincb, w.inlineFilterCb)
+			if w.r.inlineFilterExpr != nil {
+				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, handler, fincb, w.inlineFilterCb)
+			} else {
+				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, handler, fincb, nil)
+			}
 		} else {
 			err = snap.Lookup(ctx, scan.Low, handler, fincb)
 		}
