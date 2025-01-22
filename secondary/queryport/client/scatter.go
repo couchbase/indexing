@@ -108,6 +108,7 @@ type RequestBroker struct {
 	limit          int64
 	offset         int64
 	sorted         bool // return rows in sorted order?
+	sortkeyNeeded  bool
 	pushdownLimit  int64
 	pushdownOffset int64
 	pushdownSorted bool
@@ -122,6 +123,7 @@ type RequestBroker struct {
 	// IndexKeyOrder for sorting purpose. These additions keys need to be
 	// pruned from index entry row before sending to N1QL
 	indexOrderPosPruneMap map[int64]bool
+	indexPosToProjnPos    map[int]int
 
 	// stats
 	sendCount    int64
@@ -843,7 +845,8 @@ func (c *RequestBroker) sort(rows []Row, sorted []int) bool {
 
 				if rows[sorted[i]].last && !rows[sorted[j]].last ||
 					(!rows[sorted[i]].last && !rows[sorted[j]].last &&
-						c.compareKey(rows[sorted[i]].value, rows[sorted[j]].value) > 0) {
+						((!c.sortkeyNeeded && c.compareKey(rows[sorted[i]].value, rows[sorted[j]].value) > 0) ||
+							c.sortkeyNeeded && c.compareForOrderBy(rows[sorted[i]].value, rows[sorted[j]].value) > 0)) {
 					tmp := sorted[i]
 					sorted[i] = sorted[j]
 					sorted[j] = tmp
@@ -887,7 +890,8 @@ func (c *RequestBroker) pick(rows []Row, sorted []int) int {
 			// last value always sorted last
 			if rows[sorted[pos]].last && !rows[sorted[i]].last ||
 				(!rows[sorted[pos]].last && !rows[sorted[i]].last &&
-					c.compareKey(rows[sorted[pos]].value, rows[sorted[i]].value) > 0) {
+					((!c.sortkeyNeeded && c.compareKey(rows[sorted[pos]].value, rows[sorted[i]].value) > 0) ||
+						c.sortkeyNeeded && c.compareForOrderBy(rows[sorted[pos]].value, rows[sorted[i]].value) > 0)) {
 
 				tmp := sorted[pos]
 				sorted[pos] = sorted[i]
@@ -1178,6 +1182,23 @@ func (c *RequestBroker) compareKey(key1, key2 []value.Value) int {
 	}
 
 	return ln1 - ln2
+}
+
+func (c *RequestBroker) compareForOrderBy(key1, key2 []value.Value) int {
+	for i, keyPos := range c.indexOrder.KeyPos {
+		desc := c.indexOrder.Desc[i]
+		projPos := c.indexPosToProjnPos[keyPos]
+		if r := key1[projPos].Collate(key2[projPos]); r != 0 {
+			// asecending
+			if !desc {
+				return r
+			}
+
+			// descending
+			return 0 - r
+		}
+	}
+	return 0
 }
 
 // This function compares the primary key.
@@ -1922,11 +1943,38 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 
 	if c.indexOrder != nil {
 
+		// Check if sortKey is needed or not. If keys in indexOrder and and actual index
+		// are different order we will need sortKey this can happen for vector indexes
+		// OrderBy pushdowns for BHive are not implemented yet
+		if c.defn.NonBhiveVectorIndex() {
+			lastKeyPos := -1
+			for _, indexKeyPos := range c.indexOrder.KeyPos {
+				if lastKeyPos+1 != indexKeyPos {
+					c.sortkeyNeeded = true
+					break
+				}
+				lastKeyPos = indexKeyPos
+			}
+
+			c.indexPosToProjnPos = make(map[int]int)
+		}
+
 		projection := make(map[int64]bool)
 		if c.projections != nil && len(c.projections.EntryKeys) != 0 {
 			// Entry key can be an index key, group key expression, or aggregate expression.
-			for _, position := range c.projections.EntryKeys {
-				projection[position] = true
+			for projnKeyPos, indexKeyPos := range c.projections.EntryKeys {
+				projection[indexKeyPos] = true
+				if c.defn.NonBhiveVectorIndex() {
+					c.indexPosToProjnPos[int(indexKeyPos)] = projnKeyPos
+				}
+			}
+		} else {
+			if c.defn.NonBhiveVectorIndex() {
+				// When projecting everything we project it in indexOrder so index order
+				// and projection order is same
+				for i := range c.defn.SecExprs {
+					c.indexPosToProjnPos[i] = i
+				}
 			}
 		}
 
@@ -1950,6 +1998,9 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 					c.indexOrderPosPruneMap[int64(order)] = true
 				}
 				projection[int64(order)] = true
+				if c.defn.NonBhiveVectorIndex() {
+					c.indexPosToProjnPos[order] = len(c.projections.EntryKeys) - 1
+				}
 			}
 		}
 	}
@@ -1981,7 +2032,7 @@ func (c *RequestBroker) analyzeProjection(partitions [][]common.PartitionId, num
 	}
 
 	// order-by is pushed down only if order-by keys match leading index keys
-	//
+	// except in case of vector indexes with limit pushdown
 	// If there is a projection list, cbq will have added any order-by keys
 	// to it (handled by "if" block). "Else if" block handles the special
 	// case where there is an order-by but no projection list because primary

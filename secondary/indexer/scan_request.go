@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -222,7 +223,8 @@ type Scan struct {
 	Filters  []Filter // A collection qualifying filters
 	Equals   IndexKey // TODO: Remove Equals
 
-	MultiCentroid bool // Set to true when one scan filters data of multiple centroids
+	MultiCentroid bool  // Set to true when one scan filters data of multiple centroids
+	cid           int64 // If not multicentroid save cid here
 }
 
 type Filter struct {
@@ -838,7 +840,15 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 		r.perPartnScanParallelism = len(scansGenerated)
 
 		for id, scan := range scansGenerated {
-			scansForPartns[partnId][int64(id)] = []Scan{scan}
+			// If its not Multicentroid scan cid is used in distance calculations when using SIMD
+			// so get the correct value from the scan low and high key
+			// If its Multicentroid scan cid can be any mutually exclusive number as its not being
+			// used for calculating distance
+			cid := int64(id)
+			if !scan.MultiCentroid {
+				cid = scan.cid
+			}
+			scansForPartns[partnId][cid] = []Scan{scan}
 		}
 	}
 	r.vectorScans = scansForPartns
@@ -1193,7 +1203,7 @@ func (r *ScanRequest) fillFilterEquals(protoScan *protobuf.Scan, filter *Filter)
 // Create scans from sorted Index Points
 // Iterate over sorted points and keep track of applicable filters
 // between overlapped regions
-func (r *ScanRequest) composeScans(points []IndexPoint, filters []Filter) []Scan {
+func (r *ScanRequest) composeScans(points []IndexPoint, filters []Filter) ([]Scan, error) {
 
 	var scans []Scan
 	filtersMap := make(map[int]bool)
@@ -1246,7 +1256,10 @@ func (r *ScanRequest) composeScans(points []IndexPoint, filters []Filter) []Scan
 							cho = highFilter.centroidOffsetHighKey
 							chl = highFilter.centroidLenHighKey
 						}
-						scan.setMultiCentroidScan(clo, cll, cho, chl)
+						err := scan.setMultiCentroidScan(clo, cll, cho, chl)
+						if err != nil {
+							return nil, err
+						}
 					}
 					scans = append(scans, scan)
 					filtersList = nil
@@ -1272,7 +1285,7 @@ func (r *ScanRequest) composeScans(points []IndexPoint, filters []Filter) []Scan
 		// TODO: Optimzation if single CEF in all filters (for both primary and secondary)
 	}
 
-	return scans
+	return scans, nil
 }
 
 // /// Compose Scans for Primary Index
@@ -1538,7 +1551,10 @@ func (r *ScanRequest) makeScans(protoScans []*protobuf.Scan) (s []Scan, localErr
 
 	// Sort Index Points
 	sort.Sort(IndexPoints(points))
-	scans := r.composeScans(points, filters)
+	scans, err := r.composeScans(points, filters)
+	if err != nil {
+		return nil, err
+	}
 
 	r.maxCompositeFilters = 0
 	for _, sc := range scans {
@@ -1569,17 +1585,33 @@ func (r *ScanRequest) makeScans(protoScans []*protobuf.Scan) (s []Scan, localErr
 	return scans, nil
 }
 
-func (s *Scan) setMultiCentroidScan(centroidOffsetLowKey, centroidLenLowKey, centroidOffsetHighKey, centroidLenHighKey int) {
+func (s *Scan) setMultiCentroidScan(centroidOffsetLowKey, centroidLenLowKey,
+	centroidOffsetHighKey, centroidLenHighKey int) (err error) {
+
 	// One the keys before centroid was either Min or Max
 	if centroidLenLowKey == 0 || centroidLenHighKey == 0 {
 		s.MultiCentroid = true
-		return
+		return nil
 	}
 
 	lowBytes := s.Low.Bytes()
 	highBytes := s.High.Bytes()
 	s.MultiCentroid = bytes.Compare(lowBytes[centroidOffsetLowKey:centroidOffsetLowKey+centroidLenLowKey],
 		highBytes[centroidOffsetHighKey:centroidOffsetHighKey+centroidLenHighKey]) != 0
+	if !s.MultiCentroid {
+		cidCode := lowBytes[centroidOffsetLowKey : centroidOffsetLowKey+centroidLenLowKey]
+		cidByte := make([]byte, len(cidCode)*3)
+		cidByte, err = jsonEncoder.Decode(cidCode, cidByte)
+		if err != nil {
+			return err
+		}
+		cidVal := value.NewValue(cidByte)
+		s.cid, err = strconv.ParseInt(cidVal.Actual().(string), 16, 64)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Populate list of positions of keys which need to be

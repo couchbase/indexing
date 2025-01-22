@@ -1932,7 +1932,7 @@ func (w *ScanWorker) makeSortKeyForOrderBy(compositeKeys [][]byte, indexOrder *I
 		}
 	}
 
-	for _, keyPos := range indexOrder.keyPos {
+	for i, keyPos := range indexOrder.keyPos {
 		if keyPos == int32(vectorKeyPos) {
 			distVal := n1qlval.NewValue(float64(dist))
 			encodeBuf := make([]byte, 0, distVal.Size()*3)
@@ -1952,7 +1952,7 @@ func (w *ScanWorker) makeSortKeyForOrderBy(compositeKeys [][]byte, indexOrder *I
 			continue
 		}
 		revBuf := compositeKeys[keyPos]
-		if desc != nil && desc[keyPos] {
+		if desc != nil && desc[keyPos] != indexOrder.desc[i] {
 			revBuf = make([]byte, 0)
 			revBuf = append(revBuf, compositeKeys[keyPos]...)
 			FlipBits(revBuf)

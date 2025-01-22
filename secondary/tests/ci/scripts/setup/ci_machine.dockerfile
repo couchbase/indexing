@@ -84,6 +84,7 @@ ARG MODE="sanity,unit,functional,integration"
 ARG BRANCH="unstable"
 ARG STORAGE="plasma"
 ARG PEGGED
+ARG TEST_NAME
 
 # setup .cienv file on the basis of ARGS
 COPY <<EOF /home/bot/.cienv
@@ -97,6 +98,7 @@ export BRANCH=${BRANCH}
 export STORAGE=${STORAGE}
 export PEGGED=${PEGGED}
 export PATH=$PATH:${ciscripts_dir}/secondary/tests/ci/scripts/
+export TEST_NAME=${TEST_NAME}
 alias repo='repo --color=never'
 EOF
 

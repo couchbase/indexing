@@ -2467,13 +2467,21 @@ loop:
 					if tt.State == c.TransferTokenReady || tt.State == c.TransferTokenCommit {
 						continue
 					}
+					indexState, err := getIndexStatusFromMeta(tt, localMeta)
+
+					if indexState == c.INDEX_STATE_READY && err != "" && common.IsVectorTrainingErrorQualifyingDocs(err) {
+						logging.Infof("%v skipping tt:%v err:%v", _waitForIndexBuild, tt, err)
+						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
+						setTransferTokenInMetakv(ttid, tt)
+
+						continue
+					}
 					allTokensReady = false
 
 					if tt.State == c.TransferTokenMerge {
 						continue
 					}
 
-					indexState, err := getIndexStatusFromMeta(tt, localMeta)
 					if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
 						if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
 							errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)
@@ -2629,9 +2637,16 @@ loop:
 						continue
 					}
 
+					indexState, err := getIndexStatusFromMeta(tt, localMeta)
+					if indexState == c.INDEX_STATE_READY && err != "" && common.IsVectorTrainingErrorQualifyingDocs(err) {
+						logging.Infof("%v skipping tt:%v err:%v", _waitForIndexBuildBatch, tt, err)
+						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
+						setTransferTokenInMetakv(ttid, tt)
+						continue
+					}
+
 					allBuildsDone = false
 
-					indexState, err := getIndexStatusFromMeta(tt, localMeta)
 					if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
 						if err != "" && (common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err)) {
 							errStr = fmt.Sprintf("Error encountered for InstId:%v err:%v", tt.InstId, err)

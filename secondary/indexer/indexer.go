@@ -13443,6 +13443,10 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 			maxSampleSize = max(maxSampleSize, vm.TrainList)
 		}
 	}
+	if maxSampleSize > int(itemsCount) {
+		logging.Infof("Indexer::getMaxSampleSize updating new maxSampleSize from %v to %v", maxSampleSize, itemsCount)
+		maxSampleSize = int(itemsCount)
+	}
 
 	return int64(maxSampleSize), vectorInsts, trainedOrNonVecInsts
 }
@@ -13559,7 +13563,10 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	multiplier := getMultiplierForSample(itemsCount, maxRetry, initialSampleSize)
 	maxRatio := 1
 
-	if retry > 0 {
+	if retry == 0 && maxSampleSize >= int64(itemsCount) {
+		logging.Infof("Indexer::initiateTraining updating retry from %v to %v", retry, maxRetry)
+		retry = maxRetry
+	} else if retry > 0 {
 
 		for _, ratio := range retryTrainingInstRatioMap {
 			maxRatio = max(maxRatio, ratio)
