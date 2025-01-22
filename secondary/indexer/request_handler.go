@@ -1041,7 +1041,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 						state != common.INDEX_STATE_DELETED &&
 						state != common.INDEX_STATE_NIL {
 
-						stateStr := getStateStr(&instance, state, len(errStr) != 0, stats, defn.IsVectorIndex)
+						stateStr := getStateStr(&instance, state, len(errStr) != 0, stats, &defn)
 
 						name := common.FormatIndexInstDisplayName(defn.Name, int(instance.ReplicaId))
 						prefix := common.GetStatsPrefix(defn.Bucket, defn.Scope, defn.Collection,
@@ -1318,7 +1318,7 @@ func (m *requestHandlerContext) getCachedIndexerNodeUUIDs() (nodeUUIDs []service
 // getStateStr is a helper for getIndexStatus that returns the IndexStatus.Status string for the
 // given instance given its state, stateError, and stats.
 func getStateStr(instance *manager.IndexInstDistribution, state common.IndexState, stateError bool,
-	stats *common.Statistics, vectorIndex bool) string {
+	stats *common.Statistics, defn *common.IndexDefn) string {
 
 	if stateError {
 		return "Error"
@@ -1333,7 +1333,22 @@ func getStateStr(instance *manager.IndexInstDistribution, state common.IndexStat
 	case common.INDEX_STATE_CATCHUP:
 		stateStr = "Building"
 	case common.INDEX_STATE_ACTIVE:
-		stateStr = "Ready"
+		if defn.IsBhive() {
+			graphPending := false
+			for _, partn := range instance.Partitions {
+				if !partn.BhiveGraphReady {
+					graphPending = true
+				}
+			}
+			//if graph build is pending, report state as "Building"
+			if graphPending {
+				stateStr = "Building"
+			} else {
+				stateStr = "Ready"
+			}
+		} else {
+			stateStr = "Ready"
+		}
 	}
 	if instance.RState == uint32(common.REBAL_PENDING) && state != common.INDEX_STATE_READY {
 		stateStr = "Moving"
@@ -1358,7 +1373,7 @@ func getStateStr(instance *manager.IndexInstDistribution, state common.IndexStat
 			}
 		}
 		if instance.TrainingPhase == common.TRAINING_IN_PROGRESS {
-			if vectorIndex {
+			if defn.IsVectorIndex {
 				stateStr = "Training"
 			} else {
 				stateStr = "Scheduled for build"
