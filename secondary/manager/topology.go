@@ -850,6 +850,21 @@ func (t *IndexTopology) GetShardInfoForInst(defn common.IndexDefnId,
 	return nil, nil
 }
 
+func (t *IndexTopology) GetBhiveGraphStatusForInst(defn common.IndexDefnId,
+	instId common.IndexInstId) map[common.PartitionId]bool {
+
+	inst := t.GetIndexInstByDefn(defn, instId)
+	if inst != nil {
+		bhiveGraphStatus := make(map[common.PartitionId]bool)
+
+		for _, partn := range inst.Partitions {
+			bhiveGraphStatus[common.PartitionId(partn.PartId)] = partn.BhiveGraphReady
+		}
+		return bhiveGraphStatus
+	}
+	return nil
+}
+
 /*
 //
 // Get all index instance Id's for a specific defnition

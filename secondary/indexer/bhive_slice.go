@@ -1501,16 +1501,16 @@ func (mdb *bhiveSlice) RecoveryDone() {
 
 }
 
-func (mdb *bhiveSlice) BuildDone(callb BuildDoneCallback) {
+func (mdb *bhiveSlice) BuildDone(idxInstId common.IndexInstId, callb BuildDoneCallback) {
 	count := mdb.mainstore.ItemCount()
 	logging.Infof("bhiveSlice: BuildDone.  Item count %v", count)
 
 	atomic.StoreInt32(&mdb.isInitialBuild, 0)
 
-	go mdb.buildGraph(callb)
+	go mdb.buildGraph(idxInstId, callb)
 }
 
-func (mdb *bhiveSlice) buildGraph(callb BuildDoneCallback) {
+func (mdb *bhiveSlice) buildGraph(idxInstId common.IndexInstId, callb BuildDoneCallback) {
 
 	donech := make(chan bool)
 
@@ -1524,7 +1524,7 @@ func (mdb *bhiveSlice) buildGraph(callb BuildDoneCallback) {
 		//send message to the indexer
 		resp := &MsgBhiveGraphReady{
 			idxDefnId:  mdb.idxDefnId,
-			idxInstId:  mdb.idxInstId,
+			idxInstId:  idxInstId, //use proxy instId instead of realInstId for correct metadata update
 			idxPartnId: mdb.idxPartnId,
 		}
 		callb(resp)

@@ -1509,7 +1509,7 @@ func (s *storageMgr) notifyBuildDone(oldIndexInstMap common.IndexInstMap) {
 		for _, partnInst := range partnMap {
 			slices := partnInst.Sc.GetAllSlices()
 			for _, slice := range slices {
-				slice.BuildDone(s.buildDoneCallback)
+				slice.BuildDone(idxInstId, s.buildDoneCallback)
 			}
 		}
 	}

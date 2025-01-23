@@ -47,7 +47,7 @@ type Slice interface {
 	GetReaderContext(user string, skipReadMetering bool) IndexReaderContext
 
 	RecoveryDone()
-	BuildDone(BuildDoneCallback)
+	BuildDone(common.IndexInstId, BuildDoneCallback)
 
 	GetShardIds() []common.ShardId
 	ClearRebalRunning()

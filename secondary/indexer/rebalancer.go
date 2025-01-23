@@ -2539,7 +2539,9 @@ loop:
 							numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
 							tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
 					}
-					if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
+					bhiveGraphReady := checkBhiveInstGraphReady(tt, localMeta)
+					if indexState == c.INDEX_STATE_ACTIVE && bhiveGraphReady &&
+						remainingBuildTime < maxRemainingBuildTime {
 						r.destTokenToMergeOrReadyLOCKED(ttid, tt)
 					}
 				}
@@ -2704,7 +2706,9 @@ loop:
 							numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
 							tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
 					}
-					if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
+					bhiveGraphReady := checkBhiveInstGraphReady(tt, localMeta)
+					if indexState == c.INDEX_STATE_ACTIVE && bhiveGraphReady &&
+						remainingBuildTime < maxRemainingBuildTime {
 						logging.Infof("%v Index: %v:%v:%v:%v BuildDone", _waitForIndexBuildBatch, defn.Bucket,
 							defn.Scope, defn.Collection, defn.Name)
 						tokenBuildDone[ttid] = true
@@ -3269,6 +3273,34 @@ func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMe
 	}
 
 	return state, errMsg
+}
+
+func checkBhiveInstGraphReady(tt *c.TransferToken, localMeta *manager.LocalIndexMetadata) bool {
+
+	inst := tt.IndexInst
+
+	//for non Bhive index always return true
+	if !inst.Defn.IsBhive() {
+		return true
+	}
+
+	topology := findTopologyByCollection(localMeta.IndexTopologies, inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
+	if topology == nil {
+		return false
+	}
+
+	bhiveGraphStatus := topology.GetBhiveGraphStatusForInst(inst.Defn.DefnId, tt.InstId)
+	if bhiveGraphStatus == nil && tt.RealInstId != 0 {
+		bhiveGraphStatus = topology.GetBhiveGraphStatusForInst(inst.Defn.DefnId, tt.RealInstId)
+	}
+	//all partitions need to be ready for the instance to be considered ready
+	for _, ready := range bhiveGraphStatus {
+		if !ready {
+			return false
+		}
+	}
+
+	return true
 }
 
 // getDestNode returns the key of the partitionMap entry whose value
