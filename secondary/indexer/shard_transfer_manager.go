@@ -58,6 +58,8 @@ type ShardTransferManager struct {
 	rpcMutex            sync.Mutex
 	rpcSrv              plasma.RPCServer
 	shouldRpcSrvBeAlive atomic.Bool // true when rpc server is started; false when it is supposed to be shutdown
+
+	shardTypeMapper *ShardTypeMapper
 }
 
 func NewShardTransferManager(config common.Config, supvWrkrCh chan Message) *ShardTransferManager {
@@ -69,6 +71,8 @@ func NewShardTransferManager(config common.Config, supvWrkrCh chan Message) *Sha
 		supvWrkrCh:         supvWrkrCh,
 
 		shouldRpcSrvBeAlive: atomic.Bool{},
+
+		shardTypeMapper: NewShardTypeMapper(),
 	}
 	stm.shouldRpcSrvBeAlive.Store(false)
 
@@ -1747,4 +1751,36 @@ func getCodebookRootDir(copyConfig *plasmaCopyConfigMeta) string {
 
 	prefix := fmt.Sprintf("%s_%s", formatUUID(rebalanceId), formatUUID(ttid))
 	return joinURIPath(destination, CODEBOOK_COPY_PREFIX, prefix)
+}
+
+type ShardTypeMapper struct {
+	RWLock       sync.RWMutex
+	ShardTypeMap map[c.ShardId]c.ShardType
+}
+
+func NewShardTypeMapper() *ShardTypeMapper {
+	stm := &ShardTypeMapper{
+		ShardTypeMap: make(map[c.ShardId]c.ShardType),
+	}
+	return stm
+}
+
+func (shardTypeMgr *ShardTypeMapper) AddShardIds(shardType c.ShardType, shardIds []c.ShardId) {
+	shardTypeMgr.RWLock.Lock()
+	defer shardTypeMgr.RWLock.Unlock()
+
+	for _, shardId := range shardIds {
+		shardTypeMgr.ShardTypeMap[shardId] = shardType
+	}
+}
+
+func (shardTypeMgr *ShardTypeMapper) GetShardType(shardId c.ShardId) c.ShardType {
+	shardTypeMgr.RWLock.RLock()
+	defer shardTypeMgr.RWLock.RUnlock()
+
+	if _, ok := shardTypeMgr.ShardTypeMap[shardId]; !ok {
+		logging.Infof("ShardTypeMapper::GetShardType did not find the ShardId:%v", shardId)
+		return c.UNSET_SHARD_TYPE
+	}
+	return shardTypeMgr.ShardTypeMap[shardId]
 }
