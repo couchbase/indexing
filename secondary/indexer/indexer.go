@@ -1688,6 +1688,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		RESTORE_AND_UNLOCK_LOCKED_SHARDS,
 		START_PEER_SERVER,
 		STOP_PEER_SERVER,
+		POPULATE_SHARD_TYPE,
 		PERSISTANCE_STATUS:
 
 		idx.storageMgrCmdCh <- msg
@@ -6567,7 +6568,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool,
 	ephemeral bool, numVBuckets int, partnStats map[common.PartitionId]*IndexStats,
 	memQuota int64, cancelCh chan bool) (
-	// return values
+// return values
 	PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
 
 	//initialize partitionInstMap for this index

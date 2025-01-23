@@ -191,6 +191,10 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 	case STOP_PEER_SERVER:
 		forceLog = true
 		stm.handleStopPeerServer(cmd)
+
+	case POPULATE_SHARD_TYPE:
+		forceLog = true
+		stm.handlePopulateShardType(cmd)
 	}
 	logProcessingTime(
 		"ShardTransferManager::handleStorageMgrCommands",
@@ -1659,6 +1663,19 @@ func authMiddlewareForShardTransfer(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (stm *ShardTransferManager) handlePopulateShardType(cmd Message) {
+	msg := cmd.(*MsgPopulateShardType)
+	shardIds := msg.GetShardIds()
+	shardType := msg.GetShardType()
+	ttid := msg.GetTransferId()
+
+	stm.shardTypeMapper.AddShardIds(shardType, shardIds)
+
+	logging.Infof("ShardTransferManager::handlePopulateShardType: ttid:%v"+
+		"populated the ShardType:%v for shardIds %v", ttid, shardType, shardIds)
+
 }
 
 func (stm *ShardTransferManager) TransferCodebook(codebookCopier plasma.Copier, codebookSrcPath string) error {

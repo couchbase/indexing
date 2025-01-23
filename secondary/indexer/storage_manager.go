@@ -357,6 +357,10 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		}
 		s.supvCmdch <- &MsgSuccess{}
 
+	case POPULATE_SHARD_TYPE:
+		s.handlePopulateShardType(cmd)
+		s.supvCmdch <- &MsgSuccess{}
+
 	case BHIVE_BUILD_GRAPH:
 		s.handleBuildBhiveGraph(cmd)
 
@@ -2731,6 +2735,27 @@ func (s *storageMgr) handleShardTransfer(cmd Message) {
 		)
 	}
 	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *storageMgr) handlePopulateShardType(cmd Message) {
+
+	msg := cmd.(*MsgPopulateShardType)
+	ttid := msg.GetTransferId()
+	shardIds := msg.GetShardIds()
+	doneCh := msg.GetDoneCh()
+
+	defer close(doneCh)
+
+	logging.Infof("StorageMgr::handlePopulateShardType For ttid:%v, adding the Shard type for shardIds:%v",
+		ttid, shardIds)
+	if s.stm != nil {
+		s.stm.ProcessCommand(cmd)
+	} else {
+		common.CrashOnError(
+			fmt.Errorf("StorageMgr::handlePopulateShardType ShardTransferManager Not Initialized during msg %v execution",
+				cmd),
+		)
+	}
 }
 
 func (s *storageMgr) ClearRebalanceRunning(cmd Message) {

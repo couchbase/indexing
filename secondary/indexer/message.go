@@ -229,6 +229,8 @@ const (
 	STOP_PEER_SERVER
 
 	CODEBOOK_TRANSFER_RESPONSE
+
+	POPULATE_SHARD_TYPE
 	BHIVE_GRAPH_READY
 	BHIVE_BUILD_GRAPH
 )
@@ -3430,6 +3432,33 @@ func (m *MsgBuildBhiveGraph) GetBhiveGraphStatus() map[common.PartitionId]bool {
 	return m.bhiveGraphStatus
 }
 
+type MsgPopulateShardType struct {
+	transferId string
+	shardType  common.ShardType
+	shardIds   []common.ShardId
+	doneCh     chan bool
+}
+
+func (m *MsgPopulateShardType) GetMsgType() MsgType {
+	return POPULATE_SHARD_TYPE
+}
+
+func (m *MsgPopulateShardType) GetTransferId() string {
+	return m.transferId
+}
+
+func (m *MsgPopulateShardType) GetShardIds() []common.ShardId {
+	return m.shardIds
+}
+
+func (m *MsgPopulateShardType) GetShardType() common.ShardType {
+	return m.shardType
+}
+
+func (m *MsgPopulateShardType) GetDoneCh() chan bool {
+	return m.doneCh
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3776,6 +3805,8 @@ func (m MsgType) String() string {
 		return "BHIVE_GRAPH_READY"
 	case BHIVE_BUILD_GRAPH:
 		return "BHIVE_BUILD_GRAPH"
+	case POPULATE_SHARD_TYPE:
+		return "POPULATE_SHARD_TYPE"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

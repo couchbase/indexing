@@ -1086,6 +1086,11 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 		sr.updateInstsTransferPhase(ttid, tt, common.RebalanceInitated)
 		sr.updateEmptyNodeBatching(tt.IsEmptyNodeBatch)
 
+		if err := sr.populateShardTypes(ttid, tt); err != nil {
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return true
+		}
+
 		tt.ShardTransferTokenState = c.ShardTokenScheduledOnSource
 		setTransferTokenInMetakv(ttid, tt)
 
@@ -1606,6 +1611,11 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		sr.updateInMemToken(ttid, tt, "dest")
 		sr.updateInstsTransferPhase(ttid, tt, common.RebalanceInitated)
 		sr.updateEmptyNodeBatching(tt.IsEmptyNodeBatch)
+
+		if err := sr.populateShardTypes(ttid, tt); err != nil {
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return true
+		}
 
 		tt.ShardTransferTokenState = c.ShardTokenScheduleAck
 		setTransferTokenInMetakv(ttid, tt)
@@ -5083,4 +5093,52 @@ func (sr *ShardRebalancer) createDummyTokenForDest(destNodeUUID string) (string,
 		RebalId:                 sr.rebalToken.RebalId,
 		Version:                 c.MULTI_INST_SHARD_TRANSFER,
 	}
+}
+
+func (sr *ShardRebalancer) populateShardTypes(ttid string, tt *c.TransferToken) error {
+
+	var foundShardType c.ShardType
+	instShardType := make(map[c.ShardType][]c.IndexInstId)
+
+	for i, idxInst := range tt.IndexInsts {
+		if idxInst.Defn.IsBhive() {
+			instShardType[c.BHIVE_SHARD] = append(instShardType[c.BHIVE_SHARD], tt.InstIds[i])
+		} else {
+			instShardType[c.PLASMA_SHARD] = append(instShardType[c.PLASMA_SHARD], tt.InstIds[i])
+		}
+	}
+
+	// If multiple types of Shard type is found in the same transfer token
+	// it means that different indexes have been clubbed into the same transfer
+	// token, furthermore the same ShardId exist for different types of indexes
+	// This should be an impossible case, log and return the error if it occurs
+	if len(instShardType) > 1 {
+		var sb strings.Builder
+		sbp := &sb
+		fmt.Fprintf(sbp, "For Transfer token:%v found multiple shard types", ttid)
+		for shardType, instIds := range instShardType {
+			fmt.Fprintf(sbp, " {ShardType: %v, InstIds: %v}", shardType, instIds)
+		}
+		logging.Errorf("ShardRebalancer::addShardType %v", sb.String())
+		return errors.New(sb.String())
+	} else if len(instShardType) == 1 {
+		for shardType := range instShardType {
+			foundShardType = shardType
+		}
+	}
+
+	doneCh := make(chan bool)
+
+	msg := &MsgPopulateShardType{
+		transferId: ttid,
+		shardType:  foundShardType,
+		shardIds:   tt.ShardIds,
+		doneCh:     doneCh,
+	}
+
+	sr.supvMsgch <- msg
+
+	// Wait for the update to happen in the shardTypeMapper
+	<-doneCh
+	return nil
 }
