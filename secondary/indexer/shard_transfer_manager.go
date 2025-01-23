@@ -1228,9 +1228,21 @@ func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message, no
 	logging.Infof("ShardTransferManager::processDestroyLocalShardMessage All slices closed. Initiating shard destroy for shards: %v, elapsed: %v", shardIds, time.Since(start))
 
 	for _, shardId := range shardIds {
-		if err := plasma.DestroyShardID(plasma.ShardId(shardId)); err != nil {
-			logging.Errorf("ShardTransferManager::processDestroyLocalShardMessage Error cleaning-up shardId: %v from "+
-				"local file system, err: %v", shardId, err)
+		var err error
+
+		shardType := stm.shardTypeMapper.GetShardType(shardId)
+		if shardType == c.PLASMA_SHARD {
+			err = plasma.DestroyShardID(plasma.ShardId(shardId))
+		} else if shardType == c.BHIVE_SHARD {
+			err = bhive.DestroyShardID(plasma.ShardId(shardId))
+		} else {
+			// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be transferred
+			err = ErrShardTypeUnset
+		}
+
+		if err != nil {
+			logging.Errorf("ShardTransferManager::processDestroyLocalShardMessage Error cleaning-up shardId: %v"+
+				" of shard type: %v from local file system, err: %v", shardId, shardType, err)
 		} else {
 			// Since the shard is being destroyed, delete the shard from book-keeping as
 			// there is no need to unlock a deleted shard
