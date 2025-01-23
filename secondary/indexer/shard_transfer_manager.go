@@ -883,7 +883,19 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 				meta[plasma.GSIReplicaRepair] = instRenameMap[shardId]
 			}
 
-			if err := plasma.RestoreShard(destination, doneCb, progressCb, cancelCh, meta); err != nil {
+			var err error
+
+			shardType := stm.shardTypeMapper.GetShardType(shardId)
+			if shardType == c.PLASMA_SHARD {
+				err = plasma.RestoreShard(destination, doneCb, progressCb, cancelCh, meta)
+			} else if shardType == c.BHIVE_SHARD {
+				err = bhive.RestoreShard(destination, doneCb, progressCb, cancelCh, meta)
+			} else {
+				// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be transferred
+				err = ErrShardTypeUnset
+			}
+
+			if err != nil {
 
 				func() { // update errMap with error due to failure
 					mu.Lock()
@@ -894,7 +906,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 				}()
 
 				wg.Done()
-				logging.Errorf("ShardTransferManager::processShardRestoreMessage: Error when restoring shard: %v from path: %v", shardId, shardPath)
+				logging.Errorf("ShardTransferManager::processShardRestoreMessage: Error when restoring shard: %v, shard type:%v from path: %v", shardId, shardType, shardPath)
 
 				closeCancelCh() // Abort already initiated transfers
 				break           // Do not initiate transfer for remaining shards
@@ -1388,13 +1400,20 @@ func (stm *ShardTransferManager) handleRestoreShardDone(cmd Message) {
 	restoreShardDoneMsg := cmd.(*MsgRestoreShardDone)
 	shardIds := restoreShardDoneMsg.GetShardIds()
 	respCh := restoreShardDoneMsg.GetRespCh()
-
+	var shardType c.ShardType
 	logging.Infof("ShardTransferManager::handleRestoreShardDone Initiating RestoreShardDone for shards: %v", shardIds)
 	start := time.Now()
 	for _, shardId := range shardIds {
-		plasma.RestoreShardDone(plasma.ShardId(shardId))
+
+		shardType = stm.shardTypeMapper.GetShardType(shardId)
+		if shardType == c.PLASMA_SHARD {
+			plasma.RestoreShardDone(plasma.ShardId(shardId))
+		} else if shardType == c.BHIVE_SHARD {
+			bhive.RestoreShardDone(plasma.ShardId(shardId))
+		}
 	}
-	logging.Infof("ShardTransferManager::handleRestoreShardDone Finished RestoreShardDone for shards: %v, elapsed: %v", shardIds, time.Since(start))
+	logging.Infof("ShardTransferManager::handleRestoreShardDone Finished RestoreShardDone for shards: %v of "+
+		"shard type:%v, elapsed: %v", shardIds, shardType, time.Since(start))
 	respCh <- true
 }
 
@@ -1426,17 +1445,33 @@ func (stm *ShardTransferManager) handleRestoreAndUnlockShards(cmd Message) {
 			continue
 		}
 
-		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards shardId: %v, refCount: %v", shardId, shardRefCount.refCount)
+		shardType := stm.shardTypeMapper.GetShardType(shardId)
+		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards shardId: %v, shard type:%v, refCount: %v",
+			shardId, shardType, shardRefCount.refCount)
 
 		if shardRefCount.lockedForRecovery {
 			logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating RestoreShardDone for shardId: %v", shardId)
-			plasma.RestoreShardDone(plasma.ShardId(shardId))
+			if shardType == c.PLASMA_SHARD {
+				plasma.RestoreShardDone(plasma.ShardId(shardId))
+			} else if shardType == c.BHIVE_SHARD {
+				bhive.RestoreShardDone(plasma.ShardId(shardId))
+			}
 		}
 
 		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating unlock for shardId: %v, refCount: %v", shardId, shardRefCount.refCount)
 		refCount := shardRefCount.refCount
 		for i := 0; i < refCount; i++ {
-			if err := plasma.UnlockShard(plasma.ShardId(shardId)); err != nil {
+			var err error
+			if shardType == c.PLASMA_SHARD {
+				err = plasma.UnlockShard(plasma.ShardId(shardId))
+			} else if shardType == c.BHIVE_SHARD {
+				err = bhive.UnlockShard(plasma.ShardId(shardId))
+			} else {
+				// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be transferred
+				err = ErrShardTypeUnset
+			}
+
+			if err != nil {
 				logging.Errorf("ShardTransferManager::handleRestoreAndUnlockShards Error observed while unlocking shard: %v, err: %v", shardId, err)
 			} else {
 				shardRefCount.refCount--

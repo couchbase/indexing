@@ -1773,8 +1773,9 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 		case respMsg := <-respCh:
 
 			elapsed := time.Since(start).Seconds()
+			shardType := tt.GetShardType()
 			l.Infof("ShardRebalancer::startRestoreShard Received response %s for restore of "+
-				"shardIds: %v, ttid: %v, elapsed(sec): %v", respMsg.GetMsgType().String(), tt.ShardIds, ttid, elapsed)
+				"shardIds: %v, shardType:%v ttid: %v, elapsed(sec): %v", respMsg.GetMsgType().String(), tt.ShardIds, shardType, ttid, elapsed)
 
 			// For Rebalance, the Shard Restore and Codebook Restore happen sequentially. Hence, the respCh will receive
 			// the SHARD_TRANSFER_RESPONSE first, then CODEBOOK_TRANSFER_RESPONSE
