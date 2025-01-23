@@ -274,6 +274,37 @@ func (ttv TransferTokenVersion) String() string {
 	return "unknown"
 }
 
+// Used to decide what kind of shard is being moved
+// by the transfer tokens
+type ShardType byte
+
+const (
+	// Default shard type value.
+	UNSET_SHARD_TYPE ShardType = iota
+
+	// Used when the Shard being transferred is of a standard
+	// index(primary or secondary) or Shard of Composite Vector
+	// index
+	PLASMA_SHARD
+
+	// Used when the Shard being transferred is of a BHIVE
+	// vector index
+	BHIVE_SHARD
+)
+
+func (st ShardType) String() string {
+
+	switch st {
+	case UNSET_SHARD_TYPE:
+		return "UNSET_SHARD_TYPE"
+	case PLASMA_SHARD:
+		return "PLASMA_SHARD"
+	case BHIVE_SHARD:
+		return "BHIVE_SHARD"
+	}
+	return "unknown"
+}
+
 // TransferToken represents a sindgle index partition movement for rebalance or move index.
 // These get stored in metakv, which makes callbacks on creation and each change.
 type TransferToken struct {
@@ -408,6 +439,7 @@ func (tt *TransferToken) String() string {
 
 	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
 	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
+	fmt.Fprintf(sbp, "ShardType: %v ", tt.GetShardType())
 	if tt.Error != "" {
 		fmt.Fprintf(sbp, "Error: %v ", tt.Error)
 	}
@@ -473,6 +505,7 @@ func (tt *TransferToken) LessVerboseString() string {
 
 	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
 	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
+	fmt.Fprintf(sbp, "ShardType: %v ", tt.GetShardType())
 	if tt.Error != "" {
 		fmt.Fprintf(sbp, "Error: %v ", tt.Error)
 	}
@@ -540,6 +573,7 @@ func (tt *TransferToken) CompactString() string {
 
 	fmt.Fprintf(sbp, "%v ", tt.BuildSource)
 	fmt.Fprintf(sbp, "%v ", tt.TransferMode)
+	fmt.Fprintf(sbp, "%v ", tt.GetShardType())
 	if tt.Error != "" {
 		fmt.Fprintf(sbp, "Error: %v ", tt.Error)
 	}
@@ -584,6 +618,35 @@ func (tt *TransferToken) IsDcpTransferToken() bool {
 
 func (tt *TransferToken) SiblingExists() bool {
 	return tt.SiblingTokenId != ""
+}
+
+// When the shard dealer is turned on, one alternate id can't be assigned to two
+// index of different storage types(plasma & Bhive).
+// Hence one TT should only contain 1 ShardType
+func (tt *TransferToken) GetShardType() ShardType {
+
+	if tt.IsDcpTransferToken() {
+		if tt.IndexInst.Defn.IsBhive() {
+			return BHIVE_SHARD
+		}
+		return PLASMA_SHARD
+	} else if tt.IsShardTransferToken() {
+		foundShardTypes := make(map[ShardType]bool)
+		for i := range tt.IndexInsts {
+			if tt.IndexInsts[i].Defn.IsBhive() {
+				foundShardTypes[BHIVE_SHARD] = true
+			} else {
+				foundShardTypes[PLASMA_SHARD] = true
+			}
+		}
+
+		if len(foundShardTypes) == 1 {
+			for shardType := range foundShardTypes {
+				return shardType
+			}
+		}
+	}
+	return UNSET_SHARD_TYPE
 }
 
 type RebalancePhase byte
