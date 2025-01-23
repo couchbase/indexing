@@ -28,6 +28,8 @@ type IndexerNode struct {
 	MemOverhead uint64  `json:"memOverhead"`
 	DataSize    uint64  `json:"dataSize"`
 
+	MemCodebookUsage uint64 `json:"memCodebookUsage"`
+
 	// input/output: resource consumption (from live cluster)
 	ActualMemUsage    uint64  `json:"actualMemUsage"`
 	ActualMemOverhead uint64  `json:"actualMemOverhead"`
@@ -186,6 +188,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.StorageMode = o.StorageMode
 	r.MemUsage = o.MemUsage
 	r.MemOverhead = o.MemOverhead
+	r.MemCodebookUsage = o.MemCodebookUsage
 	r.DataSize = o.DataSize
 	r.CpuUsage = o.CpuUsage
 	r.DiskUsage = o.DiskUsage
@@ -307,8 +310,8 @@ func (o *IndexerNode) GetCodebookMemUsage(useLive bool) uint64 {
 	if useLive {
 		return o.ActualCodebookMemUsage
 	}
-	// currently there is no estimation for Codebook mem usage
-	return 0
+
+	return o.MemCodebookUsage
 }
 
 // Get memory total
@@ -342,6 +345,7 @@ func (o *IndexerNode) AddMemUsageOverhead(s *Solution, usage uint64, overhead ui
 	} else {
 		o.MemUsage += usage
 		o.MemOverhead += overhead
+		o.MemCodebookUsage += codebookMemUsage
 	}
 }
 
@@ -365,6 +369,7 @@ func (o *IndexerNode) SubtractMemUsageOverhead(s *Solution, usage uint64, overhe
 	} else {
 		o.MemUsage -= usage
 		o.MemOverhead -= overhead
+		o.MemCodebookUsage -= codebookMemUsage
 	}
 }
 

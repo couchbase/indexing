@@ -1781,7 +1781,7 @@ func (s *Solution) runSizeEstimation(placement PlacementMethod, newInstCount int
 						}
 					}
 
-					indexer.AddMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage, 0)
+					indexer.AddMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage, index.EstimatedCodebookMem)
 					indexer.AddDataSize(s, index.EstimatedDataSize)
 				}
 			}
@@ -1948,7 +1948,7 @@ func (s *Solution) cleanupEstimation() {
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
 			if index.NeedsEstimation() {
-				indexer.SubtractMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage, 0)
+				indexer.SubtractMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage, index.EstimatedCodebookMem)
 				indexer.SubtractDataSize(s, index.EstimatedDataSize)
 				index.EstimatedMemUsage = 0
 				index.EstimatedDataSize = 0

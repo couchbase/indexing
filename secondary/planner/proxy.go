@@ -900,9 +900,12 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			combinedMemSzIdx = uint64(combinedMemSzIdxVal.(float64))
 		}
 
-		// check if the index is a composite vector index and non-deferred
-		if index.IsPlasma() && index.Instance != nil && !index.Instance.Defn.Deferred && index.Instance.Defn.IsVectorIndex && !index.Instance.Defn.IsBhive() {
-			if codebookMemUsageVal, ok := GetIndexStat(index, "codebook_mem_usage", statsMap, true, clusterVersion); ok {
+		// check if the index is a vector index and non-deferred
+		if index.Instance != nil && index.Instance.Defn.IsVectorIndex {
+			if index.NoUsageInfo {
+				// this is a static estimation, hence we can perform at the start of creating the IndexUsage
+				index.EstimatedCodebookMem = estimateCodebookMemUsage(index.Instance.Defn.VectorMeta, index.Instance.Nlist[index.PartnId])
+			} else if codebookMemUsageVal, ok := GetIndexStat(index, "codebook_mem_usage", statsMap, true, clusterVersion); ok {
 				index.ActualCodebookMemUsage = uint64(codebookMemUsageVal.(float64))
 			}
 		}
@@ -2279,4 +2282,56 @@ func populateShardDealerWithNode(dealer *ShardDealer, node *IndexerNode) {
 				index.InstId, index.PartnId, node.NodeUUID, err)
 		}
 	}
+}
+
+// Direct copy of the function of codebookIVFSQ.Size() && codebookIVFPQ.Size()
+func estimateCodebookMemUsage(vecMeta *common.VectorMetadata, nlist int) uint64 {
+	const float32Size = 4
+	// Size of storage_idx_t, used for internal storage of vectors (32 bits)
+	const hnswIndexStorageSize = 4
+	// Number of connections per point (set to 32 by default)
+	const numConnection = 32
+
+	if vecMeta.Quantizer.Type == common.SQ {
+
+		var sqCbSize int64
+		coarseCbSize := int64(nlist * vecMeta.Dimension * float32Size)
+		// No quantization codebook is stored for fp16.
+		if vecMeta.Quantizer.Type == common.SQ && vecMeta.Quantizer.SQRange != common.SQ_FP16 {
+			// Memory usage for Scalar Quantization (SQ) codebook.
+			// Each dimension requires two float32 values (min and max) for range.
+			sqCbSize = int64(2 * vecMeta.Dimension * float32Size)
+		}
+
+		// Memory usage for HNSW graph as IVF_HNSW is used
+		// This memory is used for maintaing centroids' HNSW structure.
+		// ref: https://github.com/facebookresearch/faiss/wiki/Guidelines-to-choose-an-index#if-not-hnswm-or-ivf1024pqnx4fsrflat
+		hnswGraphSize := int64(nlist * numConnection * hnswIndexStorageSize * 2)
+
+		return uint64(coarseCbSize + sqCbSize + hnswGraphSize)
+
+	} else if vecMeta.Quantizer.Type == common.PQ {
+
+		var pqCbSize int64
+		coarseCbSize := int64(nlist * vecMeta.Dimension * float32Size)
+
+		// Memory usage for the Product Quantization (PQ) codebook
+		// PQ quantizes each sub-vector using a codebook of quantized vectors.
+		// Memory size formula: m * (2^nbits) * (d/m) * sizeof(float32)
+		// - m: Number of sub-vectors, each with its own codebook.
+		// - 2^nbits: Number of quantization levels (codes) for each sub-vector.
+		// - d/m: Dimensionality of each sub-vector,
+		//since the original vector of dimension d is split into m sub-vectors.
+		// Each codebook entry represents a vector of size d/m.
+		pqCbSize = int64((1 << vecMeta.Quantizer.Nbits) * vecMeta.Dimension * float32Size)
+
+		// Memory usage for HNSW graph as IVF_HNSW is used.
+		// This memory is used for maintaing centroids' HNSW structure.
+		// ref: https://github.com/facebookresearch/faiss/wiki/Guidelines-to-choose-an-index#if-not-hnswm-or-ivf1024pqnx4fsrflat
+		hnswGraphSize := int64(nlist * numConnection * hnswIndexStorageSize * 2)
+
+		return uint64(coarseCbSize + pqCbSize + hnswGraphSize)
+	}
+
+	return 0
 }

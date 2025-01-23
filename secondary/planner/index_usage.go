@@ -65,7 +65,7 @@ type IndexUsage struct {
 	ActualScanRate        uint64 `json:"actualScanRate"`
 	ActualMemMin          uint64 `json:"actualMemMin"`
 	ActualUnitsUsage      uint64 `json:"actualUnitsUsage"`
-	// For composite Vector Index, this will be populated, for other cases, this will be zero value
+	// For Vector Index (Composite & Bhive), this will be populated, for other cases, this will be zero value
 	ActualCodebookMemUsage uint64 `json:"actualCodebookMemUsage"`
 
 	// Available from 7.6+ version of server
@@ -80,10 +80,11 @@ type IndexUsage struct {
 	ActualDiskSize uint64 `json:"actualDiskSize,omitempty"`
 
 	// input: resource consumption (estimated sizing)
-	NoUsageInfo       bool   `json:"NoUsageInfo"`
-	EstimatedMemUsage uint64 `json:"estimatedMemUsage"`
-	EstimatedDataSize uint64 `json:"estimatedDataSize"`
-	NeedsEstimate     bool   `json:"NeedsEstimate"`
+	NoUsageInfo          bool   `json:"NoUsageInfo"`
+	EstimatedMemUsage    uint64 `json:"estimatedMemUsage"`
+	EstimatedDataSize    uint64 `json:"estimatedDataSize"`
+	EstimatedCodebookMem uint64 `json:"estimatedCodebookMemUsage"`
+	NeedsEstimate        bool   `json:"NeedsEstimate"`
 
 	// input: index definition (optional)
 	Instance *common.IndexInst `json:"instance,omitempty"`
@@ -293,7 +294,7 @@ func (o *IndexUsage) GetCodebookMemUsage(useLive bool) uint64 {
 
 	// currently there is no estimation for Codebook mem usage. Return 0 mem usage
 	if o.NeedsEstimation() {
-		return 0
+		return o.EstimatedCodebookMem
 	}
 
 	if useLive {
