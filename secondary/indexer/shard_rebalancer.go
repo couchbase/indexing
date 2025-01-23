@@ -33,6 +33,7 @@ import (
 
 var ErrRebalanceCancel = errors.New("Shard rebalance cancel received")
 var ErrRebalanceDone = errors.New("Shard rebalance done received")
+var ErrShardTypeUnset = errors.New("Shard type not set")
 
 // TODO add the Prefix in Indexer settings
 const CODEBOOK_COPY_PREFIX = "codebook_v1"

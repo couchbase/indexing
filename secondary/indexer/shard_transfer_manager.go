@@ -19,6 +19,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/iowrap"
 
+	"github.com/couchbase/bhive"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -1289,9 +1290,21 @@ func (stm *ShardTransferManager) handleLockShardsCommand(cmd Message) {
 
 	errMap := make(map[common.ShardId]error)
 	for _, shardId := range shardIds {
-		err := plasma.LockShard(plasma.ShardId(shardId))
+		var err error
+
+		shardType := stm.shardTypeMapper.GetShardType(shardId)
+		if shardType == c.PLASMA_SHARD {
+			err = plasma.LockShard(plasma.ShardId(shardId))
+		} else if shardType == c.BHIVE_SHARD {
+			err = bhive.LockShard(plasma.ShardId(shardId))
+		} else {
+			// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be transferred
+			err = ErrShardTypeUnset
+		}
+
 		if err != nil {
-			logging.Errorf("ShardTransferManager::handleLockShardsCommand Error observed while locking shard: %v, err: %v", shardId, err)
+			logging.Errorf("ShardTransferManager::handleLockShardsCommand Error observed while locking shard:  %v,"+
+				"shard type:%v, err: %v", shardId, shardType, err)
 		} else {
 			if shardRefCount, ok := stm.lockedShards[shardId]; ok && shardRefCount != nil {
 				shardRefCount.refCount++
@@ -1326,9 +1339,21 @@ func (stm *ShardTransferManager) handleUnlockShardsCommand(cmd Message) {
 
 	errMap := make(map[common.ShardId]error)
 	for _, shardId := range shardIds {
-		err := plasma.UnlockShard(plasma.ShardId(shardId))
+		var err error
+
+		shardType := stm.shardTypeMapper.GetShardType(shardId)
+		if shardType == c.PLASMA_SHARD {
+			err = plasma.UnlockShard(plasma.ShardId(shardId))
+		} else if shardType == c.BHIVE_SHARD {
+			err = bhive.UnlockShard(plasma.ShardId(shardId))
+		} else {
+			// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be transferred
+			err = ErrShardTypeUnset
+		}
+
 		if err != nil {
-			logging.Errorf("ShardTransferManager::handleUnlockShardsCommand Error observed while unlocking shard: %v, err: %v", shardId, err)
+			logging.Errorf("ShardTransferManager::handleUnlockShardsCommand Error observed while unlocking shard: %v,"+
+				"shard type:%v, err: %v", shardId, shardType, err)
 		} else {
 			if shardRefCount, ok := stm.lockedShards[shardId]; ok && shardRefCount != nil {
 				shardRefCount.refCount--
