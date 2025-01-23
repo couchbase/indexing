@@ -3969,6 +3969,11 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 		return fmt.Errorf("Fail to alter index: %v", err)
 	}
 
+	nodes, _, _ := o.getNodesParam(plan)
+	if len(nodes) > 0 && o.ShouldMaintainShardAffinity() {
+		return fmt.Errorf("\"nodes\" clause is disabled with alter index as file based rebalance (shard affinity) is enabled")
+	}
+
 	// Find the index metadata.   We don't need the index metadata to be latest.  We just need
 	// the definition for acquiring exclusive lock from indexer.
 	idxMeta := o.findIndex(defnId)
