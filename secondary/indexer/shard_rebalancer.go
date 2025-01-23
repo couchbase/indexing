@@ -1320,10 +1320,10 @@ loop:
 		// aborted and rebalancer would still get a message on respCh
 		// with errors as sr.cancel is passed on to downstream
 		case respMsg := <-respCh:
-
+			shardType := tt.GetShardType()
 			elapsed := time.Since(start).Seconds()
 			l.Infof("ShardRebalancer::startShardTransfer Received response %s for transfer of "+
-				"shards: %v, ttid: %v, elapsed(sec): %v", respMsg.GetMsgType().String(), tt.ShardIds, ttid, elapsed)
+				"shards: %v, shardType:%v, ttid: %v, elapsed(sec): %v", respMsg.GetMsgType().String(), tt.ShardIds, shardType, ttid, elapsed)
 
 			// ShardRebalancer can only receive SHARD_TRANSFER_RESPONSE after successful transfer of Codebooks
 			// Receiving CODEBOOK_TRANSFER_RESPONSE then SHARD_TRANSFER_RESPONSE are sequential
@@ -1358,8 +1358,8 @@ loop:
 						hasErr = true
 
 						l.Errorf("ShardRebalancer::startShardTransfer Observed error during trasfer"+
-							" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
-							tt.Destination, tt.Region, shardId, shardPaths, err)
+							" for destination: %v, region: %v, shardId: %v, shardType:%v shardPaths: %v, err: %v. Initiating transfer clean-up",
+							tt.Destination, tt.Region, shardId, shardType, shardPaths, err)
 
 						unlockShards(tt.ShardIds, sr.supvMsgch)
 

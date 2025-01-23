@@ -463,8 +463,19 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 			// TODO: Add a configurable setting to enable or disbale disk snapshotting
 			// before transferring the shard
 			wg.Add(1)
+			var err error
 
-			if err := plasma.TransferShard(plasma.ShardId(shardIds[i]), destination, doneCb, progressCb, cancelCh, metaCpy); err != nil {
+			shardType := stm.shardTypeMapper.GetShardType(shardIds[i])
+			if shardType == c.PLASMA_SHARD {
+				err = plasma.TransferShard(plasma.ShardId(shardIds[i]), destination, doneCb, progressCb, cancelCh, metaCpy)
+			} else if shardType == c.BHIVE_SHARD {
+				err = bhive.TransferShard(plasma.ShardId(shardIds[i]), destination, doneCb, progressCb, cancelCh, metaCpy)
+			} else {
+				// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be transferred
+				err = ErrShardTypeUnset
+			}
+
+			if err != nil {
 
 				func() { // update errMap for this shard
 					mu.Lock()
@@ -474,7 +485,7 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 				}()
 
 				wg.Done()
-				logging.Errorf("ShardTransferManager::processShardTransferMessage: Error when starting to transfer shard: %v", shardIds[i])
+				logging.Errorf("ShardTransferManager::processShardTransferMessage: Error when starting to transfer shard: %v, shard type: %v", shardIds[i], shardType)
 
 				closeCancelCh() // Abort already initiated transfers
 				break           // Do not initiate transfer for remaining shards
