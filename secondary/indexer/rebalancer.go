@@ -2966,6 +2966,29 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 
 		r.updateMasterTokenState(ttid, c.TransferTokenCommit)
 
+		//Move to initiate state only if all the tokens have been
+		//accepted by the destination as well as there is no other
+		//token in committed state yet to be processed. If there is
+		//a token in TransferTokenCommit let the last token in
+		//batch handle transition of accepted tokens. A token in
+		//commit token yet to be processed will still show up in
+		//Created state in r.buildingTTsByDestId map.
+		//There can be a race condition where one transfer token in
+		//TransferTokenAccept state is waiting for other in the batch
+		//to transition from TransferTokenCreated ->
+		//TransferTokenAccept but the token in TransferTokenCreated
+		//can move to TransferTokenCommit instead.
+		if !r.checkAnyTTPendingAcceptByDestId(tt.DestId) {
+
+			//find all tokens in the batch for this dest and
+			//move to initiate state.
+			acceptedTTs := r.getAcceptedTTByDestId(tt.DestId)
+			for ttid, tt := range acceptedTTs {
+				tt.State = c.TransferTokenInitiate
+				setTransferTokenInMetakv(ttid, tt)
+			}
+		}
+
 	case c.TransferTokenDeleted:
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
