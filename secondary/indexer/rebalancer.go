@@ -1884,7 +1884,8 @@ loop:
 					return
 				}
 				// Ok: failed to drop source index because b/s/c was dropped. Continue to TransferTokenCommit state.
-				l.Infof("%v Source index already dropped due to bucket/scope/collection dropped. tt %v.", method, tt)
+				l.Infof("%v Source index already dropped due to bucket/scope/collection dropped. "+
+					"ttid %v, new state %v.", method, ttid, c.TransferTokenCommit)
 			}
 			tt.State = c.TransferTokenCommit
 			setTransferTokenInMetakv(ttid, tt)
@@ -1919,8 +1920,8 @@ func (r *Rebalancer) needRetryForDrop(ttid string, tt *c.TransferToken) bool {
 	if indexState == c.INDEX_STATE_NIL {
 		//if index cannot be found in metadata, most likely its drop has already succeeded.
 		//instead of waiting indefinitely, it is better to assume success and proceed.
-		l.Infof("%v Missing Metadata for %v. Assume success and abort retry",
-			method, tt.IndexInst)
+		l.Infof("%v Missing Metadata for ttid %v new state %v. Assume success and abort retry",
+			method, ttid, c.TransferTokenCommit)
 		tt.State = c.TransferTokenCommit
 		setTransferTokenInMetakv(ttid, tt)
 
@@ -1985,7 +1986,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 				return true
 			}
 			// Ok: failed to create dest index because b/s/c was dropped. Skip to TransferTokenCommit state.
-			l.Infof("%v Create destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", method, tt)
+			l.Infof("%v Create destination index failed due to bucket/scope/collection dropped. Skipping. ttid %v, new state %v.", method, ttid, c.TransferTokenCommit)
 			tt.State = c.TransferTokenCommit
 		} else {
 			tt.State = c.TransferTokenAccepted
@@ -2200,7 +2201,7 @@ func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.Transfe
 				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
 				for ttid, tt := range buildTokens {
 					if id == tt.IndexInst.InstId {
-						l.Infof("%v Build destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", method, tt)
+						l.Infof("%v Build destination index failed due to bucket/scope/collection dropped. Skipping. ttid %v, new state %v.", method, ttid, c.TransferTokenCommit)
 						tt.State = c.TransferTokenCommit
 						setTransferTokenInMetakv(ttid, tt)
 						break
@@ -2213,7 +2214,8 @@ func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.Transfe
 				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
 				for ttid, tt := range buildTokens {
 					if defnId == tt.IndexInst.Defn.DefnId {
-						l.Infof("%v Build destination index failed due to index metadata missing; bucket/scope/collection likely dropped. Skipping. tt %v.", method, tt)
+						l.Infof("%v Build destination index failed due to index metadata missing; bucket/scope/collection likely dropped. Skipping."+
+							"ttid %v, new state %v.", method, ttid, c.TransferTokenCommit)
 						tt.State = c.TransferTokenCommit
 						setTransferTokenInMetakv(ttid, tt)
 					}
@@ -2372,7 +2374,7 @@ func (r *Rebalancer) buildAcceptedIndexesBatch(buildTokens map[string]*common.Tr
 				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
 				for ttid, tt := range buildTokens {
 					if id == tt.IndexInst.InstId {
-						l.Infof("%v Build destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", method, tt)
+						l.Infof("%v Build destination index failed due to bucket/scope/collection dropped. Skipping. ttid %v, new state %v.", method, ttid, c.TransferTokenCommit)
 						tt.State = c.TransferTokenCommit
 						setTransferTokenInMetakv(ttid, tt)
 						break
@@ -2385,7 +2387,8 @@ func (r *Rebalancer) buildAcceptedIndexesBatch(buildTokens map[string]*common.Tr
 				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
 				for ttid, tt := range buildTokens {
 					if defnId == tt.IndexInst.Defn.DefnId {
-						l.Infof("%v Build destination index failed due to index metadata missing; bucket/scope/collection likely dropped. Skipping. tt %v.", method, tt)
+						l.Infof("%v Build destination index failed due to index metadata missing; bucket/scope/collection likely dropped. Skipping."+
+							"ttid %v, new state %v.", method, ttid, c.TransferTokenCommit)
 						tt.State = c.TransferTokenCommit
 						setTransferTokenInMetakv(ttid, tt)
 					}
@@ -2470,7 +2473,7 @@ loop:
 					indexState, err := getIndexStatusFromMeta(tt, localMeta)
 
 					if indexState == c.INDEX_STATE_READY && err != "" && common.IsVectorTrainingErrorQualifyingDocs(err) {
-						logging.Infof("%v skipping tt:%v err:%v", _waitForIndexBuild, tt, err)
+						logging.Infof("%v skipping ttid:%v, new state:%v err:%v", _waitForIndexBuild, ttid, c.TransferTokenCommit, err)
 						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
 						setTransferTokenInMetakv(ttid, tt)
 
@@ -2488,7 +2491,7 @@ loop:
 							return
 						}
 						l.Infof("%v Could not get index status; bucket/scope/collection likely dropped."+
-							" Skipping. indexState %v, err %v, tt %v.", _waitForIndexBuild, indexState, err, tt)
+							" Skipping. indexState %v, err %v, ttid %v, new state %v.", _waitForIndexBuild, indexState, err, ttid, c.TransferTokenCommit)
 						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
 						setTransferTokenInMetakv(ttid, tt)
 					} else if err != "" {
@@ -2641,7 +2644,7 @@ loop:
 
 					indexState, err := getIndexStatusFromMeta(tt, localMeta)
 					if indexState == c.INDEX_STATE_READY && err != "" && common.IsVectorTrainingErrorQualifyingDocs(err) {
-						logging.Infof("%v skipping tt:%v err:%v", _waitForIndexBuildBatch, tt, err)
+						logging.Infof("%v skipping ttid:%v, new state:%v err:%v", _waitForIndexBuildBatch, ttid, c.TransferTokenCommit, err)
 						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
 						setTransferTokenInMetakv(ttid, tt)
 						continue
@@ -2655,7 +2658,7 @@ loop:
 							return
 						}
 						l.Infof("%v Could not get index status; bucket/scope/collection likely dropped."+
-							" Skipping. indexState %v, err %v, tt %v.", _waitForIndexBuildBatch, indexState, err, tt)
+							" Skipping. indexState %v, err %v, ttid %v, new state %v.", _waitForIndexBuildBatch, indexState, err, ttid, c.TransferTokenCommit)
 						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
 						setTransferTokenInMetakv(ttid, tt)
 					} else if err != "" {
