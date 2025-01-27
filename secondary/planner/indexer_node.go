@@ -652,6 +652,10 @@ func (o *IndexerNode) ComputeMinShardCapacity(config common.Config) {
 	flushBufferSz := config["indexer.plasma.sharedFlushBufferSize"].Int()
 	flushBufferQuota := config["indexer.plasma.flushBufferQuota"].Float64()
 	shardLimitPerNode := config["indexer.plasma.shardLimitPerNode"].Int()
+	flushBufferMultipler := config["indexer.plasma.sharedFlushBufferMultipler"].Int()
+	minShardsPerNode := config["indexer.plasma.minShardsPerNode"].Int()
+
+	flushBufferSz = flushBufferSz * flushBufferMultipler
 
 	if flushBufferQuota == 0 || flushBufferSz == 0 {
 		// Limit the number of shards at "shardLimitPerNode"
@@ -674,6 +678,13 @@ func (o *IndexerNode) ComputeMinShardCapacity(config common.Config) {
 		logging.Warnf("IndexerNode::ComputeMinShardCapacity Limiting the number of shards at: %v. "+
 			"Num shards per quota: %v, indexer node: %v", shardLimitPerNode, o.MinShardCapacity, o.NodeId)
 		o.MinShardCapacity = shardLimitPerNode
+	}
+
+	if o.MinShardCapacity < minShardsPerNode {
+		logging.Warnf("IndexerNode::ComputeMinShardCapacity The number of shards are less than mininum number of shards: %v. "+
+			"Expanding the minShardCapacity from: %v to: %v, indexer node: %v",
+			minShardsPerNode, o.MinShardCapacity, minShardsPerNode, o.NodeId)
+		o.MinShardCapacity = minShardsPerNode
 	}
 
 	if o.ShardTenantMultiplier*o.MinShardCapacity != 0 {
