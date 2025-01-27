@@ -230,6 +230,7 @@ const (
 
 	CODEBOOK_TRANSFER_RESPONSE
 	BHIVE_GRAPH_READY
+	BHIVE_BUILD_GRAPH
 )
 
 type Message interface {
@@ -3412,6 +3413,23 @@ func (m *MsgBhiveGraphReady) GetPartnId() common.PartitionId {
 	return m.idxPartnId
 }
 
+type MsgBuildBhiveGraph struct {
+	idxInstId        common.IndexInstId
+	bhiveGraphStatus map[common.PartitionId]bool
+}
+
+func (m *MsgBuildBhiveGraph) GetMsgType() MsgType {
+	return BHIVE_BUILD_GRAPH
+}
+
+func (m *MsgBuildBhiveGraph) GetInstId() common.IndexInstId {
+	return m.idxInstId
+}
+
+func (m *MsgBuildBhiveGraph) GetBhiveGraphStatus() map[common.PartitionId]bool {
+	return m.bhiveGraphStatus
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3756,6 +3774,8 @@ func (m MsgType) String() string {
 		return "CODEBOOK_TRANSFER_RESPONSE"
 	case BHIVE_GRAPH_READY:
 		return "BHIVE_GRAPH_READY"
+	case BHIVE_BUILD_GRAPH:
+		return "BHIVE_BUILD_GRAPH"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

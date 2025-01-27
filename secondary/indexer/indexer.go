@@ -1735,6 +1735,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case BHIVE_GRAPH_READY:
 		idx.handleBhiveGraphReady(msg)
 
+	case BHIVE_BUILD_GRAPH:
+		//forward to storage manager
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -9455,6 +9460,8 @@ func (idx *indexer) initFromPersistedState() error {
 		}
 
 		idx.updateBootstrapStats(bootstrapStats, inst.InstId)
+
+		idx.buildBhiveGraphIfMissing(inst)
 	}
 
 	return nil
@@ -14367,3 +14374,29 @@ func (idx *indexer) handleBhiveGraphReady(cmd Message) {
 	}
 
 }
+
+func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
+
+	if inst.Defn.IsBhive() {
+
+		//if index state is ACTIVE but bhive graph is not built, send
+		//a message to storage manager to build it. This situation can
+		//happen if indexer crashes before updating bhive graph status in
+		//metadata or before calling graph build API.
+		//Ignore insts with RState not ACTIVE, rebalancer takes care of
+		//of such insts.
+		if inst.State == common.INDEX_STATE_ACTIVE &&
+			inst.RState == common.REBAL_ACTIVE {
+			for _, status := range inst.BhiveGraphStatus {
+				if !status {
+					idx.internalRecvCh <- &MsgBuildBhiveGraph {
+						idxInstId: inst.InstId,
+						bhiveGraphStatus: inst.BhiveGraphStatus,
+					}
+					break
+				}
+			}
+		}
+	}
+}
+

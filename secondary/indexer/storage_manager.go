@@ -357,6 +357,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		}
 		s.supvCmdch <- &MsgSuccess{}
 
+	case BHIVE_BUILD_GRAPH:
+		s.handleBuildBhiveGraph(cmd)
+
 	}
 
 }
@@ -3002,5 +3005,46 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64) {
 
 	if plasmaQuota > 0 {
 		plasma.SetMemoryQuota(plasmaQuota)
+	}
+}
+
+func (sm *storageMgr) handleBuildBhiveGraph(cmd Message) {
+	sm.supvCmdch <- &MsgSuccess{}
+
+	msg := cmd.(*MsgBuildBhiveGraph)
+	instId := msg.GetInstId()
+	bhiveGraphStatus := msg.GetBhiveGraphStatus()
+
+	indexInstMap := sm.indexInstMap.Get()
+	indexPartnMap := sm.indexPartnMap.Get()
+
+	inst, ok := indexInstMap[instId]
+	//skip deleted indexes
+	if !ok || inst.State == common.INDEX_STATE_DELETED {
+		logging.Infof("StorageMgr::handleBhiveBuildGraph instId %v not found or deleted", instId)
+		return
+	}
+
+	partnMap, ok := indexPartnMap[instId]
+	if !ok {
+		logging.Infof("StorageMgr::handleBhiveBuildGraph No partitions found for instId %v", instId)
+		return
+	}
+
+	for partnId, status := range bhiveGraphStatus {
+
+		if !status {
+			partnInst, ok := partnMap[partnId]
+			if !ok {
+				logging.Infof("StorageMgr::handleBhiveBuildGraph No partition info for instId %v partn %v", instId, partnId)
+				continue
+			}
+			sc := partnInst.Sc
+
+			for _, slice := range sc.GetAllSlices() {
+				//BuildDone builds the graph if missing
+				slice.BuildDone(instId, sm.buildDoneCallback)
+			}
+		}
 	}
 }
