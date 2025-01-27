@@ -2417,6 +2417,22 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.minShardsPerNode": ConfigValue{
+		10,
+		"Minimum number of shards that can be created before reuse of shards happen",
+		10,
+		false,
+		false,
+	},
+	"indexer.plasma.sharedFlushBufferMultipler": ConfigValue{
+		4,
+		"Plasma can have multiple flush buffers per shard. Currently, it can use upto " +
+			"4 flush buffers. Each flush buffer holds upto \"sharedFlushBufferSize\". " +
+			"This multipler is used to accurately estimate the flush buffer size",
+		4,
+		false,
+		false,
+	},
 	"indexer.plasma.shardLimitPerTenant": ConfigValue{
 		2000,
 		"Maximum number of shards per tenant that can be created in entire cluster",
