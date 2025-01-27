@@ -848,7 +848,12 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 			if !scan.MultiCentroid {
 				cid = scan.cid
 			}
-			scansForPartns[partnId][cid] = []Scan{scan}
+			_, ok := scansForPartns[partnId][cid]
+			if !ok {
+				scansForPartns[partnId][cid] = []Scan{scan}
+			} else {
+				scansForPartns[partnId][cid] = append(scansForPartns[partnId][cid], scan)
+			}
 		}
 	}
 	r.vectorScans = scansForPartns
