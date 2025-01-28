@@ -1281,6 +1281,8 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 			case t.tt.MasterId, t.tt.SourceId, t.tt.DestId:
 				l.Infof("RebalanceServiceManager::cleanupShardTransferTokens Cleaning Up %v %v", t.ttid, t.tt.LessVerboseString())
 				if string(m.nodeInfo.NodeID) != t.tt.MasterId {
+					// If the cleanup is happening due to restarts, the mapper needs to be populated again
+					m.populateShardTypeDuringCleanup(t.ttid, t.tt)
 					shardIdsToClear = append(shardIdsToClear, t.tt.ShardIds...)
 				}
 			default:
@@ -4579,6 +4581,22 @@ func (m *RebalanceServiceManager) clearShardType(shardIds []c.ShardId, skipShard
 		skipShard: skipShards,
 		shardIds:  shardIds,
 		doneCh:    doneCh,
+	}
+
+	m.supvMsgch <- msg
+
+	// Wait for the update to happen in the shardTypeMapper
+	<-doneCh
+}
+
+func (m *RebalanceServiceManager) populateShardTypeDuringCleanup(ttid string, tt *c.TransferToken) {
+
+	doneCh := make(chan bool)
+	msg := &MsgPopulateShardType{
+		transferId: ttid,
+		shardType:  tt.GetShardType(),
+		shardIds:   tt.ShardIds,
+		doneCh:     doneCh,
 	}
 
 	m.supvMsgch <- msg
