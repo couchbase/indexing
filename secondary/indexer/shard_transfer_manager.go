@@ -783,8 +783,16 @@ func (stm *ShardTransferManager) cleanupStagingDirOnRestore(cmd Message) {
 		}
 	}
 
+	shardType := msg.GetShardType()
+	var err error
 	wg.Add(1)
-	err := plasma.DoCleanupStaging(destination, meta, doneCb)
+	if shardType == c.PLASMA_SHARD {
+		err = plasma.DoCleanupStaging(destination, meta, doneCb)
+	} else if shardType == c.BHIVE_SHARD {
+		err = bhive.DoCleanupStaging(destination, meta, doneCb)
+	} else {
+		err = ErrShardTypeUnset
+	}
 	if err != nil {
 		wg.Done()
 		logging.Errorf("ShardTransferManager::cleanupStagingDirOnRestore Error initiating "+
@@ -836,6 +844,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var shardRestoreHasErr bool
+	var shardType c.ShardType
 
 	errMap := make(map[common.ShardId]error)
 
@@ -908,7 +917,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 
 			var err error
 
-			shardType := stm.shardTypeMapper.GetShardType(shardId)
+			shardType = stm.shardTypeMapper.GetShardType(shardId)
 			if shardType == c.PLASMA_SHARD {
 				err = plasma.RestoreShard(destination, doneCb, progressCb, cancelCh, meta)
 			} else if shardType == c.BHIVE_SHARD {
@@ -942,12 +951,13 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 
 	sendResponse := func() {
 
+		msg.shardType = shardType
 		// Upon completion of restore, cleanup the transferred data. Cleanup is a
 		// best effort call. So, ignore any errors arising out during Cleanup
 
 		// TODO: Does pause-resume need to handle any errors arising out of staging
 		// cleanup during resume(?)
-		stm.cleanupStagingDirOnRestore(cmd)
+		stm.cleanupStagingDirOnRestore(msg)
 
 		elapsed := time.Since(start).Seconds()
 		logging.Infof("ShardTransferManager::processShardRestoreMessage All shards are restored. Sending response "+

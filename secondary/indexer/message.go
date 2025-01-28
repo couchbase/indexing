@@ -2999,6 +2999,7 @@ type MsgStartShardRestore struct {
 	isPeerTransfer bool
 
 	vectorInsts []c.IndexInst
+	shardType   common.ShardType
 }
 
 func (m *MsgStartShardRestore) GetMsgType() MsgType {
@@ -3111,6 +3112,10 @@ func (m *MsgStartShardRestore) GetAuthCallback() func(*http.Request) error {
 
 func (m *MsgStartShardRestore) GetVectorIndexInsts() []c.IndexInst {
 	return m.vectorInsts
+}
+
+func (m *MsgStartShardRestore) GetShardType() c.ShardType {
+	return m.shardType
 }
 
 type MsgDestroyLocalShardData struct {
