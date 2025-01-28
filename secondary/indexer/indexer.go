@@ -1689,6 +1689,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		START_PEER_SERVER,
 		STOP_PEER_SERVER,
 		POPULATE_SHARD_TYPE,
+		CLEAR_SHARD_TYPE,
 		PERSISTANCE_STATUS:
 
 		idx.storageMgrCmdCh <- msg

@@ -196,6 +196,10 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 	case POPULATE_SHARD_TYPE:
 		forceLog = true
 		stm.handlePopulateShardType(cmd)
+
+	case CLEAR_SHARD_TYPE:
+		forceLog = true
+		stm.handleClearShardType(cmd)
 	}
 	logProcessingTime(
 		"ShardTransferManager::handleStorageMgrCommands",
@@ -1780,6 +1784,26 @@ func (stm *ShardTransferManager) handlePopulateShardType(cmd Message) {
 
 }
 
+func (stm *ShardTransferManager) handleClearShardType(cmd Message) {
+	msg := cmd.(*MsgClearShardType)
+	shardIds := msg.GetShardIds()
+	skipShards := msg.GetSkipShard()
+
+	clearShardIds := make([]c.ShardId, 0)
+	for _, shardId := range shardIds {
+		if _, ok := skipShards[shardId]; ok {
+			continue
+		}
+		clearShardIds = append(clearShardIds, shardId)
+	}
+
+	stm.shardTypeMapper.DeleteShardIds(clearShardIds)
+
+	logging.Infof("ShardTransferManager::handleClearShardType: cleared"+
+		" shard type value for shardIds %v", clearShardIds)
+
+}
+
 func (stm *ShardTransferManager) TransferCodebook(codebookCopier plasma.Copier, codebookSrcPath string) error {
 	var srcDir, srcFile string
 	var sz int64
@@ -1902,4 +1926,18 @@ func (shardTypeMgr *ShardTypeMapper) GetShardType(shardId c.ShardId) c.ShardType
 		return c.UNSET_SHARD_TYPE
 	}
 	return shardTypeMgr.ShardTypeMap[shardId]
+}
+
+func (shardTypeMgr *ShardTypeMapper) DeleteShardIds(shardIds []c.ShardId) {
+	shardTypeMgr.RWLock.Lock()
+	defer shardTypeMgr.RWLock.Unlock()
+
+	for _, shardId := range shardIds {
+		delete(shardTypeMgr.ShardTypeMap, shardId)
+	}
+
+	// Resets the bucket in internal go maps to reduce memory footprint
+	if len(shardTypeMgr.ShardTypeMap) == 0 {
+		shardTypeMgr.ShardTypeMap = make(map[c.ShardId]c.ShardType)
+	}
 }

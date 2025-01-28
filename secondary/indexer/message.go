@@ -231,6 +231,7 @@ const (
 	CODEBOOK_TRANSFER_RESPONSE
 
 	POPULATE_SHARD_TYPE
+	CLEAR_SHARD_TYPE
 	BHIVE_GRAPH_READY
 	BHIVE_BUILD_GRAPH
 )
@@ -3465,6 +3466,28 @@ func (m *MsgPopulateShardType) GetDoneCh() chan bool {
 	return m.doneCh
 }
 
+type MsgClearShardType struct {
+	shardIds  []common.ShardId
+	skipShard map[common.ShardId]bool
+	doneCh    chan bool
+}
+
+func (m *MsgClearShardType) GetMsgType() MsgType {
+	return CLEAR_SHARD_TYPE
+}
+
+func (m *MsgClearShardType) GetShardIds() []common.ShardId {
+	return m.shardIds
+}
+
+func (m *MsgClearShardType) GetSkipShard() map[common.ShardId]bool {
+	return m.skipShard
+}
+
+func (m *MsgClearShardType) GetDoneCh() chan bool {
+	return m.doneCh
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3813,6 +3836,8 @@ func (m MsgType) String() string {
 		return "BHIVE_BUILD_GRAPH"
 	case POPULATE_SHARD_TYPE:
 		return "POPULATE_SHARD_TYPE"
+	case CLEAR_SHARD_TYPE:
+		return "CLEAR_SHARD_TYPE"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

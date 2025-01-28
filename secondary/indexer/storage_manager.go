@@ -361,6 +361,10 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		s.handlePopulateShardType(cmd)
 		s.supvCmdch <- &MsgSuccess{}
 
+	case CLEAR_SHARD_TYPE:
+		s.handleClearShardType(cmd)
+		s.supvCmdch <- &MsgSuccess{}
+
 	case BHIVE_BUILD_GRAPH:
 		s.handleBuildBhiveGraph(cmd)
 
@@ -2753,6 +2757,26 @@ func (s *storageMgr) handlePopulateShardType(cmd Message) {
 	} else {
 		common.CrashOnError(
 			fmt.Errorf("StorageMgr::handlePopulateShardType ShardTransferManager Not Initialized during msg %v execution",
+				cmd),
+		)
+	}
+}
+
+func (s *storageMgr) handleClearShardType(cmd Message) {
+
+	msg := cmd.(*MsgClearShardType)
+	shardIds := msg.GetShardIds()
+	doneCh := msg.GetDoneCh()
+
+	defer close(doneCh)
+
+	logging.Infof("StorageMgr::handleClearShardType Clearing the Shard type for shardIds:%v",
+		shardIds)
+	if s.stm != nil {
+		s.stm.ProcessCommand(cmd)
+	} else {
+		common.CrashOnError(
+			fmt.Errorf("StorageMgr::handleClearShardType ShardTransferManager Not Initialized during msg %v execution",
 				cmd),
 		)
 	}
