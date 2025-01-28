@@ -560,6 +560,7 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	respCh := msg.GetRespCh()
 	isSyncCleanup := msg.IsSyncCleanup()
 	hasCodebooks := len(msg.GetCodebookNames()) != 0
+	shardType := msg.GetShardType()
 
 	meta := make(map[string]interface{})
 	meta[plasma.GSIRebalanceId] = rebalanceId
@@ -583,13 +584,23 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	}
 
 	if !isSyncCleanup { // Invoke asynchronous cleanup
-		err := plasma.DoCleanup(destination, meta, nil)
+		var err error
+		if shardType == c.PLASMA_SHARD {
+			err = plasma.DoCleanup(destination, meta, nil)
+		} else if shardType == c.BHIVE_SHARD {
+			err = bhive.DoCleanup(destination, meta, nil)
+		} else {
+			// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be cleaned
+			err = ErrShardTypeUnset
+		}
+
 		if err != nil {
 			logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
 				"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
 		}
 	} else { // Wait for cleanup to finish
 		var wg sync.WaitGroup
+		var err error
 		doneCb := func(err error) {
 			logging.Infof("ShardTransferManager::processTransferCleanupMessage doneCb invoked for "+
 				"ttid: %v, rebalanceId: %v", ttid, rebalanceId)
@@ -601,7 +612,15 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 		}
 
 		wg.Add(1)
-		err := plasma.DoCleanup(destination, meta, doneCb)
+
+		if shardType == c.PLASMA_SHARD {
+			err = plasma.DoCleanup(destination, meta, doneCb)
+		} else if shardType == c.BHIVE_SHARD {
+			err = bhive.DoCleanup(destination, meta, doneCb)
+		} else {
+			// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be cleaned
+			err = ErrShardTypeUnset
+		}
 		if err != nil {
 			logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
 				"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)

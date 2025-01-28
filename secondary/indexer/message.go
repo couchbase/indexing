@@ -2816,6 +2816,8 @@ type MsgShardTransferCleanup struct {
 	isPeerTransfer bool
 
 	codebookPaths []string
+
+	shardType common.ShardType
 }
 
 func (m *MsgShardTransferCleanup) GetMsgType() MsgType {
@@ -2852,6 +2854,10 @@ func (m *MsgShardTransferCleanup) GetCodebookNames() []string {
 		codebookNames = append(codebookNames, filepath.Base(codebookPath))
 	}
 	return codebookNames
+}
+
+func (m *MsgShardTransferCleanup) GetShardType() common.ShardType {
+	return m.shardType
 }
 
 func (m *MsgShardTransferCleanup) String() string {

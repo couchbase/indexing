@@ -1448,6 +1448,7 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.Sh
 		respCh:          respCh,
 		syncCleanup:     syncCleanup,
 		codebookPaths:   getCodebookPaths(tt),
+		shardType:       tt.GetShardType(),
 	}
 
 	if sr.canMaintainShardAffinity {

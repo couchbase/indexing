@@ -4552,6 +4552,7 @@ func (m *RebalanceServiceManager) cleanupTranferredData(ttid string, tt *c.Trans
 		respCh:          respCh,
 		syncCleanup:     false,
 		codebookPaths:   getCodebookPaths(tt),
+		shardType:       tt.GetShardType(),
 	}
 
 	m.supvMsgch <- msg
