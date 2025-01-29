@@ -3006,6 +3006,19 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64) {
 	// Storage takes 90% of the quota
 	storageQuota := int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC)
 
+	var numBhives int64
+	for _, inst := range s.indexInstMap.Get() {
+		if inst.Defn.VectorMeta != nil && inst.Defn.VectorMeta.IsBhive {
+			numBhives++
+		}
+	}
+
+	if numBhives <= 0 {
+		// There are no bhive indexes, give all the quota to plasma
+		plasma.SetMemoryQuota(storageQuota)
+		return
+	}
+
 	pMandQuota := plasma.GetMandatoryQuota()
 	if pMandQuota < 0 {
 		pMandQuota = 0
