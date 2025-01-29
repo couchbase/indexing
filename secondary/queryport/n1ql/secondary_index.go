@@ -1064,18 +1064,6 @@ func newSecondaryIndexFromMetaData(
 	indexInfo := make(map[string]interface{})
 	numReplica := indexDefn.GetNumReplica()
 
-	// In Serverless Mode: We hide num_replica via system:indexes
-	//                     We expose IndexStatement via system:indexes, this statement does not have num_partition/nodes parameter
-	//                     as Deployment is Serverless.
-	// In On prem Mode :   We don't expose IndexStatement as we do not have the current value of num_partition and nodes of the Index
-	//                     We expose current number of replicas in the cluster via system:indexes
-	if common.GetDeploymentModel() != common.SERVERLESS_DEPLOYMENT {
-		indexInfo["num_replica"] = numReplica
-	} else {
-		stmt := common.IndexStatement(*indexDefn, int(indexDefn.NumPartitions), numReplica, true)
-		indexInfo["definition"] = stmt
-	}
-
 	si = &secondaryIndex{
 		gsi:                    gsi,
 		bucketn:                indexDefn.Bucket,
@@ -1171,6 +1159,12 @@ func newSecondaryIndexFromMetaData(
 	if len(imd.Instances) > 0 {
 		si.numPartition = int(imd.Instances[0].NumPartitions)
 	}
+
+	// for backward compatibility the num_replica field is still kept along with complete Index definition stmt
+	if common.GetDeploymentModel() != common.SERVERLESS_DEPLOYMENT {
+		si.indexInfo["num_replica"] = numReplica
+	}
+	si.indexInfo["definition"] = common.IndexStatement(*indexDefn, si.numPartition, numReplica, true)
 
 	return si, nil
 }
