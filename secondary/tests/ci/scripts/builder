@@ -58,9 +58,19 @@ cmake ${CMAKE_x86_OPTS} \
 	.. 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "CMake build [$SUFFIX]"
 
+num_cores=0
+core_read_commands=("nproc --all" "sysctl -n hw.ncpu" "echo 32")
+for cmd in $core_read_commands; do
+  val=$(eval $cmd)
+  if [ $? -eq 0 ]; then
+    num_cores=$val
+    break
+  fi
+done
+
 echo "Building main product [$SUFFIX]"
 cd $WORKSPACE/build
-make -j8 install 1>>$WORKSPACE/make.log 2>&1
+make -j$num_cores install 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Making Install [$SUFFIX]"
 
 echo "Build $SUFFIX finished"

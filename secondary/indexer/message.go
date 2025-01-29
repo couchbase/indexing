@@ -3352,6 +3352,8 @@ type MsgIndexTrainingDone struct {
 	dropMap      map[common.IndexInstId]MsgChannel
 	reqCtx       *c.MetadataRequestContext
 	respCh       MsgChannel
+
+	nlistInstPartMap map[common.IndexInstId]map[common.PartitionId]int
 }
 
 func (m *MsgIndexTrainingDone) GetMsgType() MsgType {
@@ -3380,6 +3382,11 @@ func (m *MsgIndexTrainingDone) GetDroppedInsts() map[common.IndexInstId]bool {
 
 func (m *MsgIndexTrainingDone) GetReqCtx() *c.MetadataRequestContext {
 	return m.reqCtx
+}
+
+// For propagating change in number of centroids if required
+func (m *MsgIndexTrainingDone) GetNlistMap() map[common.IndexInstId]map[common.PartitionId]int {
+	return m.nlistInstPartMap
 }
 
 // MsgType.String is a helper function to return string for message type.

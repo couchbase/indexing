@@ -1,4 +1,5 @@
 #!/bin/bash
+perl -pi -e "s/export STORAGE=.*/export STORAGE=plasma/g" ~/.cienv
 source $HOME/.cienv
 
 echo "container runner started"

@@ -191,6 +191,9 @@ type bhiveSnapshot struct {
 
 	committed bool
 
+	chkpointCb bhive.RecoveryPointCallback
+	chkpointCh chan bool
+
 	refCount int32
 }
 
@@ -1754,6 +1757,21 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 	mdb.persistorLock.Lock()
 	defer mdb.persistorLock.Unlock()
 
+	var wg sync.WaitGroup
+
+	s.chkpointCh = make(chan bool)
+	// do not resume mutations until checkpoint callback is completed.
+	// This is needed for rollback to ensure both vindex(full vector)
+	// and pindex (quantized) processed the same mutations when we
+	// checkpoint for a snapshot. checkpoint is an memory operation for us;
+	// actual persistence happens lazily.
+	s.chkpointCb = func(b *bhive.Bhive) error {
+		wg.Done()
+		return nil
+	}
+	wg.Add(2) // mainIndex : vindex (lsm) + pindex (lss)
+	wg.Add(1) // docIndex  : vindex (lsm)
+
 	s.MainSnap.Open() // close in CreateRecoveryPoint
 	s.BackSnap.Open() // close in CreateRecoveryPoint
 
@@ -1767,10 +1785,18 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 		mdb.closeQueuedSnapNoLock()
 		mdb.persistorQueue = s
 	}
+
+	select {
+	case <- s.chkpointCh:
+	default:
+		wg.Wait()
+	}
 }
 
 func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 	if mdb.CheckCmdChStopped() {
+		close(s.chkpointCh)
+
 		mdb.persistorLock.Lock()
 		defer mdb.persistorLock.Unlock()
 
@@ -1802,7 +1828,7 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 		plasmaPersistenceMutex.Lock()
 		defer plasmaPersistenceMutex.Unlock()
 
-		mErr := mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta)
+		mErr := mdb.mainstore.CreateRecoveryPoint2(s.MainSnap, meta, s.chkpointCb)
 		if mErr != nil {
 			logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v: "+
 				"Failed to create mainstore recovery point: %v",
@@ -1821,7 +1847,7 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 		plasmaPersistenceMutex.Lock()
 		defer plasmaPersistenceMutex.Unlock()
 
-		bErr := mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta)
+		bErr := mdb.backstore.CreateRecoveryPoint2(s.BackSnap, meta, s.chkpointCb)
 		if bErr != nil {
 			logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v: "+
 				"Failed to create backstore recovery point: %v",
@@ -1833,6 +1859,7 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 	}()
 
 	wg.Wait()
+	close(s.chkpointCh)
 
 	dur := time.Since(t0)
 	logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v "+
@@ -2030,6 +2057,7 @@ func (mdb *bhiveSlice) closeQueuedSnapNoLock() {
 	if deQueuedS != nil {
 		deQueuedS.MainSnap.Close()
 		deQueuedS.BackSnap.Close()
+		close(deQueuedS.chkpointCh)
 		logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v DeQueuing SnapshotId %v ondisk"+
 			" snapshot.", mdb.id, mdb.idxInstId, mdb.idxPartnId, deQueuedS.id)
 	}
