@@ -39,13 +39,20 @@ services:
     # comment both of the below to run standalone tests
     restart: unless-stopped
     entrypoint: /home/bot/.ciscripts/secondary/tests/ci/scripts/setup/container-runner.sh
+    # cpus: 6.0
+    cpuset: "0-5"
+    mem_limit: 12G
+    memswap_limit: "0"
   apache:
     build:
       dockerfile: apache_server.dockerfile
+    restart: unless-stopped
     volumes:
       - var-www:/var/www:ro
     ports:
       - 80:80
+    cpus: 0.5
+    mem_limit: 1G
 secrets:
   github_key:
     file: $HOME/.ssh/id_rsa_server_buildnode_to_github
@@ -54,4 +61,9 @@ secrets:
 volumes:
   var-www:
   build:
+    driver: local
+    driver_opts:
+      type: none
+      device: /opt/ci
+      o: bind
   depscache:

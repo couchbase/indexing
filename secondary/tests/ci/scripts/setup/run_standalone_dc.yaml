@@ -36,6 +36,10 @@ services:
       # set your cb server root as $WORKSPACE to run CI tests on current set of scripts
       - ${WORKSPACE:-./../../../../../}:/mnt/project
     entrypoint: /home/bot/.ciscripts/secondary/tests/ci/scripts/setup/standalone-runner.sh
+    # cpus: "6.0"
+    cpuset: "0-5"
+    mem_limit: "12G"
+    memswap_limit: "0"
     extra_hosts:
       - "host.docker.internal:host-gateway"
   apache:
