@@ -786,7 +786,7 @@ func (r *Rebalancer) mapTransferTokensByDestIdLOCKED() {
 		if tt.IsUserDeferred() { // rebalance will not build this index
 			continue
 		}
-		if tt.State == common.TransferTokenDeleted {
+		if isTokenDone(r.RebalanceOwner, tt) {
 			//state can already be deleted in case this token
 			//already got processed for empty node.
 			continue
@@ -3026,21 +3026,28 @@ func (r *Rebalancer) allTokensPendingReadyOrDeleted() bool {
 	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 
-	for _, token := range r.transferTokens {
+	for ttid, token := range r.transferTokens {
 		if token.State != c.TransferTokenInProgress && token.State != c.TransferTokenDeleted {
+			logging.Infof("Rebalancer::allTokensPendingReadyOrDeleted token %v not in desired state %v/%v but in %v",
+				ttid, c.TransferTokenInProgress, c.TransferTokenDeleted, token.State)
 			return false
 		}
 
 		if token.State == c.TransferTokenInProgress {
 			if token.IsEmptyNodeBatch == false {
+				logging.Infof("Rebalancer::allTokensPendingReadyOrDeleted non empty node token %v in state %v",
+					ttid, token.State)
 				return false
 			}
 
 			if token.IsPendingReady == false {
+				logging.Infof("Rebalancer::allTokensPendingReadyOrDeleted empty node token %v not ready in state %v",
+					ttid, token.State)
 				return false
 			}
 		}
 	}
+	logging.Infof("Rebalancer::allTokensPendingReadyOrDeleted all tokens are either in pendingReady state or Deleted")
 	return true // all tokens are either Deleted or in pending Ready state
 }
 

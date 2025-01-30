@@ -18,7 +18,10 @@ import (
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
-const defaultOMPThreads = 1
+const (
+	defaultOMPThreads = 1
+	defaultWaitPolicy = "PASSIVE"
+)
 
 type codebookIVFPQ struct {
 	dim      int //vector dimension
@@ -144,7 +147,7 @@ func (cb *codebookIVFPQ) CodeSize() (int, error) {
 	return cb.index.CodeSize()
 }
 
-//compute coarse code size based on nlist
+// compute coarse code size based on nlist
 func computeCoarseCodeSize(nlist int) int {
 
 	nl := nlist - 1
@@ -298,10 +301,10 @@ func (cb *codebookIVFPQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) 
 	return 0
 }
 
-//Compute the distance between a vector and flat quantized codes.
-//Quantized codes are decoded first before distance comparison.
-//Codes must be provided without coarse code(i.e. centroid ID).
-//This function only works with vectors belonging to the same centroid(input as listno).
+// Compute the distance between a vector and flat quantized codes.
+// Quantized codes are decoded first before distance comparison.
+// Codes must be provided without coarse code(i.e. centroid ID).
+// This function only works with vectors belonging to the same centroid(input as listno).
 func (cb *codebookIVFPQ) ComputeDistanceEncoded(qvec []float32,
 	n int, codes []byte, dists []float32, listno int64) error {
 	//Not yet implemented

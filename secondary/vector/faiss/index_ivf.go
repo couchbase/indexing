@@ -12,7 +12,6 @@ import "C"
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"unsafe"
 )
 
@@ -26,8 +25,8 @@ func (idx *IndexImpl) SetNProbe(nprobe int32) {
 	C.faiss_IndexIVF_set_nprobe(ivfPtr, C.size_t(nprobe))
 }
 
-//Quantizer returns the pointer to the quantizer for
-//IVF family indexes only.
+// Quantizer returns the pointer to the quantizer for
+// IVF family indexes only.
 func (idx *IndexImpl) Quantizer() (*IndexImpl, error) {
 	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
 	if ivfPtr == nil {
@@ -38,9 +37,9 @@ func (idx *IndexImpl) Quantizer() (*IndexImpl, error) {
 	return &IndexImpl{&faissIndex{quantizer}}, nil
 }
 
-//Compute the quantized code for a given list of vectors.
-//list_no is encoded as part of the code. The code returned
-//from the function can directly be decoded using Decode function.
+// Compute the quantized code for a given list of vectors.
+// list_no is encoded as part of the code. The code returned
+// from the function can directly be decoded using Decode function.
 func (idx *IndexImpl) CodeSize() (size int, err error) {
 
 	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
@@ -61,14 +60,14 @@ func (idx *IndexImpl) CodeSize() (size int, err error) {
 	return
 }
 
-//Compute the quantized code for a given list of vectors.
-//list_no is encoded as part of the code. The code returned
-//from the function can directly be decoded using Decode function.
+// Compute the quantized code for a given list of vectors.
+// list_no is encoded as part of the code. The code returned
+// from the function can directly be decoded using Decode function.
 func (idx *IndexImpl) EncodeVectors(x []float32,
 	codes []byte, nlist int) (err error) {
 
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// runtime.LockOSThread()
+	// defer runtime.UnlockOSThread()
 
 	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
 	if ivfPtr == nil {
@@ -89,15 +88,15 @@ func (idx *IndexImpl) EncodeVectors(x []float32,
 	return
 }
 
-//Compute the quantized code for a given list of vectors.
-//list_no is NOT encoded as part of the code. The code returned
-//from this function cannot be decoded via Decoded. It can be
-//used for direct distance calculations.
+// Compute the quantized code for a given list of vectors.
+// list_no is NOT encoded as part of the code. The code returned
+// from this function cannot be decoded via Decoded. It can be
+// used for direct distance calculations.
 func (idx *IndexImpl) EncodeVectors2(x []float32, codes []byte,
 	nsub int, nbits int, nlist int) (err error) {
 
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// runtime.LockOSThread()
+	// defer runtime.UnlockOSThread()
 
 	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
 	if ivfPtr == nil {
@@ -133,8 +132,8 @@ func (idx *IndexImpl) EncodeVectors2(x []float32, codes []byte,
 	return
 }
 
-//stripCoarseSize is a helper function to strip out the coarse code from
-//the quantized code. This function doesn't allocate a new slice.
+// stripCoarseSize is a helper function to strip out the coarse code from
+// the quantized code. This function doesn't allocate a new slice.
 func stripCoarseSize(codes []byte, code_size, coarse_size int) []byte {
 
 	total_size := code_size + coarse_size
@@ -153,14 +152,14 @@ func stripCoarseSize(codes []byte, code_size, coarse_size int) []byte {
 	return codes
 }
 
-//EncodeAndAssignPQ computes the quantized code for a given
-//list of vectors. list_no is encoded as part of the code.
-//Additionally, it decodes the list_no from the quantized
-//code and returns it as labels. The list_no is the nearest
-//centroid in the coarse index to the given input vector.
-//This list_no is the same as returned from assign function and
-//allows this function to be used for both encode and assign
-//functionality within a single function call.
+// EncodeAndAssignPQ computes the quantized code for a given
+// list of vectors. list_no is encoded as part of the code.
+// Additionally, it decodes the list_no from the quantized
+// code and returns it as labels. The list_no is the nearest
+// centroid in the coarse index to the given input vector.
+// This list_no is the same as returned from assign function and
+// allows this function to be used for both encode and assign
+// functionality within a single function call.
 func (idx *IndexImpl) EncodeAndAssignPQ(x []float32, codes []byte,
 	labels []int64, nsub int, nbits int, nlist int) (err error) {
 
@@ -197,7 +196,7 @@ func (idx *IndexImpl) EncodeAndAssignPQ(x []float32, codes []byte,
 	return
 }
 
-//extract the label(decoded listno) from the code
+// extract the label(decoded listno) from the code
 func extractLabels(codes []byte, labels []int64, code_size, coarse_size int) {
 
 	total_size := code_size + coarse_size
@@ -214,8 +213,8 @@ func extractLabels(codes []byte, labels []int64, code_size, coarse_size int) {
 	}
 }
 
-//decodeListNo decodes the listno encoded
-//as little-endian []byte to an int64
+// decodeListNo decodes the listno encoded
+// as little-endian []byte to an int64
 func decodeListNo(code []byte) int64 {
 	var listNo int64
 	nbit := 0
@@ -228,14 +227,14 @@ func decodeListNo(code []byte) int64 {
 	return listNo
 }
 
-//EncodeAndAssignSQ computes the quantized code for a given
-//list of vectors. list_no is encoded as part of the code.
-//Additionally, it decodes the list_no from the quantized
-//code and returns it as labels. The list_no is the nearest
-//centroid in the coarse index to the given input vector.
-//This list_no is the same as returned from assign function and
-//allows this function to be used for both encode and assign
-//functionality within a single function call.
+// EncodeAndAssignSQ computes the quantized code for a given
+// list of vectors. list_no is encoded as part of the code.
+// Additionally, it decodes the list_no from the quantized
+// code and returns it as labels. The list_no is the nearest
+// centroid in the coarse index to the given input vector.
+// This list_no is the same as returned from assign function and
+// allows this function to be used for both encode and assign
+// functionality within a single function call.
 func (idx *IndexImpl) EncodeAndAssignSQ(x []float32, codes []byte,
 	labels []int64, nlist int) (err error) {
 
@@ -281,8 +280,8 @@ func (idx *IndexImpl) EncodeAndAssignSQ(x []float32, codes []byte,
 
 func (idx *IndexImpl) DecodeVectors(nx int, codes []byte, x []float32) (err error) {
 
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// runtime.LockOSThread()
+	// defer runtime.UnlockOSThread()
 
 	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
 	if ivfPtr == nil {
@@ -299,14 +298,14 @@ func (idx *IndexImpl) DecodeVectors(nx int, codes []byte, x []float32) (err erro
 	return err
 }
 
-//Compute the distance between a vector with a list of flat quantized codes.
-//This function needs a listno as input and all the codes must belong to
-//the same listno. The computed distances are returned in `dists`.
+// Compute the distance between a vector with a list of flat quantized codes.
+// This function needs a listno as input and all the codes must belong to
+// the same listno. The computed distances are returned in `dists`.
 func (idx *IndexImpl) ComputeDistanceEncodedSQ(qvec []float32,
 	nx int, codes []byte, dists []float32, listno int64, metric int, qt int, dim int) (err error) {
 
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// runtime.LockOSThread()
+	// defer runtime.UnlockOSThread()
 
 	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
 	if ivfPtr == nil {

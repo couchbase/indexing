@@ -8,7 +8,6 @@ package faiss
 */
 import "C"
 import (
-	"runtime"
 	"unsafe"
 )
 
@@ -88,8 +87,8 @@ func (idx *faissIndex) MetricType() int {
 }
 
 func (idx *faissIndex) Train(x []float32) error {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// runtime.LockOSThread()
+	// defer runtime.UnlockOSThread()
 
 	n := len(x) / idx.D()
 	if c := C.faiss_Index_train(idx.idx, C.idx_t(n), (*C.float)(&x[0])); c != 0 {
@@ -99,8 +98,8 @@ func (idx *faissIndex) Train(x []float32) error {
 }
 
 func (idx *faissIndex) Add(x []float32) error {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// runtime.LockOSThread()
+	// defer runtime.UnlockOSThread()
 
 	n := len(x) / idx.D()
 	if c := C.faiss_Index_add(idx.idx, C.idx_t(n), (*C.float)(&x[0])); c != 0 {
@@ -112,8 +111,8 @@ func (idx *faissIndex) Add(x []float32) error {
 func (idx *faissIndex) Assign(x []float32, k int64) (
 	labels []int64, err error,
 ) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// runtime.LockOSThread()
+	// defer runtime.UnlockOSThread()
 
 	n := len(x) / idx.D()
 	labels = make([]int64, int64(n)*k)
@@ -133,8 +132,8 @@ func (idx *faissIndex) Assign(x []float32, k int64) (
 func (idx *faissIndex) Search(x []float32, k int64) (
 	distances []float32, labels []int64, err error,
 ) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// runtime.LockOSThread()
+	// defer runtime.UnlockOSThread()
 
 	n := len(x) / idx.D()
 	distances = make([]float32, int64(n)*k)
@@ -154,8 +153,8 @@ func (idx *faissIndex) Search(x []float32, k int64) (
 }
 
 func (idx *faissIndex) Reset() error {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// runtime.LockOSThread()
+	// defer runtime.UnlockOSThread()
 
 	if c := C.faiss_Index_reset(idx.idx); c != 0 {
 		return getLastError()
@@ -180,8 +179,8 @@ type IndexImpl struct {
 // IndexFactory builds a composite index.
 // description is a comma-separated list of components.
 func IndexFactory(d int, description string, metric int) (*IndexImpl, error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// runtime.LockOSThread()
+	// defer runtime.UnlockOSThread()
 
 	cdesc := C.CString(description)
 	defer C.free(unsafe.Pointer(cdesc))
