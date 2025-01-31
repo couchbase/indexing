@@ -1358,6 +1358,17 @@ func (stm *ShardTransferManager) handleLockShardsCommand(cmd Message) {
 
 	errMap := make(map[common.ShardId]error)
 	for _, shardId := range shardIds {
+
+		if shardRefCount, ok := stm.lockedShards[shardId]; ok && shardRefCount != nil {
+			shardRefCount.refCount++
+			shardRefCount.lockedForRecovery = shardRefCount.lockedForRecovery || isLockedForRecovery
+		} else {
+			stm.lockedShards[shardId] = &ShardRefCount{
+				refCount:          1,
+				lockedForRecovery: isLockedForRecovery,
+			}
+		}
+
 		var err error
 
 		shardType := stm.shardTypeMapper.GetShardType(shardId)
@@ -1373,17 +1384,8 @@ func (stm *ShardTransferManager) handleLockShardsCommand(cmd Message) {
 		if err != nil {
 			logging.Errorf("ShardTransferManager::handleLockShardsCommand Error observed while locking shard:  %v,"+
 				"shard type:%v, err: %v", shardId, shardType, err)
-		} else {
-			if shardRefCount, ok := stm.lockedShards[shardId]; ok && shardRefCount != nil {
-				shardRefCount.refCount++
-				shardRefCount.lockedForRecovery = shardRefCount.lockedForRecovery || isLockedForRecovery
-			} else {
-				stm.lockedShards[shardId] = &ShardRefCount{
-					refCount:          1,
-					lockedForRecovery: isLockedForRecovery,
-				}
-			}
-
+			// reset the refCount if LockShard errored
+			stm.lockedShards[shardId].refCount--
 		}
 		errMap[shardId] = err
 	}
@@ -1407,6 +1409,12 @@ func (stm *ShardTransferManager) handleUnlockShardsCommand(cmd Message) {
 
 	errMap := make(map[common.ShardId]error)
 	for _, shardId := range shardIds {
+
+		if shardRefCount, ok := stm.lockedShards[shardId]; !ok || shardRefCount == nil || shardRefCount.refCount <= 0 {
+			delete(stm.lockedShards, shardId) // clear the book-keeping
+			continue
+		}
+
 		var err error
 
 		shardType := stm.shardTypeMapper.GetShardType(shardId)
@@ -1423,14 +1431,10 @@ func (stm *ShardTransferManager) handleUnlockShardsCommand(cmd Message) {
 			logging.Errorf("ShardTransferManager::handleUnlockShardsCommand Error observed while unlocking shard: %v,"+
 				"shard type:%v, err: %v", shardId, shardType, err)
 		} else {
-			if shardRefCount, ok := stm.lockedShards[shardId]; ok && shardRefCount != nil {
-				shardRefCount.refCount--
-				if shardRefCount.refCount <= 0 {
-					logging.Infof("ShardTransferManager::handleUnlockShardCommands Clearing the book-keeping for shard: %v, refCount: %v", shardId, shardRefCount.refCount)
-					delete(stm.lockedShards, shardId)
-				}
-			} else {
-				delete(stm.lockedShards, shardId) // clear the book-keeping
+			stm.lockedShards[shardId].refCount--
+			if stm.lockedShards[shardId].refCount <= 0 {
+				logging.Infof("ShardTransferManager::handleUnlockShardCommands Clearing the book-keeping for shard: %v, refCount: %v", shardId, stm.lockedShards[shardId].refCount)
+				delete(stm.lockedShards, shardId)
 			}
 		}
 		errMap[shardId] = err
