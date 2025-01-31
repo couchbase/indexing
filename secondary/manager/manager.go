@@ -24,8 +24,8 @@ import (
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 
-	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/cbauthutil"
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -352,9 +352,10 @@ func (mgr *IndexManager) ServerAuth(conn net.Conn) (*gometaC.PeerPipe, gometaC.P
 		return nil, nil, err
 	}
 
-	_, err = cbauth.Auth(authReq.User, authReq.Pass)
-	if err != nil {
-		logging.Errorf("IndexManager:ServerAuth error %v for connection %v:%v", err, laddr, raddr)
+	creds, err, _ := cbauthutil.HandleClientCertAndAuth(conn, authReq.User, authReq.Pass)
+	if err != nil || creds == nil {
+		logging.Errorf("IndexManager:ServerAuth {error: %v, creds == nil? %v} for connection %v:%v",
+			err, creds == nil, laddr, raddr)
 
 		authErr := errors.New("Unauthenticated access. Authentication failure.")
 		send(transport.AUTH_FAILURE, authErr.Error())

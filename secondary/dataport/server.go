@@ -64,9 +64,8 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/cbauthutil"
 	"github.com/couchbase/indexing/secondary/stats"
-
-	"github.com/couchbase/cbauth"
 
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
@@ -772,10 +771,11 @@ func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
 		return nil, c.ErrAuthMissing
 
 	} else {
-		// The upgraded server always accepts the auth request.
-		_, err = cbauth.Auth(req.GetUser(), req.GetPass())
-		if err != nil {
-			logging.Errorf("%v connection %q doAuth() error %v", s.logPrefix, raddr, err)
+		creds, err, _ := cbauthutil.HandleClientCertAndAuth(conn, req.GetUser(), req.GetPass())
+		if err != nil || creds == nil {
+			logging.Errorf("%v connection %q doAuth() error - %v; creds == nil? %v",
+				s.logPrefix, raddr, err, creds == nil)
+
 			return nil, errors.New("Unauthenticated access. Authentication failure.")
 		}
 
