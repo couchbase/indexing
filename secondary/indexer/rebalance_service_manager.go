@@ -2643,8 +2643,12 @@ func (m *RebalanceServiceManager) rebalanceOrFailoverDoneCallback(err error, can
 // forceUnbalanced flag forces isBalanced = false (for failovers and cancels).
 // Caller should be holding mutex svcMgrMu write locked.
 func (m *RebalanceServiceManager) onRebalanceDoneLOCKED(err error, forceUnbalanced bool) {
+	var rebalId string
 	isMaster := m.rebalancer != nil
 	isBalancedNew := !forceUnbalanced // new isBalanced state to set; below should only change this to false
+	if m.rebalanceToken != nil {
+		rebalId = m.rebalanceToken.RebalId
+	}
 	if isMaster {
 		newTask := (*service.Task)(nil) // no task if succeeded
 		if err != nil {
@@ -2683,6 +2687,9 @@ func (m *RebalanceServiceManager) onRebalanceDoneLOCKED(err error, forceUnbalanc
 	}
 
 	m.setStateIsBalanced(isBalancedNew) // set new isBalanced state
+	// we are not making any checks here if the RPC server was running or not; if the server is not
+	// running then STOP_PEER_SERVER should be a no-op
+	m.sendPeerServerCommand(STOP_PEER_SERVER, rebalId)
 	m.rebalancer = nil
 	m.rebalancerF = nil
 	l.Infof("RebalanceServiceManager::onRebalanceDoneLOCKED Rebalance Done: "+
@@ -2768,6 +2775,34 @@ func (m *RebalanceServiceManager) getStateServers() []service.NodeID {
 	m.stateMu.RLock()
 	defer m.stateMu.RUnlock()
 	return m.state.servers
+}
+
+func (m *RebalanceServiceManager) sendPeerServerCommand(cmd MsgType, rebalId string) {
+
+	cfg := m.config.Load()
+	if !m.shardAffinity || !c.CanMaintanShardAffinity(cfg) || c.IsServerlessDeployment() {
+		return
+	}
+
+	respCh := make(chan error)
+	msg := &MsgPeerServerCommand{
+		mType:       cmd,
+		respCh:      respCh,
+		rebalanceId: rebalId,
+	}
+
+	logging.Infof("RebalanceServiceManager::sendPeerServerCommand: sending command %v for rebalance %v",
+		cmd, rebalId)
+	m.supvMsgch <- msg
+
+	err := <-respCh
+	if err != nil {
+		logging.Errorf("RebalanceServiceManager::sendPeerServerCommand: failed command %v with error %v", cmd, err)
+		common.CrashOnError(err)
+	} else {
+		logging.Infof("RebalanceServiceManager::sendPeerServerCommand: command %v successful for rebalance %v",
+			cmd, rebalId)
+	}
 }
 
 // wait returns the current state immediately if it is newer than what the

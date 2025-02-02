@@ -3597,8 +3597,6 @@ func (sr *ShardRebalancer) doFinish() {
 
 	sr.cancelMetakv()
 	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
-		// can't directly use sr.done as it is closed before STOP_PEER_SERVER command
-		sr.sendPeerServerCommand(STOP_PEER_SERVER, nil, nil)
 
 		sr.dcpRebrCloseOnce.Do(func() {
 			if sr.dcpRebrCloseCh != nil {
@@ -3664,12 +3662,6 @@ func (sr *ShardRebalancer) Cancel() {
 		sr.batchBuildReqChCloseOnce.Do(func() {
 			close(sr.batchBuildReqCh)
 		})
-	}
-
-	// we are not making any checks here if the RPC server was running or not; if the server is not
-	// running then STOP_PEER_SERVER should be a no-op
-	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
-		go sr.sendPeerServerCommand(STOP_PEER_SERVER, nil, nil)
 	}
 
 	sr.mu.Lock()
