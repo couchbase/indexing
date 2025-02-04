@@ -1670,7 +1670,7 @@ func (stm *ShardTransferManager) handleSecurityChange(cmd Message) {
 	stm.rpcMutex.Lock()
 	defer stm.rpcMutex.Unlock()
 
-	if secChange.refreshCert && stm.rpcSrv != nil {
+	if secChange.RefreshServerCert() && stm.rpcSrv != nil {
 		// restart rpc server for certificate change
 
 		// shutdown should trigger srv.httpSrv.Serve to fail with error ErrServerClosed

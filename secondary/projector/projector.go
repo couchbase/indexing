@@ -1198,7 +1198,7 @@ func (p *Projector) initSecurityContext(encryptLocalHost bool) error {
 func (p *Projector) registerSecurityCallback() error {
 	security.WaitForSecurityCtxInit()
 
-	fn := func(refreshCert bool, refreshEncrypt bool) error {
+	fn := func(_, _, _ bool) error {
 		select {
 		case <-p.enableSecurityChange:
 		default:

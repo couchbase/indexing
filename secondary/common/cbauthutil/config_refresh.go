@@ -26,6 +26,7 @@ func ConfigRefreshCallback(code uint64) error {
 	logging.Infof("ConfigRefreshCallback: Received notificaiton with code: %v", code)
 
 	if code&cbauth.CFG_CHANGE_CERTS_TLSCONFIG != 0 ||
+		code&cbauth.CFG_CHANGE_CLIENT_CERTS_TLSCONFIG != 0 ||
 		code&cbauth.CFG_CHANGE_CLUSTER_ENCRYPTION != 0 {
 		return security.SecurityConfigRefresh(code)
 	}

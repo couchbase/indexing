@@ -229,7 +229,7 @@ func Refresh(tlsConfig cbauth.TLSConfig, encryptConfig cbauth.ClusterEncryptionC
 		return
 	}
 
-	if err := pSecurityContext.update(newSetting, true); err != nil {
+	if err := pSecurityContext.update(newSetting, true, true); err != nil {
 		logging.Errorf("Fail to update security setting %v", err)
 		return
 	}
@@ -374,7 +374,10 @@ func (p *SecurityContext) refresh(code uint64) error {
 		newSetting = &temp
 	}
 
-	if code&cbauth.CFG_CHANGE_CERTS_TLSCONFIG != 0 {
+	var certsRefreshed = code&cbauth.CFG_CHANGE_CERTS_TLSCONFIG != 0 ||
+		code&cbauth.CFG_CHANGE_CLIENT_CERTS_TLSCONFIG != 0
+
+	if certsRefreshed {
 		if err := p.refreshConfig(newSetting); err != nil {
 			return err
 		}
@@ -396,10 +399,13 @@ func (p *SecurityContext) refresh(code uint64) error {
 		}
 	}
 
-	return p.update(newSetting, code&cbauth.CFG_CHANGE_CERTS_TLSCONFIG != 0)
+	return p.update(newSetting, // newSetting *SecuritySetting
+		code&cbauth.CFG_CHANGE_CERTS_TLSCONFIG != 0,        // refreshServerCert
+		code&cbauth.CFG_CHANGE_CLIENT_CERTS_TLSCONFIG != 0, // refreshClientCert
+	)
 }
 
-func (p *SecurityContext) update(newSetting *SecuritySetting, refreshCert bool) error {
+func (p *SecurityContext) update(newSetting *SecuritySetting, refreshServerCert, refreshClientCert bool) error {
 
 	hasEnabled := false
 	oldSetting := GetSecuritySetting()
@@ -410,7 +416,7 @@ func (p *SecurityContext) update(newSetting *SecuritySetting, refreshCert bool) 
 
 	UpdateSecuritySetting(newSetting)
 
-	if !refreshEncrypt && !refreshCert {
+	if !refreshEncrypt && !refreshServerCert {
 		logging.Infof("tls_setting: encryption is not enabled or no certificate refresh. Do not notify security change")
 		return nil
 	}
@@ -420,7 +426,7 @@ func (p *SecurityContext) update(newSetting *SecuritySetting, refreshCert bool) 
 
 	for key, notifier := range p.notifiers {
 		logging.Infof("tls_setting: notify security setting change for %v", key)
-		if err := notifier(refreshCert, refreshEncrypt); err != nil {
+		if err := notifier(refreshServerCert, refreshClientCert, refreshEncrypt); err != nil {
 			err1 := fmt.Errorf("Fail to refresh security setting for %v: %v", key, err)
 			if p.logger != nil {
 				p.logger(err1)
@@ -569,7 +575,7 @@ func (p *SecurityContext) refreshEncryption(setting *SecuritySetting) error {
 // Security Change Notifier
 //////////////////////////////////////////////////////
 
-type SecurityChangeNotifier func(refreshCert bool, refreshEncrypt bool) error
+type SecurityChangeNotifier func(refreshServerCert, refreshClientCert, refreshEncrypt bool) error
 
 func RegisterCallback(key string, cb SecurityChangeNotifier) {
 	pSecurityContext.mutex.Lock()

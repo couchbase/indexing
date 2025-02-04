@@ -2384,16 +2384,21 @@ func (m *MsgResetStats) GetMsgType() MsgType {
 }
 
 type MsgSecurityChange struct {
-	refreshCert    bool
-	refreshEncrypt bool
+	refreshServerCert bool
+	refreshClientCert bool
+	refreshEncrypt    bool
 }
 
 func (m *MsgSecurityChange) GetMsgType() MsgType {
 	return INDEXER_SECURITY_CHANGE
 }
 
-func (m *MsgSecurityChange) RefreshCert() bool {
-	return m.refreshCert
+func (m *MsgSecurityChange) RefreshServerCert() bool {
+	return m.refreshServerCert
+}
+
+func (m *MsgSecurityChange) RefreshClientCert() bool {
+	return m.refreshClientCert
 }
 
 func (m *MsgSecurityChange) RefreshEncrypt() bool {

@@ -676,7 +676,7 @@ func (idx *indexer) registerSecurityCallback() error {
 
 	security.WaitForSecurityCtxInit()
 
-	fn := func(refreshCert bool, refreshEncrypt bool) error {
+	fn := func(refreshServerCert, refreshClientCert, refreshEncrypt bool) error {
 		select {
 		case <-idx.enableSecurityChange:
 		default:
@@ -685,8 +685,9 @@ func (idx *indexer) registerSecurityCallback() error {
 		}
 
 		msg := &MsgSecurityChange{
-			refreshCert:    refreshCert,
-			refreshEncrypt: refreshEncrypt,
+			refreshServerCert: refreshServerCert,
+			refreshClientCert: refreshClientCert,
+			refreshEncrypt:    refreshEncrypt,
 		}
 		idx.internalRecvCh <- msg
 
@@ -710,6 +711,7 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 	}
 
 	refreshEncrypt := msg.(*MsgSecurityChange).RefreshEncrypt()
+	refreshServerCert := msg.(*MsgSecurityChange).RefreshServerCert()
 
 	if refreshEncrypt {
 		logging.Infof("handleSecurityChange: refresh security context")
@@ -719,23 +721,27 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 		}
 	}
 
-	// stop HTTPS server
-	idx.httpsSrvLock.Lock()
-	if idx.httpsSrv != nil {
-		// This does not close connections.  Use idx.httpSrv.Close() on 1.11
-		idx.tlsListener.Close()
-		idx.httpsSrv = nil
-		idx.tlsListener = nil
-	}
-	idx.httpsSrvLock.Unlock()
+	var shouldServersRestart = refreshServerCert || refreshEncrypt
 
-	idx.httpSrvLock.Lock()
-	if idx.httpSrv != nil {
-		idx.tcpListener.Close()
-		idx.httpSrv = nil
-		idx.tcpListener = nil
+	if shouldServersRestart {
+		// stop HTTPS server
+		idx.httpsSrvLock.Lock()
+		if idx.httpsSrv != nil {
+			// This does not close connections.  Use idx.httpSrv.Close() on 1.11
+			idx.tlsListener.Close()
+			idx.httpsSrv = nil
+			idx.tlsListener = nil
+		}
+		idx.httpsSrvLock.Unlock()
+
+		idx.httpSrvLock.Lock()
+		if idx.httpSrv != nil {
+			idx.tcpListener.Close()
+			idx.httpSrv = nil
+			idx.tcpListener = nil
+		}
+		idx.httpSrvLock.Unlock()
 	}
-	idx.httpSrvLock.Unlock()
 
 	if refreshEncrypt {
 		// restart lifecyclemgr
@@ -758,24 +764,26 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 		}
 	}
 
-	// start HTTP server
-	initHttp := func(r int, e error) error {
-		logging.Infof("handleSecurityChange: restarting http server")
-		return idx.initHttpServer()
-	}
-	rh := common.NewRetryHelper(10, time.Second, 1, initHttp)
-	if err := rh.Run(); err != nil {
-		exitFn(fmt.Sprintf("Fail to restart http server on security change. Error %v", err))
-	}
+	if shouldServersRestart {
+		// start HTTP server
+		initHttp := func(r int, e error) error {
+			logging.Infof("handleSecurityChange: restarting http server")
+			return idx.initHttpServer()
+		}
+		rh := common.NewRetryHelper(10, time.Second, 1, initHttp)
+		if err := rh.Run(); err != nil {
+			exitFn(fmt.Sprintf("Fail to restart http server on security change. Error %v", err))
+		}
 
-	// start HTTPS server
-	fn := func(r int, e error) error {
-		logging.Infof("handleSecurityChange: restarting https server")
-		return idx.initHttpsServer()
-	}
-	helper := common.NewRetryHelper(10, time.Second, 1, fn)
-	if err := helper.Run(); err != nil {
-		exitFn(fmt.Sprintf("Fail to restart https server on security change. Error %v", err))
+		// start HTTPS server
+		fn := func(r int, e error) error {
+			logging.Infof("handleSecurityChange: restarting https server")
+			return idx.initHttpsServer()
+		}
+		helper := common.NewRetryHelper(10, time.Second, 1, fn)
+		if err := helper.Run(); err != nil {
+			exitFn(fmt.Sprintf("Fail to restart https server on security change. Error %v", err))
+		}
 	}
 
 	if refreshEncrypt {
@@ -787,7 +795,8 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 	idx.storageMgrCmdCh <- msg
 	<-idx.storageMgrCmdCh
 
-	logging.Infof("handleSecurityChange: done")
+	logging.Infof("handleSecurityChange: (refreshServerCert: %v, refreshClientCert %v,refreshEncrypt %v) done",
+		refreshServerCert, msg.(*MsgSecurityChange).RefreshClientCert(), refreshEncrypt)
 }
 
 func (idx *indexer) initFromConfig() {
@@ -6569,7 +6578,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool,
 	ephemeral bool, numVBuckets int, partnStats map[common.PartitionId]*IndexStats,
 	memQuota int64, cancelCh chan bool) (
-// return values
+	// return values
 	PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
 
 	//initialize partitionInstMap for this index
@@ -10455,7 +10464,7 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 		partnShardIdMap: partnShardIdMap,
 		trainingPhase:   updateTrainingPhase,
 
-		partnBhiveGraphStatus:      partnBhiveGraphStatusMap,
+		partnBhiveGraphStatus: partnBhiveGraphStatusMap,
 	}
 
 	msg := &MsgClustMgrUpdate{
@@ -14359,16 +14368,15 @@ func (idx *indexer) handleBhiveGraphReady(cmd Message) {
 	var bhiveGraphStatus map[c.PartitionId]bool
 	//update index maps with this status
 	if inst, ok := idx.indexInstMap[idxInstId]; ok {
-			if inst.BhiveGraphStatus == nil {
-				inst.BhiveGraphStatus = make(map[c.PartitionId]bool)
-			}
-			inst.BhiveGraphStatus[idxPartnId] = true
+		if inst.BhiveGraphStatus == nil {
+			inst.BhiveGraphStatus = make(map[c.PartitionId]bool)
+		}
+		inst.BhiveGraphStatus[idxPartnId] = true
 
-			bhiveGraphStatus = make(map[c.PartitionId]bool)
-			bhiveGraphStatus[idxPartnId] = true
+		bhiveGraphStatus = make(map[c.PartitionId]bool)
+		bhiveGraphStatus[idxPartnId] = true
 		idx.indexInstMap[idxInstId] = inst
 	}
-
 
 	// Send a message to cluster manager to update index instance state to topology
 	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{idxInstId}, false, false, false, false, false, false, false, false, nil, false, bhiveGraphStatus, nil); err != nil {
@@ -14391,8 +14399,8 @@ func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
 			inst.RState == common.REBAL_ACTIVE {
 			for _, status := range inst.BhiveGraphStatus {
 				if !status {
-					idx.internalRecvCh <- &MsgBuildBhiveGraph {
-						idxInstId: inst.InstId,
+					idx.internalRecvCh <- &MsgBuildBhiveGraph{
+						idxInstId:        inst.InstId,
 						bhiveGraphStatus: inst.BhiveGraphStatus,
 					}
 					break
@@ -14401,4 +14409,3 @@ func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
 		}
 	}
 }
-
