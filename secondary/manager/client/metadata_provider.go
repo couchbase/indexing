@@ -4325,6 +4325,11 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 		return fmt.Errorf("Fail to alter index: %v", err)
 	}
 
+	nodes, _, _ := o.getNodesParam(plan)
+	if len(nodes) > 0 && o.ShouldMaintainShardAffinity() {
+		return fmt.Errorf("\"nodes\" clause is disabled with alter index as file based rebalance (shard affinity) is enabled")
+	}
+
 	// Find the index metadata.   We don't need the index metadata to be latest.  We just need
 	// the definition for acquiring exclusive lock from indexer.
 	idxMeta := o.findIndex(defnId)
@@ -5426,9 +5431,12 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 // This function returns the an index instance which is an ensemble of different index partitions.
 // Each index partition has the highest version with active RState, and each one can be residing on
 // different indexer node.  This function will not check if the index instance has all the partitions.
-func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId) []*mc.IndexInstDistribution {
+func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId,
+	meta *IndexMetadata) []*mc.IndexInstDistribution {
 
 	var result []*mc.IndexInstDistribution
+
+	isBhive := meta.Definition.IsBhive()
 
 	instsByInstId := r.instances[defnId]
 	for _, instsByPartitionId := range instsByInstId {
@@ -5439,6 +5447,21 @@ func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId) []*
 			var chosen *mc.IndexInstDistribution
 			var chosenVersion uint64
 			for version, inst := range instsByVersion {
+
+				//For any Bhive indexes, if graph is not ready, update the inst state to
+				//Catchup. Such an index will only be considered active after graph
+				//build finishes. This is only done for RState Active instances as
+				//rebalance ensures that RState is only active after graph build is
+				//done for instances moving during DCP rebalance.
+				if isBhive && inst.RState == uint32(c.REBAL_ACTIVE) &&
+					c.IndexState(inst.State) == c.INDEX_STATE_ACTIVE {
+					for _, partn := range inst.Partitions {
+						if !partn.BhiveGraphReady {
+							inst.State = uint32(c.INDEX_STATE_CATCHUP)
+							logging.Debugf("Updating inst %v partn %v to catchup as graph not ready", inst.InstId, partn.PartId)
+						}
+					}
+				}
 
 				// Do not filter out CREATED index, even though it is a "transient"
 				// index state.  A created index can be promoted to a READY index by
@@ -6005,7 +6028,7 @@ func (r *metadataRepo) updateInstancesInIndexMetadata(defnId c.IndexDefnId, meta
 	// This will exclude all DELETED instances.  Therefore, meta.Instances will be
 	// not be empty if there is at least one instance/partition that is not DELETED
 	// with active Rstate.
-	chosens := r.findLatestActiveIndexInstNoLock(defnId)
+	chosens := r.findLatestActiveIndexInstNoLock(defnId, meta)
 	for _, inst := range chosens {
 		idxInst := r.makeInstanceDefn(defnId, inst)
 

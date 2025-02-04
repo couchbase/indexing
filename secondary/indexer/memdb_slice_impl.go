@@ -1997,7 +1997,7 @@ func (mdb *memdbSlice) RecoveryDone() {
 	// nothing to do
 }
 
-func (mdb *memdbSlice) BuildDone() {
+func (mdb *memdbSlice) BuildDone(idxInstId common.IndexInstId, callb BuildDoneCallback) {
 	// nothing to do
 }
 

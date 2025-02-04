@@ -1273,12 +1273,18 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	dropIssued := false
 	// cleanup transfer token
 	var shardTokenCleanupWaitGroup sync.WaitGroup
+	var shardIdsToClear []c.ShardId
 	for _, t := range ttList {
 
 		if t.tt.IsShardTransferToken() {
 			switch string(m.nodeInfo.NodeID) {
 			case t.tt.MasterId, t.tt.SourceId, t.tt.DestId:
 				l.Infof("RebalanceServiceManager::cleanupShardTransferTokens Cleaning Up %v %v", t.ttid, t.tt.LessVerboseString())
+				if string(m.nodeInfo.NodeID) != t.tt.MasterId {
+					// If the cleanup is happening due to restarts, the mapper needs to be populated again
+					m.populateShardTypeDuringCleanup(t.ttid, t.tt)
+					shardIdsToClear = append(shardIdsToClear, t.tt.ShardIds...)
+				}
 			default:
 				l.Infof("RebalanceServiceManager::cleanupShardTransferTokens Cleaning Up %v %v", t.ttid, t.tt.CompactString())
 			}
@@ -1316,6 +1322,10 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	if dropIssued && enableEmptyNodeBatching {
 		logging.Infof("RebalanceServiceManager::cleanupTransferTokens Wait for async cleanup to finish")
 		time.Sleep(30 * time.Second)
+	}
+
+	if len(shardIdsToClear) != 0 {
+		m.clearShardType(shardIdsToClear, failedShardIds.cleanupFailedShards)
 	}
 
 	return failedShardIds.cleanupFailedShards, nil
@@ -4552,6 +4562,7 @@ func (m *RebalanceServiceManager) cleanupTranferredData(ttid string, tt *c.Trans
 		respCh:          respCh,
 		syncCleanup:     false,
 		codebookPaths:   getCodebookPaths(tt),
+		shardType:       tt.GetShardType(),
 	}
 
 	m.supvMsgch <- msg
@@ -4561,6 +4572,37 @@ func (m *RebalanceServiceManager) cleanupTranferredData(ttid string, tt *c.Trans
 	// Getting a response here only means that cleanup has been
 	// initiated by plasma
 	<-respCh
+}
+
+func (m *RebalanceServiceManager) clearShardType(shardIds []c.ShardId, skipShards map[c.ShardId]bool) {
+
+	doneCh := make(chan bool)
+	msg := &MsgClearShardType{
+		skipShard: skipShards,
+		shardIds:  shardIds,
+		doneCh:    doneCh,
+	}
+
+	m.supvMsgch <- msg
+
+	// Wait for the update to happen in the shardTypeMapper
+	<-doneCh
+}
+
+func (m *RebalanceServiceManager) populateShardTypeDuringCleanup(ttid string, tt *c.TransferToken) {
+
+	doneCh := make(chan bool)
+	msg := &MsgPopulateShardType{
+		transferId: ttid,
+		shardType:  tt.GetShardType(),
+		shardIds:   tt.ShardIds,
+		doneCh:     doneCh,
+	}
+
+	m.supvMsgch <- msg
+
+	// Wait for the update to happen in the shardTypeMapper
+	<-doneCh
 }
 
 func retriedMetakvGet(path string, val interface{}) (bool, error) {

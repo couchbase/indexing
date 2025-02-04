@@ -19,6 +19,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/iowrap"
 
+	"github.com/couchbase/bhive"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -58,6 +59,8 @@ type ShardTransferManager struct {
 	rpcMutex            sync.Mutex
 	rpcSrv              plasma.RPCServer
 	shouldRpcSrvBeAlive atomic.Bool // true when rpc server is started; false when it is supposed to be shutdown
+
+	shardTypeMapper *ShardTypeMapper
 }
 
 func NewShardTransferManager(config common.Config, supvWrkrCh chan Message) *ShardTransferManager {
@@ -69,6 +72,8 @@ func NewShardTransferManager(config common.Config, supvWrkrCh chan Message) *Sha
 		supvWrkrCh:         supvWrkrCh,
 
 		shouldRpcSrvBeAlive: atomic.Bool{},
+
+		shardTypeMapper: NewShardTypeMapper(),
 	}
 	stm.shouldRpcSrvBeAlive.Store(false)
 
@@ -187,6 +192,14 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 	case STOP_PEER_SERVER:
 		forceLog = true
 		stm.handleStopPeerServer(cmd)
+
+	case POPULATE_SHARD_TYPE:
+		forceLog = true
+		stm.handlePopulateShardType(cmd)
+
+	case CLEAR_SHARD_TYPE:
+		forceLog = true
+		stm.handleClearShardType(cmd)
 	}
 	logProcessingTime(
 		"ShardTransferManager::handleStorageMgrCommands",
@@ -454,8 +467,19 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 			// TODO: Add a configurable setting to enable or disbale disk snapshotting
 			// before transferring the shard
 			wg.Add(1)
+			var err error
 
-			if err := plasma.TransferShard(plasma.ShardId(shardIds[i]), destination, doneCb, progressCb, cancelCh, metaCpy); err != nil {
+			shardType := stm.shardTypeMapper.GetShardType(shardIds[i])
+			if shardType == c.PLASMA_SHARD {
+				err = plasma.TransferShard(plasma.ShardId(shardIds[i]), destination, doneCb, progressCb, cancelCh, metaCpy)
+			} else if shardType == c.BHIVE_SHARD {
+				err = bhive.TransferShard(plasma.ShardId(shardIds[i]), destination, doneCb, progressCb, cancelCh, metaCpy)
+			} else {
+				// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be transferred
+				err = ErrShardTypeUnset
+			}
+
+			if err != nil {
 
 				func() { // update errMap for this shard
 					mu.Lock()
@@ -465,7 +489,7 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 				}()
 
 				wg.Done()
-				logging.Errorf("ShardTransferManager::processShardTransferMessage: Error when starting to transfer shard: %v", shardIds[i])
+				logging.Errorf("ShardTransferManager::processShardTransferMessage: Error when starting to transfer shard: %v, shard type: %v", shardIds[i], shardType)
 
 				closeCancelCh() // Abort already initiated transfers
 				break           // Do not initiate transfer for remaining shards
@@ -540,6 +564,7 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	respCh := msg.GetRespCh()
 	isSyncCleanup := msg.IsSyncCleanup()
 	hasCodebooks := len(msg.GetCodebookNames()) != 0
+	shardType := msg.GetShardType()
 
 	meta := make(map[string]interface{})
 	meta[plasma.GSIRebalanceId] = rebalanceId
@@ -563,13 +588,23 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	}
 
 	if !isSyncCleanup { // Invoke asynchronous cleanup
-		err := plasma.DoCleanup(destination, meta, nil)
+		var err error
+		if shardType == c.PLASMA_SHARD {
+			err = plasma.DoCleanup(destination, meta, nil)
+		} else if shardType == c.BHIVE_SHARD {
+			err = bhive.DoCleanup(destination, meta, nil)
+		} else {
+			// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be cleaned
+			err = ErrShardTypeUnset
+		}
+
 		if err != nil {
 			logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
 				"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
 		}
 	} else { // Wait for cleanup to finish
 		var wg sync.WaitGroup
+		var err error
 		doneCb := func(err error) {
 			logging.Infof("ShardTransferManager::processTransferCleanupMessage doneCb invoked for "+
 				"ttid: %v, rebalanceId: %v", ttid, rebalanceId)
@@ -581,7 +616,15 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 		}
 
 		wg.Add(1)
-		err := plasma.DoCleanup(destination, meta, doneCb)
+
+		if shardType == c.PLASMA_SHARD {
+			err = plasma.DoCleanup(destination, meta, doneCb)
+		} else if shardType == c.BHIVE_SHARD {
+			err = bhive.DoCleanup(destination, meta, doneCb)
+		} else {
+			// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be cleaned
+			err = ErrShardTypeUnset
+		}
 		if err != nil {
 			logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
 				"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
@@ -740,8 +783,16 @@ func (stm *ShardTransferManager) cleanupStagingDirOnRestore(cmd Message) {
 		}
 	}
 
+	shardType := msg.GetShardType()
+	var err error
 	wg.Add(1)
-	err := plasma.DoCleanupStaging(destination, meta, doneCb)
+	if shardType == c.PLASMA_SHARD {
+		err = plasma.DoCleanupStaging(destination, meta, doneCb)
+	} else if shardType == c.BHIVE_SHARD {
+		err = bhive.DoCleanupStaging(destination, meta, doneCb)
+	} else {
+		err = ErrShardTypeUnset
+	}
 	if err != nil {
 		wg.Done()
 		logging.Errorf("ShardTransferManager::cleanupStagingDirOnRestore Error initiating "+
@@ -793,6 +844,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var shardRestoreHasErr bool
+	var shardType c.ShardType
 
 	errMap := make(map[common.ShardId]error)
 
@@ -863,7 +915,19 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 				meta[plasma.GSIReplicaRepair] = instRenameMap[shardId]
 			}
 
-			if err := plasma.RestoreShard(destination, doneCb, progressCb, cancelCh, meta); err != nil {
+			var err error
+
+			shardType = stm.shardTypeMapper.GetShardType(shardId)
+			if shardType == c.PLASMA_SHARD {
+				err = plasma.RestoreShard(destination, doneCb, progressCb, cancelCh, meta)
+			} else if shardType == c.BHIVE_SHARD {
+				err = bhive.RestoreShard(destination, doneCb, progressCb, cancelCh, meta)
+			} else {
+				// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be transferred
+				err = ErrShardTypeUnset
+			}
+
+			if err != nil {
 
 				func() { // update errMap with error due to failure
 					mu.Lock()
@@ -874,7 +938,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 				}()
 
 				wg.Done()
-				logging.Errorf("ShardTransferManager::processShardRestoreMessage: Error when restoring shard: %v from path: %v", shardId, shardPath)
+				logging.Errorf("ShardTransferManager::processShardRestoreMessage: Error when restoring shard: %v, shard type:%v from path: %v", shardId, shardType, shardPath)
 
 				closeCancelCh() // Abort already initiated transfers
 				break           // Do not initiate transfer for remaining shards
@@ -887,12 +951,13 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 
 	sendResponse := func() {
 
+		msg.shardType = shardType
 		// Upon completion of restore, cleanup the transferred data. Cleanup is a
 		// best effort call. So, ignore any errors arising out during Cleanup
 
 		// TODO: Does pause-resume need to handle any errors arising out of staging
 		// cleanup during resume(?)
-		stm.cleanupStagingDirOnRestore(cmd)
+		stm.cleanupStagingDirOnRestore(msg)
 
 		elapsed := time.Since(start).Seconds()
 		logging.Infof("ShardTransferManager::processShardRestoreMessage All shards are restored. Sending response "+
@@ -1196,9 +1261,21 @@ func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message, no
 	logging.Infof("ShardTransferManager::processDestroyLocalShardMessage All slices closed. Initiating shard destroy for shards: %v, elapsed: %v", shardIds, time.Since(start))
 
 	for _, shardId := range shardIds {
-		if err := plasma.DestroyShardID(plasma.ShardId(shardId)); err != nil {
-			logging.Errorf("ShardTransferManager::processDestroyLocalShardMessage Error cleaning-up shardId: %v from "+
-				"local file system, err: %v", shardId, err)
+		var err error
+
+		shardType := stm.shardTypeMapper.GetShardType(shardId)
+		if shardType == c.PLASMA_SHARD {
+			err = plasma.DestroyShardID(plasma.ShardId(shardId))
+		} else if shardType == c.BHIVE_SHARD {
+			err = bhive.DestroyShardID(plasma.ShardId(shardId))
+		} else {
+			// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be transferred
+			err = ErrShardTypeUnset
+		}
+
+		if err != nil {
+			logging.Errorf("ShardTransferManager::processDestroyLocalShardMessage Error cleaning-up shardId: %v"+
+				" of shard type: %v from local file system, err: %v", shardId, shardType, err)
 		} else {
 			// Since the shard is being destroyed, delete the shard from book-keeping as
 			// there is no need to unlock a deleted shard
@@ -1281,20 +1358,34 @@ func (stm *ShardTransferManager) handleLockShardsCommand(cmd Message) {
 
 	errMap := make(map[common.ShardId]error)
 	for _, shardId := range shardIds {
-		err := plasma.LockShard(plasma.ShardId(shardId))
-		if err != nil {
-			logging.Errorf("ShardTransferManager::handleLockShardsCommand Error observed while locking shard: %v, err: %v", shardId, err)
-		} else {
-			if shardRefCount, ok := stm.lockedShards[shardId]; ok && shardRefCount != nil {
-				shardRefCount.refCount++
-				shardRefCount.lockedForRecovery = shardRefCount.lockedForRecovery || isLockedForRecovery
-			} else {
-				stm.lockedShards[shardId] = &ShardRefCount{
-					refCount:          1,
-					lockedForRecovery: isLockedForRecovery,
-				}
-			}
 
+		if shardRefCount, ok := stm.lockedShards[shardId]; ok && shardRefCount != nil {
+			shardRefCount.refCount++
+			shardRefCount.lockedForRecovery = shardRefCount.lockedForRecovery || isLockedForRecovery
+		} else {
+			stm.lockedShards[shardId] = &ShardRefCount{
+				refCount:          1,
+				lockedForRecovery: isLockedForRecovery,
+			}
+		}
+
+		var err error
+
+		shardType := stm.shardTypeMapper.GetShardType(shardId)
+		if shardType == c.PLASMA_SHARD {
+			err = plasma.LockShard(plasma.ShardId(shardId))
+		} else if shardType == c.BHIVE_SHARD {
+			err = bhive.LockShard(plasma.ShardId(shardId))
+		} else {
+			// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be transferred
+			err = ErrShardTypeUnset
+		}
+
+		if err != nil {
+			logging.Errorf("ShardTransferManager::handleLockShardsCommand Error observed while locking shard:  %v,"+
+				"shard type:%v, err: %v", shardId, shardType, err)
+			// reset the refCount if LockShard errored
+			stm.lockedShards[shardId].refCount--
 		}
 		errMap[shardId] = err
 	}
@@ -1318,18 +1409,32 @@ func (stm *ShardTransferManager) handleUnlockShardsCommand(cmd Message) {
 
 	errMap := make(map[common.ShardId]error)
 	for _, shardId := range shardIds {
-		err := plasma.UnlockShard(plasma.ShardId(shardId))
-		if err != nil {
-			logging.Errorf("ShardTransferManager::handleUnlockShardsCommand Error observed while unlocking shard: %v, err: %v", shardId, err)
+
+		if shardRefCount, ok := stm.lockedShards[shardId]; !ok || shardRefCount == nil || shardRefCount.refCount <= 0 {
+			delete(stm.lockedShards, shardId) // clear the book-keeping
+			continue
+		}
+
+		var err error
+
+		shardType := stm.shardTypeMapper.GetShardType(shardId)
+		if shardType == c.PLASMA_SHARD {
+			err = plasma.UnlockShard(plasma.ShardId(shardId))
+		} else if shardType == c.BHIVE_SHARD {
+			err = bhive.UnlockShard(plasma.ShardId(shardId))
 		} else {
-			if shardRefCount, ok := stm.lockedShards[shardId]; ok && shardRefCount != nil {
-				shardRefCount.refCount--
-				if shardRefCount.refCount <= 0 {
-					logging.Infof("ShardTransferManager::handleUnlockShardCommands Clearing the book-keeping for shard: %v, refCount: %v", shardId, shardRefCount.refCount)
-					delete(stm.lockedShards, shardId)
-				}
-			} else {
-				delete(stm.lockedShards, shardId) // clear the book-keeping
+			// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be transferred
+			err = ErrShardTypeUnset
+		}
+
+		if err != nil {
+			logging.Errorf("ShardTransferManager::handleUnlockShardsCommand Error observed while unlocking shard: %v,"+
+				"shard type:%v, err: %v", shardId, shardType, err)
+		} else {
+			stm.lockedShards[shardId].refCount--
+			if stm.lockedShards[shardId].refCount <= 0 {
+				logging.Infof("ShardTransferManager::handleUnlockShardCommands Clearing the book-keeping for shard: %v, refCount: %v", shardId, stm.lockedShards[shardId].refCount)
+				delete(stm.lockedShards, shardId)
 			}
 		}
 		errMap[shardId] = err
@@ -1344,13 +1449,20 @@ func (stm *ShardTransferManager) handleRestoreShardDone(cmd Message) {
 	restoreShardDoneMsg := cmd.(*MsgRestoreShardDone)
 	shardIds := restoreShardDoneMsg.GetShardIds()
 	respCh := restoreShardDoneMsg.GetRespCh()
-
+	var shardType c.ShardType
 	logging.Infof("ShardTransferManager::handleRestoreShardDone Initiating RestoreShardDone for shards: %v", shardIds)
 	start := time.Now()
 	for _, shardId := range shardIds {
-		plasma.RestoreShardDone(plasma.ShardId(shardId))
+
+		shardType = stm.shardTypeMapper.GetShardType(shardId)
+		if shardType == c.PLASMA_SHARD {
+			plasma.RestoreShardDone(plasma.ShardId(shardId))
+		} else if shardType == c.BHIVE_SHARD {
+			bhive.RestoreShardDone(plasma.ShardId(shardId))
+		}
 	}
-	logging.Infof("ShardTransferManager::handleRestoreShardDone Finished RestoreShardDone for shards: %v, elapsed: %v", shardIds, time.Since(start))
+	logging.Infof("ShardTransferManager::handleRestoreShardDone Finished RestoreShardDone for shards: %v of "+
+		"shard type:%v, elapsed: %v", shardIds, shardType, time.Since(start))
 	respCh <- true
 }
 
@@ -1382,17 +1494,33 @@ func (stm *ShardTransferManager) handleRestoreAndUnlockShards(cmd Message) {
 			continue
 		}
 
-		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards shardId: %v, refCount: %v", shardId, shardRefCount.refCount)
+		shardType := stm.shardTypeMapper.GetShardType(shardId)
+		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards shardId: %v, shard type:%v, refCount: %v",
+			shardId, shardType, shardRefCount.refCount)
 
 		if shardRefCount.lockedForRecovery {
 			logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating RestoreShardDone for shardId: %v", shardId)
-			plasma.RestoreShardDone(plasma.ShardId(shardId))
+			if shardType == c.PLASMA_SHARD {
+				plasma.RestoreShardDone(plasma.ShardId(shardId))
+			} else if shardType == c.BHIVE_SHARD {
+				bhive.RestoreShardDone(plasma.ShardId(shardId))
+			}
 		}
 
 		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating unlock for shardId: %v, refCount: %v", shardId, shardRefCount.refCount)
 		refCount := shardRefCount.refCount
 		for i := 0; i < refCount; i++ {
-			if err := plasma.UnlockShard(plasma.ShardId(shardId)); err != nil {
+			var err error
+			if shardType == c.PLASMA_SHARD {
+				err = plasma.UnlockShard(plasma.ShardId(shardId))
+			} else if shardType == c.BHIVE_SHARD {
+				err = bhive.UnlockShard(plasma.ShardId(shardId))
+			} else {
+				// consider the case where UNSET_SHARD_TYPE returned as an error case, since the Shards cant be transferred
+				err = ErrShardTypeUnset
+			}
+
+			if err != nil {
 				logging.Errorf("ShardTransferManager::handleRestoreAndUnlockShards Error observed while unlocking shard: %v, err: %v", shardId, err)
 			} else {
 				shardRefCount.refCount--
@@ -1657,6 +1785,39 @@ func authMiddlewareForShardTransfer(next http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
+func (stm *ShardTransferManager) handlePopulateShardType(cmd Message) {
+	msg := cmd.(*MsgPopulateShardType)
+	shardIds := msg.GetShardIds()
+	shardType := msg.GetShardType()
+	ttid := msg.GetTransferId()
+
+	stm.shardTypeMapper.AddShardIds(shardType, shardIds)
+
+	logging.Infof("ShardTransferManager::handlePopulateShardType: ttid:%v"+
+		"populated the ShardType:%v for shardIds %v", ttid, shardType, shardIds)
+
+}
+
+func (stm *ShardTransferManager) handleClearShardType(cmd Message) {
+	msg := cmd.(*MsgClearShardType)
+	shardIds := msg.GetShardIds()
+	skipShards := msg.GetSkipShard()
+
+	clearShardIds := make([]c.ShardId, 0)
+	for _, shardId := range shardIds {
+		if _, ok := skipShards[shardId]; ok {
+			continue
+		}
+		clearShardIds = append(clearShardIds, shardId)
+	}
+
+	stm.shardTypeMapper.DeleteShardIds(clearShardIds)
+
+	logging.Infof("ShardTransferManager::handleClearShardType: cleared"+
+		" shard type value for shardIds %v", clearShardIds)
+
+}
+
 func (stm *ShardTransferManager) TransferCodebook(codebookCopier plasma.Copier, codebookSrcPath string) error {
 	var srcDir, srcFile string
 	var sz int64
@@ -1747,4 +1908,50 @@ func getCodebookRootDir(copyConfig *plasmaCopyConfigMeta) string {
 
 	prefix := fmt.Sprintf("%s_%s", formatUUID(rebalanceId), formatUUID(ttid))
 	return joinURIPath(destination, CODEBOOK_COPY_PREFIX, prefix)
+}
+
+type ShardTypeMapper struct {
+	RWLock       sync.RWMutex
+	ShardTypeMap map[c.ShardId]c.ShardType
+}
+
+func NewShardTypeMapper() *ShardTypeMapper {
+	stm := &ShardTypeMapper{
+		ShardTypeMap: make(map[c.ShardId]c.ShardType),
+	}
+	return stm
+}
+
+func (shardTypeMgr *ShardTypeMapper) AddShardIds(shardType c.ShardType, shardIds []c.ShardId) {
+	shardTypeMgr.RWLock.Lock()
+	defer shardTypeMgr.RWLock.Unlock()
+
+	for _, shardId := range shardIds {
+		shardTypeMgr.ShardTypeMap[shardId] = shardType
+	}
+}
+
+func (shardTypeMgr *ShardTypeMapper) GetShardType(shardId c.ShardId) c.ShardType {
+	shardTypeMgr.RWLock.RLock()
+	defer shardTypeMgr.RWLock.RUnlock()
+
+	if _, ok := shardTypeMgr.ShardTypeMap[shardId]; !ok {
+		logging.Infof("ShardTypeMapper::GetShardType did not find the ShardId:%v", shardId)
+		return c.UNSET_SHARD_TYPE
+	}
+	return shardTypeMgr.ShardTypeMap[shardId]
+}
+
+func (shardTypeMgr *ShardTypeMapper) DeleteShardIds(shardIds []c.ShardId) {
+	shardTypeMgr.RWLock.Lock()
+	defer shardTypeMgr.RWLock.Unlock()
+
+	for _, shardId := range shardIds {
+		delete(shardTypeMgr.ShardTypeMap, shardId)
+	}
+
+	// Resets the bucket in internal go maps to reduce memory footprint
+	if len(shardTypeMgr.ShardTypeMap) == 0 {
+		shardTypeMgr.ShardTypeMap = make(map[c.ShardId]c.ShardType)
+	}
 }

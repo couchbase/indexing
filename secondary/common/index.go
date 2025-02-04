@@ -356,6 +356,9 @@ type IndexInst struct {
 	Nlist map[PartitionId]int
 
 	TrainingPhase TrainingPhase // Set to true once training is completed
+
+	//per partition status of bhive index graph build
+	BhiveGraphStatus map[PartitionId]bool
 }
 
 // IndexInstMap is a map from IndexInstanceId to IndexInstance

@@ -229,6 +229,11 @@ const (
 	STOP_PEER_SERVER
 
 	CODEBOOK_TRANSFER_RESPONSE
+
+	POPULATE_SHARD_TYPE
+	CLEAR_SHARD_TYPE
+	BHIVE_GRAPH_READY
+	BHIVE_BUILD_GRAPH
 )
 
 type Message interface {
@@ -2812,6 +2817,8 @@ type MsgShardTransferCleanup struct {
 	isPeerTransfer bool
 
 	codebookPaths []string
+
+	shardType common.ShardType
 }
 
 func (m *MsgShardTransferCleanup) GetMsgType() MsgType {
@@ -2848,6 +2855,10 @@ func (m *MsgShardTransferCleanup) GetCodebookNames() []string {
 		codebookNames = append(codebookNames, filepath.Base(codebookPath))
 	}
 	return codebookNames
+}
+
+func (m *MsgShardTransferCleanup) GetShardType() common.ShardType {
+	return m.shardType
 }
 
 func (m *MsgShardTransferCleanup) String() string {
@@ -2988,6 +2999,7 @@ type MsgStartShardRestore struct {
 	isPeerTransfer bool
 
 	vectorInsts []c.IndexInst
+	shardType   common.ShardType
 }
 
 func (m *MsgStartShardRestore) GetMsgType() MsgType {
@@ -3100,6 +3112,10 @@ func (m *MsgStartShardRestore) GetAuthCallback() func(*http.Request) error {
 
 func (m *MsgStartShardRestore) GetVectorIndexInsts() []c.IndexInst {
 	return m.vectorInsts
+}
+
+func (m *MsgStartShardRestore) GetShardType() c.ShardType {
+	return m.shardType
 }
 
 type MsgDestroyLocalShardData struct {
@@ -3387,6 +3403,94 @@ func (m *MsgIndexTrainingDone) GetReqCtx() *c.MetadataRequestContext {
 // For propagating change in number of centroids if required
 func (m *MsgIndexTrainingDone) GetNlistMap() map[common.IndexInstId]map[common.PartitionId]int {
 	return m.nlistInstPartMap
+}
+
+type MsgBhiveGraphReady struct {
+	idxDefnId  common.IndexDefnId
+	idxInstId  common.IndexInstId
+	idxPartnId common.PartitionId
+}
+
+func (m *MsgBhiveGraphReady) GetMsgType() MsgType {
+	return BHIVE_GRAPH_READY
+}
+
+func (m *MsgBhiveGraphReady) GetDefnId() common.IndexDefnId {
+	return m.idxDefnId
+}
+
+func (m *MsgBhiveGraphReady) GetInstId() common.IndexInstId {
+	return m.idxInstId
+}
+
+func (m *MsgBhiveGraphReady) GetPartnId() common.PartitionId {
+	return m.idxPartnId
+}
+
+type MsgBuildBhiveGraph struct {
+	idxInstId        common.IndexInstId
+	bhiveGraphStatus map[common.PartitionId]bool
+}
+
+func (m *MsgBuildBhiveGraph) GetMsgType() MsgType {
+	return BHIVE_BUILD_GRAPH
+}
+
+func (m *MsgBuildBhiveGraph) GetInstId() common.IndexInstId {
+	return m.idxInstId
+}
+
+func (m *MsgBuildBhiveGraph) GetBhiveGraphStatus() map[common.PartitionId]bool {
+	return m.bhiveGraphStatus
+}
+
+type MsgPopulateShardType struct {
+	transferId string
+	shardType  common.ShardType
+	shardIds   []common.ShardId
+	doneCh     chan bool
+}
+
+func (m *MsgPopulateShardType) GetMsgType() MsgType {
+	return POPULATE_SHARD_TYPE
+}
+
+func (m *MsgPopulateShardType) GetTransferId() string {
+	return m.transferId
+}
+
+func (m *MsgPopulateShardType) GetShardIds() []common.ShardId {
+	return m.shardIds
+}
+
+func (m *MsgPopulateShardType) GetShardType() common.ShardType {
+	return m.shardType
+}
+
+func (m *MsgPopulateShardType) GetDoneCh() chan bool {
+	return m.doneCh
+}
+
+type MsgClearShardType struct {
+	shardIds  []common.ShardId
+	skipShard map[common.ShardId]bool
+	doneCh    chan bool
+}
+
+func (m *MsgClearShardType) GetMsgType() MsgType {
+	return CLEAR_SHARD_TYPE
+}
+
+func (m *MsgClearShardType) GetShardIds() []common.ShardId {
+	return m.shardIds
+}
+
+func (m *MsgClearShardType) GetSkipShard() map[common.ShardId]bool {
+	return m.skipShard
+}
+
+func (m *MsgClearShardType) GetDoneCh() chan bool {
+	return m.doneCh
 }
 
 // MsgType.String is a helper function to return string for message type.
@@ -3731,6 +3835,14 @@ func (m MsgType) String() string {
 		return "INDEX_TRAINING_DONE"
 	case CODEBOOK_TRANSFER_RESPONSE:
 		return "CODEBOOK_TRANSFER_RESPONSE"
+	case BHIVE_GRAPH_READY:
+		return "BHIVE_GRAPH_READY"
+	case BHIVE_BUILD_GRAPH:
+		return "BHIVE_BUILD_GRAPH"
+	case POPULATE_SHARD_TYPE:
+		return "POPULATE_SHARD_TYPE"
+	case CLEAR_SHARD_TYPE:
+		return "CLEAR_SHARD_TYPE"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

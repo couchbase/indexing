@@ -665,10 +665,12 @@ func (m *IndexManager) HandleBuildIndexRebalDDLEmptyNode(indexIds client.IndexId
 	return m.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX_REBAL_EMPTY_NODE, key, content)
 }
 
-func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
-	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
+func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string,
+	defnId common.IndexDefnId, instId common.IndexInstId, state common.IndexState,
+	streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
 	partitions []uint64, versions []int, instVersion int, partnShardIdMap common.PartnShardIdMap,
-	trainingPhase common.TrainingPhase, numCentroids int) error {
+	trainingPhase common.TrainingPhase, numCentroids int,
+	updatedBhiveGraphStatus map[common.PartitionId]bool) error {
 
 	inst := &topologyChange{
 		Bucket:        bucket,
@@ -687,6 +689,8 @@ func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, def
 		ShardIdMap:    partnShardIdMap,
 		TrainingPhase: trainingPhase,
 		NumCentroids:  numCentroids,
+
+		BhiveGraphStatusMap: updatedBhiveGraphStatus,
 	}
 
 	buf, e := json.Marshal(&inst)
@@ -700,10 +704,12 @@ func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, def
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
-func (m *IndexManager) UpdateIndexInstanceSync(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
-	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
+func (m *IndexManager) UpdateIndexInstanceSync(bucket, scope, collection string,
+	defnId common.IndexDefnId, instId common.IndexInstId, state common.IndexState,
+	streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
 	partitions []uint64, versions []int, instVersion int, partnShardIdMap common.PartnShardIdMap,
-	trainingPhase common.TrainingPhase, numCentroids int) error {
+	trainingPhase common.TrainingPhase, numCentroids int,
+	updatedBhiveGraphStatus map[common.PartitionId]bool) error {
 
 	inst := &topologyChange{
 		Bucket:        bucket,
@@ -721,7 +727,8 @@ func (m *IndexManager) UpdateIndexInstanceSync(bucket, scope, collection string,
 		InstVersion:   instVersion,
 		ShardIdMap:    partnShardIdMap,
 		TrainingPhase: trainingPhase,
-		NumCentroids:  numCentroids,
+
+		BhiveGraphStatusMap: updatedBhiveGraphStatus,
 	}
 
 	buf, e := json.Marshal(&inst)

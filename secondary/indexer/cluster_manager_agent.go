@@ -225,6 +225,9 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		updatedShardIds := make(common.PartnShardIdMap)
 		partnShardMap := updatedFields.partnShardIdMap
 
+		partnBhiveGraphStatus := updatedFields.partnBhiveGraphStatus
+		updatedBhiveGraphStatus := make(map[common.PartitionId]bool)
+
 		if updatedFields.state {
 			updatedState = index.State
 		}
@@ -255,20 +258,26 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		updatedTrainingPhase := index.TrainingPhase
 		numCentroids := index.GetNumCentroids()
 
+		if len(partnBhiveGraphStatus) > 0 {
+			for partnId, ready := range partnBhiveGraphStatus {
+				updatedBhiveGraphStatus[partnId] = ready
+			}
+		}
+
 		var err error
 		if syncUpdate {
 			go func() {
 				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
 					index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
 					updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds,
-					updatedTrainingPhase, numCentroids)
+					updatedTrainingPhase, numCentroids, updatedBhiveGraphStatus)
 				respCh <- err
 			}()
 		} else {
 			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
 				index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
 				updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds,
-				updatedTrainingPhase, numCentroids)
+				updatedTrainingPhase, numCentroids, updatedBhiveGraphStatus)
 		}
 		common.CrashOnError(err)
 	}
@@ -508,11 +517,13 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			versions := make([]int, len(inst.Partitions))
 			shardIds := make([][]common.ShardId, len(inst.Partitions))
 			alternateShardIds := make(map[common.PartitionId][]string)
+			bhiveGraphStatus := make(map[common.PartitionId]bool)
 			for i, partn := range inst.Partitions {
 				partitions[i] = common.PartitionId(partn.PartId)
 				versions[i] = int(partn.Version)
 				shardIds[i] = []common.ShardId(partn.ShardIds)
 				alternateShardIds[common.PartitionId(partn.PartId)] = partn.AlternateShardIds
+				bhiveGraphStatus[common.PartitionId(partn.PartId)] = partn.BhiveGraphReady
 			}
 			pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, versions, shardIds,
 				inst.NumPartitions, idxDefn.PartitionScheme, idxDefn.HashScheme)
@@ -522,19 +533,20 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 
 			// create index instance
 			idxInst := common.IndexInst{
-				InstId:         common.IndexInstId(inst.InstId),
-				Defn:           idxDefn,
-				State:          common.IndexState(inst.State),
-				Stream:         common.StreamId(inst.StreamId),
-				ReplicaId:      int(inst.ReplicaId),
-				Version:        int(inst.Version),
-				RState:         common.RebalanceState(inst.RState),
-				Scheduled:      inst.Scheduled,
-				StorageMode:    inst.StorageMode,
-				OldStorageMode: inst.OldStorageMode,
-				Pc:             pc,
-				RealInstId:     common.IndexInstId(inst.RealInstId),
-				TrainingPhase:  inst.TrainingPhase,
+				InstId:           common.IndexInstId(inst.InstId),
+				Defn:             idxDefn,
+				State:            common.IndexState(inst.State),
+				Stream:           common.StreamId(inst.StreamId),
+				ReplicaId:        int(inst.ReplicaId),
+				Version:          int(inst.Version),
+				RState:           common.RebalanceState(inst.RState),
+				Scheduled:        inst.Scheduled,
+				StorageMode:      inst.StorageMode,
+				OldStorageMode:   inst.OldStorageMode,
+				Pc:               pc,
+				RealInstId:       common.IndexInstId(inst.RealInstId),
+				TrainingPhase:    inst.TrainingPhase,
+				BhiveGraphStatus: bhiveGraphStatus,
 			}
 
 			if idxInst.State != common.INDEX_STATE_DELETED {

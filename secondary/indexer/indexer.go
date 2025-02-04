@@ -1688,6 +1688,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		RESTORE_AND_UNLOCK_LOCKED_SHARDS,
 		START_PEER_SERVER,
 		STOP_PEER_SERVER,
+		POPULATE_SHARD_TYPE,
+		CLEAR_SHARD_TYPE,
 		PERSISTANCE_STATUS:
 
 		idx.storageMgrCmdCh <- msg
@@ -1731,6 +1733,14 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case INDEX_TRAINING_DONE:
 		idx.handleIndexTrainingDone(msg)
+
+	case BHIVE_GRAPH_READY:
+		idx.handleBhiveGraphReady(msg)
+
+	case BHIVE_BUILD_GRAPH:
+		//forward to storage manager
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -2584,7 +2594,7 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 		// will be cleaned up as a part of token cleanup by shard rebalancer
 		indexInst.Error = recoveryErr.Error()
 		idx.indexInstMap[indexInst.InstId] = indexInst
-		if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, false, false, true, false, false, false, false, false, nil, false, nil); err != nil {
+		if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, false, false, true, false, false, false, false, false, nil, false, nil, nil); err != nil {
 			// Crash indexer so that rebalancer will not wait for ever
 			common.CrashOnError(err)
 		}
@@ -2615,7 +2625,7 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	idx.indexPartnMap[indexInst.InstId] = partnInstMap
 
 	// Send a message to cluster manager to update index instance state to topology
-	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, true, false, false, false, false, false, true, false, partnShardIdMap, false, nil); err != nil {
+	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, true, false, false, false, false, false, true, false, partnShardIdMap, false, nil, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -2723,7 +2733,7 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 			idx.indexInstMap[tgtInstId] = inst
 
 			instIds := []common.IndexInstId{tgtInstId}
-			idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, false, respch)
+			idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, false, nil, respch)
 
 			logging.Infof("MergePartition: sent async request to update index instance %v rstate moved to ACTIVE", tgtInstId)
 		}
@@ -3532,7 +3542,7 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 			idx.indexInstMap[instId] = inst
 
 			if updateRState {
-				if err := idx.updateMetaInfoForIndexList([]c.IndexInstId{instId}, false, false, false, false, true, false, false, false, nil, false, nil); err != nil {
+				if err := idx.updateMetaInfoForIndexList([]c.IndexInstId{instId}, false, false, false, false, true, false, false, false, nil, false, nil, nil); err != nil {
 					logging.Errorf("PrunePartition: Error observed while updating RState for inst: %v", instId)
 					common.CrashOnError(err)
 				}
@@ -3904,7 +3914,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
-				true, false, true, true, false, false, false, nil, false, nil); err != nil {
+				true, false, true, true, false, false, false, nil, false, nil, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
@@ -4108,7 +4118,7 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
-				true, false, true, true, false, false, false, nil, false, nil); err != nil {
+				true, false, true, true, false, false, false, nil, false, nil, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
@@ -4229,7 +4239,7 @@ func (idx *indexer) handleResumeRecoveredIndexes(msg Message) {
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
-				true, false, true, true, false, false, false, nil, false, nil); err != nil {
+				true, false, true, true, false, false, false, nil, false, nil, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
@@ -6559,7 +6569,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool,
 	ephemeral bool, numVBuckets int, partnStats map[common.PartitionId]*IndexStats,
 	memQuota int64, cancelCh chan bool) (
-	// return values
+// return values
 	PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
 
 	//initialize partitionInstMap for this index
@@ -7077,7 +7087,7 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 	idx.indexInstMap[instId] = inst
 
 	instIds := []common.IndexInstId{instId}
-	if err := idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, false, respCh); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, false, nil, respCh); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -7110,7 +7120,7 @@ func (idx *indexer) handleBulkUpdateIndexError(msg Message) {
 	if len(updateInstIds) != 0 {
 		idx.bulkUpdateError(updateInstIds, errStr)
 
-		if err := idx.updateMetaInfoForIndexList(updateInstIds, false, false, true, false, false, false, false, false, nil, false, nil); err != nil {
+		if err := idx.updateMetaInfoForIndexList(updateInstIds, false, false, true, false, false, false, false, false, nil, false, nil, nil); err != nil {
 			common.CrashOnError(err)
 		}
 
@@ -7313,7 +7323,7 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 	}
 
 	//update index state in metadata
-	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil, false, nil); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil, false, nil, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -7524,7 +7534,7 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 	}
 
 	//update index state in metadata
-	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil, false, nil); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil, false, nil, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -7805,7 +7815,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 		}
 
 		if err := idx.updateMetaInfoForIndexList(instIdList, true, true,
-			false, false, true, false, false, false, nil, false, nil); err != nil {
+			false, false, true, false, false, false, nil, false, nil, nil); err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -9452,6 +9462,8 @@ func (idx *indexer) initFromPersistedState() error {
 		}
 
 		idx.updateBootstrapStats(bootstrapStats, inst.InstId)
+
+		idx.buildBhiveGraphIfMissing(inst)
 	}
 
 	return nil
@@ -9723,7 +9735,7 @@ func (idx *indexer) updateTopologyOnShardIdChange(indexInst *common.IndexInst, p
 			persistedShardIdMap, partnShardIdMap, indexInst.InstId)
 
 		respCh := make(chan error)
-		idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, false, false, false, false, false, true, true, false, partnShardIdMap, false, respCh)
+		idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, false, false, false, false, false, true, true, false, partnShardIdMap, false, nil, respCh)
 	}
 }
 
@@ -9947,7 +9959,7 @@ func (idx *indexer) validateIndexInstMap() {
 					idx.indexInstMap[instId] = index
 
 					instIds := []common.IndexInstId{index.InstId}
-					if err := idx.updateMetaInfoForIndexList(instIds, true, false, false, false, true, false, false, false, nil, false, nil); err != nil {
+					if err := idx.updateMetaInfoForIndexList(instIds, true, false, false, false, true, false, false, false, nil, false, nil, nil); err != nil {
 						common.CrashOnError(err)
 					}
 				}
@@ -10172,7 +10184,7 @@ func (idx *indexer) checkMaintStreamIndexBuild() {
 
 	if idx.enableManager {
 		if err := idx.updateMetaInfoForIndexList(updatedList,
-			true, true, false, false, true, false, false, false, nil, false, nil); err != nil {
+			true, true, false, false, true, false, false, false, nil, false, nil, nil); err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -10221,7 +10233,7 @@ func (idx *indexer) checkMissingMaintBucket() {
 
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(updatedList,
-				true, true, false, false, true, false, false, false, nil, false, nil); err != nil {
+				true, true, false, false, true, false, false, false, nil, false, nil, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -10412,7 +10424,7 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 
 	if len(instIdList) != 0 {
 		return idx.updateMetaInfoForIndexList(instIdList, updateState,
-			updateStream, updateError, false, updateRState, false, updatePartition, updateVersion, nil, false, nil)
+			updateStream, updateError, false, updateRState, false, updatePartition, updateVersion, nil, false, nil, nil)
 	} else {
 		return nil
 	}
@@ -10424,7 +10436,8 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 	updateBuildTs bool, updateRState bool, syncUpdate bool,
 	updatePartitions bool, updateVersion bool,
 	partnShardIdMap common.PartnShardIdMap,
-	updateTrainingPhase bool, respCh chan error) error {
+	updateTrainingPhase bool, partnBhiveGraphStatusMap map[c.PartitionId]bool,
+	respCh chan error) error {
 
 	var indexList []common.IndexInst
 	for _, instId := range instIdList {
@@ -10441,6 +10454,8 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 		version:         updateVersion,
 		partnShardIdMap: partnShardIdMap,
 		trainingPhase:   updateTrainingPhase,
+
+		partnBhiveGraphStatus:      partnBhiveGraphStatusMap,
 	}
 
 	msg := &MsgClustMgrUpdate{
@@ -13343,7 +13358,7 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 				"all indexes in batch: %v", vecInstIdList, instIdList)
 
 			idx.updateTrainingPhase(instIdList, common.TRAINING_IN_PROGRESS)
-			err := idx.updateMetaInfoForIndexList(instIdList, false, false, false, false, false, false, false, false, nil, true, nil)
+			err := idx.updateMetaInfoForIndexList(instIdList, false, false, false, false, false, false, false, false, nil, true, nil, nil)
 			common.CrashOnError(err)
 
 			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap),
@@ -14111,7 +14126,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	}
 
 	if len(allInsts) > 0 {
-		err := idx.updateMetaInfoForIndexList(allInsts, false, false, true, false, false, false, true, false, nil, true, nil)
+		err := idx.updateMetaInfoForIndexList(allInsts, false, false, true, false, false, false, true, false, nil, true, nil, nil)
 		common.CrashOnError(err)
 	}
 
@@ -14333,3 +14348,57 @@ func (idx *indexer) isInstanceDroppedDuringTraining(instId common.IndexInstId) (
 	clientCh, ok := idx.dropInstsDuringTraining[instId]
 	return clientCh, ok
 }
+
+func (idx *indexer) handleBhiveGraphReady(cmd Message) {
+	msg := cmd.(*MsgBhiveGraphReady)
+	idxInstId := msg.GetInstId()
+	idxPartnId := msg.GetPartnId()
+
+	logging.Infof("Indexer::handleBhiveGraphReady InstId %v PartnId %v", idxInstId, idxPartnId)
+
+	var bhiveGraphStatus map[c.PartitionId]bool
+	//update index maps with this status
+	if inst, ok := idx.indexInstMap[idxInstId]; ok {
+			if inst.BhiveGraphStatus == nil {
+				inst.BhiveGraphStatus = make(map[c.PartitionId]bool)
+			}
+			inst.BhiveGraphStatus[idxPartnId] = true
+
+			bhiveGraphStatus = make(map[c.PartitionId]bool)
+			bhiveGraphStatus[idxPartnId] = true
+		idx.indexInstMap[idxInstId] = inst
+	}
+
+
+	// Send a message to cluster manager to update index instance state to topology
+	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{idxInstId}, false, false, false, false, false, false, false, false, nil, false, bhiveGraphStatus, nil); err != nil {
+		common.CrashOnError(err)
+	}
+
+}
+
+func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
+
+	if inst.Defn.IsBhive() {
+
+		//if index state is ACTIVE but bhive graph is not built, send
+		//a message to storage manager to build it. This situation can
+		//happen if indexer crashes before updating bhive graph status in
+		//metadata or before calling graph build API.
+		//Ignore insts with RState not ACTIVE, rebalancer takes care of
+		//of such insts.
+		if inst.State == common.INDEX_STATE_ACTIVE &&
+			inst.RState == common.REBAL_ACTIVE {
+			for _, status := range inst.BhiveGraphStatus {
+				if !status {
+					idx.internalRecvCh <- &MsgBuildBhiveGraph {
+						idxInstId: inst.InstId,
+						bhiveGraphStatus: inst.BhiveGraphStatus,
+					}
+					break
+				}
+			}
+		}
+	}
+}
+

@@ -1118,10 +1118,10 @@ func (mdb *bhiveSlice) deleteVectorIndex(docid []byte, vector []float32, fields 
 		docSeqno = binary.LittleEndian.Uint64(backEntry[offset:8])
 
 		offset += 8
-		backShaVec := backEntry[offset:offset + sha256.Size]
+		backShaVec := backEntry[offset : offset+sha256.Size]
 
 		offset += sha256.Size
-		backShaField := backEntry[offset:offset + sha256.Size]
+		backShaField := backEntry[offset : offset+sha256.Size]
 
 		offset += sha256.Size
 		centroidId := backEntry[offset:]
@@ -1501,11 +1501,34 @@ func (mdb *bhiveSlice) RecoveryDone() {
 
 }
 
-func (mdb *bhiveSlice) BuildDone() {
+func (mdb *bhiveSlice) BuildDone(idxInstId common.IndexInstId, callb BuildDoneCallback) {
 	count := mdb.mainstore.ItemCount()
 	logging.Infof("bhiveSlice: BuildDone.  Item count %v", count)
 
 	atomic.StoreInt32(&mdb.isInitialBuild, 0)
+
+	go mdb.buildGraph(idxInstId, callb)
+}
+
+func (mdb *bhiveSlice) buildGraph(idxInstId common.IndexInstId, callb BuildDoneCallback) {
+
+	donech := make(chan bool)
+
+	go func() {
+		mdb.mainstore.BuildGraph()
+		close(donech)
+	}()
+
+	select {
+	case <-donech:
+		//send message to the indexer
+		resp := &MsgBhiveGraphReady{
+			idxDefnId:  mdb.idxDefnId,
+			idxInstId:  idxInstId, //use proxy instId instead of realInstId for correct metadata update
+			idxPartnId: mdb.idxPartnId,
+		}
+		callb(resp)
+	}
 }
 
 // //////////////////////////////////////////////////////////

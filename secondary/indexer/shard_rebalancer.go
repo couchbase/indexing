@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
@@ -32,6 +33,7 @@ import (
 
 var ErrRebalanceCancel = errors.New("Shard rebalance cancel received")
 var ErrRebalanceDone = errors.New("Shard rebalance done received")
+var ErrShardTypeUnset = errors.New("Shard type not set")
 
 // TODO add the Prefix in Indexer settings
 const CODEBOOK_COPY_PREFIX = "codebook_v1"
@@ -152,6 +154,10 @@ type ShardRebalancer struct {
 	batchBuildReqChCloseOnce sync.Once
 
 	droppedInstsInRebal map[c.IndexInstId]bool
+
+	localMeta          unsafe.Pointer
+	localMetaWaiterCnt atomic.Int32
+	localMetaError     atomic.Bool
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -255,6 +261,8 @@ func (sr *ShardRebalancer) observeRebalance() {
 
 	<-sr.waitForTokenPublish
 	<-sr.rpcCommandSyncChannel
+
+	go sr.localMetaFetcher()
 
 	err := metakv.RunObserveChildren(RebalanceMetakvDir, sr.processShardTokens, sr.metakvCancel)
 	if err != nil {
@@ -513,6 +521,46 @@ func (sr *ShardRebalancer) genPeerDestination(nodeUuid string) (string, error) {
 	}
 
 	return fmt.Sprintf("%v%v/", sr.transferScheme, addr), nil
+}
+
+func (sr *ShardRebalancer) localMetaFetcher() {
+	ticker := time.NewTicker(900 * time.Millisecond)
+	defer ticker.Stop()
+
+	refreshLocalMeta := func() {
+		newLocalMeta, err := getLocalMeta(sr.localaddr)
+		if err != nil {
+			l.Errorf("%v Error Fetching Local Meta %v %v", "ShardRebalancer::localMetaFetcher", sr.localaddr, err)
+			sr.localMetaError.Store(true)
+			return
+		}
+		newptr := unsafe.Pointer(newLocalMeta)
+		done := atomic.CompareAndSwapPointer(&sr.localMeta, atomic.LoadPointer(&sr.localMeta), newptr)
+		if !done {
+			l.Errorf("%v Error Updating Local Meta %v", "ShardRebalancer::localMetaFetcher", sr.localaddr)
+			sr.localMetaError.Store(true)
+		}
+		sr.localMetaError.Store(false)
+	}
+
+	for {
+		select {
+		case <-sr.cancel:
+			l.Infof("ShardRebalancer::initRebalAsync Cancel Received")
+			refreshLocalMeta()
+			return
+
+		case <-sr.done:
+			l.Infof("ShardRebalancer::initRebalAsync Done Received")
+			refreshLocalMeta()
+			return
+
+		case <-ticker.C:
+			if sr.localMetaWaiterCnt.Load() > 0 {
+				refreshLocalMeta()
+			}
+		}
+	}
 }
 
 func getTransferScheme(cfg c.Config) string {
@@ -1039,6 +1087,11 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 		sr.updateInstsTransferPhase(ttid, tt, common.RebalanceInitated)
 		sr.updateEmptyNodeBatching(tt.IsEmptyNodeBatch)
 
+		if err := sr.populateShardTypes(ttid, tt); err != nil {
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return true
+		}
+
 		tt.ShardTransferTokenState = c.ShardTokenScheduledOnSource
 		setTransferTokenInMetakv(ttid, tt)
 
@@ -1267,10 +1320,10 @@ loop:
 		// aborted and rebalancer would still get a message on respCh
 		// with errors as sr.cancel is passed on to downstream
 		case respMsg := <-respCh:
-
+			shardType := tt.GetShardType()
 			elapsed := time.Since(start).Seconds()
 			l.Infof("ShardRebalancer::startShardTransfer Received response %s for transfer of "+
-				"shards: %v, ttid: %v, elapsed(sec): %v", respMsg.GetMsgType().String(), tt.ShardIds, ttid, elapsed)
+				"shards: %v, shardType:%v, ttid: %v, elapsed(sec): %v", respMsg.GetMsgType().String(), tt.ShardIds, shardType, ttid, elapsed)
 
 			// ShardRebalancer can only receive SHARD_TRANSFER_RESPONSE after successful transfer of Codebooks
 			// Receiving CODEBOOK_TRANSFER_RESPONSE then SHARD_TRANSFER_RESPONSE are sequential
@@ -1305,8 +1358,8 @@ loop:
 						hasErr = true
 
 						l.Errorf("ShardRebalancer::startShardTransfer Observed error during trasfer"+
-							" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
-							tt.Destination, tt.Region, shardId, shardPaths, err)
+							" for destination: %v, region: %v, shardId: %v, shardType:%v shardPaths: %v, err: %v. Initiating transfer clean-up",
+							tt.Destination, tt.Region, shardId, shardType, shardPaths, err)
 
 						unlockShards(tt.ShardIds, sr.supvMsgch)
 
@@ -1395,6 +1448,7 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.Sh
 		respCh:          respCh,
 		syncCleanup:     syncCleanup,
 		codebookPaths:   getCodebookPaths(tt),
+		shardType:       tt.GetShardType(),
 	}
 
 	if sr.canMaintainShardAffinity {
@@ -1560,6 +1614,11 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		sr.updateInstsTransferPhase(ttid, tt, common.RebalanceInitated)
 		sr.updateEmptyNodeBatching(tt.IsEmptyNodeBatch)
 
+		if err := sr.populateShardTypes(ttid, tt); err != nil {
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return true
+		}
+
 		tt.ShardTransferTokenState = c.ShardTokenScheduleAck
 		setTransferTokenInMetakv(ttid, tt)
 
@@ -1715,8 +1774,9 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 		case respMsg := <-respCh:
 
 			elapsed := time.Since(start).Seconds()
+			shardType := tt.GetShardType()
 			l.Infof("ShardRebalancer::startRestoreShard Received response %s for restore of "+
-				"shardIds: %v, ttid: %v, elapsed(sec): %v", respMsg.GetMsgType().String(), tt.ShardIds, ttid, elapsed)
+				"shardIds: %v, shardType:%v ttid: %v, elapsed(sec): %v", respMsg.GetMsgType().String(), tt.ShardIds, shardType, ttid, elapsed)
 
 			// For Rebalance, the Shard Restore and Codebook Restore happen sequentially. Hence, the respCh will receive
 			// the SHARD_TRANSFER_RESPONSE first, then CODEBOOK_TRANSFER_RESPONSE
@@ -1950,6 +2010,9 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		}
 		logging.Infof("ShardRebalancer::startShardRecovery Done with recovery for ttid: %v", ttid)
 	}()
+
+	sr.localMetaWaiterCnt.Add(1)
+	defer sr.localMetaWaiterCnt.Add(-1)
 
 	if err := lockShards(tt.ShardIds, sr.supvMsgch, true); err != nil {
 		logging.Errorf("ShardRebalancer::startShardRecovery, error observed while locking shards: %v, err: %v", tt.ShardIds, err)
@@ -2209,6 +2272,9 @@ func (sr *ShardRebalancer) startShardRecoveryNonServerless(ttid string, tt *c.Tr
 
 	start := time.Now()
 	logging.Infof("ShardRebalancer::startShardRecovery Starting to recover index instance for ttid: %v", ttid)
+
+	sr.localMetaWaiterCnt.Add(1)
+	defer sr.localMetaWaiterCnt.Add(-1)
 
 	defer func() {
 		logging.Infof("ShardRebalancer::startShardRecovery Done with recovery for ttid: %v, elapsed: %v", ttid, time.Since(start))
@@ -2520,6 +2586,7 @@ func (sr *ShardRebalancer) waitForIndexState(expectedState c.IndexState,
 
 	retryInterval := time.Duration(1)
 	retryCount := 0
+	retryOnce := true
 loop:
 	for {
 
@@ -2557,14 +2624,18 @@ loop:
 				return err
 			}
 
-			localMeta, err := getLocalMeta(sr.localaddr)
-			if err != nil {
-				l.Errorf("ShardRebalancer::waitForIndexState Error Fetching Local Meta %v %v", sr.localaddr, err)
-				retryCount++
+			localMeta := (*manager.LocalIndexMetadata)(atomic.LoadPointer(&sr.localMeta))
 
-				if retryCount > 5 {
-					return err // Return after 5 unsuccessful attempts
+			if localMeta == nil || sr.localMetaError.Load() {
+				if sr.localMetaError.Load() {
+					err := fmt.Errorf("ShardRebalancer::waitForIndexState Error Fetching Local Meta %v", sr.localaddr)
+					retryCount++
+
+					if retryCount > 5 {
+						return err // Return after 5 unsuccessful attempts
+					}
 				}
+
 				time.Sleep(retryInterval * time.Second)
 				goto loop
 			}
@@ -2589,6 +2660,13 @@ loop:
 					logging.Warnf("ShardRebalancer::waitForIndexState, Could not get index status. "+
 						"scope/collection/index are likely dropped. Skipping instId: %v, indexState: %v, "+
 						"ttid: %v", instId, indexState, ttid)
+
+					if retryOnce {
+						retryOnce = false
+						time.Sleep(retryInterval * time.Second)
+						goto loop // Retry
+					}
+
 					continue
 				} else if err != "" {
 					l.Errorf("ShardRebalancer::waitForIndexState Error Fetching Index Status %v %v", sr.localaddr, err)
@@ -5018,4 +5096,52 @@ func (sr *ShardRebalancer) createDummyTokenForDest(destNodeUUID string) (string,
 		RebalId:                 sr.rebalToken.RebalId,
 		Version:                 c.MULTI_INST_SHARD_TRANSFER,
 	}
+}
+
+func (sr *ShardRebalancer) populateShardTypes(ttid string, tt *c.TransferToken) error {
+
+	var foundShardType c.ShardType
+	instShardType := make(map[c.ShardType][]c.IndexInstId)
+
+	for i, idxInst := range tt.IndexInsts {
+		if idxInst.Defn.IsBhive() {
+			instShardType[c.BHIVE_SHARD] = append(instShardType[c.BHIVE_SHARD], tt.InstIds[i])
+		} else {
+			instShardType[c.PLASMA_SHARD] = append(instShardType[c.PLASMA_SHARD], tt.InstIds[i])
+		}
+	}
+
+	// If multiple types of Shard type is found in the same transfer token
+	// it means that different indexes have been clubbed into the same transfer
+	// token, furthermore the same ShardId exist for different types of indexes
+	// This should be an impossible case, log and return the error if it occurs
+	if len(instShardType) > 1 {
+		var sb strings.Builder
+		sbp := &sb
+		fmt.Fprintf(sbp, "For Transfer token:%v found multiple shard types", ttid)
+		for shardType, instIds := range instShardType {
+			fmt.Fprintf(sbp, " {ShardType: %v, InstIds: %v}", shardType, instIds)
+		}
+		logging.Errorf("ShardRebalancer::addShardType %v", sb.String())
+		return errors.New(sb.String())
+	} else if len(instShardType) == 1 {
+		for shardType := range instShardType {
+			foundShardType = shardType
+		}
+	}
+
+	doneCh := make(chan bool)
+
+	msg := &MsgPopulateShardType{
+		transferId: ttid,
+		shardType:  foundShardType,
+		shardIds:   tt.ShardIds,
+		doneCh:     doneCh,
+	}
+
+	sr.supvMsgch <- msg
+
+	// Wait for the update to happen in the shardTypeMapper
+	<-doneCh
+	return nil
 }

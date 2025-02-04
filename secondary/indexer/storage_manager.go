@@ -357,6 +357,17 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		}
 		s.supvCmdch <- &MsgSuccess{}
 
+	case POPULATE_SHARD_TYPE:
+		s.handlePopulateShardType(cmd)
+		s.supvCmdch <- &MsgSuccess{}
+
+	case CLEAR_SHARD_TYPE:
+		s.handleClearShardType(cmd)
+		s.supvCmdch <- &MsgSuccess{}
+
+	case BHIVE_BUILD_GRAPH:
+		s.handleBuildBhiveGraph(cmd)
+
 	}
 
 }
@@ -1509,10 +1520,17 @@ func (s *storageMgr) notifyBuildDone(oldIndexInstMap common.IndexInstMap) {
 		for _, partnInst := range partnMap {
 			slices := partnInst.Sc.GetAllSlices()
 			for _, slice := range slices {
-				slice.BuildDone()
+				slice.BuildDone(idxInstId, s.buildDoneCallback)
 			}
 		}
 	}
+}
+
+type BuildDoneCallback func(Message)
+
+func (s *storageMgr) buildDoneCallback(msg Message) {
+	//forward the message to the supervisor
+	s.supvRespch <- msg
 }
 
 func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {
@@ -2723,6 +2741,47 @@ func (s *storageMgr) handleShardTransfer(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 }
 
+func (s *storageMgr) handlePopulateShardType(cmd Message) {
+
+	msg := cmd.(*MsgPopulateShardType)
+	ttid := msg.GetTransferId()
+	shardIds := msg.GetShardIds()
+	doneCh := msg.GetDoneCh()
+
+	defer close(doneCh)
+
+	logging.Infof("StorageMgr::handlePopulateShardType For ttid:%v, adding the Shard type for shardIds:%v",
+		ttid, shardIds)
+	if s.stm != nil {
+		s.stm.ProcessCommand(cmd)
+	} else {
+		common.CrashOnError(
+			fmt.Errorf("StorageMgr::handlePopulateShardType ShardTransferManager Not Initialized during msg %v execution",
+				cmd),
+		)
+	}
+}
+
+func (s *storageMgr) handleClearShardType(cmd Message) {
+
+	msg := cmd.(*MsgClearShardType)
+	shardIds := msg.GetShardIds()
+	doneCh := msg.GetDoneCh()
+
+	defer close(doneCh)
+
+	logging.Infof("StorageMgr::handleClearShardType Clearing the Shard type for shardIds:%v",
+		shardIds)
+	if s.stm != nil {
+		s.stm.ProcessCommand(cmd)
+	} else {
+		common.CrashOnError(
+			fmt.Errorf("StorageMgr::handleClearShardType ShardTransferManager Not Initialized during msg %v execution",
+				cmd),
+		)
+	}
+}
+
 func (s *storageMgr) ClearRebalanceRunning(cmd Message) {
 
 	start := time.Now()
@@ -2995,5 +3054,46 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64) {
 
 	if plasmaQuota > 0 {
 		plasma.SetMemoryQuota(plasmaQuota)
+	}
+}
+
+func (sm *storageMgr) handleBuildBhiveGraph(cmd Message) {
+	sm.supvCmdch <- &MsgSuccess{}
+
+	msg := cmd.(*MsgBuildBhiveGraph)
+	instId := msg.GetInstId()
+	bhiveGraphStatus := msg.GetBhiveGraphStatus()
+
+	indexInstMap := sm.indexInstMap.Get()
+	indexPartnMap := sm.indexPartnMap.Get()
+
+	inst, ok := indexInstMap[instId]
+	//skip deleted indexes
+	if !ok || inst.State == common.INDEX_STATE_DELETED {
+		logging.Infof("StorageMgr::handleBhiveBuildGraph instId %v not found or deleted", instId)
+		return
+	}
+
+	partnMap, ok := indexPartnMap[instId]
+	if !ok {
+		logging.Infof("StorageMgr::handleBhiveBuildGraph No partitions found for instId %v", instId)
+		return
+	}
+
+	for partnId, status := range bhiveGraphStatus {
+
+		if !status {
+			partnInst, ok := partnMap[partnId]
+			if !ok {
+				logging.Infof("StorageMgr::handleBhiveBuildGraph No partition info for instId %v partn %v", instId, partnId)
+				continue
+			}
+			sc := partnInst.Sc
+
+			for _, slice := range sc.GetAllSlices() {
+				//BuildDone builds the graph if missing
+				slice.BuildDone(instId, sm.buildDoneCallback)
+			}
+		}
 	}
 }

@@ -1516,6 +1516,7 @@ func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket, scop
 	}
 
 	alternateShardIds, shardIds := topology.GetShardInfoForInst(id, srcInstId)
+	bhiveGraphStatus := topology.GetBhiveGraphStatusForInst(id, srcInstId)
 
 	// Delete the proxy during merge.
 	topology.RemoveIndexInstanceById(id, srcInstId)
@@ -1525,6 +1526,7 @@ func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket, scop
 	topology.UpdateVersionForIndexInst(id, tgtInstId, tgtInstVersion)
 	topology.UpdateShardIdsForIndexPartn(id, tgtInstId, shardIds)
 	topology.UpdateAlternateShardIdsForIndexPartn(id, tgtInstId, alternateShardIds)
+	topology.UpdateBhiveGraphStatusForIndexPartn(id, tgtInstId, bhiveGraphStatus)
 
 	if err = m.SetTopologyByCollection(topology.Bucket, scope, collection, topology); err != nil {
 		return err

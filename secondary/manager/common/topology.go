@@ -63,6 +63,7 @@ type IndexPartDistribution struct {
 	KeyPartition      IndexKeyPartDistribution    `json:"keyPartition,omitempty"`
 	ShardIds          []c.ShardId                 `json:"shardIds,omitempty"`
 	AlternateShardIds []string                    `json:"alternateShardIds,omitempty"`
+	BhiveGraphReady   bool                        `json:"bhiveGraphReady,omitempty"`
 }
 
 type IndexSinglePartDistribution struct {

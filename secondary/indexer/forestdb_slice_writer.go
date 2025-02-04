@@ -1914,7 +1914,7 @@ func (fdb *fdbSlice) RecoveryDone() {
 	// done nothing
 }
 
-func (fdb *fdbSlice) BuildDone() {
+func (fdb *fdbSlice) BuildDone(idxInstId common.IndexInstId, callb BuildDoneCallback) {
 	// done nothing
 }
 
