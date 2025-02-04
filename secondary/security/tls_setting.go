@@ -82,6 +82,16 @@ func DisableNonSSLPort() bool {
 	return setting.disableNonSSLPort
 }
 
+// ShouldUseClientCertAuth returns the TLS config indicating if clients should only use cert based
+// auth or basic auth
+func ShouldUseClientCertAuth() bool {
+	var settings = GetSecuritySetting()
+	if settings == nil {
+		return false
+	}
+	return settings.encryptionEnabled && settings.tlsPreference.ShouldClientsUseClientCert
+}
+
 //////////////////////////////////////////////////////
 // Security Context
 //////////////////////////////////////////////////////

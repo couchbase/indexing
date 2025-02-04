@@ -242,6 +242,11 @@ func (cp *connectionPool) getAuthInfo() (string, string, error) {
 	var err error
 	user, pass := security.GetToolsCreds()
 	if !security.IsToolsConfigUsed() {
+		if security.ShouldUseClientCertAuth() {
+			logging.Infof("%v doAuth using empty basic auth as client cert auth is enabled",
+				cp.logPrefix)
+			return "", "", nil
+		}
 		user, pass, err = cbauth.GetHTTPServiceAuth(cp.authHost)
 		if err != nil {
 			logging.Errorf("%v doAuth cbauth.GetHTTPServiceAuth returns error %v", cp.logPrefix, err)

@@ -330,6 +330,10 @@ func (endpoint *RouterEndpoint) getAuthInfo() (string, string, error) {
 		}
 	}
 
+	if security.ShouldUseClientCertAuth() {
+		logging.Infof("%v doAuth sending empty basic auth as client cert auth is enabled", endpoint.logPrefix)
+		return "", "", nil
+	}
 	user, pass, err := cbauth.GetHTTPServiceAuth(endpoint.authHost)
 	if err != nil {
 		logging.Errorf("%v doAuth cbauth.GetHTTPServiceAuth returns error %v", endpoint.logPrefix, err)
