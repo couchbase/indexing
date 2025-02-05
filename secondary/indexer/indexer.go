@@ -711,7 +711,10 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 	}
 
 	refreshEncrypt := msg.(*MsgSecurityChange).RefreshEncrypt()
-	refreshServerCert := msg.(*MsgSecurityChange).RefreshServerCert()
+	refreshServerCert := msg.(*MsgSecurityChange).RefreshServerCert() // no action on this
+
+	logging.Infof("handleSecurityChange: received (refreshServerCert: %v, refreshClientCert %v,refreshEncrypt %v)",
+		refreshServerCert, msg.(*MsgSecurityChange).RefreshClientCert(), refreshEncrypt)
 
 	if refreshEncrypt {
 		logging.Infof("handleSecurityChange: refresh security context")
@@ -721,10 +724,11 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 		}
 	}
 
-	var shouldServersRestart = refreshServerCert || refreshEncrypt
+	var shouldServersRestart = refreshEncrypt
 
 	if shouldServersRestart {
 		// stop HTTPS server
+		logging.Infof("handleSecurityChange: stopping http servers")
 		idx.httpsSrvLock.Lock()
 		if idx.httpsSrv != nil {
 			// This does not close connections.  Use idx.httpSrv.Close() on 1.11
@@ -736,6 +740,7 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 
 		idx.httpSrvLock.Lock()
 		if idx.httpSrv != nil {
+			logging.Infof("handleSecurityChange: stopping https servers")
 			idx.tcpListener.Close()
 			idx.httpSrv = nil
 			idx.tcpListener = nil
@@ -795,8 +800,7 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 	idx.storageMgrCmdCh <- msg
 	<-idx.storageMgrCmdCh
 
-	logging.Infof("handleSecurityChange: (refreshServerCert: %v, refreshClientCert %v,refreshEncrypt %v) done",
-		refreshServerCert, msg.(*MsgSecurityChange).RefreshClientCert(), refreshEncrypt)
+	logging.Infof("handleSecurityChange: done")
 }
 
 func (idx *indexer) initFromConfig() {
