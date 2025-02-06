@@ -682,7 +682,8 @@ func (o *IndexerNode) ComputeMinShardCapacity(config common.Config) {
 
 	if o.MinShardCapacity < minShardsPerNode {
 		logging.Warnf("IndexerNode::ComputeMinShardCapacity The number of shards are less than mininum number of shards: %v. "+
-			"Expanding the minShardCapacity to: %v, indexer node: %v", minShardsPerNode, o.MinShardCapacity, o.NodeId)
+			"Expanding the minShardCapacity from: %v to %v, indexer node: %v", minShardsPerNode,
+			o.MinShardCapacity, minShardsPerNode, o.NodeId)
 		o.MinShardCapacity = minShardsPerNode
 	}
 
