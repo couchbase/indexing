@@ -968,6 +968,7 @@ func (m *RebalanceServiceManager) runCleanupPhaseLOCKED(path string, isMaster bo
 
 	var err error
 	var cleanupFailedShards map[c.ShardId]bool
+	var clearShardType []c.ShardId
 	if m.indexerReady {
 		rtokens, err := m.getCurrRebalTokens()
 		if err != nil {
@@ -975,7 +976,7 @@ func (m *RebalanceServiceManager) runCleanupPhaseLOCKED(path string, isMaster bo
 		}
 
 		if rtokens != nil && len(rtokens.TT) != 0 {
-			cleanupFailedShards, err = m.cleanupTransferTokens(rtokens.TT)
+			cleanupFailedShards, clearShardType, err = m.cleanupTransferTokens(rtokens.TT)
 			if err != nil {
 				l.Errorf("RebalanceServiceManager::runCleanupPhase Error Cleaning Transfer Tokens %v", err)
 			}
@@ -994,6 +995,10 @@ func (m *RebalanceServiceManager) runCleanupPhaseLOCKED(path string, isMaster bo
 	err = m.cleanupRebalanceRunning()
 	if err != nil {
 		return err
+	}
+
+	if clearShardType != nil && len(clearShardType) != 0 {
+		m.clearShardType(clearShardType, cleanupFailedShards)
 	}
 
 	return nil
@@ -1124,11 +1129,11 @@ type failedShardsContainer struct {
 	cleanupFailedShards map[common.ShardId]bool
 }
 
-func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.TransferToken) (map[c.ShardId]bool, error) {
+func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.TransferToken) (map[c.ShardId]bool, []c.ShardId, error) {
 
 	if tts == nil || len(tts) == 0 {
 		l.Infof("RebalanceServiceManager::cleanupTransferTokens No Tokens Found For Cleanup")
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// List of all shards that could not be cleaned up due to some error
@@ -1192,7 +1197,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 		localMeta, err = getLocalMeta(m.localhttp)
 		if err != nil {
 			l.Errorf("%v Error Fetching Local Meta %v %v", "RebalanceServiceManager::cleanupTransferTokens", m.localhttp, err)
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -1280,7 +1285,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 			switch string(m.nodeInfo.NodeID) {
 			case t.tt.MasterId, t.tt.SourceId, t.tt.DestId:
 				l.Infof("RebalanceServiceManager::cleanupShardTransferTokens Cleaning Up %v %v", t.ttid, t.tt.LessVerboseString())
-				if string(m.nodeInfo.NodeID) != t.tt.MasterId {
+				if string(m.nodeInfo.NodeID) == t.tt.SourceId || string(m.nodeInfo.NodeID) == t.tt.DestId {
 					// If the cleanup is happening due to restarts, the mapper needs to be populated again
 					m.populateShardTypeDuringCleanup(t.ttid, t.tt)
 					shardIdsToClear = append(shardIdsToClear, t.tt.ShardIds...)
@@ -1324,11 +1329,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 		time.Sleep(30 * time.Second)
 	}
 
-	if len(shardIdsToClear) != 0 {
-		m.clearShardType(shardIdsToClear, failedShardIds.cleanupFailedShards)
-	}
-
-	return failedShardIds.cleanupFailedShards, nil
+	return failedShardIds.cleanupFailedShards, shardIdsToClear, nil
 }
 
 func (m *RebalanceServiceManager) isProxyFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMetadata) (bool, error) {
@@ -2320,9 +2321,12 @@ func (m *RebalanceServiceManager) rebalanceJanitor() {
 
 			if rtokens != nil && len(rtokens.TT) != 0 {
 				l.Infof("%v Found %v tokens. Cleaning up.", _rebalanceJanitor, len(rtokens.TT))
-				_, err := m.cleanupTransferTokens(rtokens.TT)
+				_, clearShardType, err := m.cleanupTransferTokens(rtokens.TT)
 				if err != nil {
 					l.Errorf("%v Error Cleaning Transfer Tokens %v", _rebalanceJanitor, err)
+				}
+				if clearShardType != nil && len(clearShardType) != 0 {
+					m.clearShardType(clearShardType, nil)
 				}
 			}
 
