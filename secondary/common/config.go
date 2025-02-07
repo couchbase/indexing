@@ -4310,6 +4310,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.bhive.vanama.filterThreshold": ConfigValue{
+		0.6,
+		"threshold when vanama will applying filtering before distance comparison",
+		0.6,
+		false,
+		false,
+	},
 	"indexer.bhive.numCompactor": ConfigValue{
 		100,
 		"number of compactor to use",

@@ -338,6 +338,7 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.EfNumNeighbors = slice.sysconf["bhive.vanama.efNumNeighbors"].Int()
 	cfg.EfConstruction = slice.sysconf["bhive.vanama.efConstruction"].Int()
 	cfg.VanamaBuildQuota = slice.sysconf["bhive.vanama.buildQuota"].Int()
+	cfg.FilterThreshold = float32(slice.sysconf["bhive.vanama.filterThreshold"].Float64())
 	cfg.NumCompactor = slice.sysconf["bhive.numCompactor"].Int()
 	cfg.PersistFullVector = slice.sysconf["bhive.persistFullVector"].Bool()
 	cfg.UseVanama = slice.sysconf["bhive.useVanama"].Bool()
