@@ -2397,9 +2397,34 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	return sts, nil
 }
 
-// CBO is not supported
 func (mdb *bhiveSlice) handleN1QLStorageStatistics() (StorageStatistics, error) {
 	var sts StorageStatistics
+
+	mstats := mdb.mainstore.GetStats()
+	internalData := fmt.Sprintf("{\n\"MainStore\":\n"+
+		"{\n"+
+		"\"graph_resident_ratio\":%.5f,\n"+
+		"\"graph_hit_ratio\":%.2f,\n"+
+		"\"num_vec_ops_per_cell\":%d,\n"+
+		"\"norm_graph_disk_size\":%.5f,\n"+
+		"\"norm_full_vector_size\":%.5f\n}\n}",
+		mstats.GraphRR,
+		mstats.GraphHitRatio,
+		mstats.NumVectorOp,
+		mstats.NormGraphDiskSz,
+		mstats.NormFullVectorSz)
+
+	sts.InternalData = []string{internalData}
+
+	internalDataMap := make(map[string]interface{})
+	internalDataMap["graph_resident_ratio"] = mstats.GraphRR
+	internalDataMap["graph_hit_ratio"] = mstats.GraphHitRatio
+	internalDataMap["num_vec_ops_per_cell"] = mstats.NumVectorOp
+	internalDataMap["norm_graph_disk_size"] = mstats.NormGraphDiskSz
+	internalDataMap["norm_full_vector_size"] = mstats.NormFullVectorSz
+
+	sts.InternalDataMap = make(map[string]interface{})
+	sts.InternalDataMap["MainStore"] = internalDataMap
 	return sts, nil
 }
 

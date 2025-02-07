@@ -1285,6 +1285,11 @@ const STAT_NUM_DELETE = "NUM_DELETE"
 const STAT_AVG_ITEM_SIZE = "AVG_ITEM_SIZE"
 const STAT_AVG_PAGE_SIZE = "AVG_PAGE_SIZE"
 const STAT_LAST_RESET_TIME = "LAST_RESET_TIME"
+const STAT_BHIVE_GRAPH_RES_RATIO = "GRAPH_RES_RATIO"
+const STAT_BHIVE_GRAPH_HIT_RATIO = "GRAPH_HIT_RATIO"
+const STAT_BHIVE_NUM_VEC_OPS = "NUM_VEC_OPS"
+const STAT_BHIVE_GRAPH_DISK_SIZE = "GRAPH_DISK_SIZE"
+const STAT_BHIVE_FULL_VEC_SIZE = "FULL_VEC_SIZE"
 
 // A set of partitions for given index definition is chosen using metaclient's
 // GetScanport. It returns a set of target replica InstanceIds with corresponding
@@ -1486,19 +1491,31 @@ func getStatsForPartition(instStats StorageStats, storageMode string) map[string
 	if storageMode == "plasma" {
 		storageStats := make(map[string]interface{})
 		storageStats[STAT_PARTITION_ID] = instStats.PartitionId
-		storageStats[STAT_LAST_RESET_TIME] = instStats.LastResetTime
+
 		stats := instStats.Stats
 		if _, ok := stats["MainStore"]; !ok {
 			return nil
 		}
 		mainStoreStats := stats["MainStore"].(map[string]interface{})
-		storageStats[STAT_NUM_PAGES] = mainStoreStats["num_pages"]
-		storageStats[STAT_NUM_ITEMS] = mainStoreStats["items_count"]
-		storageStats[STAT_RESIDENT_RATIO] = mainStoreStats["resident_ratio"]
-		storageStats[STAT_NUM_INSERT] = mainStoreStats["inserts"]
-		storageStats[STAT_NUM_DELETE] = mainStoreStats["deletes"]
-		storageStats[STAT_AVG_ITEM_SIZE] = mainStoreStats["avg_item_size"]
-		storageStats[STAT_AVG_PAGE_SIZE] = mainStoreStats["avg_page_size"]
+
+		// Bhive specific stats
+		if _, exists := mainStoreStats["graph_resident_ratio"]; exists {
+			storageStats[STAT_BHIVE_GRAPH_RES_RATIO] = mainStoreStats["graph_resident_ratio"]
+			storageStats[STAT_BHIVE_GRAPH_HIT_RATIO] = mainStoreStats["graph_hit_ratio"]
+			storageStats[STAT_BHIVE_NUM_VEC_OPS] = mainStoreStats["num_vec_ops_per_cell"]
+			storageStats[STAT_BHIVE_GRAPH_DISK_SIZE] = mainStoreStats["norm_graph_disk_size"]
+			storageStats[STAT_BHIVE_FULL_VEC_SIZE] = mainStoreStats["norm_full_vector_size"]
+		} else {
+			// Plasma stats
+			storageStats[STAT_LAST_RESET_TIME] = instStats.LastResetTime
+			storageStats[STAT_NUM_PAGES] = mainStoreStats["num_pages"]
+			storageStats[STAT_NUM_ITEMS] = mainStoreStats["items_count"]
+			storageStats[STAT_RESIDENT_RATIO] = mainStoreStats["resident_ratio"]
+			storageStats[STAT_NUM_INSERT] = mainStoreStats["inserts"]
+			storageStats[STAT_NUM_DELETE] = mainStoreStats["deletes"]
+			storageStats[STAT_AVG_ITEM_SIZE] = mainStoreStats["avg_item_size"]
+			storageStats[STAT_AVG_PAGE_SIZE] = mainStoreStats["avg_page_size"]
+		}
 		return storageStats
 	}
 
