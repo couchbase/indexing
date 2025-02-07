@@ -155,6 +155,8 @@ type ScanRequest struct {
 	perPartnReaderCtx   map[common.PartitionId][]IndexReaderContext
 	readersPerPartition int
 
+	cklen            int // length of secondary expressions
+	allexprlen       int // length of secondary + include column expressions
 	indexKeyNames    []string
 	inlineFilter     string
 	inlineFilterExpr expression.Expression
@@ -1758,6 +1760,9 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 
 		// VECTOR_TODO: Replace this with IsBhive() method
 		r.isBhiveScan = r.isVectorScan && indexInst.Defn.IsVectorIndex && indexInst.Defn.VectorMeta.IsBhive
+
+		r.cklen = len(indexInst.Defn.SecExprs)
+		r.allexprlen = len(indexInst.Defn.SecExprs) + len(indexInst.Defn.Include)
 	}
 	return
 }

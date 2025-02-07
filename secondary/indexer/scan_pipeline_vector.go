@@ -161,6 +161,11 @@ type ScanWorker struct {
 	includeColumnDecode  []bool
 	includeColumncktemp  [][]byte
 	includeColumndktemp  value.Values
+
+	//For caching values
+	cv          *value.ScopeValue
+	av          value.AnnotatedValue
+	exprContext expression.Context
 }
 
 func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- *Row,
@@ -232,6 +237,10 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		}
 		w.mem = m
 	}
+
+	w.cv = value.NewScopeValue(make(map[string]interface{}), nil)
+	w.av = value.NewAnnotatedValue(w.cv)
+	w.exprContext = expression.NewIndexContext()
 
 	go w.Scanner()
 
@@ -720,58 +729,18 @@ func resizeIncludeColumnBuf(buf []byte, capacity int) []byte {
 	return buf
 }
 
-func (w *ScanWorker) filterIncludeColumn(secKey []byte, includeColumn []byte, isBhive bool) (bool, error) {
-
-	if !isBhive {
-		return false, errors.New("Include column filtering is only supported with BHIVE indexes")
-	}
-
-	// VECTOR_TODO: Try to reuse these values instead of alloacting everytime
-	cv := value.NewScopeValue(make(map[string]interface{}), nil)
-	av := value.NewAnnotatedValue(cv)
-	exprContext := expression.NewIndexContext()
-
-	docId := secKey // For Bhive, secKey is docId
-
-	w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(includeColumn))
-
-	// VECTOR_TODO: No need to explode all experssions. Explode only upto those expressions
-	// that are required in index definition
-	_, explodedIncludeValues, err := jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
-		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, len(w.r.IndexInst.Defn.Include))
-	if err != nil {
-		if err == collatejson.ErrorOutputLen {
-			w.includeColumnBuf = make([]byte, 0, len(includeColumn)*3)
-			_, explodedIncludeValues, err = jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
-				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, len(w.r.IndexInst.Defn.Include))
-		}
-		if err != nil {
-			return false, err
-		}
-	}
-
-	indexDefn := w.r.IndexInst.Defn
-	cklen := len(indexDefn.SecExprs)
-	metalen := len(indexDefn.SecExprs) + len(indexDefn.Include)
+func (w *ScanWorker) setCoverForIncludeExprs(docid []byte, explodedIncludeValues n1qlval.Values) {
+	cklen, metalen := w.r.cklen, w.r.allexprlen
 	for i := cklen; i < metalen; i++ {
 		index := i - cklen
 		if w.r.indexKeyNames != nil && w.r.indexKeyNames[i] != "" {
-			av.SetCover(w.r.indexKeyNames[i], explodedIncludeValues[index])
+			w.av.SetCover(w.r.indexKeyNames[i], explodedIncludeValues[index])
 		}
 	}
 
 	if len(w.r.indexKeyNames) >= metalen && w.r.indexKeyNames[metalen] != "" {
-		av.SetCover(w.r.indexKeyNames[metalen], value.NewValue(string(docId)))
+		w.av.SetCover(w.r.indexKeyNames[metalen], value.NewValue(string(docid)))
 	}
-
-	evalValue, _, err := w.r.inlineFilterExpr.EvaluateForIndex(av, exprContext)
-	switch evalValue.Actual().(type) {
-	case bool:
-		return evalValue.Actual().(bool), nil
-	default:
-		return false, nil
-	}
-
 }
 
 // "meta" is the decoded version of the "rawMeta" given by iterator
@@ -784,11 +753,6 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 
 	includeColumn := meta[w.codeSize:]
 
-	// VECTOR_TODO: Try to reuse these values instead of alloacting everytime
-	cv := value.NewScopeValue(make(map[string]interface{}), nil)
-	av := value.NewAnnotatedValue(cv)
-	exprContext := expression.NewIndexContext()
-
 	w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(includeColumn))
 
 	// VECTOR_TODO: No need to explode all experssions. Explode only upto those expressions
@@ -806,21 +770,9 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 		}
 	}
 
-	indexDefn := w.r.IndexInst.Defn
-	cklen := len(indexDefn.SecExprs)
-	metalen := len(indexDefn.SecExprs) + len(indexDefn.Include)
-	for i := cklen; i < metalen; i++ {
-		index := i - cklen
-		if w.r.indexKeyNames != nil && w.r.indexKeyNames[i] != "" {
-			av.SetCover(w.r.indexKeyNames[i], explodedIncludeValues[index])
-		}
-	}
+	w.setCoverForIncludeExprs(docid, explodedIncludeValues)
 
-	if len(w.r.indexKeyNames) >= metalen && w.r.indexKeyNames[metalen] != "" {
-		av.SetCover(w.r.indexKeyNames[metalen], value.NewValue(string(docid)))
-	}
-
-	evalValue, _, err := w.r.inlineFilterExpr.EvaluateForIndex(av, exprContext)
+	evalValue, _, err := w.r.inlineFilterExpr.EvaluateForIndex(w.av, w.exprContext)
 	switch evalValue.Actual().(type) {
 	case bool:
 		return evalValue.Actual().(bool), nil
@@ -857,7 +809,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	value = value[:codeSize]
 
 	if len(includeColumn) > 0 && w.r.inlineFilter != "" {
-		processRow, err := w.filterIncludeColumn(entry, includeColumn, true)
+		processRow, err := w.inlineFilterCb(meta, entry)
 		if err != nil {
 			return err
 		}
