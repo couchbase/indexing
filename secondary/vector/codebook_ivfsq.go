@@ -273,12 +273,12 @@ func (cb *codebookIVFSQ) ComputeDistance(qvec []float32, fvecs []float32, dist [
 	return nil
 }
 
-func (cb *codebookIVFSQ) ComputeDistanceTable(vec []float32) ([][]float32, error) {
+func (cb *codebookIVFSQ) ComputeDistanceTable(vec []float32, dtable []float32) error {
 	//Not yet implemented
 	return nil, nil
 }
 
-func (cb *codebookIVFSQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) float32 {
+func (cb *codebookIVFSQ) ComputeDistanceWithDT(code []byte, dtable []float32) float32 {
 	//Not yet implemented
 	return 0
 }

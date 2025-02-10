@@ -69,11 +69,11 @@ type Codebook interface {
 	//Distance table is a matrix of dimension M * ksub where
 	//M = number of subquantizers
 	//ksub = number of centroids for each subquantizer (2**nbits)
-	ComputeDistanceTable(vec []float32) ([][]float32, error)
+	ComputeDistanceTable(qvec []float32, dtable []float32) error
 
 	//Compute the distance between a vector using distance table and
 	//quantized code of another vector.
-	ComputeDistanceWithDT(code []byte, dtable [][]float32) float32
+	ComputeDistanceWithDT(code []byte, dtable []float32) float32
 
 	//Compute the distance between a vector with another given set of vectors.
 	ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error
