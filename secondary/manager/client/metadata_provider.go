@@ -6502,10 +6502,14 @@ func (w *watcher) ClientAuth(pipe *common.PeerPipe) error {
 	var err error
 	user, pass := security.GetToolsCreds()
 	if !security.IsToolsConfigUsed() {
-		user, pass, err = cbauth.GetHTTPServiceAuth(w.authHost)
-		if err != nil {
-			logging.Errorf("watcher:ClientAuth cbauth.GetHTTPServiceAuth returns error %v", err)
-			return err
+		if security.ShouldUseClientCertAuth() {
+			user, pass = "", ""
+		} else {
+			user, pass, err = cbauth.GetHTTPServiceAuth(w.authHost)
+			if err != nil {
+				logging.Errorf("watcher:ClientAuth cbauth.GetHTTPServiceAuth returns error %v", err)
+				return err
+			}
 		}
 	}
 

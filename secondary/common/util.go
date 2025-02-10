@@ -323,6 +323,7 @@ type CbAuthHandler struct {
 	Bucket   string
 }
 
+// GetCredentials is the function to get credentials for memcached DCP connections
 func (ah *CbAuthHandler) GetCredentials() (string, string) {
 
 	var u, p string
@@ -331,7 +332,8 @@ func (ah *CbAuthHandler) GetCredentials() (string, string) {
 		if r > 0 {
 			logging.Warnf("CbAuthHandler::GetCredentials error=%v Retrying (%d)", err, r)
 		}
-
+		// DCP connections continue to require basic auth for audit purposes. hence even if we have
+		// client cert based auth enabled, we still need to send basic for AuthCmd
 		u, p, err = cbauth.GetHTTPServiceAuth(ah.Hostport)
 		return err
 	}
@@ -354,6 +356,8 @@ func (ah *CbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.
 			logging.Warnf("CbAuthHandler::AuthenticateMemcachedConn error=%v Retrying (%d)", err, r)
 		}
 
+		// DCP connections continue to require basic auth for audit purposes. hence even if we have
+		// client cert based auth enabled, we still need to send basic for AuthCmd
 		u, p, err = cbauth.GetMemcachedServiceAuth(host)
 		return err
 	}

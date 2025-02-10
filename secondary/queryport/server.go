@@ -11,12 +11,11 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/cbauthutil"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 
 	c "github.com/couchbase/indexing/secondary/common"
-
-	"github.com/couchbase/cbauth"
 
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/transport"
@@ -309,17 +308,19 @@ func (s *Server) doAuth(conn net.Conn) (interface{}, uint32, error) {
 		authErr = c.ErrAuthMissing
 	} else {
 		// The upgraded server always responds to the AuthRequest.
+		creds, err, _ := cbauthutil.HandleClientCertAndAuth(conn, req.GetUser(), req.GetPass())
 
-		_, err = cbauth.Auth(req.GetUser(), req.GetPass())
-		if err != nil {
-			logging.Errorf("%v connection %q doAuth() error %v", s.logPrefix, raddr, err)
+		if err != nil || creds == nil {
+			logging.Errorf("%v connection %q doAuth() error %v; creds == nil? %v",
+				s.logPrefix, raddr, err, creds == nil)
 			code = transport.AUTH_FAILURE
 			authErr = errors.New("Unauthenticated access. Authentication failure.")
+		} else {
+			// TODO: RBAC
+
+			code = transport.AUTH_SUCCESS
 		}
 
-		// TODO: RBAC
-
-		code = transport.AUTH_SUCCESS
 	}
 
 	resp := &protobuf.AuthResponse{
