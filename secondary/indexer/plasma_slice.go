@@ -314,7 +314,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 				"fatal error occured: %v", sliceId, idxInstId, partitionId, isNew, err)
 		}
 		if isNew {
-			destroyPlasmaSlice(storage_dir, path)
+			destroySlice_Plasma(storage_dir, path)
 		}
 		return nil, err
 	}
@@ -383,7 +383,7 @@ func createSliceDir(storageDir string, path string, isNew bool) error {
 	return err
 }
 
-func destroyPlasmaSlice(storageDir string, path string) error {
+func destroySlice_Plasma(storageDir string, path string) error {
 	if err := plasma.DestroyInstance(storageDir, path); err != nil {
 		return err
 	}
@@ -396,7 +396,7 @@ func listPlasmaSlices() ([]string, error) {
 	return plasma.ListInstancePaths(), nil
 }
 
-func backupCorruptedPlasmaSlice(storageDir string, prefix string, rename func(string) (string, error), clean func(string)) error {
+func backupCorruptedSlice_Plasma(storageDir string, prefix string, rename func(string) (string, error), clean func(string)) error {
 	return plasma.BackupCorruptedInstance(storageDir, prefix, rename, clean)
 }
 
@@ -3722,7 +3722,7 @@ func (mdb *plasmaSlice) GetTenantDiskSize() (int64, error) {
 func tryDeleteplasmaSlice(mdb *plasmaSlice) {
 
 	//cleanup the disk directory
-	if err := destroyPlasmaSlice(mdb.storageDir, mdb.path); err != nil {
+	if err := destroySlice_Plasma(mdb.storageDir, mdb.path); err != nil {
 		logging.Errorf("plasmaSlice::Destroy Error Cleaning Up Slice Id %v, "+
 			"IndexInstId %v, PartitionId %v, IndexDefnId %v. Error %v", mdb.id,
 			mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, err)

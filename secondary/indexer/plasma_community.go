@@ -36,7 +36,8 @@ func deleteFreeWriters(instId common.IndexInstId) {
 	// do nothing
 }
 
-func DestroyPlasmaSlice(storageDir string, path string) error {
+// DestroySlice_Plasma - placeholder for community edition
+func DestroySlice_Plasma(storageDir string, path string) error {
 	// do nothing
 	return nil
 }
@@ -46,26 +47,31 @@ func ListPlasmaSlices() ([]string, error) {
 	return nil, nil
 }
 
-func BackupCorruptedPlasmaSlice(string, string, func(string) (string, error), func(string)) error {
+// BackupCorruptedSlice_Plasma - placeholder for community edition
+func BackupCorruptedSlice_Plasma(storageDir string, prefix string, rename func(string) (string, error), clean func(string)) error {
 	// do nothing
 	return nil
 }
 
-func RecoveryDone() {
+// RecoveryDone_Plasma - placeholder for community edition
+func RecoveryDone_Plasma() {
 }
 
-func GetShardCompactVersion() int {
-	return 0
-}
-
-func GetEmptyShardInfo() ([]common.ShardId, error) {
+// GetEmptyShardInfo_Plasma - placeholder for community edition
+func GetEmptyShardInfo_Plasma() ([]common.ShardId, error) {
 	return nil, nil
 }
 
-func DestroyShard(shardId common.ShardId) error {
+// DestroyShard_Plasma - placeholder for community edition
+func DestroyShard_Plasma(shardId common.ShardId) error {
 	return nil
 }
 
 func GetRPCRootDir() string {
 	return ""
+}
+
+// GetShardCompatVersion_Plasma - placeholder for community edition
+func GetShardCompatVersion_Plasma() int {
+	return 0
 }

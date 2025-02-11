@@ -1818,7 +1818,7 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 						logging.Infof("Indexer::updateStorageMode Storage Mode Set %v. ", common.GetStorageMode())
 						if idx.getIndexerState() == common.INDEXER_ACTIVE &&
 							common.GetStorageMode() == common.PLASMA {
-							RecoveryDone()
+							RecoveryDone_Plasma()
 						}
 					}
 				} else {
@@ -11036,7 +11036,7 @@ func DestroySlice(mode common.StorageMode, storageDir string, path string) error
 	case common.MOI, common.FORESTDB, common.NOT_SET:
 		return iowrap.Os_RemoveAll(path)
 	case common.PLASMA:
-		return DestroyPlasmaSlice(storageDir, path)
+		return DestroySlice_Plasma(storageDir, path)
 	}
 
 	return fmt.Errorf("unable to delete instance %v : unrecognized storage type %v", path, mode)
@@ -11108,7 +11108,7 @@ func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId com
 	case common.PLASMA:
 		indexPath := IndexPath(indexInst, partnId, sliceId)
 		srcPath := filepath.Join(sourceDir, indexPath)
-		return BackupCorruptedPlasmaSlice(storageDir, srcPath, rename, clean)
+		return BackupCorruptedSlice_Plasma(storageDir, srcPath, rename, clean)
 	}
 	return fmt.Errorf("unable to move instance : unrecognized storage type %v", mode)
 }

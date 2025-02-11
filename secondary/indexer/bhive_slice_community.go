@@ -20,3 +20,35 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 	cancelCh chan bool, codebookPath string) (Slice, error) {
 	panic("B-Hive storage engine not supported in community edition")
 }
+
+// BackupCorruptedSlice_Bhive - placeholder for community edition
+func BackupCorruptedSlice_Bhive(
+	storageDir, prefix string,
+	rename func(string) (string, error),
+	clean func(string),
+) error {
+	return nil
+}
+
+// DestroySlice_Bhive - placeholder for community edition
+func DestroySlice_Bhive(storageDir string, path string) error {
+	return nil
+}
+
+// GetEmptyShardInfo_Bhive - placeholder for community edition
+func GetEmptyShardInfo_Bhive() ([]common.ShardId, error) {
+	return nil, nil
+}
+
+// DestroyShard_Bhive - placeholder for community edition
+func DestroyShard_Bhive(shardId common.ShardId) error {
+	return nil
+}
+
+// RecoveryDone_Bhive - placeholder for community edition
+func RecoveryDone_Bhive() {}
+
+// GetShardCompatVersion_Bhive - placeholder for community edition
+func GetShardCompatVersion_Bhive() int {
+	return -1
+}

@@ -2108,7 +2108,7 @@ func (s *storageMgr) handleRecoveryDone() {
 	s.supvCmdch <- &MsgSuccess{}
 
 	if common.GetStorageMode() == common.PLASMA {
-		RecoveryDone()
+		RecoveryDone_Plasma()
 	}
 }
 
@@ -2972,13 +2972,13 @@ func (sm *storageMgr) handleDestroyEmptyShards() {
 	sm.muSnap.Lock()
 	defer sm.muSnap.Unlock()
 
-	emptyShards, err := GetEmptyShardInfo()
+	emptyShards, err := GetEmptyShardInfo_Plasma()
 	if err != nil {
 		logging.Errorf("StorageMgr::handleDestroyEmptyShards Error observed while retrieving empty shardInfo, err: %v", err)
 	} else {
 		logging.Infof("StorageMgr::handleDestroyEmptyShards destroying empty shards: %v", emptyShards)
 		for _, shardId := range emptyShards {
-			err := DestroyShard(shardId)
+			err := DestroyShard_Plasma(shardId)
 			if err != nil {
 				logging.Errorf("StorageMgr::handleDestroyEmptyShards Error observed while destroying shard: %v, err: %v", shardId, err)
 			}

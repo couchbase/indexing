@@ -1351,7 +1351,7 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 		statMap.AddStat("rebalance_transfer_progress", is.RebalanceTransferProgress.Get())
 	}
 
-	is.ShardCompatVersion.Set(int64(GetShardCompactVersion()))
+	is.ShardCompatVersion.Set(int64(GetShardCompatVersion_Plasma()))
 	statMap.AddStatValueFiltered("shard_compat_version", &is.ShardCompatVersion)
 
 	statMap.AddStatValueFiltered("maint_port_blocked_hist", &is.datapMaintBlockedDurHist)
