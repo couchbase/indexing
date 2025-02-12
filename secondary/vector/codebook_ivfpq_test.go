@@ -382,7 +382,16 @@ func TestComputeDistanceEncodedPQ(t *testing.T) {
 				}
 			}
 			t0 = time.Now()
-			err = codebook.ComputeDistanceEncoded(qvec, n, icodes, dist2, listno)
+			dtable := make([]float32, nsub*(1<<nbits))
+			err = codebook.ComputeDistanceTable(qvec, dtable)
+			if err != nil {
+				t.Errorf("Error computing distance table %v", err)
+			}
+
+			err = codebook.ComputeDistanceEncoded(qvec, n, icodes, dist2, dtable, listno)
+			if err != nil {
+				t.Errorf("Error computing encoded distance %v", err)
+			}
 			delta = time.Now().Sub(t0)
 			t.Logf("Computed distance encoded %v, expected %v", dist2, dist)
 			t.Logf("Computed distance encoded timing %v", delta)
