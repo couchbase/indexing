@@ -275,7 +275,7 @@ func (cb *codebookIVFSQ) ComputeDistance(qvec []float32, fvecs []float32, dist [
 
 func (cb *codebookIVFSQ) ComputeDistanceTable(vec []float32, dtable []float32) error {
 	//Not yet implemented
-	return nil, nil
+	return nil
 }
 
 func (cb *codebookIVFSQ) ComputeDistanceWithDT(code []byte, dtable []float32) float32 {
@@ -288,9 +288,9 @@ func (cb *codebookIVFSQ) ComputeDistanceWithDT(code []byte, dtable []float32) fl
 //Codes must be provided without coarse code(i.e. centroid ID).
 //This function only works with vectors belonging to the same centroid(input as listno).
 func (cb *codebookIVFSQ) ComputeDistanceEncoded(qvec []float32,
-	n int, codes []byte, dists []float32, listno int64) error {
+	n int, codes []byte, dists []float32, dtable []float32, listno int64) error {
 
-	return cb.index.ComputeDistanceEncoded(qvec, n, codes, dists, listno,
+	return cb.index.ComputeDistanceEncoded(qvec, n, codes, dists, nil, listno,
 		convertToFaissMetric(cb.metric), cb.dim)
 }
 

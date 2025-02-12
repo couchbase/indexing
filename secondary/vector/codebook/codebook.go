@@ -82,7 +82,8 @@ type Codebook interface {
 	//Quantized codes are decoded first before distance comparison.
 	//Codes must be provided without coarse code(i.e. centroid ID).
 	//This function only works with vectors belonging to the same centroid(input as listno).
-	ComputeDistanceEncoded(qvec []float32, n int, codes []byte, dists []float32, listno int64) error
+	ComputeDistanceEncoded(qvec []float32, n int, codes []byte,
+		dists []float32, dtable []float32, listno int64) error
 
 	//Decode the quantized code and return float32 vector.
 	//Must be run on a trained codebook.

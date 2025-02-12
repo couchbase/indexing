@@ -295,8 +295,7 @@ func (cb *codebookIVFPQ) ComputeDistance(qvec []float32, fvecs []float32, dist [
 }
 
 func (cb *codebookIVFPQ) ComputeDistanceTable(qvec []float32, dtable []float32) error {
-	//Not yet implemented
-	return 0
+	return cb.index.ComputeDistanceTable(qvec, dtable)
 }
 
 func (cb *codebookIVFPQ) ComputeDistanceWithDT(code []byte, dtable []float32) float32 {
@@ -309,10 +308,10 @@ func (cb *codebookIVFPQ) ComputeDistanceWithDT(code []byte, dtable []float32) fl
 // Codes must be provided without coarse code(i.e. centroid ID).
 // This function only works with vectors belonging to the same centroid(input as listno).
 func (cb *codebookIVFPQ) ComputeDistanceEncoded(qvec []float32,
-	n int, codes []byte, dists []float32, listno int64) error {
+	n int, codes []byte, dists []float32, dtable []float32, listno int64) error {
 
-	return cb.index.ComputeDistanceEncoded(qvec, n, codes, dists, listno,
-		convertToFaissMetric(cb.metric), cb.dim)
+	return cb.index.ComputeDistanceEncoded(qvec, n, codes, dists, dtable,
+		listno, convertToFaissMetric(cb.metric), cb.dim)
 }
 
 // Size returns the memory size in bytes.
