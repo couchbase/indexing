@@ -382,7 +382,7 @@ func TestComputeDistanceEncodedPQ(t *testing.T) {
 				}
 			}
 			t0 = time.Now()
-			dtable := make([]float32, nsub*(1<<nbits))
+			dtable := make([]float32, tc.nsub*(1<<tc.nbits))
 			err = codebook.ComputeDistanceTable(qvec, dtable)
 			if err != nil {
 				t.Errorf("Error computing distance table %v", err)

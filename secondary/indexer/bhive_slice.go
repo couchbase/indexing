@@ -1297,7 +1297,7 @@ func (mdb *bhiveSlice) createVectorFuncCtx() *bhive.VectorFuncCtx {
 	}
 
 	distEncoded := func(q []float32, n int, codes []byte, dist []float32, cid int64) error {
-		return mdb.codebook.ComputeDistanceEncoded(q, n, codes, dist, cid)
+		return mdb.codebook.ComputeDistanceEncoded(q, n, codes, dist, nil, cid)
 	}
 
 	ctx := &bhive.VectorFuncCtx{

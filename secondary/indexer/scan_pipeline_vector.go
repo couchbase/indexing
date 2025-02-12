@@ -160,6 +160,8 @@ type ScanWorker struct {
 	cktmp       [][]byte
 	cachedEntry entryCache
 
+	dtable []float32
+
 	rowBuf *AtomicRowBuffer
 
 	// temporary buffer to process each include column
@@ -573,8 +575,23 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		t0 := time.Now()
 
 		qvec := w.r.queryVector
+		qtype := w.r.IndexInst.Defn.VectorMeta.Quantizer.Type
+		if qtype == c.PQ {
+			if w.dtable == nil {
+				subQuantizers := w.r.IndexInst.Defn.VectorMeta.Quantizer.SubQuantizers
+				nbits := w.r.IndexInst.Defn.VectorMeta.Quantizer.Nbits
+				w.dtable = make([]float32, subQuantizers*(1<<nbits))
+				err = w.currJob.codebook.ComputeDistanceTable(qvec, w.dtable)
+				if err != nil {
+					logging.Verbosef("%v Sender got error: %v from ComputeDistanceTable", w.logPrefix, err)
+					return
+				}
+			}
+		}
+
 		w.dists = w.dists[:vecCount]
-		err = w.currJob.codebook.ComputeDistanceEncoded(qvec, vecCount, w.codes, w.dists, w.currJob.cid)
+		err = w.currJob.codebook.ComputeDistanceEncoded(qvec, vecCount, w.codes,
+			w.dists, w.dtable, w.currJob.cid)
 		if err != nil {
 			logging.Verbosef("%v Sender got error: %v from ComputeDistance", w.logPrefix, err)
 			return
