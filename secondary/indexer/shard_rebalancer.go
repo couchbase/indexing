@@ -158,6 +158,7 @@ type ShardRebalancer struct {
 	localMeta          unsafe.Pointer
 	localMetaWaiterCnt atomic.Int32
 	localMetaError     atomic.Bool
+	forceLocalMetaCh   chan chan struct{}
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -223,6 +224,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 
 		batchBuildReqCh:     make(chan *batchBuildReq, 100),
 		droppedInstsInRebal: make(map[c.IndexInstId]bool),
+
+		forceLocalMetaCh: make(chan chan struct{}),
 	}
 
 	sr.shardProgress.SetFloat64(0)
@@ -524,7 +527,8 @@ func (sr *ShardRebalancer) genPeerDestination(nodeUuid string) (string, error) {
 }
 
 func (sr *ShardRebalancer) localMetaFetcher() {
-	ticker := time.NewTicker(900 * time.Millisecond)
+	const metaFetchInterval = 900 * time.Millisecond
+	ticker := time.NewTicker(metaFetchInterval)
 	defer ticker.Stop()
 
 	refreshLocalMeta := func() {
@@ -554,7 +558,12 @@ func (sr *ShardRebalancer) localMetaFetcher() {
 			l.Infof("ShardRebalancer::initRebalAsync Done Received")
 			refreshLocalMeta()
 			return
-
+		case respCh := <-sr.forceLocalMetaCh:
+			if respCh != nil {
+				refreshLocalMeta()
+				close(respCh)
+				ticker.Reset(metaFetchInterval)
+			}
 		case <-ticker.C:
 			if sr.localMetaWaiterCnt.Load() > 0 {
 				refreshLocalMeta()
@@ -1966,6 +1975,7 @@ func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn,
 		testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_DURING_DEFERRED_INDEX_RECOVERY)
 		///////////////////////////////////////////////////////////////////
 
+		sr.waitForNewMeta()
 		if err := sr.waitForIndexState(c.INDEX_STATE_READY, deferredInsts, ttid, tt, recoveryListener); err != nil {
 			return false, err
 		}
@@ -2140,6 +2150,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_DURING_NON_DEFERRED_INDEX_RECOVERY)
 				///////////////////////////////////////////////////////////////////
 
+				sr.waitForNewMeta()
 				if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, nonDeferredInsts[currIndex], ttid, tt, nil); err != nil {
 					sr.setTransferTokenError(ttid, tt, err.Error())
 					return
@@ -2329,6 +2340,7 @@ func (sr *ShardRebalancer) startShardRecoveryNonServerless(ttid string, tt *c.Tr
 					recoveryInsts[defn.InstId] = true
 				}
 
+				sr.waitForNewMeta()
 				if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, recoveryInsts, ttid, tt, recoveryListener); err != nil {
 					sr.setTransferTokenError(ttid, tt, err.Error())
 					return
@@ -5144,4 +5156,20 @@ func (sr *ShardRebalancer) populateShardTypes(ttid string, tt *c.TransferToken) 
 	// Wait for the update to happen in the shardTypeMapper
 	<-doneCh
 	return nil
+}
+
+// waitForNewMeta() call this if you have made updates to local meta and would like to refresh
+// the local meta forcefully
+func (sr *ShardRebalancer) waitForNewMeta() {
+	respCh := make(chan struct{})
+	select {
+	case <-sr.cancel:
+	case <-sr.done:
+	case sr.forceLocalMetaCh <- respCh:
+		select {
+		case <-sr.cancel:
+		case <-sr.done:
+		case <-respCh:
+		}
+	}
 }
