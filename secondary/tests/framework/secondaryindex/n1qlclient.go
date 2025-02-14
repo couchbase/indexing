@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -974,7 +975,41 @@ func ChangeQuerySettings(configKey string, configValue interface{}, serverUserNa
 		}
 
 		newValue, ok := newSetting[configKey]
-		if !ok || fmt.Sprintf("%v", newValue) != fmt.Sprintf("%v", configValue) {
+		if !ok {
+			return fmt.Errorf("did not get a response back for the change of key:%v", configKey)
+		}
+
+		// convert all the numeric values to uint64
+		// keep other as it is
+		switch typedNewValue := newValue.(type) {
+		case int:
+			newValue = uint64(typedNewValue)
+		case int8:
+			newValue = uint64(typedNewValue)
+		case int16:
+			newValue = uint64(typedNewValue)
+		case int32:
+			newValue = uint64(typedNewValue)
+		case int64:
+			newValue = uint64(typedNewValue)
+		case uint:
+			newValue = uint64(typedNewValue)
+		case uint8:
+			newValue = uint64(typedNewValue)
+		case uint16:
+			newValue = uint64(typedNewValue)
+		case uint32:
+			newValue = uint64(typedNewValue)
+		case uint64:
+			newValue = typedNewValue
+		case float32:
+			newValue = uint64(typedNewValue)
+		case float64:
+			newValue = uint64(typedNewValue)
+		default:
+		}
+
+		if reflect.TypeOf(configValue).Kind() != reflect.TypeOf(newValue).Kind() || fmt.Sprintf("%v", newValue) != fmt.Sprintf("%v", configValue) {
 			return fmt.Errorf("couldn't change %v to %v. curr value %v", configKey, configValue, newValue)
 		}
 	}
