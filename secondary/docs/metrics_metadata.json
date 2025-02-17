@@ -328,6 +328,19 @@
             "index"
         ]
     },
+    "index_partn_items_count": {
+        "type": "gauge",
+        "help": "The actual number of items present in the latest index snapshot, for this partition",
+        "added": "7.6.6",
+        "labels": [
+            "bucket",
+            "scope",
+            "collection",
+            "index",
+            "partition"
+        ],
+        "notes": "This metric is valid only for partitioned indexes."
+    },
     "index_memory_used_total": {
         "type": "gauge",
         "help": "Total memory used by the indexer process",
