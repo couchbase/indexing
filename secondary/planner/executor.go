@@ -2864,6 +2864,13 @@ func replicaRepair(config *RunConfig, plan *Plan, defnId common.IndexDefnId, inc
 		}
 	}
 
+	param := make(map[string]interface{})
+	param["MinIterPerTemp"] = config.MinIterPerTemp
+	param["MaxIterPerTemp"] = config.MaxIterPerTemp
+	if err := planner.SetParam(param); err != nil {
+		return nil, err
+	}
+
 	if config.Detail {
 		logging.Infof("************ Index Layout Before Rebalance *************")
 		solution.PrintLayout()
