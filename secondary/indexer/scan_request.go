@@ -2579,7 +2579,7 @@ func (r ScanRequest) String() string {
 }
 
 func (r *ScanRequest) getKeyBuffer(minSize int) []byte {
-	if r.indexKeyBuffer == nil {
+	if r.indexKeyBuffer == nil || cap(r.indexKeyBuffer) < minSize {
 		buf := secKeyBufPool.Get()
 		if minSize != 0 {
 			newBuf := resizeEncodeBuf(*buf, minSize, true)
