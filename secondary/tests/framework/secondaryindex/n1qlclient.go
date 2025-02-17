@@ -547,6 +547,39 @@ func N1QLStorageStatistics(indexName, bucketName, server string) ([]map[string]i
 	return statsArr, err2
 }
 
+func N1QLDefnStorageStatistics(indexName, bucketName, server string) (
+	map[uint64][]map[string]interface{}, error) {
+
+	client, err := GetOrCreateN1QLClient(server, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.SetLogLevel(logging.Error)
+
+	requestid := getrequestid()
+	index, err := client.IndexByName(indexName)
+	if err != nil {
+		return nil, err
+	}
+
+	var err1 error
+	index, err1 = WaitForIndexOnline(client, indexName, index)
+	if err1 != nil {
+		return nil, err1
+	}
+
+	index6, useScan4 := index.(datastore.Index6)
+
+	if !useScan4 {
+		return nil, e.New("Index6 implementation unavailable")
+	}
+
+	stats, err2 := index6.DefnStorageStatistics(requestid)
+	statsMap := convertN1QLStats2(stats)
+	return statsMap, err2
+}
+
 func convertN1QLStats(stats []map[datastore.IndexStatType]value.Value) []map[string]interface{} {
 	statsArr := make([]map[string]interface{}, 0)
 	for _, stat := range stats {
@@ -557,6 +590,18 @@ func convertN1QLStats(stats []map[datastore.IndexStatType]value.Value) []map[str
 		statsArr = append(statsArr, newMap)
 	}
 	return statsArr
+}
+
+func convertN1QLStats2(
+	stats map[uint64][]map[datastore.IndexStatType]value.Value,
+) map[uint64][]map[string]interface{} {
+
+	var statsMap = make(map[uint64][]map[string]interface{})
+
+	for instID, instStat := range stats {
+		statsMap[instID] = convertN1QLStats(instStat)
+	}
+	return statsMap
 }
 
 func filtertoranges2(filters []*qc.CompositeElementFilter) datastore.Ranges2 {

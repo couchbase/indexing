@@ -4282,13 +4282,6 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
-	"indexer.bhive.vanama.useDistanceTable": ConfigValue{
-		false,
-		"use distance table when building vanama graph",
-		false,
-		false,
-		false,
-	},
 	"indexer.bhive.useResidual": ConfigValue{
 		true,
 		"use SIMD + residual distance calculation",

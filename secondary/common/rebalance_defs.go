@@ -439,7 +439,6 @@ func (tt *TransferToken) String() string {
 
 	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
 	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
-	fmt.Fprintf(sbp, "ShardType: %v ", tt.GetShardType())
 	if tt.Error != "" {
 		fmt.Fprintf(sbp, "Error: %v ", tt.Error)
 	}
@@ -451,7 +450,8 @@ func (tt *TransferToken) String() string {
 	// If more than one index instance exists, print all of them
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "SiblingTokenId: %v ", tt.SiblingTokenId)
-		fmt.Fprintf(sbp, "Shards: %v\n", tt.ShardIds)
+		fmt.Fprintf(sbp, "Shards: %v ", tt.ShardIds)
+		fmt.Fprintf(sbp, "ShardType: %v\n", tt.GetShardType())
 		fmt.Fprintf(sbp, "Destination: %v\n", tt.Destination)
 		fmt.Fprintf(sbp, "Region: %v\n", tt.Region)
 
@@ -505,7 +505,6 @@ func (tt *TransferToken) LessVerboseString() string {
 
 	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
 	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
-	fmt.Fprintf(sbp, "ShardType: %v ", tt.GetShardType())
 	if tt.Error != "" {
 		fmt.Fprintf(sbp, "Error: %v ", tt.Error)
 	}
@@ -516,7 +515,8 @@ func (tt *TransferToken) LessVerboseString() string {
 	// If more than one index instance exists, print all of them
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "SiblingTokenId: %v ", tt.SiblingTokenId)
-		fmt.Fprintf(sbp, "Shards: %v\n", tt.ShardIds)
+		fmt.Fprintf(sbp, "Shards: %v ", tt.ShardIds)
+		fmt.Fprintf(sbp, "ShardType: %v\n", tt.GetShardType())
 		// tt.Destination contains same info as DestHost + TransferPort for on-prem file based.
 		// Omit printing if tt.DestHost is already printed
 		if tt.Destination != "" && (len(tt.DestHost) == 0 || GetDeploymentModel() == SERVERLESS_DEPLOYMENT) {

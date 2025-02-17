@@ -335,7 +335,6 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.Parallelism = 1
 	cfg.Dimension = slice.idxDefn.VectorMeta.Dimension
 
-	cfg.UseDistanceTable = slice.sysconf["bhive.vanama.useDistanceTable"].Bool()
 	cfg.EfNumNeighbors = slice.sysconf["bhive.vanama.efNumNeighbors"].Int()
 	cfg.EfConstruction = slice.sysconf["bhive.vanama.efConstruction"].Int()
 	cfg.VanamaBuildQuota = slice.sysconf["bhive.vanama.buildQuota"].Int()
@@ -356,8 +355,8 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 
 	cfg.NumWriters = slice.maxNumWriters
 
-	logging.Infof("bhiveSlice:setupConfig UseDistanceTable %v efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v",
-		cfg.UseDistanceTable, cfg.EfNumNeighbors, cfg.EfConstruction, cfg.VanamaBuildQuota, cfg.NumCompactor, slice.topNScan)
+	logging.Infof("bhiveSlice:setupConfig efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v",
+		cfg.EfNumNeighbors, cfg.EfConstruction, cfg.VanamaBuildQuota, cfg.NumCompactor, slice.topNScan)
 
 	return cfg
 }
@@ -1810,7 +1809,7 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 	}
 
 	select {
-	case <- s.chkpointCh:
+	case <-s.chkpointCh:
 	default:
 		wg.Wait()
 	}
