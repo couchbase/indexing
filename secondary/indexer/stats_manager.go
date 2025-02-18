@@ -2440,9 +2440,12 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_rows_returned", s.bucket, collectionLabels, s.dispName, numRowsReturned)
 	st = append(st, []byte(str)...)
 
+	indexState := s.int64Stats(func(ss *IndexStats) int64 { return int64(ss.indexState.Value()) })
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "state", s.bucket, collectionLabels, s.dispName, indexState)
+	st = append(st, []byte(str)...)
+
 	numDocsPending := s.int64Stats(func(ss *IndexStats) int64 { return ss.numDocsPending.Value() })
-	indexState := s.indexState.Value()
-	if indexState == uint64(common.INDEX_STATE_CREATED) {
+	if indexState == int64(common.INDEX_STATE_CREATED) {
 		numDocsPending = 0
 	}
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_docs_pending", s.bucket, collectionLabels, s.dispName, numDocsPending)

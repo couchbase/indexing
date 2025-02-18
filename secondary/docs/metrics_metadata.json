@@ -317,6 +317,17 @@
         ],
         "notes": "This metric is valid only for partitioned indexes."
     },
+    "index_state": {
+        "type": "gauge",
+        "help": "The current state of this index; CREATED: 0, READY: 1, INITIAL: 2, CATCHUP: 3, ACTIVE: 4, DELETED: 5, ERROR: 6, NIL: 7, SCHEDULED: 8, RECOVERED: 9. Index is usable only in ACTIVE state",
+        "added": "7.6.6",
+        "labels": [
+            "bucket",
+            "scope",
+            "collection",
+            "index"
+        ]
+    },
     "index_memory_used_total": {
         "type": "gauge",
         "help": "Total memory used by the indexer process",
