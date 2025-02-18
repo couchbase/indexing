@@ -356,16 +356,33 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 	var currPassItr = 0
 	var passes = []string{"init", "0", "1", "2", "3", "overflow"}
 
+	var defnDbgLog = fmt.Sprintf("(d: %v, p: %v)", defnID, partnID)
+
+	var indexShardCategory ShardCategory = InvalidShardCategory
+	for _, nodes := range replicaMap {
+		for _, index := range nodes {
+			if index == nil {
+				continue
+			}
+			indexShardCategory = getIndexCategory(index)
+			logging.Debugf("ShardDealer::GetSlot shard category for inst %v is %v",
+				defnDbgLog, indexShardCategory)
+			if indexShardCategory != InvalidShardCategory {
+				break
+			}
+		}
+	}
+	defnDbgLog = fmt.Sprintf("(d: %v, p: %v, cat: %d)", defnID, partnID, indexShardCategory)
+
 	var defnJSONLog = func(replicaID int, nodeUUID string) string {
-		return fmt.Sprintf("{defnID: %v, partnID: %v, replicaID: %v, node: %v}",
+		return fmt.Sprintf("{defnID: %v, partnID: %v, repID: %v, node: %v, cat: %s}",
 			defnID,
 			partnID,
 			replicaID,
 			nodeUUID,
+			indexShardCategory.String(),
 		)
 	}
-
-	var defnDbgLog = fmt.Sprintf("(d: %v, p: %v)", defnID, partnID)
 
 	logging.Tracef("ShardDealer::GetSlot called for defn %v with replica map %v",
 		defnDbgLog, replicaMap)
@@ -685,20 +702,6 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 		return mainstoreShard.GetSlotId()
 	}
 
-	var indexShardCategory ShardCategory = InvalidShardCategory
-	for _, nodes := range replicaMap {
-		for _, index := range nodes {
-			if index == nil {
-				continue
-			}
-			indexShardCategory = getIndexCategory(index)
-			logging.Debugf("ShardDealer::GetSlot shard category for inst %v is %v",
-				defnDbgLog, indexShardCategory)
-			if indexShardCategory != InvalidShardCategory {
-				break
-			}
-		}
-	}
 	if indexShardCategory == InvalidShardCategory {
 		logging.Warnf(
 			"ShardDealer::GetSlot index inst %v not of a valid shard category. skipping slot allotment",
