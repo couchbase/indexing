@@ -4387,6 +4387,27 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.bhive.EnableRollbackFilterMerge": ConfigValue{
+		true,
+		"Enables or disables the lssVIndex rollback filter merge operation",
+		true,
+		false,
+		false,
+	},
+	"indexer.bhive.EnableRollbackFilterTrim": ConfigValue{
+		true,
+		"Enables or disables the lssVIndex rollback filter trim operation",
+		true,
+		false,
+		false,
+	},
+	"indexer.bhive.EnableRollbackFilterPrune": ConfigValue{
+		true,
+		"Enables or disables the lssVIndex rollback filter prune operation",
+		true,
+		false,
+		false,
+	},
 	"projector.log_dir": ConfigValue{
 		"",
 		"Projector log directory",

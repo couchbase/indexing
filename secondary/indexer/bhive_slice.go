@@ -354,6 +354,10 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.CompressionType = slice.sysconf["bhive.compressType"].String()
 	cfg.CompressionLevel = slice.sysconf["bhive.compressLevel"].Int()
 
+	cfg.EnableRollbackFilterMerge = slice.sysconf["bhive.EnableRollbackFilterMerge"].Bool()
+	cfg.EnableRollbackFilterTrim = slice.sysconf["bhive.EnableRollbackFilterTrim"].Bool()
+	cfg.EnableRollbackFilterPrune = slice.sysconf["bhive.EnableRollbackFilterPrune"].Bool()
+
 	cfg.NumWriters = slice.maxNumWriters
 
 	logging.Infof("bhiveSlice:setupConfig efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v",
