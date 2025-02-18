@@ -127,26 +127,28 @@ type Plan struct {
 
 type IndexSpec struct {
 	// definition
-	Name               string             `json:"name,omitempty"`
-	Bucket             string             `json:"bucket,omitempty"`
-	Scope              string             `json:"scope,omitempty"`
-	Collection         string             `json:"collection,omitempty"`
-	DefnId             common.IndexDefnId `json:"defnId,omitempty"`
-	IsPrimary          bool               `json:"isPrimary,omitempty"`
-	SecExprs           []string           `json:"secExprs,omitempty"`
-	WhereExpr          string             `json:"where,omitempty"`
-	Deferred           bool               `json:"deferred,omitempty"`
-	Immutable          bool               `json:"immutable,omitempty"`
-	IsArrayIndex       bool               `json:"isArrayIndex,omitempty"`
-	RetainDeletedXATTR bool               `json:"retainDeletedXATTR,omitempty"`
-	NumPartition       uint64             `json:"numPartition,omitempty"`
-	PartitionScheme    string             `json:"partitionScheme,omitempty"`
-	HashScheme         uint64             `json:"hashScheme,omitempty"`
-	PartitionKeys      []string           `json:"partitionKeys,omitempty"`
-	Replica            uint64             `json:"replica,omitempty"`
-	Desc               []bool             `json:"desc,omitempty"`
-	Using              string             `json:"using,omitempty"`
-	ExprType           string             `json:"exprType,omitempty"`
+	Name                   string             `json:"name,omitempty"`
+	Bucket                 string             `json:"bucket,omitempty"`
+	Scope                  string             `json:"scope,omitempty"`
+	Collection             string             `json:"collection,omitempty"`
+	DefnId                 common.IndexDefnId `json:"defnId,omitempty"`
+	IsPrimary              bool               `json:"isPrimary,omitempty"`
+	SecExprs               []string           `json:"secExprs,omitempty"`
+	WhereExpr              string             `json:"where,omitempty"`
+	Deferred               bool               `json:"deferred,omitempty"`
+	Immutable              bool               `json:"immutable,omitempty"`
+	IsArrayIndex           bool               `json:"isArrayIndex,omitempty"`
+	IsCompositeVectorIndex bool               `json:"isCompositeVectorIndex,omitempty"`
+	IsBhiveIndex           bool               `json:"isBhiveIndex,omitempty"`
+	RetainDeletedXATTR     bool               `json:"retainDeletedXATTR,omitempty"`
+	NumPartition           uint64             `json:"numPartition,omitempty"`
+	PartitionScheme        string             `json:"partitionScheme,omitempty"`
+	HashScheme             uint64             `json:"hashScheme,omitempty"`
+	PartitionKeys          []string           `json:"partitionKeys,omitempty"`
+	Replica                uint64             `json:"replica,omitempty"`
+	Desc                   []bool             `json:"desc,omitempty"`
+	Using                  string             `json:"using,omitempty"`
+	ExprType               string             `json:"exprType,omitempty"`
 
 	IndexMissingLeadingKey bool `json:"indexMissingLeadingKey,omitempty"`
 
@@ -4278,6 +4280,14 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.ResidentRatio = spec.ResidentRatio
 			index.MutationRate = spec.MutationRate
 			index.ScanRate = spec.ScanRate
+
+			index.Instance.Defn.IsVectorIndex = spec.IsCompositeVectorIndex || spec.IsBhiveIndex
+			if index.Instance.Defn.IsVectorIndex {
+				index.Instance.Defn.VectorMeta = &common.VectorMetadata{
+					IsCompositeIndex: spec.IsCompositeVectorIndex,
+					IsBhive:          spec.IsBhiveIndex,
+				}
+			}
 
 			// This is need to compute stats for new indexes
 			// The index size will be recomputed later on in plan/rebalance
