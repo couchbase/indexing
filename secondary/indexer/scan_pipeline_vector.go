@@ -12,6 +12,7 @@ import (
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/conversions"
 	"github.com/couchbase/indexing/secondary/logging"
 	l "github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
@@ -741,7 +742,7 @@ func (w *ScanWorker) setCoverForIncludeExprs(docid []byte, explodedIncludeValues
 	}
 
 	if len(w.r.indexKeyNames) >= metalen && w.r.indexKeyNames[metalen] != "" {
-		w.av.SetCover(w.r.indexKeyNames[metalen], w.svPool.Get(metalen-cklen, string(docid)))
+		w.av.SetCover(w.r.indexKeyNames[metalen], w.svPool.Get(metalen-cklen, conversions.ByteSliceToString(docid)))
 	}
 }
 
