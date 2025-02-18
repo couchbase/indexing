@@ -1043,8 +1043,9 @@ type secondaryIndex struct {
 	numCentroids       int
 	numPartition       int
 
-	isBhive bool
-	include expression.Expressions
+	isBhive      bool
+	rerankFactor int
+	include      expression.Expressions
 }
 
 // for metadata-provider.
@@ -1974,6 +1975,15 @@ func (si *secondaryIndex6) MaxHeapSize() int {
 // based on index definition
 func (si *secondaryIndex6) AllowRerank() bool {
 	return si.IsBhive()
+}
+
+func (si *secondaryIndex6) RerankFactor() int32 {
+	if si.AllowRerank() {
+		config := si.gsi.gsiClient.Settings()
+		return config.RerankFactor()
+	} else {
+		return -1
+	}
 }
 
 // Scan6 implements Index6 interface
