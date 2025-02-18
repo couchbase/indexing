@@ -161,6 +161,7 @@ type ScanWorker struct {
 	includeColumnDecode  []bool
 	includeColumncktemp  [][]byte
 	includeColumndktemp  value.Values
+	svPool               *value.StringValuePoolForIndex
 
 	//For caching values
 	cv          *value.ScopeValue
@@ -241,6 +242,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	w.cv = value.NewScopeValue(make(map[string]interface{}), nil)
 	w.av = value.NewAnnotatedValue(w.cv)
 	w.exprContext = expression.NewIndexContext()
+	w.svPool = value.NewStringValuePoolForIndex(len(r.IndexInst.Defn.Include) + 1) // +1 is required for meta().id
 
 	go w.Scanner()
 
@@ -739,7 +741,7 @@ func (w *ScanWorker) setCoverForIncludeExprs(docid []byte, explodedIncludeValues
 	}
 
 	if len(w.r.indexKeyNames) >= metalen && w.r.indexKeyNames[metalen] != "" {
-		w.av.SetCover(w.r.indexKeyNames[metalen], value.NewValue(string(docid)))
+		w.av.SetCover(w.r.indexKeyNames[metalen], w.svPool.Get(metalen-cklen, string(docid)))
 	}
 }
 
@@ -757,13 +759,13 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 
 	// VECTOR_TODO: No need to explode all experssions. Explode only upto those expressions
 	// that are required in index definition
-	_, explodedIncludeValues, err := jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
-		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, len(w.r.IndexInst.Defn.Include))
+	_, explodedIncludeValues, err := jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf,
+		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, len(w.r.IndexInst.Defn.Include), w.svPool)
 	if err != nil {
 		if err == collatejson.ErrorOutputLen {
 			w.includeColumnBuf = make([]byte, 0, len(includeColumn)*3)
-			_, explodedIncludeValues, err = jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
-				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, len(w.r.IndexInst.Defn.Include))
+			_, explodedIncludeValues, err = jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf,
+				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, len(w.r.IndexInst.Defn.Include), w.svPool)
 		}
 		if err != nil {
 			return false, err
