@@ -1980,6 +1980,7 @@ func (si *secondaryIndex6) AllowRerank() bool {
 func (si *secondaryIndex6) Scan6(
 	requestId string,
 	spans datastore.Spans2,
+	inclSpans datastore.Spans2,
 	reverse bool,
 	distinctAfterProjection bool,
 	projection *datastore.IndexProjection,
