@@ -1198,7 +1198,7 @@ func (p *Projector) initSecurityContext(encryptLocalHost bool) error {
 func (p *Projector) registerSecurityCallback() error {
 	security.WaitForSecurityCtxInit()
 
-	fn := func(_, _, _ bool) error {
+	fn := func(_, _, refreshEncrypt bool) error {
 		select {
 		case <-p.enableSecurityChange:
 		default:
@@ -1210,11 +1210,13 @@ func (p *Projector) registerSecurityCallback() error {
 			return err
 		}
 
-		p.admind.CloseReqch()
-		// restart HTTPS server
-		p.admind.Stop()
-		time.Sleep(500 * time.Millisecond)
-		p.setupHTTP()
+		if refreshEncrypt {
+			// restart HTTPS server
+			p.admind.CloseReqch()
+			p.admind.Stop()
+			time.Sleep(500 * time.Millisecond)
+			p.setupHTTP()
+		}
 
 		return nil
 	}

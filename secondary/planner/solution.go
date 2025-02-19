@@ -194,7 +194,8 @@ func (s *Solution) addIndex(n *IndexerNode, idx *IndexUsage, meetConstraint bool
 	n.EvaluateNodeConstraint(s, meetConstraint, idx, nil)
 	n.Indexes = append(n.Indexes, idx)
 
-	n.AddMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()), idx.GetMemMin(s.UseLiveData()))
+	n.AddMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()),
+		idx.GetMemMin(s.UseLiveData()), idx.GetCodebookMemUsage(s.UseLiveData()))
 	n.AddCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 	n.AddDataSize(s, idx.GetDataSize(s.UseLiveData()))
 	n.AddDiskUsage(s, idx.GetDiskUsage(s.UseLiveData()))
@@ -214,7 +215,8 @@ func (s *Solution) removeIndex(n *IndexerNode, i int) {
 		n.Indexes = n.Indexes[:i]
 	}
 
-	n.SubtractMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()), idx.GetMemMin(s.UseLiveData()))
+	n.SubtractMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()),
+		idx.GetMemMin(s.UseLiveData()), idx.GetCodebookMemUsage(s.UseLiveData()))
 	n.SubtractCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 	n.SubtractDataSize(s, idx.GetDataSize(s.UseLiveData()))
 	n.SubtractDiskUsage(s, idx.GetDiskUsage(s.UseLiveData()))
@@ -541,11 +543,12 @@ func (s *Solution) PrintLayout() {
 
 		logging.Infof("")
 		logging.Infof("Indexer serverGroup:%v, nodeId:%v, nodeUUID:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, indexer.NodeUUID, s.UseLiveData())
-		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f, io:%v (%s), scan:%v drain:%v numIndexes:%v shardCompatVersion: %v",
+		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), codebookMem:%v (%s), data:%v (%s) cpu:%.4f, io:%v (%s), scan:%v drain:%v numIndexes:%v shardCompatVersion: %v",
 			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
 			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
 			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
 			indexer.GetMemMin(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemMin(s.UseLiveData()))),
+			indexer.GetCodebookMemUsage(s.UseLiveData()), formatMemoryStr(indexer.GetCodebookMemUsage(s.UseLiveData())),
 			indexer.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDataSize(s.UseLiveData()))),
 			indexer.GetCpuUsage(s.UseLiveData()),
 			indexer.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDiskUsage(s.UseLiveData()))),
@@ -569,11 +572,12 @@ func (s *Solution) PrintLayout() {
 					index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId,
 					index.IsShardProxy, index.NumInstances, index.AlternateShardIds, index.ShardIds)
 			}
-			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
+			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), codebookMem:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
 				index.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemOverhead(s.UseLiveData()))),
 				index.GetMemMin(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemMin(s.UseLiveData()))),
+				index.GetCodebookMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetCodebookMemUsage(s.UseLiveData()))),
 				index.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(index.GetDataSize(s.UseLiveData()))),
 				index.GetCpuUsage(s.UseLiveData()),
 				index.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetDiskUsage(s.UseLiveData()))),
@@ -591,11 +595,12 @@ func (s *Solution) PrintLayout() {
 					subIndex.initialNode == nil || subIndex.initialNode.NodeId != indexer.NodeId,
 					subIndex.IsShardProxy, subIndex.NumInstances, subIndex.AlternateShardIds,
 					subIndex.InitialAlternateShardIds, subIndex.ShardIds, subIndex.Instance.Defn.ShardIdsForDest)
-				logging.Infof("\t\t\t Sub-Index total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
+				logging.Infof("\t\t\t Sub-Index total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), codebookMem:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 					subIndex.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemTotal(s.UseLiveData()))),
 					subIndex.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemUsage(s.UseLiveData()))),
 					subIndex.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemOverhead(s.UseLiveData()))),
 					subIndex.GetMemMin(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemMin(s.UseLiveData()))),
+					subIndex.GetCodebookMemUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetCodebookMemUsage(s.UseLiveData()))),
 					subIndex.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetDataSize(s.UseLiveData()))),
 					subIndex.GetCpuUsage(s.UseLiveData()),
 					subIndex.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetDiskUsage(s.UseLiveData()))),
@@ -621,11 +626,12 @@ func (s *Solution) PrintCompactLayout() {
 
 		logging.Infof("")
 		logging.Infof("Indexer serverGroup:%v, nodeId:%v, nodeUUID:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, indexer.NodeUUID, s.UseLiveData())
-		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f, io:%v (%s), scan:%v drain:%v numIndexes:%v shardCompatVersion: %v",
+		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), codebookMem:%v (%s), data:%v (%s) cpu:%.4f, io:%v (%s), scan:%v drain:%v numIndexes:%v shardCompatVersion: %v",
 			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
 			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
 			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
 			indexer.GetMemMin(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemMin(s.UseLiveData()))),
+			indexer.GetCodebookMemUsage(s.UseLiveData()), formatMemoryStr(indexer.GetCodebookMemUsage(s.UseLiveData())),
 			indexer.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDataSize(s.UseLiveData()))),
 			indexer.GetCpuUsage(s.UseLiveData()),
 			indexer.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDiskUsage(s.UseLiveData()))),
@@ -649,11 +655,12 @@ func (s *Solution) PrintCompactLayout() {
 					index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId,
 					index.IsShardProxy, index.NumInstances, index.AlternateShardIds, index.ShardIds)
 			}
-			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
+			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), codebookMem:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
 				index.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemOverhead(s.UseLiveData()))),
 				index.GetMemMin(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemMin(s.UseLiveData()))),
+				index.GetCodebookMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetCodebookMemUsage(s.UseLiveData()))),
 				index.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(index.GetDataSize(s.UseLiveData()))),
 				index.GetCpuUsage(s.UseLiveData()),
 				index.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetDiskUsage(s.UseLiveData()))),
@@ -1774,7 +1781,7 @@ func (s *Solution) runSizeEstimation(placement PlacementMethod, newInstCount int
 						}
 					}
 
-					indexer.AddMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage)
+					indexer.AddMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage, index.EstimatedCodebookMem)
 					indexer.AddDataSize(s, index.EstimatedDataSize)
 				}
 			}
@@ -1941,7 +1948,7 @@ func (s *Solution) cleanupEstimation() {
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
 			if index.NeedsEstimation() {
-				indexer.SubtractMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage)
+				indexer.SubtractMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage, index.EstimatedCodebookMem)
 				indexer.SubtractDataSize(s, index.EstimatedDataSize)
 				index.EstimatedMemUsage = 0
 				index.EstimatedDataSize = 0

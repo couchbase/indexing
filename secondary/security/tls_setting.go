@@ -12,6 +12,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -415,6 +416,21 @@ func (p *SecurityContext) refresh(code uint64) error {
 	)
 }
 
+func hasCipherSuitesChanged(oldTLSPref *cbauth.TLSConfig, newTLSPref *cbauth.TLSConfig) bool {
+	var oldTLSCipherSuite, newTLSCipherSuite []uint16
+	var oldTLSPrefCipherSuite, newTLSPrefCipherSuite bool
+	if oldTLSPref != nil {
+		oldTLSCipherSuite = oldTLSPref.CipherSuites
+		oldTLSPrefCipherSuite = oldTLSPref.PreferServerCipherSuites
+	}
+	if newTLSPref != nil {
+		newTLSCipherSuite = newTLSPref.CipherSuites
+		newTLSPrefCipherSuite = newTLSPref.PreferServerCipherSuites
+	}
+	return oldTLSPrefCipherSuite != newTLSPrefCipherSuite ||
+		(!reflect.DeepEqual(oldTLSCipherSuite, newTLSCipherSuite))
+}
+
 func (p *SecurityContext) update(newSetting *SecuritySetting, refreshServerCert, refreshClientCert bool) error {
 
 	hasEnabled := false
@@ -422,7 +438,14 @@ func (p *SecurityContext) update(newSetting *SecuritySetting, refreshServerCert,
 	if oldSetting != nil {
 		hasEnabled = oldSetting.encryptionEnabled
 	}
-	refreshEncrypt := hasEnabled || hasEnabled != newSetting.encryptionEnabled
+	refreshEncrypt := hasEnabled != newSetting.encryptionEnabled
+
+	if oldSetting != nil {
+		// if Cipher suites have changed, then we should consider that as refreshEncrypt
+		// and restart the servers as in refreshServerCert we will only update the inmem configs
+		refreshEncrypt = refreshEncrypt ||
+			hasCipherSuitesChanged(oldSetting.tlsPreference, newSetting.tlsPreference)
+	}
 
 	UpdateSecuritySetting(newSetting)
 

@@ -652,6 +652,7 @@ func (s *IndexStats) SetPlannerFilters() {
 	s.bsNumRecsInMem.AddFilter(stats.PlannerFilter)
 	s.bsNumRecsOnDisk.AddFilter(stats.PlannerFilter)
 	s.combinedMemSzIndex.AddFilter(stats.PlannerFilter)
+	s.codebookSize.AddFilter(stats.PlannerFilter)
 }
 
 func (s *IndexStats) SetIndexStatusFilters() {

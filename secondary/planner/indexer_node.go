@@ -28,6 +28,8 @@ type IndexerNode struct {
 	MemOverhead uint64  `json:"memOverhead"`
 	DataSize    uint64  `json:"dataSize"`
 
+	MemCodebookUsage uint64 `json:"memCodebookUsage"`
+
 	// input/output: resource consumption (from live cluster)
 	ActualMemUsage    uint64  `json:"actualMemUsage"`
 	ActualMemOverhead uint64  `json:"actualMemOverhead"`
@@ -41,6 +43,8 @@ type IndexerNode struct {
 	ActualUnits       uint64  `json:"actualUnits"`
 	MandatoryQuota    uint64  `json:"mandatoryQuota"`
 	NumTenants        uint64  `json:"numTenants"`
+
+	ActualCodebookMemUsage uint64 `json:"actualCodebookMemUsage"`
 
 	// input: index residing on the node
 	Indexes []*IndexUsage `json:"indexes"`
@@ -184,6 +188,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.StorageMode = o.StorageMode
 	r.MemUsage = o.MemUsage
 	r.MemOverhead = o.MemOverhead
+	r.MemCodebookUsage = o.MemCodebookUsage
 	r.DataSize = o.DataSize
 	r.CpuUsage = o.CpuUsage
 	r.DiskUsage = o.DiskUsage
@@ -218,6 +223,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.ShardLimitPerTenant = o.ShardLimitPerTenant
 	r.ShardTenantMultiplier = o.ShardTenantMultiplier
 	r.UseShardStats = o.UseShardStats
+	r.ActualCodebookMemUsage = o.ActualCodebookMemUsage
 
 	r.ShardStats = o.ShardStats
 	r.ShardCompatVersion = o.ShardCompatVersion
@@ -298,14 +304,24 @@ func (o *IndexerNode) GetMemOverhead(useLive bool) uint64 {
 	return o.MemOverhead
 }
 
+// Get total memory taken by all the codebook present on this Node - only for Composite Vector Index
+func (o *IndexerNode) GetCodebookMemUsage(useLive bool) uint64 {
+
+	if useLive {
+		return o.ActualCodebookMemUsage
+	}
+
+	return o.MemCodebookUsage
+}
+
 // Get memory total
 func (o *IndexerNode) GetMemTotal(useLive bool) uint64 {
 
 	if useLive {
-		return o.ActualMemUsage + o.ActualMemOverhead
+		return o.ActualMemUsage + o.ActualMemOverhead + o.GetCodebookMemUsage(useLive)
 	}
 
-	return o.MemUsage + o.MemOverhead
+	return o.MemUsage + o.MemOverhead + o.GetCodebookMemUsage(useLive)
 }
 
 // Get memory min
@@ -319,15 +335,17 @@ func (o *IndexerNode) GetMemMin(useLive bool) uint64 {
 }
 
 // Add memory
-func (o *IndexerNode) AddMemUsageOverhead(s *Solution, usage uint64, overhead uint64, min uint64) {
+func (o *IndexerNode) AddMemUsageOverhead(s *Solution, usage uint64, overhead uint64, min uint64, codebookMemUsage uint64) {
 
 	if s.UseLiveData() {
 		o.ActualMemUsage += usage
 		o.ActualMemOverhead += overhead
 		o.ActualMemMin += min
+		o.ActualCodebookMemUsage += codebookMemUsage
 	} else {
 		o.MemUsage += usage
 		o.MemOverhead += overhead
+		o.MemCodebookUsage += codebookMemUsage
 	}
 }
 
@@ -341,15 +359,17 @@ func (o *IndexerNode) AddMemUsage(s *Solution, usage uint64) {
 }
 
 // Subtract memory
-func (o *IndexerNode) SubtractMemUsageOverhead(s *Solution, usage uint64, overhead uint64, min uint64) {
+func (o *IndexerNode) SubtractMemUsageOverhead(s *Solution, usage uint64, overhead uint64, min uint64, codebookMemUsage uint64) {
 
 	if s.UseLiveData() {
 		o.ActualMemUsage -= usage
 		o.ActualMemOverhead -= overhead
 		o.ActualMemMin -= min
+		o.ActualCodebookMemUsage -= codebookMemUsage
 	} else {
 		o.MemUsage -= usage
 		o.MemOverhead -= overhead
+		o.MemCodebookUsage -= codebookMemUsage
 	}
 }
 
@@ -682,7 +702,8 @@ func (o *IndexerNode) ComputeMinShardCapacity(config common.Config) {
 
 	if o.MinShardCapacity < minShardsPerNode {
 		logging.Warnf("IndexerNode::ComputeMinShardCapacity The number of shards are less than mininum number of shards: %v. "+
-			"Expanding the minShardCapacity to: %v, indexer node: %v", minShardsPerNode, o.MinShardCapacity, o.NodeId)
+			"Expanding the minShardCapacity from: %v to %v, indexer node: %v", minShardsPerNode,
+			o.MinShardCapacity, minShardsPerNode, o.NodeId)
 		o.MinShardCapacity = minShardsPerNode
 	}
 
