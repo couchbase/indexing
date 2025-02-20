@@ -184,7 +184,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	//start Storage Manager loop which listens to commands from its supervisor
 	go s.run()
 
-	s.redistributeMemoryQuota(int64(config.GetIndexerMemoryQuota()))
+	s.redistributeMemoryQuota(int64(config.GetIndexerMemoryQuota()), true)
 	go s.runMemoryQuotaDistributor()
 
 	return s, &MsgSuccess{}
@@ -2982,7 +2982,7 @@ func (s *storageMgr) runMemoryQuotaDistributor() {
 		case <-ticker.C:
 			newMemQuota = int64(s.config.GetIndexerMemoryQuota())
 
-			s.redistributeMemoryQuota(newMemQuota)
+			s.redistributeMemoryQuota(newMemQuota, false)
 
 		case stop := <-s.quotaDistCh:
 
@@ -2995,14 +2995,14 @@ func (s *storageMgr) runMemoryQuotaDistributor() {
 			newMemQuota = int64(s.config.GetIndexerMemoryQuota())
 			logging.Infof("storageMgr:runMemoryQuotaDistributor: Distributing quota [%d] due to request", newMemQuota)
 
-			s.redistributeMemoryQuota(newMemQuota)
+			s.redistributeMemoryQuota(newMemQuota, true)
 			s.quotaDistCh <- false
 
 		}
 	}
 }
 
-func (s *storageMgr) redistributeMemoryQuota(memQuota int64) {
+func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 	// Storage takes 90% of the quota
 	storageQuota := int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC)
 
@@ -3014,8 +3014,12 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64) {
 	}
 
 	if numBhives <= 0 {
-		// There are no bhive indexes, give all the quota to plasma
-		plasma.SetMemoryQuota(storageQuota)
+		if isRequest {
+			// There are no bhive indexes, give all the quota to plasma
+			plasma.SetMemoryQuota(storageQuota, true)
+		}
+
+		// If there are no bhive index, do not set the plasma quota periodically
 		return
 	}
 
@@ -3058,15 +3062,15 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64) {
 		remainingQuota = 0
 	}
 
-	logging.Infof("storageMgr:redistributeMemoryQuota: bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d]",
-		bhiveQuota, plasmaQuota, storageQuota)
+	logging.Infof("storageMgr:redistributeMemoryQuota: bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] "+
+		"pMandQuota[%d] bMandQuota[%d]", bhiveQuota, plasmaQuota, storageQuota, pMandQuota, bMandQuota)
 
 	if bhiveQuota > 0 {
 		bhive.SetMemoryQuota(bhiveQuota)
 	}
 
 	if plasmaQuota > 0 {
-		plasma.SetMemoryQuota(plasmaQuota)
+		plasma.SetMemoryQuota(plasmaQuota, false)
 	}
 }
 
