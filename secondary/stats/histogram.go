@@ -12,6 +12,7 @@ type Histogram struct {
 	vals       []int64
 	humanizeFn func(int64) string
 	bitmap     uint64
+	total      uint64
 }
 
 func (h *Histogram) Init(buckets []int64, humanizeFn func(int64) string) {
@@ -29,6 +30,8 @@ func (h *Histogram) Init(buckets []int64, humanizeFn func(int64) string) {
 	h.humanizeFn = humanizeFn
 
 	h.bitmap = AllStatsFilter
+
+	atomic.StoreUint64(&h.total, 0)
 }
 
 func (h *Histogram) InitLatency(buckets []int64, humanizeFn func(int64) string) {
@@ -48,11 +51,14 @@ func (h *Histogram) InitLatency(buckets []int64, humanizeFn func(int64) string) 
 	h.humanizeFn = humanizeFn
 
 	h.bitmap = AllStatsFilter
+
+	atomic.StoreUint64(&h.total, 0)
 }
 
 func (h *Histogram) Add(val int64) {
 	i := h.findBucket(val)
 	atomic.AddInt64(&h.vals[i], 1)
+	atomic.AddUint64(&h.total, uint64(val))
 }
 
 func (h *Histogram) Merge(src Histogram) {
@@ -90,18 +96,23 @@ func (h *Histogram) findBucket(val int64) int {
 }
 
 func (h *Histogram) String() string {
+	if atomic.LoadUint64(&h.total) == 0 {
+		return "\"\""
+	}
 	s := "\""
 	l := len(h.vals)
 	for i := 0; i < l; i++ {
+		val := atomic.LoadInt64(&h.vals[i])
+		if val == 0 {
+			continue
+		}
 
 		low := h.humanizeFn(h.buckets[i])
 		hi := h.humanizeFn(h.buckets[i+1])
 
-		s += fmt.Sprintf("(%s-%s)=%d", low, hi, h.vals[i])
-		if i != l-1 {
-			s += ", "
-		}
+		s += fmt.Sprintf("(%s-%s)=%d, ", low, hi, val)
 	}
+	s = s[:len(s)-2] // remove extra `, ` from the string
 	s += "\""
 	return s
 }
@@ -137,4 +148,8 @@ func (h *Histogram) GetValue() interface{} {
 		out[key] = h.vals[i]
 	}
 	return out
+}
+
+func (h *Histogram) GetTotal() uint64 {
+	return atomic.LoadUint64(&h.total)
 }

@@ -131,21 +131,27 @@ func (m *monitor) logStats(logtick time.Duration) {
 				continue
 			}
 
-			scandur := atomic.LoadInt64(&gsi.scandur)
-			blockeddur := atomic.LoadInt64(&gsi.blockeddur)
-			throttledur := atomic.LoadInt64(&gsi.throttledur)
-			primedur := atomic.LoadInt64(&gsi.primedur)
+			scandur := gsi.scandur.GetTotal()
+			scandurdist := gsi.scandur.String()
+			blockeddur := gsi.blockeddur.GetTotal()
+			blockeddurdist := gsi.blockeddur.String()
+			throttledur := gsi.throttledur.GetTotal()
+			throttledurdist := gsi.throttledur.String()
+			primedur := gsi.primedur.GetTotal()
+			primedurdist := gsi.primedur.String()
 			totalbackfills := atomic.LoadInt64(&gsi.totalbackfills)
 			backfillSize := atomic.LoadInt64(&gsi.backfillSize)
 
 			fmsg := `%v logstats %q {` +
-				`"gsi_scan_count":%v,"gsi_scan_duration":%v,` +
-				`"gsi_throttle_duration":%v,` +
-				`"gsi_prime_duration":%v,"gsi_blocked_duration":%v,` +
+				`"gsi_scan_count":%v,"gsi_scan_duration":%v,"gsi_scan_duration_dist":%v,` +
+				`"gsi_throttle_duration":%v,"gsi_throttle_duration_dist":%v,` +
+				`"gsi_prime_duration":%v,"gsi_prime_duration_dist":%v,` +
+				`"gsi_blocked_duration":%v,"gsi_blocked_duration_dist":%v,` +
 				`"gsi_total_temp_files":%v,"gsi_backfill_size":%v}`
 			l.Infof(
-				fmsg, gsi.logPrefix, gsi.bucket, totalscans, scandur,
-				throttledur, primedur, blockeddur, totalbackfills, backfillSize)
+				fmsg, gsi.logPrefix, gsi.bucket, totalscans, scandur, scandurdist,
+				throttledur, throttledurdist, primedur, primedurdist,
+				blockeddur, blockeddurdist, totalbackfills, backfillSize)
 
 			atomic.StoreInt64(&gsi.prevTotalScans, totalscans)
 		}

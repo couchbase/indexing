@@ -24,6 +24,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	l "github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/stats"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -103,11 +104,10 @@ var n1ql2GsiConsistency = map[datastore.ScanConsistency]c.Consistency{
 
 // contains all index loaded via gsi cluster.
 type gsiKeyspace struct {
-	// for 8-byte alignment fot atomic access.
-	scandur        int64
-	blockeddur     int64
-	throttledur    int64
-	primedur       int64
+	scandur        stats.Histogram
+	blockeddur     stats.Histogram
+	throttledur    stats.Histogram
+	primedur       stats.Histogram
 	totalscans     int64
 	backfillSize   int64
 	totalbackfills int64
@@ -146,6 +146,15 @@ func NewGSIIndexer(clusterURL, namespace, keyspace string,
 	return NewGSIIndexer2(clusterURL, namespace, keyspace, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, securityconf)
 }
 
+// end-end scan request latency
+// 0-2ms, 2ms-5ms, 5ms-10ms, 10ms-20ms, 20ms-30ms, 30ms-50ms, 50ms-100ms, 100ms-1000ms,
+// 1000ms-5000ms, 5000ms-10000ms, 10000ms-50000ms, 50000ms-Inf
+var scanReqLatencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100, 1000, 5000, 10000, 50000}
+
+func prettyTimeToString(v int64) string {
+	return fmt.Sprintf("%vms", v/int64(time.Millisecond))
+}
+
 // During cluster version < 7.0 (mixed mode), scope and keyspace
 // are expected to be only _default as non-default collections cannot be
 // created during mixed mode.
@@ -163,6 +172,11 @@ func NewGSIIndexer2(clusterURL, namespace, bucket, scope, keyspace string,
 		indexes:        make(map[uint64]datastore.Index), // defnID -> index
 		primaryIndexes: make(map[uint64]datastore.PrimaryIndex),
 	}
+
+	gsi.scandur.InitLatency(scanReqLatencyDist, prettyTimeToString)
+	gsi.blockeddur.InitLatency(scanReqLatencyDist, prettyTimeToString)
+	gsi.throttledur.InitLatency(scanReqLatencyDist, prettyTimeToString)
+	gsi.primedur.InitLatency(scanReqLatencyDist, prettyTimeToString)
 
 	tm := time.Now().UnixNano()
 	gsi.logPrefix = fmt.Sprintf("GSIC[%s/%s-%s-%s-%v]", namespace, bucket, scope, keyspace, tm)
@@ -1271,7 +1285,7 @@ func (si *secondaryIndex) Scan(
 		}
 	}
 	atomic.AddInt64(&si.gsi.totalscans, 1)
-	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
+	si.gsi.scandur.Add(int64(time.Since(starttm)))
 }
 
 // Scan implement PrimaryIndex{} interface.
@@ -1315,7 +1329,7 @@ func (si *secondaryIndex) ScanEntries(
 	}
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
-	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
+	si.gsi.scandur.Add(int64(time.Since(starttm)))
 }
 
 func (si *secondaryIndex) CheckScheduled() error {
@@ -1390,7 +1404,7 @@ func (si *secondaryIndex2) Scan2(
 	}
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
-	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
+	si.gsi.scandur.Add(int64(time.Since(starttm)))
 
 	l.Debugf("scan2: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
 		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
@@ -1603,7 +1617,7 @@ func (si *secondaryIndex3) Scan3(
 	}
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
-	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
+	si.gsi.scandur.Add(int64(time.Since(starttm)))
 
 	l.Debugf("scan3: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
 		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
@@ -1881,7 +1895,7 @@ func makeResponsehandler(
 			}
 			l.Tracef("%v temp file read %v entries\n", lprefix, skeys.GetLength())
 			if primed == false {
-				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
+				si.gsi.primedur.Add(int64(time.Since(starttm)))
 				primed = true
 			}
 
@@ -1891,7 +1905,7 @@ func makeResponsehandler(
 			}
 
 			if ln > 0 && skeys.GetLength() > 0 {
-				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
+				si.gsi.throttledur.Add(int64(time.Since(ticktm)))
 			}
 			cont, err := broker.SendEntries(id, pkeys, &skeys)
 			if err != nil {
@@ -2031,11 +2045,11 @@ func makeResponsehandler(
 		} else {
 			l.Tracef("%v response cap:%v len:%v entries:%v\n", lprefix, cp, ln, skeys.GetLength())
 			if primed == false {
-				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
+				si.gsi.primedur.Add(int64(time.Since(starttm)))
 				primed = true
 			}
 			if int(ln) > 0 && skeys.GetLength() > 0 {
-				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
+				si.gsi.throttledur.Add(int64(time.Since(ticktm)))
 			}
 			cont, err := broker.SendEntries(id, pkeys, skeys)
 			if err != nil {
@@ -2304,7 +2318,7 @@ func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte,
 		blocked = false
 	}
 
-	atomic.AddInt64(&si.gsi.blockeddur, blockedtm)
+	si.gsi.blockeddur.Add(blockedtm)
 	broker.IncrementSendCount()
 	return true, retBuf
 }
