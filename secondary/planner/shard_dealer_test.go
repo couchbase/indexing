@@ -3,6 +3,7 @@ package planner
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"reflect"
 	"testing"
 	"time"
@@ -57,7 +58,7 @@ func createDummyIndexUsage(params createIdxParam) *IndexUsage {
 
 func createDummyReplicaIndexUsages(params createIdxParam) []*IndexUsage {
 	var indexes = make([]*IndexUsage, 0, params.numReplicas)
-	for i := 1; i <= params.numReplicas; i++ {
+	for i := 1; i <= params.numReplicas+1; i++ {
 		var index = createDummyIndexUsage(params)
 		index.InstId = c.IndexInstId(time.Now().UnixNano())
 		index.Instance.InstId = index.InstId
@@ -69,6 +70,9 @@ func createDummyReplicaIndexUsages(params createIdxParam) []*IndexUsage {
 
 func createDummyPartitionedIndexUsages(params createIdxParam) []*IndexUsage {
 	var partitions = make([]*IndexUsage, 0, params.numPartns)
+	if params.numPartns == 0 {
+		return []*IndexUsage{createDummyIndexUsage(params)}
+	}
 	for i := 1; i <= params.numPartns; i++ {
 		var partn = createDummyIndexUsage(params)
 		partn.PartnId = c.PartitionId(i)
@@ -79,8 +83,8 @@ func createDummyPartitionedIndexUsages(params createIdxParam) []*IndexUsage {
 }
 
 func createDummyReplicaPartitionedIndexUsage(params createIdxParam) [][]*IndexUsage {
-	var indexes = make([][]*IndexUsage, 0, params.numReplicas)
-	for i := 1; i <= params.numReplicas; i++ {
+	var indexes = make([][]*IndexUsage, 0, params.numReplicas+1)
+	for i := 1; i <= params.numReplicas+1; i++ {
 		var instID = c.IndexInstId(time.Now().UnixNano())
 		var partitions = createDummyPartitionedIndexUsages(params)
 		for _, partn := range partitions {
@@ -89,6 +93,7 @@ func createDummyReplicaPartitionedIndexUsage(params createIdxParam) [][]*IndexUs
 			partn.Instance.ReplicaId = i
 			partn.Instance.Defn.NumReplica = uint32(params.numReplicas)
 		}
+		indexes = append(indexes, partitions)
 	}
 	return indexes
 }
@@ -221,33 +226,86 @@ func createDummyIndexerNode(nodeID string, cips ...createIdxParam) *IndexerNode 
 	return &indexerNode
 }
 
-func getReplicaMapsForIndexerNode(
-	node *IndexerNode,
+func createDummyIndexerNodes(cips ...createIdxParam) []*IndexerNode {
+	var nodes = make([]*IndexerNode, 0) // replicaID to IndexerNode map
+
+	getNNodes := func(n int) []*IndexerNode {
+		if len(nodes) < n {
+			for i := len(nodes); i < n; i++ {
+				nodes = append(nodes, createDummyIndexerNode(fmt.Sprintf("%v", i)))
+			}
+		}
+
+		var selNodes = make([]*IndexerNode, n)
+		var randoStart = rand.Intn(len(nodes))
+		for i := 0; i < n; i++ {
+			selNodes[i] = nodes[(randoStart+i)%len(nodes)]
+		}
+
+		return selNodes
+	}
+
+	shuffleNodes := func(nodes []*IndexerNode) {
+		rand.Shuffle(len(nodes), func(i, j int) {
+			nodes[i], nodes[j] = nodes[j], nodes[i]
+		})
+	}
+
+	for j, cip := range cips {
+		for i := 0; i < int(cip.count); i++ {
+			cip.defnid = uint64(j + i + 1)
+			var indexes = createDummyReplicaPartitionedIndexUsage(cip)
+
+			var nodesForDist = getNNodes(cip.numReplicas + 1)
+			var partnCount = cip.numPartns
+			if partnCount == 0 {
+				partnCount++
+			}
+			for i := 0; i < partnCount; i++ {
+				var nodesForThisReplica = make([]*IndexerNode, len(nodesForDist))
+				copy(nodesForThisReplica, nodesForDist)
+				shuffleNodes(nodesForThisReplica)
+
+				for j := 0; j <= cip.numReplicas; j++ {
+					indexes[j][i].initialNode = nodesForThisReplica[j]
+					nodesForThisReplica[j].Indexes = append(nodesForThisReplica[j].Indexes, indexes[j][i])
+				}
+			}
+		}
+	}
+
+	return nodes
+}
+
+func getReplicaMapsForIndexerNodes(
+	nodes ...*IndexerNode,
 ) map[c.IndexDefnId]map[c.PartitionId]map[int]map[*IndexerNode]*IndexUsage {
 	var defnMap = make(map[c.IndexDefnId]map[c.PartitionId]map[int]map[*IndexerNode]*IndexUsage)
 
-	for _, partn := range node.Indexes {
-		if defnMap[partn.DefnId] == nil {
-			defnMap[partn.DefnId] = make(map[c.PartitionId]map[int]map[*IndexerNode]*IndexUsage)
-		}
+	for _, node := range nodes {
+		for _, partn := range node.Indexes {
+			if defnMap[partn.DefnId] == nil {
+				defnMap[partn.DefnId] = make(map[c.PartitionId]map[int]map[*IndexerNode]*IndexUsage)
+			}
 
-		if defnMap[partn.DefnId][partn.PartnId] == nil {
-			defnMap[partn.DefnId][partn.PartnId] = make(map[int]map[*IndexerNode]*IndexUsage)
-		}
+			if defnMap[partn.DefnId][partn.PartnId] == nil {
+				defnMap[partn.DefnId][partn.PartnId] = make(map[int]map[*IndexerNode]*IndexUsage)
+			}
 
-		if defnMap[partn.DefnId][partn.PartnId][partn.Instance.ReplicaId] == nil {
-			defnMap[partn.DefnId][partn.PartnId][partn.Instance.ReplicaId] = make(
-				map[*IndexerNode]*IndexUsage,
-			)
-		}
+			if defnMap[partn.DefnId][partn.PartnId][partn.Instance.ReplicaId] == nil {
+				defnMap[partn.DefnId][partn.PartnId][partn.Instance.ReplicaId] = make(
+					map[*IndexerNode]*IndexUsage,
+				)
+			}
 
-		defnMap[partn.DefnId][partn.PartnId][partn.Instance.ReplicaId][node] = partn
+			defnMap[partn.DefnId][partn.PartnId][partn.Instance.ReplicaId][node] = partn
+		}
 	}
 
 	return defnMap
 }
 
-func TestSingleNodePass0(t *testing.T) {
+func TestSingleNode_Pass0(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Basic-AllPrimary", func(t0 *testing.T) {
@@ -265,7 +323,7 @@ func TestSingleNodePass0(t *testing.T) {
 
 		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
 
-		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 
 		for defnID, repMaps := range replicaMaps {
 			for partnID, repmap := range repMaps {
@@ -363,7 +421,7 @@ func TestSingleNodePass0(t *testing.T) {
 
 			var alternateShardIDs = make(map[string]bool)
 
-			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+			var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
@@ -429,7 +487,7 @@ func TestSingleNodePass0(t *testing.T) {
 
 			var alternateShardIDs = make(map[string]bool)
 
-			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+			var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
@@ -478,7 +536,7 @@ func TestSingleNodePass0(t *testing.T) {
 
 	})
 
-	// TODO: add partitioned index tests
+	// add partitioned index tests
 	// same as above test but we here use partitions instead of multiple indexes
 	t.Run("PartitionedIndexes", func(t0 *testing.T) {
 		t0.Parallel()
@@ -501,7 +559,7 @@ func TestSingleNodePass0(t *testing.T) {
 
 			var alternateShardIDs = make(map[string]bool)
 
-			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+			var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
@@ -580,7 +638,7 @@ func TestSingleNodePass0(t *testing.T) {
 
 			var alternateShardIDs = make(map[string]bool)
 
-			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+			var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
@@ -628,7 +686,7 @@ func TestSingleNodePass0(t *testing.T) {
 	})
 }
 
-func TestSingleNodePass1(t *testing.T) {
+func TestSingleNode_Pass1(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Basic-AllPrimary", func(t0 *testing.T) {
@@ -647,7 +705,7 @@ func TestSingleNodePass1(t *testing.T) {
 
 		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
 
-		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 
 		for defnID, repMaps := range replicaMaps {
 			for partnID, repmap := range repMaps {
@@ -718,7 +776,7 @@ func TestSingleNodePass1(t *testing.T) {
 
 		var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
 
-		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 		var alternateShardIDs = make(map[string]bool)
 
 		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
@@ -811,7 +869,7 @@ func TestSingleNodePass1(t *testing.T) {
 
 			var alternateShardIDs = make(map[string]bool)
 
-			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+			var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
@@ -888,7 +946,7 @@ func TestSingleNodePass1(t *testing.T) {
 
 			var alternateShardIDs = make(map[string]bool)
 
-			var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+			var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
@@ -953,7 +1011,7 @@ func TestSingleNodePass1(t *testing.T) {
 		}
 		var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
 
-		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 		var alternateShardIDs = make(map[string]bool)
 
 		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
@@ -1051,7 +1109,7 @@ func TestSingleNodePass1(t *testing.T) {
 	})
 }
 
-func TestSingleNodePass2(t *testing.T) {
+func TestSingleNode_Pass2(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Basic-AllPrimary", func(t0 *testing.T) {
@@ -1067,7 +1125,7 @@ func TestSingleNodePass2(t *testing.T) {
 		var cip = createIdxParam{count: shardCapacity / 10, isPrimary: true}
 		var indexerNode = createDummyIndexerNode(t0.Name(), cip)
 
-		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 
 		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
 
@@ -1134,7 +1192,7 @@ func TestSingleNodePass2(t *testing.T) {
 		var cip = createIdxParam{count: testShardCapacity}
 		var indexerNode = createDummyIndexerNode(t0.Name(), cip)
 
-		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
 		var alternateShardIDs = make(map[string]bool)
 
@@ -1246,7 +1304,7 @@ func TestSingleNodePass2(t *testing.T) {
 		}
 		var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
 
-		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 		var alternateShardIDs = make(map[string]bool)
 
 		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
@@ -1362,7 +1420,7 @@ func TestSingleNodePass2(t *testing.T) {
 		}
 		var indexerNode = createDummyIndexerNode(t0.Name(), cips...)
 
-		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 		var alternateShardIDs = make(map[string]bool)
 
 		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
@@ -1411,7 +1469,7 @@ func TestSingleNodePass2(t *testing.T) {
 
 }
 
-func TestSingleNodePass3(t *testing.T) {
+func TestSingleNode_Pass3(t *testing.T) {
 	t.Parallel()
 
 	var testShardCapacity uint64 = 10
@@ -1431,7 +1489,7 @@ func TestSingleNodePass3(t *testing.T) {
 			testShardCapacity,
 			createNewAlternateShardIDGenerator(), nil)
 		var indexerNode = createDummyIndexerNode(t.Name(), cips...)
-		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
 		var alternateShardIDs = make(map[string]bool)
 
@@ -1540,7 +1598,7 @@ func TestSingleNodePass3(t *testing.T) {
 			createNewAlternateShardIDGenerator(), nil)
 
 		var indexerNode = createDummyIndexerNode(t.Name(), cips...)
-		var replicaMaps = getReplicaMapsForIndexerNode(indexerNode)
+		var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
 		var alternateShardIDs = make(map[string]bool)
 
@@ -2345,6 +2403,261 @@ func (psc1 *pseudoShardContainer) String() string {
 	return fmt.Sprintf("ShardContainer: {totalPartitions: %v, memUsage: %v,"+
 		"dataSize: %v, diskUsage: %v, insts: (%v)}", psc1.totalPartitions,
 		psc1.memUsage, psc1.dataSize, psc1.diskUsage, psc1.insts)
+}
+
+// TestMultiNode_Pass0 tests the shard dealer for multi node setup for only Pass 0 cases
+func TestMultiNode_Pass0(t *testing.T) {
+	t.Parallel()
+
+	t.Run("BasicAllPrimary", func(t0 *testing.T) {
+		t0.Parallel()
+
+		var dealer = NewShardDealer(
+			minShardsPerNode,
+			minPartitionsPerShard,
+			maxDiskUsagePerShard,
+			shardCapacity,
+			createNewAlternateShardIDGenerator(),
+			nil,
+		)
+
+		var cips = []createIdxParam{
+			{count: minShardsPerNode, isPrimary: true, numReplicas: int(rand.Intn(6))},
+		}
+
+		var cluster = createDummyIndexerNodes(cips...)
+
+		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+
+		var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
+		for defnID, repMaps := range replicaMaps {
+			for partnID, repmap := range repMaps {
+				slotID := dealer.GetSlot(defnID, partnID, repmap)
+
+				if slotID == 0 {
+					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+						t0.Name(), repmap)
+				}
+
+				slotIDs[slotID] = true
+			}
+		}
+
+		if len(slotIDs) != int(minShardsPerNode) {
+			t0.Fatalf("%v slots created are %v but should have been only %v slots",
+				t0.Name(), slotIDs, minShardsPerNode)
+		}
+
+		if len(dealer.partnSlots) != int(minShardsPerNode) {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+				t0.Name(),
+				dealer.partnSlots,
+				minShardsPerNode,
+			)
+		}
+		if len(dealer.slotsMap) != int(minShardsPerNode) {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
+				t0.Name(),
+				dealer.slotsMap,
+				minShardsPerNode,
+			)
+		}
+
+		for _, indexerNode := range cluster {
+			if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != minShardsPerNode {
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
+					t0.Name(),
+					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+					minShardsPerNode,
+				)
+			}
+		}
+
+		for _, repMap := range dealer.slotsMap {
+			if len(repMap) != len(cluster) {
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - replica map length is %v (%v) but should have been only %v",
+					t0.Name(),
+					len(repMap), repMap,
+					len(cluster),
+				)
+			}
+		}
+
+		assert.NoError(
+			t0,
+			validateShardDealerInternals(dealer, cluster),
+			"internal shard dealer validation failed for basic test",
+		)
+	})
+
+	t.Run("PrimaryAndSecondary", func(t0 *testing.T) {
+		t0.Parallel()
+
+		var dealer = NewShardDealer(
+			minShardsPerNode,
+			minPartitionsPerShard,
+			maxDiskUsagePerShard,
+			shardCapacity,
+			createNewAlternateShardIDGenerator(),
+			nil,
+		)
+
+		var highReplicaCount = rand.Intn(10)
+		var cips = []createIdxParam{
+			{count: minShardsPerNode / 4, isPrimary: true, numReplicas: highReplicaCount},
+			{count: minShardsPerNode/2 - (minShardsPerNode / 4), numReplicas: rand.Intn(highReplicaCount)},
+		}
+
+		var cluster = createDummyIndexerNodes(cips...)
+
+		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+		var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
+		for defnID, repMaps := range replicaMaps {
+			for partnID, repmap := range repMaps {
+				slotID := dealer.GetSlot(defnID, partnID, repmap)
+
+				if slotID == 0 {
+					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+						t0.Name(), repmap)
+				}
+
+				slotIDs[slotID] = true
+			}
+		}
+
+		var highSlotCount = int(minShardsPerNode / 2)
+		var lowSlotCount = int((minShardsPerNode - 1) / 2)
+
+		if len(slotIDs) != highSlotCount && len(slotIDs) != lowSlotCount {
+			t0.Fatalf("%v slots created are %v but should have been only %v/%v slots",
+				t0.Name(), slotIDs,
+				highSlotCount,
+				lowSlotCount,
+			)
+		}
+		if len(dealer.partnSlots) != highSlotCount &&
+			len(dealer.partnSlots) != lowSlotCount {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v/%v defns",
+				t0.Name(),
+				dealer.partnSlots,
+				highSlotCount,
+				lowSlotCount,
+			)
+		}
+		if len(dealer.slotsMap) != highSlotCount &&
+			len(dealer.slotsMap) != lowSlotCount {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v/%v slots",
+				t0.Name(),
+				dealer.slotsMap,
+				highSlotCount,
+				lowSlotCount,
+			)
+		}
+		for _, indexerNode := range cluster {
+			if dealer.nodeToShardCountMap[indexerNode.NodeUUID] > minShardsPerNode {
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - node slot count is %v but should have been < %v",
+					t0.Name(),
+					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+					minShardsPerNode,
+				)
+			}
+		}
+
+		assert.NoError(
+			t0,
+			validateShardDealerInternals(dealer, cluster),
+			"internal shard dealer validation failed for primary and secondary mix tests",
+		)
+	})
+
+	t.Run("PartitionedIndexes", func(t0 *testing.T) {
+		t0.Parallel()
+
+		var dealer = NewShardDealer(
+			minShardsPerNode,
+			minPartitionsPerShard,
+			maxDiskUsagePerShard,
+			shardCapacity,
+			createNewAlternateShardIDGenerator(),
+			nil,
+		)
+
+		var highReplicaCount = rand.Intn(10)
+		var cips = []createIdxParam{
+			{count: 1, isPrimary: true, numReplicas: highReplicaCount, numPartns: int(minShardsPerNode / 4)},
+			{count: 1, numReplicas: rand.Intn(highReplicaCount), numPartns: int(minShardsPerNode/2 - minShardsPerNode/4)},
+		}
+
+		var cluster = createDummyIndexerNodes(cips...)
+
+		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+		var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
+		for defnID, repMaps := range replicaMaps {
+			for partnID, repmap := range repMaps {
+				slotID := dealer.GetSlot(defnID, partnID, repmap)
+
+				if slotID == 0 {
+					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+						t0.Name(), repmap)
+				}
+
+				slotIDs[slotID] = true
+			}
+		}
+
+		var highSlotCount = int(minShardsPerNode / 2)
+		var lowSlotCount = int((minShardsPerNode - 1) / 2)
+
+		if len(slotIDs) != highSlotCount && len(slotIDs) != lowSlotCount {
+			t0.Fatalf("%v slots created are %v but should have been only %v/%v slots",
+				t0.Name(), slotIDs,
+				highSlotCount,
+				lowSlotCount,
+			)
+		}
+		if len(dealer.partnSlots) != 2 {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+				t0.Name(),
+				dealer.partnSlots,
+				2,
+			)
+		}
+		if len(dealer.slotsMap) != highSlotCount &&
+			len(dealer.slotsMap) != lowSlotCount {
+			t0.Fatalf(
+				"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v/%v slots",
+				t0.Name(),
+				dealer.slotsMap,
+				highSlotCount,
+				lowSlotCount,
+			)
+		}
+		for _, indexerNode := range cluster {
+			if dealer.nodeToShardCountMap[indexerNode.NodeUUID] > minShardsPerNode {
+				t0.Fatalf(
+					"%v shard dealer book keeping mismatch - node slot count is %v but should have been < %v",
+					t0.Name(),
+					dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+					minShardsPerNode,
+				)
+			}
+		}
+
+		assert.NoError(
+			t0,
+			validateShardDealerInternals(dealer, cluster),
+			"internal shard dealer validation failed for primary and secondary mix tests",
+		)
+	})
+
 }
 
 // TODO: add multinode replica index based tests
