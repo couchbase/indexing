@@ -96,18 +96,23 @@ func (h *Histogram) findBucket(val int64) int {
 }
 
 func (h *Histogram) String() string {
+	if atomic.LoadUint64(&h.total) == 0 {
+		return "\"\""
+	}
 	s := "\""
 	l := len(h.vals)
 	for i := 0; i < l; i++ {
+		val := atomic.LoadInt64(&h.vals[i])
+		if val == 0 {
+			continue
+		}
 
 		low := h.humanizeFn(h.buckets[i])
 		hi := h.humanizeFn(h.buckets[i+1])
 
-		s += fmt.Sprintf("(%s-%s)=%d", low, hi, h.vals[i])
-		if i != l-1 {
-			s += ", "
-		}
+		s += fmt.Sprintf("(%s-%s)=%d, ", low, hi, val)
 	}
+	s = s[:len(s)-2] // remove extra `, ` from the string
 	s += "\""
 	return s
 }
