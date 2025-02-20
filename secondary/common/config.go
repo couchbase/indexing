@@ -4425,9 +4425,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.bhive.LSSCleanerInterval": ConfigValue{
-		60000,
+		1000,
 		"Controls how frequently log cleaner will check the fragmentation. It is the duration between checks in ms.",
-		60000,
+		1000,
 		false,
 		false,
 	},
@@ -4439,9 +4439,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.bhive.LSSCleanerMinSize": ConfigValue{
-		16 * 1024 * 1024,
+		2 * 1024 * 1024,
 		"The minimum used space in bytes to start cleaning the log",
-		16 * 1024 * 1024,
+		2 * 1024 * 1024,
 		false,
 		false,
 	},
