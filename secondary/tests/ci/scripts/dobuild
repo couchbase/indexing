@@ -136,6 +136,12 @@ git checkout master 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout magm
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 note_version magma $WORKSPACE/magma
 
+cd $WORKSPACE/fusion
+echo "Switching fusion to main"
+git checkout main 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout fusion/main"
+git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
+note_version fusion $WORKSPACE/fusion
+
 cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
 echo "Switching gometa to master"
 git checkout master 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout master"
