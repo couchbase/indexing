@@ -357,6 +357,10 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.EnableRollbackFilterMerge = slice.sysconf["bhive.EnableRollbackFilterMerge"].Bool()
 	cfg.EnableRollbackFilterTrim = slice.sysconf["bhive.EnableRollbackFilterTrim"].Bool()
 	cfg.EnableRollbackFilterPrune = slice.sysconf["bhive.EnableRollbackFilterPrune"].Bool()
+	cfg.AutoLSSCleaning = slice.sysconf["bhive.enableAutoLSSCleaning"].Bool()
+	cfg.LSSCleanerInterval = time.Duration(slice.sysconf["bhive.LSSCleanerInterval"].Int()) * time.Millisecond
+	cfg.LSSCleanerThreshold = float32(slice.sysconf["bhive.LSSCleanerThreshold"].Float64())
+	cfg.LSSCleanerMinSize = int64(slice.sysconf["bhive.LSSCleanerMinSize"].Int())
 
 	cfg.NumWriters = slice.maxNumWriters
 
