@@ -283,6 +283,9 @@ func (cb *codebookIVFPQ) ComputeDistance(qvec []float32, fvecs []float32, dist [
 		// to convert to distance measure negate it.
 		if err == nil {
 			for i := range dist {
+				// Done to prevent floating-point precision errors from producing values
+				// slightly outside the valid [-1, 1] range.
+				dist[i] = clip(dist[i], -1, 1)
 				dist[i] = -1 * dist[i]
 			}
 		}
@@ -428,4 +431,14 @@ func recoverCodebookIVFPQ(data []byte) (c.Codebook, error) {
 
 	return cb, nil
 
+}
+
+func clip(value, min, max float32) float32 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }

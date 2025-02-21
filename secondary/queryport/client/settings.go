@@ -68,6 +68,9 @@ type ClientSettings struct {
 	useShardDealer        atomic.Bool
 	minShardsPerNode      uint64
 	minPartitionsPerShard atomic.Pointer[map[uint64]uint64]
+
+	// Vector settings
+	rerankFactor int32
 }
 
 func NewClientSettings(needRefresh bool, toolsConfig common.Config) *ClientSettings {
@@ -419,6 +422,13 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.allowNodesClause, 0)
 	}
 
+	rerankFactor := int32(config["indexer.scan.vector.rerank_factor"].Int())
+	if rerankFactor > 0 {
+		s.rerankFactor = rerankFactor
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for rerankFactor=%v", rerankFactor)
+	}
+
 	setShardDealerConfig(s, config)
 }
 
@@ -544,6 +554,10 @@ func (s *ClientSettings) MinShardsPerNode() uint64 {
 
 func (s *ClientSettings) MinPartitionsPerShard() map[uint64]uint64 {
 	return *s.minPartitionsPerShard.Load()
+}
+
+func (s *ClientSettings) RerankFactor() int32 {
+	return atomic.LoadInt32(&s.rerankFactor)
 }
 
 func setShardDealerConfig(s *ClientSettings, config common.Config) {

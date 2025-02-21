@@ -2723,6 +2723,11 @@ func (o *MetadataProvider) prepareIndexSpec(defn *c.IndexDefn) *planner.IndexSpe
 	// 4) if cluster storage mode is not available, then ignore sizing input.
 	spec.Using = o.settings.StorageMode()
 
+	if defn.IsVectorIndex {
+		spec.IsCompositeVectorIndex = defn.VectorMeta.IsCompositeIndex
+		spec.IsBhiveIndex = defn.VectorMeta.IsBhive
+	}
+
 	return &spec
 }
 

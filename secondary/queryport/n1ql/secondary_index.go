@@ -1043,8 +1043,9 @@ type secondaryIndex struct {
 	numCentroids       int
 	numPartition       int
 
-	isBhive bool
-	include expression.Expressions
+	isBhive      bool
+	rerankFactor int
+	include      expression.Expressions
 }
 
 // for metadata-provider.
@@ -1976,6 +1977,15 @@ func (si *secondaryIndex6) AllowRerank() bool {
 	return si.IsBhive()
 }
 
+func (si *secondaryIndex6) RerankFactor() int32 {
+	if si.AllowRerank() {
+		config := si.gsi.gsiClient.Settings()
+		return config.RerankFactor()
+	} else {
+		return -1
+	}
+}
+
 // Scan6 implements Index6 interface
 func (si *secondaryIndex6) Scan6(
 	requestId string,
@@ -2887,6 +2897,16 @@ func gsistatnameton1ql(name string) (datastore.IndexStatType, bool) {
 		return datastore.IX_STAT_AVG_PAGE_SIZE, true
 	case qclient.STAT_LAST_RESET_TIME:
 		return datastore.IX_STAT_LAST_RESET_TS, true
+	case qclient.STAT_BHIVE_GRAPH_RES_RATIO:
+		return datastore.IX_STAT_BHIVE_GRAPH_RES_RATIO, true
+	case qclient.STAT_BHIVE_GRAPH_HIT_RATIO:
+		return datastore.IX_STAT_BHIVE_GRAPH_HIT_RATIO, true
+	case qclient.STAT_BHIVE_NUM_VEC_OPS:
+		return datastore.IX_STAT_BHIVE_NUM_VEC_OPS, true
+	case qclient.STAT_BHIVE_GRAPH_DISK_SIZE:
+		return datastore.IX_STAT_BHIVE_GRAPH_DISK_SIZE, true
+	case qclient.STAT_BHIVE_FULL_VEC_SIZE:
+		return datastore.IX_STAT_BHIVE_FULL_VEC_SIZE, true
 	}
 	return datastore.IndexStatType(""), false
 }
