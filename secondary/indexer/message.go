@@ -3375,6 +3375,7 @@ type MsgIndexTrainingDone struct {
 	respCh       MsgChannel
 
 	nlistInstPartMap map[common.IndexInstId]map[common.PartitionId]int
+	instTrainDurMap  map[common.IndexInstId]int64
 }
 
 func (m *MsgIndexTrainingDone) GetMsgType() MsgType {
@@ -3408,6 +3409,10 @@ func (m *MsgIndexTrainingDone) GetReqCtx() *c.MetadataRequestContext {
 // For propagating change in number of centroids if required
 func (m *MsgIndexTrainingDone) GetNlistMap() map[common.IndexInstId]map[common.PartitionId]int {
 	return m.nlistInstPartMap
+}
+
+func (m *MsgIndexTrainingDone) GetTrainDur() map[common.IndexInstId]int64 {
+	return m.instTrainDurMap
 }
 
 type MsgBhiveGraphReady struct {
