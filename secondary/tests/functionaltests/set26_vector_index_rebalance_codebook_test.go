@@ -698,7 +698,7 @@ func performStagingCleanupValidation(subt *testing.T) {
 
 		// if the staging dir exist, check for residual in the codebook folder
 		codebookStaging := filepath.Join(rebalStagingDir, tc.CODEBOOK_COPY_PREFIX)
-		if exist, err := verifyPathExists(rebalStagingDir); err != nil {
+		if exist, err := verifyPathExists(codebookStaging); err != nil {
 			FailTestIfError(err, "Error while verifying staging dir", subt)
 		} else if !exist {
 			// the entire codebook dir was cleaned up; proceed to next host
