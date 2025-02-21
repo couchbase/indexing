@@ -116,7 +116,7 @@ type bhiveSlice struct {
 
 	//
 	// rebalance
-	shardIds []plasma.Shard
+	shardIds []common.ShardId
 
 	//
 	// stats
@@ -294,6 +294,10 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 				time.Since(codebookRecoveryStartTm))
 		}
 	}
+
+	slice.shardIds = nil // Reset the slice and read the actuals from the store
+	slice.shardIds = append(slice.shardIds, common.ShardId(slice.mainstore.GetShardId()))
+	slice.shardIds = append(slice.shardIds, common.ShardId(slice.backstore.GetShardId()))
 
 	return slice, nil
 }
@@ -1495,7 +1499,7 @@ func (mdb *bhiveSlice) SetStopWriteUnitBilling(disableBilling bool) {
 // //////////////////////////////////////////////////////////
 
 func (mdb *bhiveSlice) GetShardIds() []common.ShardId {
-	return nil
+	return mdb.shardIds
 }
 
 func (mdb *bhiveSlice) ClearRebalRunning() {
