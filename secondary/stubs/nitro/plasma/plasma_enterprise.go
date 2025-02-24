@@ -9,8 +9,8 @@ import (
 
 var Diag = &ee.Diag
 
-func SetMemoryQuota(sz int64) {
-	ee.SetMemoryQuota(sz)
+func SetMemoryQuota(sz int64, force bool) {
+	ee.SetMemoryQuota2(sz, force)
 }
 
 func GetMandatoryQuota() int64 {

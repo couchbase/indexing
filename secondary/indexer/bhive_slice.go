@@ -157,6 +157,8 @@ type bhiveSlice struct {
 	// rollback
 	lastRollbackTs *common.TsVbuuid
 
+	persistFullVector bool
+
 	// error
 	fatalDbErr error // TODO
 }
@@ -340,7 +342,6 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.VanamaBuildQuota = slice.sysconf["bhive.vanama.buildQuota"].Int()
 	cfg.FilterThreshold = float32(slice.sysconf["bhive.vanama.filterThreshold"].Float64())
 	cfg.NumCompactor = slice.sysconf["bhive.numCompactor"].Int()
-	cfg.PersistFullVector = slice.sysconf["bhive.persistFullVector"].Bool()
 	cfg.UseVanama = slice.sysconf["bhive.useVanama"].Bool()
 	cfg.UseDistEncoded = slice.sysconf["bhive.useResidual"].Bool()
 	cfg.NumFlushBuffer = slice.sysconf["bhive.numFlushBuffer"].Int()
@@ -364,8 +365,10 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 
 	cfg.NumWriters = slice.maxNumWriters
 
-	logging.Infof("bhiveSlice:setupConfig efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v",
-		cfg.EfNumNeighbors, cfg.EfConstruction, cfg.VanamaBuildQuota, cfg.NumCompactor, slice.topNScan)
+	cfg.PersistFullVector = slice.sysconf["bhive.persistFullVector"].Bool() && slice.idxDefn.VectorMeta.PersistFullVector
+
+	logging.Infof("bhiveSlice:setupConfig efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v PersistFullVector: %v",
+		cfg.EfNumNeighbors, cfg.EfConstruction, cfg.VanamaBuildQuota, cfg.NumCompactor, slice.topNScan, cfg.PersistFullVector)
 
 	return cfg
 }
@@ -521,6 +524,8 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 	for i := 0; i < cap(slice.readers); i++ {
 		slice.readers <- slice.mainstore.NewReader()
 	}
+
+	slice.persistFullVector = mCfg.PersistFullVector
 
 	return err
 }
@@ -1061,8 +1066,12 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 		var cid [8]byte
 		binary.LittleEndian.PutUint64(cid[:], uint64(centroidId))
 
-		// insert into main index
-		v := ((bhive.Vector)(vec)).Bytes()
+		var v []byte
+		if mdb.persistFullVector {
+			// insert full vector into main index
+			v = ((bhive.Vector)(vec)).Bytes()
+		}
+
 		err = mdb.mainWriters[workerId].Insert(docSeqno, cid[:], docid, bhiveMeta, v)
 		if err != nil {
 			logging.Errorf("bhiveSlice:insertVectorIndex.  Error during insert main index: msg=%v", err.Error())

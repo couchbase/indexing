@@ -1143,10 +1143,10 @@ func (c *GsiScanClient) Scan(
 	var protoIndexVector *protobuf.IndexVector
 	if indexVector != nil {
 		protoIndexVector = &protobuf.IndexVector{
-			QueryVector:  make([]float32, len(indexVector.QueryVector)),
-			IndexKeyPos:  proto.Int32(int32(indexVector.IndexKeyPos)),
-			Probes:       proto.Int32(int32(indexVector.Probes)),
-			ActualVector: proto.Bool(indexVector.ActualVector),
+			QueryVector: make([]float32, len(indexVector.QueryVector)),
+			IndexKeyPos: proto.Int32(int32(indexVector.IndexKeyPos)),
+			Probes:      proto.Int32(int32(indexVector.Probes)),
+			Rerank:      proto.Bool(indexVector.Rerank),
 		}
 		copy(protoIndexVector.QueryVector, indexVector.QueryVector)
 	}

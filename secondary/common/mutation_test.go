@@ -29,8 +29,8 @@ func TestKVEqual(t *testing.T) {
 	kv2 := NewKeyVersions(seqno, docid, maxCount, 0)
 	for i := 0; i < maxCount; i++ {
 		uuid := uint64(i * 10000)
-		kv1.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"), nil)
-		kv2.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"), nil)
+		kv1.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"), nil, nil)
+		kv2.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"), nil, nil)
 	}
 	if kv1.Equal(kv2) == false {
 		t.Fatal("failed KeyVersions equality")
@@ -54,9 +54,9 @@ func TestPayloadKeyVersions(t *testing.T) {
 		vb := NewVbKeyVersions("default", vbno, vbuuid, 1000, 16)
 		for j := 0; j < 10; j++ { // for 10 mutations
 			kv := NewKeyVersions(512 /*seqno*/, []byte("Bourne"), nIndexes, 0)
-			kv.AddUpsert(uuids[0], keys[0], oldkeys[0], nil)
-			kv.AddUpsert(uuids[1], keys[1], oldkeys[1], nil)
-			kv.AddUpsert(uuids[2], keys[2], oldkeys[2], nil)
+			kv.AddUpsert(uuids[0], keys[0], oldkeys[0], nil, nil)
+			kv.AddUpsert(uuids[1], keys[1], oldkeys[1], nil, nil)
+			kv.AddUpsert(uuids[2], keys[2], oldkeys[2], nil, nil)
 			vb.AddKeyVersions(kv)
 		}
 		p.AddVbKeyVersions(vb)
@@ -73,8 +73,8 @@ func BenchmarkKVEqual(b *testing.B) {
 	kv2 := NewKeyVersions(seqno, docid, maxCount, 0)
 	for i := 0; i < maxCount; i++ {
 		uuid := uint64(i * 10000)
-		kv1.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"), nil)
-		kv2.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"), nil)
+		kv1.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"), nil, nil)
+		kv2.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"), nil, nil)
 	}
 
 	b.ResetTimer()

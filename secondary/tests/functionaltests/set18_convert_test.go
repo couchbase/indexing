@@ -1,17 +1,18 @@
 package functionaltests
 
 import (
-	"github.com/couchbase/indexing/secondary/common"
 	"reflect"
 	"runtime"
 	"testing"
 	"time"
 	"unsafe"
+
+	"github.com/couchbase/indexing/secondary/conversions"
 )
 
 func TestStringToByteSlice(t *testing.T) {
 	s := "hello"
-	b := common.StringToByteSlice(s)
+	b := conversions.StringToByteSlice(s)
 
 	// Should have the same length
 	if len(b) != 5 {
@@ -36,7 +37,7 @@ func TestStringToByteSlice_Stack(t *testing.T) {
 	// Allocates string on stack and forces a garbage collection
 	// Even after garbage collection, the byte slice should refer
 	// to the string
-	b := common.StringToByteSlice("hello")
+	b := conversions.StringToByteSlice("hello")
 	runtime.GC()
 
 	time.Sleep(1 * time.Second)
@@ -58,7 +59,7 @@ func TestStringToByteSlice_Stack(t *testing.T) {
 
 func TestByteSliceToString(t *testing.T) {
 	b := []byte("bytes!")
-	s := common.ByteSliceToString(b)
+	s := conversions.ByteSliceToString(b)
 
 	// Should have the same length
 	if len(s) != len(b) {
@@ -82,7 +83,7 @@ func TestBytesToString_WithUnusedBytes(t *testing.T) {
 	bLongDontUse := []byte("bytes! and all these other bytes")
 	// just take the first 6 characters
 	b := bLongDontUse[:6]
-	s := common.ByteSliceToString(b)
+	s := conversions.ByteSliceToString(b)
 	// Should have the same length
 	if len(s) != len(b) {
 		t.Fatalf("Converted string has a different length (%d) than the bytes (%d)", len(s), len(b))
@@ -102,10 +103,10 @@ func TestBytesToString_WithUnusedBytes(t *testing.T) {
 func TestStringHeadersCompatible(t *testing.T) {
 	// Check to make sure string header is what reflect thinks it is.
 	// They should be the same except for the type of the data field.
-	if unsafe.Sizeof(common.StringHeader{}) != unsafe.Sizeof(reflect.StringHeader{}) {
-		t.Fatalf("stringHeader layout has changed ours %#v theirs %#v", common.StringHeader{}, reflect.StringHeader{})
+	if unsafe.Sizeof(conversions.StringHeader{}) != unsafe.Sizeof(reflect.StringHeader{}) {
+		t.Fatalf("stringHeader layout has changed ours %#v theirs %#v", conversions.StringHeader{}, reflect.StringHeader{})
 	}
-	x := common.StringHeader{}
+	x := conversions.StringHeader{}
 	y := reflect.StringHeader{}
 	x.Data = unsafe.Pointer(y.Data)
 	y.Data = uintptr(x.Data)
@@ -117,10 +118,10 @@ func TestStringHeadersCompatible(t *testing.T) {
 func TestSliceHeadersCompatible(t *testing.T) {
 	// Check to make sure string header is what reflect thinks it is.
 	// They should be the same except for the type of the data field.
-	if unsafe.Sizeof(common.SliceHeader{}) != unsafe.Sizeof(reflect.SliceHeader{}) {
-		t.Fatalf("sliceHeader layout has changed ours %#v theirs %#v", common.SliceHeader{}, reflect.SliceHeader{})
+	if unsafe.Sizeof(conversions.SliceHeader{}) != unsafe.Sizeof(reflect.SliceHeader{}) {
+		t.Fatalf("sliceHeader layout has changed ours %#v theirs %#v", conversions.SliceHeader{}, reflect.SliceHeader{})
 	}
-	x := common.SliceHeader{}
+	x := conversions.SliceHeader{}
 	y := reflect.SliceHeader{}
 	x.Data = unsafe.Pointer(y.Data)
 	y.Data = uintptr(x.Data)

@@ -12,7 +12,7 @@ import (
 	"errors"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
-	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/conversions"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -158,7 +158,7 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
 	groupedItems := make(map[string]int)
 
 	for _, item := range items {
-		str := common.ByteSliceToString(item)
+		str := conversions.ByteSliceToString(item)
 		if index, ok := groupedItems[str]; !ok {
 			index = len(arrayItemsWithCount)
 			arrayItemsWithCount = append(arrayItemsWithCount, item)
@@ -185,13 +185,13 @@ func CompareArrayEntriesWithCount(newKey, oldKey [][]byte, newKeyCount, oldKeyCo
 	// value of this map -> index of entry in newKey
 	newKeyMap := make(map[string]int)
 	for newItemIndex, newItem := range newKey {
-		str := common.ByteSliceToString(newItem)
+		str := conversions.ByteSliceToString(newItem)
 		newKeyMap[str] = newItemIndex
 	}
 
 	newEntriesToBeDeleted := make([]int, 0)
 	for oldItemIndex, oldItem := range oldKey {
-		str := common.ByteSliceToString(oldItem)
+		str := conversions.ByteSliceToString(oldItem)
 		if newItemIndex, ok := newKeyMap[str]; ok && newKeyCount[newItemIndex] == oldKeyCount[oldItemIndex] {
 			// Item exists in both oldKey and newKey
 			newEntriesToBeDeleted = append(newEntriesToBeDeleted, newItemIndex)

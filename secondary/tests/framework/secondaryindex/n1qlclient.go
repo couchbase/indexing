@@ -499,7 +499,7 @@ func N1QLScan6(indexName, bucketName, scope, coll, server string, scans qc.Scans
 		if useScan6 {
 			start = time.Now()
 			// Currently go tests do not pass timestamp vector
-			index6.Scan6(requestid, spans2, reverse, distinct, proj,
+			index6.Scan6(requestid, spans2, nil, reverse, distinct, proj,
 				offset, limit, groupAggregates, nil, indexKeyNames, inlineFilter, indexVector,
 				indexPartionSets, cons, nil, conn)
 		} else {

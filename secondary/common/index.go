@@ -1044,12 +1044,13 @@ const (
 )
 
 type VectorMetadata struct {
-	IsCompositeIndex bool             `json:"isCompositeIndex,omitempty"`
-	IsBhive          bool             `json:"isBhive,omitempty"`
-	Dimension        int              `json:"dimension,omitempty"`
-	Similarity       VectorSimilarity `json:"similarity,omitempty"`
-	Nprobes          int              `json:"nprobes,omitempty"`
-	TrainList        int              `json:"trainlist,omitempty"`
+	IsCompositeIndex  bool             `json:"isCompositeIndex,omitempty"`
+	IsBhive           bool             `json:"isBhive,omitempty"`
+	Dimension         int              `json:"dimension,omitempty"`
+	Similarity        VectorSimilarity `json:"similarity,omitempty"`
+	Nprobes           int              `json:"nprobes,omitempty"`
+	TrainList         int              `json:"trainlist,omitempty"`
+	PersistFullVector bool             `json:"persistFullVector,omitempty"`
 
 	Quantizer *VectorQuantizer `json:"quantizer,omitempty"`
 }
@@ -1060,13 +1061,14 @@ func (v *VectorMetadata) Clone() *VectorMetadata {
 	}
 
 	newMeta := &VectorMetadata{
-		IsCompositeIndex: v.IsCompositeIndex,
-		IsBhive:          v.IsBhive,
-		Dimension:        v.Dimension,
-		Similarity:       v.Similarity,
-		Nprobes:          v.Nprobes,
-		TrainList:        v.TrainList,
-		Quantizer:        v.Quantizer.Clone(),
+		IsCompositeIndex:  v.IsCompositeIndex,
+		IsBhive:           v.IsBhive,
+		Dimension:         v.Dimension,
+		Similarity:        v.Similarity,
+		Nprobes:           v.Nprobes,
+		TrainList:         v.TrainList,
+		PersistFullVector: v.PersistFullVector,
+		Quantizer:         v.Quantizer.Clone(),
 	}
 
 	return newMeta

@@ -31,6 +31,7 @@ import (
 	"sync"
 
 	json "github.com/couchbase/indexing/secondary/common/json"
+	"github.com/couchbase/indexing/secondary/conversions"
 
 	n1ql "github.com/couchbase/query/value"
 )
@@ -1018,6 +1019,31 @@ func (codec *Codec) code2n1ql(code, text []byte, decode bool) (n1ql.Value, []byt
 		remaining = code[1:] // remove Terminator
 	}
 	return n1qlVal, remaining, err
+}
+
+// code2n1qlpooled is same as code2n1ql but uses SVPool to allocate n1ql values for string
+// objects instead of creating new values every time. Any other datatypes (or) any other
+// objects will use the traditional "code2n1ql" code and will create new objects where ever required
+func (codec *Codec) code2n1qlpooled(code, text []byte, decode bool, pos int, svPool *n1ql.StringValuePoolForIndex) (n1ql.Value, []byte, error) {
+	if len(code) == 0 {
+		return nil, nil, nil
+	}
+
+	var remaining []byte
+	var err error
+	var n1qlVal n1ql.Value
+
+	switch code[0] {
+	case TypeString:
+		var strb []byte
+		strb, remaining, err = suffixDecodeString(code[1:], text)
+		if decode && err == nil {
+			n1qlVal = svPool.Get(pos, conversions.ByteSliceToString(strb))
+		}
+		return n1qlVal, remaining, err
+	default:
+		return codec.code2n1ql(code, text, decode)
+	}
 }
 
 // DecodeN1QLValues takes collatejson encoded data as input, and returns

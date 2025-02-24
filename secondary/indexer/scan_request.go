@@ -155,6 +155,8 @@ type ScanRequest struct {
 	perPartnReaderCtx   map[common.PartitionId][]IndexReaderContext
 	readersPerPartition int
 
+	cklen            int // length of secondary expressions
+	allexprlen       int // length of secondary + include column expressions
 	indexKeyNames    []string
 	inlineFilter     string
 	inlineFilterExpr expression.Expression
@@ -554,7 +556,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			}
 
 			r.projectVectorDist = r.ProjectVectorDist()
-			r.setRerankLimits()
+			r.setRerankLimits(req.GetIndexVector())
 			protoIndexOrder := req.GetIndexOrder()
 			if r.indexOrder, err = validateIndexOrder(protoIndexOrder,
 				r.IndexInst.Defn.Desc, r.vectorPos); err != nil {
@@ -656,9 +658,15 @@ func (r *ScanRequest) setVectorIndexParamsFromDefn() (err error) {
 	return nil
 }
 
-func (r *ScanRequest) setRerankLimits() {
-	// Re-ranking is supported only for BHIVE indexes
-	if !r.isBhiveScan {
+func (r *ScanRequest) setRerankLimits(requestVector *protobuf.IndexVector) {
+
+	if requestVector != nil && requestVector.GetRerank() == false {
+		r.enableReranking = false
+		return
+	}
+
+	// Re-ranking is supported only for BHIVE indexes when full vector persistance is enabled
+	if !r.isBhiveScan || !r.IndexInst.Defn.VectorMeta.PersistFullVector {
 		r.enableReranking = false
 		return
 	}
@@ -1752,6 +1760,9 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 
 		// VECTOR_TODO: Replace this with IsBhive() method
 		r.isBhiveScan = r.isVectorScan && indexInst.Defn.IsVectorIndex && indexInst.Defn.VectorMeta.IsBhive
+
+		r.cklen = len(indexInst.Defn.SecExprs)
+		r.allexprlen = len(indexInst.Defn.SecExprs) + len(indexInst.Defn.Include)
 	}
 	return
 }

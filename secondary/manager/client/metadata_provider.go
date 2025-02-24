@@ -222,7 +222,7 @@ var REQUEST_CHANNEL_COUNT = 1000
 
 var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr",
 	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio",
-	"dimension", "similarity", "description", "scan_nprobes", "train_list"}
+	"dimension", "similarity", "description", "scan_nprobes", "train_list", "persist_full_vector"}
 
 var ErrWaitScheduleTimeout = fmt.Errorf("Timeout in checking for schedule create token.")
 
@@ -2511,7 +2511,8 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 	}
 
-	if (isBhive || isCompositeVectorIndex) && (version < c.INDEXER_77_VERSION || clusterVersion < c.INDEXER_77_VERSION) {
+	if (isBhive || isCompositeVectorIndex) &&
+		(version < c.INDEXER_80_VERSION || clusterVersion < c.INDEXER_80_VERSION) {
 		return nil,
 			errors.New("Fail to create vector index. This option is enabled after cluster is fully upgraded and there is no failed node."),
 			false
@@ -2527,6 +2528,11 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		return nil,
 			errors.New("Fail to create vector index. Include expressions are currently not supported"),
 			false
+	}
+
+	persistFullVector, err := o.getPersistFullVectorParam(plan, isBhive)
+	if err != nil {
+		return nil, err, false
 	}
 
 	// Distinct arrays expressions with VECTOR attributes are not supported
@@ -2572,7 +2578,6 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 	}
 
-	var err error
 	// For a vector index, extract the fields from with nodes clause
 	var similarity c.VectorSimilarity
 	var dimension, nprobes, trainlist int
@@ -2666,13 +2671,14 @@ func (o *MetadataProvider) PrepareIndexDefn(
 
 	if idxDefn.IsVectorIndex {
 		idxDefn.VectorMeta = &c.VectorMetadata{
-			IsCompositeIndex: isCompositeVectorIndex,
-			IsBhive:          isBhive,
-			Dimension:        dimension,
-			Similarity:       similarity,
-			Quantizer:        quantizer,
-			Nprobes:          nprobes,
-			TrainList:        trainlist,
+			IsCompositeIndex:  isCompositeVectorIndex,
+			IsBhive:           isBhive,
+			Dimension:         dimension,
+			Similarity:        similarity,
+			Quantizer:         quantizer,
+			Nprobes:           nprobes,
+			TrainList:         trainlist,
+			PersistFullVector: persistFullVector, // set to true only for BHIVE
 		}
 	}
 
@@ -3174,6 +3180,35 @@ func (o *MetadataProvider) getDeferredParam(plan map[string]interface{}, scope s
 	}
 
 	return deferred, nil, false
+}
+
+func (o *MetadataProvider) getPersistFullVectorParam(plan map[string]interface{}, isBhive bool) (bool, error) {
+
+	if !isBhive {
+		return false, nil // Persisting full vector is supported only in BHIVE indexes
+	}
+
+	persistFullVector := true // Default value is true. User can explicitly disable if required
+
+	persistFullVector2, ok := plan["persist_full_vector"].(bool)
+	if !ok {
+		persistFullVector_str, ok := plan["persist_full_vector"].(string)
+		if ok {
+			var err error
+			persistFullVector2, err = strconv.ParseBool(persistFullVector_str)
+			if err != nil {
+				return false, errors.New("Fails to create index.  Parameter persist_full_vector must be a boolean value of (true or false).")
+			}
+			persistFullVector = persistFullVector2
+
+		} else if _, ok := plan["persist_full_vector"]; ok {
+			return false, errors.New("Fails to create index.  Parameter persist_full_vector must be a boolean value of (true or false).")
+		}
+	} else {
+		persistFullVector = persistFullVector2
+	}
+
+	return persistFullVector, nil
 }
 
 func (o *MetadataProvider) validatePartitionKeys(partitionScheme c.PartitionScheme, partitionKeys []string, secKeys []string, isPrimary bool) error {

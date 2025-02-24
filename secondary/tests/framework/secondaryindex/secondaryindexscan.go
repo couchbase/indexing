@@ -528,10 +528,10 @@ func datastoreIndexVectorToQc(indexVector *datastore.IndexVector) *qc.IndexVecto
 	}
 
 	vec := &qc.IndexVector{
-		QueryVector:  make([]float32, len(indexVector.QueryVector)),
-		IndexKeyPos:  indexVector.IndexKeyPos,
-		Probes:       indexVector.Probes,
-		ActualVector: indexVector.ActualVector,
+		QueryVector: make([]float32, len(indexVector.QueryVector)),
+		IndexKeyPos: indexVector.IndexKeyPos,
+		Probes:      indexVector.Probes,
+		Rerank:      indexVector.ReRank,
 	}
 
 	for i, o := range indexVector.QueryVector {

@@ -12,7 +12,7 @@ type StubType int
 
 var Diag StubType
 
-func SetMemoryQuota(_ int64) {
+func SetMemoryQuota(_ int64, _ bool) {
 }
 
 func GetMandatoryQuota() int64 {

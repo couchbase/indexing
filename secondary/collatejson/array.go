@@ -168,6 +168,70 @@ func (codec *Codec) ExplodeArray3(code []byte, tmp []byte, cktmp [][]byte,
 	return cktmp, dktmp, err
 }
 
+// ExplodeArray5 is same as ExplodeArray3 except that it uses "SVPool"
+// to allocate n1ql values instead of creating new values
+func (codec *Codec) ExplodeArray5(code []byte, tmp []byte, cktmp [][]byte,
+	dktmp n1ql.Values, explodePos, decPos []bool, explodeUpto int, svPool *n1ql.StringValuePoolForIndex) (enc [][]byte,
+	dec n1ql.Values, e error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			if strings.Contains(fmt.Sprint(r), "slice bounds out of range") {
+				e = ErrorOutputLen
+			} else {
+				logging.Fatalf("ExplodeArray3:: recovered panic - %s \n %s", r, logging.StackTrace())
+				e = fmt.Errorf("%v", r)
+			}
+		}
+	}()
+
+	var err error
+	var val n1ql.Value
+	var decode bool
+
+	if codec.arrayLenPrefix {
+		return nil, nil, ErrLenPrefixUnsupported
+	}
+
+	if code[0] != TypeArray {
+		return nil, nil, ErrNotAnArray
+	}
+
+	code = code[1:]
+	elemBuf := code
+
+	pos := 0
+	for code[0] != Terminator {
+
+		if decPos != nil {
+			decode = decPos[pos]
+		}
+
+		val, code, err = codec.code2n1qlpooled(code, tmp, decode, pos, svPool)
+		if err != nil {
+			break
+		}
+
+		if dktmp != nil {
+			dktmp[pos] = val
+		}
+
+		if size := len(elemBuf) - len(code); size > 0 {
+			if explodePos[pos] {
+				cktmp[pos] = elemBuf[:size]
+			}
+			elemBuf = code
+		}
+
+		pos++
+		if pos > explodeUpto {
+			return cktmp, dktmp, err
+		}
+	}
+
+	return cktmp, dktmp, err
+}
+
 // Explodes an encoded array, returns all encoded parts
 // without decoding any part of the array
 func (codec *Codec) ExplodeArray4(code []byte, tmp []byte) (arr [][]byte, e error) {
