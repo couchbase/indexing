@@ -3151,6 +3151,7 @@ func (s *statsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/storage/jemalloc/profileDeactivate", s.jemallocMemoryProfileDeactivateHandler)
 	mux.HandleFunc("/storage/jemalloc/profileDump", s.jemallocMemoryProfileDumpHandler)
 	mux.HandleFunc("/stats/cinfolite", common.HandleCICLStats)
+	mux.HandleFunc("/stats/timestampedCounts", s.handleTimestampedCountsReq)
 	mux.HandleFunc("/_prometheusMetrics", s.handleMetrics)
 	mux.HandleFunc("/_prometheusMetricsHigh", s.handleMetricsHigh)
 }
@@ -3524,6 +3525,96 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 	} else {
 		w.WriteHeader(400)
 		w.Write([]byte("Unsupported method"))
+	}
+}
+
+func (s *statsManager) handleTimestampedCountsReq(w http.ResponseWriter, r *http.Request) {
+	creds, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleTimestampedCountsReq", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
+		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.stats!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("StatsManager::handleTimestampedCountsReq not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
+	}
+
+	if r.Method == "GET" {
+
+		stats := s.stats.Get()
+		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP {
+
+			doLog := false
+			if r.URL.Query().Get("log") == "true" {
+				doLog = true
+			}
+
+			// Make a buffered channel so that stats manager can receive the response inspite of a timeout
+			respCh := make(chan interface{}, 1)
+
+			msg := &MsgTimestampedCountReq{
+				mType:  TIMESTAMPED_COUNT_STATS,
+				doLog:  doLog,
+				respCh: respCh,
+			}
+
+			s.supvMsgch <- msg
+
+			startTime := time.Now()
+			timer := time.NewTimer(120 * time.Second)
+			defer timer.Stop()
+
+			select {
+			case <-timer.C:
+				logging.Warnf("statsManager::handleTimestampedCountsReq Req. timedout. Req. started at: %v", startTime)
+				w.WriteHeader(http.StatusRequestTimeout) // Send 408 timeout as indexer is not ready to serve the request
+				w.Write([]byte("[]"))
+				return
+			case resp := <-respCh:
+
+				// Send 200 ok as the cases where nil is sent is either for FDB (or)
+				// if there are no indexes on the node
+				if resp == nil {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte("[]"))
+					return
+				}
+
+				jsonData, err := json.Marshal(resp.([]*TimestampedCounts))
+				if err != nil {
+					logging.Warnf("statsMgr::handleTimestampedCountsReq Error observed while unmarshaling resp, err: %v", err)
+					w.WriteHeader(http.StatusInternalServerError) // Send 500 as indexer is not ready to serve the request
+					w.Write([]byte("[]"))
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				w.Write(jsonData)
+				return
+			}
+
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable) // Send 503 as indexer is not ready to serve the request
+			w.Write([]byte("[]"))
+			return
+		}
+	} else {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("Unsupported method"))
+		return
 	}
 }
 

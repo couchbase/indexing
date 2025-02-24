@@ -1760,6 +1760,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
+	case TIMESTAMPED_COUNT_STATS:
+		//forward to storage manager
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))

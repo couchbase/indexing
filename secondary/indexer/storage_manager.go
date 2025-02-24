@@ -418,6 +418,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case BHIVE_BUILD_GRAPH:
 		s.handleBuildBhiveGraph(cmd)
 
+	case TIMESTAMPED_COUNT_STATS:
+		s.handleGetTimestampedItemsCount(cmd)
+
 	}
 
 }
@@ -3192,14 +3195,19 @@ type TimestampedCounts struct {
 
 func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 
+	s.supvCmdch <- &MsgSuccess{}
+
+	respCh := cmd.(*MsgTimestampedCountReq).GetRespCh()
+	doLog := cmd.(*MsgTimestampedCountReq).GetDoLog()
+
 	// Disable for forestDB. See the comment at CountTotal() invocation
 	// in this method for more details
 	if common.GetStorageMode() == common.FORESTDB {
+		respCh <- nil
 		return
 	}
 
 	nodeId := s.config["clusterAddr"].String()
-	var respCh chan []*TimestampedCounts
 	var indexSnapMap IndexSnapMap
 	var indexInstMap common.IndexInstMap
 
@@ -3233,6 +3241,11 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 				indexInst.Stream != common.MAINT_STREAM || // Process only MAINT_STREAM indexes
 				indexInst.State != common.INDEX_STATE_ACTIVE || // process only active indexes
 				indexInst.RState != common.REBAL_ACTIVE { // Skip indexes in rebalance
+				if doLog || logging.IsEnabled(logging.Verbose) {
+					logging.Infof("storageMgr::handleGetTimestampedItemsCount Skip processing inst: %v, partn: %v due to one of the following being true. "+
+						"snapC.deleted: %v, state: %v, rstate: %v, stream: %v, arrayIndex: %v",
+						snapC.deleted, indexInst.State, indexInst.Stream, indexInst.Defn.IsArrayIndex, indexInst.RState)
+				}
 				return
 			}
 
