@@ -6222,6 +6222,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 		return targetNodes
 	}
 
+	var dealerTracker uint64
 	for defnId, partnDist := range indexesPartnDist {
 		for partnId, replicaMap := range partnDist {
 
@@ -6246,7 +6247,12 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			}
 
 			if useShardDealer {
-				slotAlloted := solution.shardDealer.GetSlot(defnId, partnId, replicaMap)
+				dealerTracker++
+				slotAlloted := solution.shardDealer.GetSlot(
+					defnId /*defnID c.IndexDefnID*/, partnId, /*partnID c.PartitionID*/
+					replicaMap,    /* replicaMap map[int]map[*IndexerNode]*IndexUsage */
+					dealerTracker, /* tracker uint64 */
+				)
 				if slotAlloted == 0 {
 					logging.Warnf("Planner::PopulateAlternateShardIds failed to get slot for {defnID: %v, partnID: %v}",
 						defnId, partnId)
