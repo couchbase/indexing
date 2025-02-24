@@ -195,7 +195,7 @@ type createIdxParam struct {
 	defnid                              uint64
 }
 
-func createDummyIndexerNode(nodeID string, cips ...createIdxParam) *IndexerNode {
+func createDummyIndexerNode(nodeID nodeUUID, cips ...createIdxParam) *IndexerNode {
 	var indexerNode = IndexerNode{
 		NodeId:   "indexer-node-id-" + nodeID,
 		NodeUUID: "indexer-node-uuid-" + nodeID,
@@ -226,8 +226,12 @@ func createDummyIndexerNode(nodeID string, cips ...createIdxParam) *IndexerNode 
 	return &indexerNode
 }
 
-func createDummyIndexerNodes(cips ...createIdxParam) []*IndexerNode {
-	var nodes = make([]*IndexerNode, 0) // replicaID to IndexerNode map
+func createDummyIndexerNodes(nNodesHint int, cips ...createIdxParam) []*IndexerNode {
+	var nodes = make([]*IndexerNode, 0, nNodesHint) // replicaID to IndexerNode map
+
+	for i := 0; i < nNodesHint; i++ {
+		nodes = append(nodes, createDummyIndexerNode(fmt.Sprintf("%v", i)))
+	}
 
 	getNNodes := func(n int) []*IndexerNode {
 		if len(nodes) < n {
@@ -251,9 +255,11 @@ func createDummyIndexerNodes(cips ...createIdxParam) []*IndexerNode {
 		})
 	}
 
-	for j, cip := range cips {
+	var defnID uint64 = 1
+	for _, cip := range cips {
 		for i := 0; i < int(cip.count); i++ {
-			cip.defnid = uint64(j + i + 1)
+			cip.defnid = defnID
+			defnID++
 			var indexes = createDummyReplicaPartitionedIndexUsage(cip)
 
 			var nodesForDist = getNNodes(cip.numReplicas + 1)
@@ -2192,12 +2198,13 @@ func validateShardDealerInternals(sd *ShardDealer, cluster []*IndexerNode) error
 	var slotsPerCategory = make(map[ShardCategory]map[asSlotID]bool)
 	// cluster level picture
 	var slotsMap = make(map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer)
+	var slotsToNodeMap = make(map[asSlotID]map[asReplicaID]nodeUUID)
 	// <defnId, partnId> to slotID
 	var partnSlots = make(map[c.IndexDefnId]map[c.PartitionId]asSlotID)
 
 	// per node pic of which shard pair belongs to which node
-	var nodeToSlotMap = make(map[string]map[asSlotID]asReplicaID)
-	var nodeToShardCountMap = make(map[string]uint64)
+	var nodeToSlotMap = make(map[nodeUUID]map[asSlotID]asReplicaID)
+	var nodeToShardCountMap = make(map[nodeUUID]uint64)
 
 	for _, indexer := range cluster {
 		for _, partn := range indexer.Indexes {
@@ -2246,9 +2253,14 @@ func validateShardDealerInternals(sd *ShardDealer, cluster []*IndexerNode) error
 			if slotsMap[slotID] == nil {
 				slotsMap[slotID] = make(map[asReplicaID]map[asGroupID]*pseudoShardContainer)
 			}
+			if slotsToNodeMap[slotID] == nil {
+				slotsToNodeMap[slotID] = make(map[asReplicaID]nodeUUID)
+			}
 			if slotsMap[slotID][replicaID] == nil {
 				slotsMap[slotID][replicaID] = make(map[asGroupID]*pseudoShardContainer)
 			}
+			slotsToNodeMap[slotID][replicaID] = indexer.NodeUUID
+
 			var newShardCount = 0
 			if slotsMap[slotID][replicaID][groupID] == nil {
 				slotsMap[slotID][replicaID][groupID] = newPseudoShardContainer()
@@ -2318,6 +2330,16 @@ func validateShardDealerInternals(sd *ShardDealer, cluster []*IndexerNode) error
 			nodeToSlotMap,
 			len(sd.nodeToSlotMap),
 			sd.nodeToSlotMap,
+		)
+	}
+
+	if !reflect.DeepEqual(slotsToNodeMap, sd.slotsToNodeMap) {
+		return fmt.Errorf(
+			"cluster slotsToNodeMap does not match shard dealer - ([l: %v] %v != [l:%v] %v)",
+			len(slotsToNodeMap),
+			slotsToNodeMap,
+			len(sd.slotsToNodeMap),
+			sd.slotsToNodeMap,
 		)
 	}
 
@@ -2405,7 +2427,83 @@ func (psc1 *pseudoShardContainer) String() string {
 		psc1.memUsage, psc1.dataSize, psc1.diskUsage, psc1.insts)
 }
 
-// TestMultiNode_Pass0 tests the shard dealer for multi node setup for only Pass 0 cases
+func TestMultNode_NoReplicas(t *testing.T) {
+	t.Parallel()
+
+	var dealer = NewShardDealer(
+		minShardsPerNode,
+		minPartitionsPerShard,
+		maxDiskUsagePerShard,
+		shardCapacity,
+		createNewAlternateShardIDGenerator(),
+		nil,
+	)
+
+	numNodes := rand.Intn(int(minShardsPerNode))
+
+	var cips = []createIdxParam{
+		{count: minShardsPerNode, isPrimary: true},
+		{count: shardCapacity},
+		{count: shardCapacity, isVector: true},
+		{count: shardCapacity, isBhive: true},
+	}
+
+	var cluster = createDummyIndexerNodes(numNodes, cips...)
+
+	var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+
+	var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
+	for defnID, repMaps := range replicaMaps {
+		for partnID, repmap := range repMaps {
+			slotID := dealer.GetSlot(defnID, partnID, repmap)
+
+			if slotID == 0 {
+				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+					t.Name(), repmap)
+			}
+
+			slotIDs[slotID] = true
+		}
+	}
+
+	err := validateShardDealerInternals(dealer, cluster)
+	assert.NoError(t, err, "internal shard dealer validation failed for basic test")
+}
+
+func TestMultiNode_NegTestSameIndexOnAllNodes(t *testing.T) {
+	t.Parallel()
+
+	var dealer = NewShardDealer(minShardsPerNode,
+		minPartitionsPerShard,
+		maxDiskUsagePerShard,
+		shardCapacity,
+		createNewAlternateShardIDGenerator(), nil)
+
+	var index = createDummyIndexUsage(createIdxParam{defnid: 1})
+	var cluster = createDummyIndexerNodes(3)
+
+	for _, indexerNode := range cluster {
+		var idx = index.clone()
+		indexerNode.Indexes = append(indexerNode.Indexes, idx)
+		idx.initialNode = indexerNode
+	}
+
+	var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
+	for defnID, repMaps := range replicaMaps {
+		for partnID, repmap := range repMaps {
+			slotID := dealer.GetSlot(defnID, partnID, repmap)
+			assert.Zero(
+				t,
+				slotID,
+				"expected slot assigment to fail as same index-replica is going to multiple nodes but we have a valid slot",
+			)
+		}
+	}
+
+}
+
+// TestMultiNode_Pass0 tests the shard dealer for multi node setup with replicated indexes for
+// only Pass 0 cases
 func TestMultiNode_Pass0(t *testing.T) {
 	t.Parallel()
 
@@ -2425,7 +2523,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 			{count: minShardsPerNode, isPrimary: true, numReplicas: int(rand.Intn(6))},
 		}
 
-		var cluster = createDummyIndexerNodes(cips...)
+		var cluster = createDummyIndexerNodes(0, cips...)
 
 		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
 
@@ -2512,7 +2610,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 			{count: minShardsPerNode/2 - (minShardsPerNode / 4), numReplicas: rand.Intn(highReplicaCount)},
 		}
 
-		var cluster = createDummyIndexerNodes(cips...)
+		var cluster = createDummyIndexerNodes(0, cips...)
 
 		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
 		var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
@@ -2595,7 +2693,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 			{count: 1, numReplicas: rand.Intn(highReplicaCount), numPartns: int(minShardsPerNode/2 - minShardsPerNode/4)},
 		}
 
-		var cluster = createDummyIndexerNodes(cips...)
+		var cluster = createDummyIndexerNodes(0, cips...)
 
 		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
 		var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
@@ -2660,7 +2758,6 @@ func TestMultiNode_Pass0(t *testing.T) {
 
 }
 
-// TODO: add multinode replica index based tests
 // TODO: add multinode partitioned index tests
 // TODO: add multinode replicated partitioned index tests
 // TODO: add tests for disk usage check in recordIndex
