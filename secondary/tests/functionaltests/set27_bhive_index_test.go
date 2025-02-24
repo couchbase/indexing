@@ -136,7 +136,7 @@ func TestBhiveVectorIndex(t *testing.T) {
 	// Create Index
 	stmt := "CREATE VECTOR INDEX " + idx_bhive +
 		" ON default(sift VECTOR)" +
-		" WITH { \"dimension\":128, \"description\": \"IVF32,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+		" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
 	err := createWithDeferAndBuild(idx_bhive, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
 	FailTestIfError(err, "Error in creating idx_sift10k", t)
 
@@ -149,7 +149,7 @@ func TestBhiveVectorIndex(t *testing.T) {
 	queryVectorStr = queryVectorStr[:len(queryVectorStr)-1]
 	queryVectorStr += "]"
 
-	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, ANN(sift, qvec, \"L2_SQUARED\", %v) from %v ORDER BY ANN(sift, qvec, \"L2_SQUARED\", %v) limit %v",
+	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, ANN(sift, qvec, \"L2_SQUARED\", %v, true) from %v ORDER BY ANN(sift, qvec, \"L2_SQUARED\", %v, true) limit %v",
 		queryVectorStr, indexVector.Probes, bucket, indexVector.Probes, limit)
 
 	annScanResults, err := execN1QL(bucket, annScanStmt)
