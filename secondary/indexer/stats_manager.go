@@ -48,6 +48,8 @@ const APPROX_METRIC_COUNT = 25
 
 var METRICS_PREFIX = "index_"
 
+var PARTN_METRICS_PREFIX = METRICS_PREFIX + "partn_"
+
 // 0-2ms, 2ms-5ms, 5ms-10ms, 10ms-20ms, 20ms-30ms, 30ms-50ms, 50ms-100ms, 100ms-Inf
 var latencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100}
 
@@ -2507,6 +2509,23 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	itemsFlushed := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numItemsFlushed.Value() })
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_items_flushed", s.bucket, collectionLabels, s.dispName, itemsFlushed)
 	st = append(st, []byte(str)...)
+
+	// Append partition level stats for partitioned indexes
+	if len(s.partitions) > 1 {
+		partnfmtStr := "%v%v{bucket=\"%v\", %vindex=\"%v\", partition=\"%v\"} %v\n"
+		for partnId, partnStat := range s.partitions {
+			var itemsCount int64
+			if partnStat.useArrItemsCount {
+				itemsCount = partnStat.int64Stats(func(ss *IndexStats) int64 { return ss.arrItemsCount.Value() })
+				str = fmt.Sprintf(partnfmtStr, PARTN_METRICS_PREFIX, "items_count", s.bucket, collectionLabels, s.dispName, partnId, itemsCount)
+				st = append(st, []byte(str)...)
+			} else {
+				itemsCount = partnStat.int64Stats(func(ss *IndexStats) int64 { return ss.itemsCount.Value() })
+				str = fmt.Sprintf(partnfmtStr, PARTN_METRICS_PREFIX, "items_count", s.bucket, collectionLabels, s.dispName, partnId, itemsCount)
+				st = append(st, []byte(str)...)
+			}
+		}
+	}
 
 	return st
 }
