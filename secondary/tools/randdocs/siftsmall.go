@@ -15,9 +15,14 @@ type SiftData struct {
 	sync.Mutex
 	vecCount int // Vector Count
 	overflow int // Overflow of Vectors
+
 	fd       *os.File
 	dec      *fvecs.Decoder[float32]
 	filename string
+
+	truthFd    *os.File
+	truthDec   *fvecs.Decoder[uint32]
+	truthFName string
 }
 
 func OpenSiftData(filename string) *SiftData {
@@ -65,13 +70,78 @@ func (sd *SiftData) reset() error {
 	var err error
 	sd.fd, err = os.Open(sd.filename)
 	if err != nil {
-		fmt.Println("Error while opening file: ", err)
+		fmt.Println("Error while opening file: ", sd.filename, err)
 		return err
 	}
 
 	sd.dec = fvecs.NewDecoder[float32](sd.fd)
+
+	if sd.truthDec != nil {
+		sd.truthFd.Close()
+		sd.truthFd = nil
+		sd.truthDec = nil
+
+		var err error
+		sd.truthFd, err = os.Open(sd.truthFName)
+		if err != nil {
+			fmt.Println("Error while opening file: ", sd.truthFName, err)
+			return err
+		}
+
+		sd.truthDec = fvecs.NewDecoder[uint32](sd.truthFd)
+	}
+
 	sd.overflow++
 	return nil
+}
+
+func OpenSiftQueryAndGroundTruth(queryFVecs, truthIVecs string) (*SiftData, error) {
+	fd1, err := os.Open(queryFVecs)
+	if err != nil {
+		fmt.Println("Error while opening file: ", err)
+		return nil, err
+	}
+
+	fd2, err := os.Open(truthIVecs)
+	if err != nil {
+		fmt.Println("Error while opening file: ", err)
+		return nil, err
+	}
+
+	d1 := fvecs.NewDecoder[float32](fd1)
+	d2 := fvecs.NewDecoder[uint32](fd2)
+
+	return &SiftData{fd: fd1, dec: d1, filename: queryFVecs,
+		truthFd: fd2, truthDec: d2, truthFName: truthIVecs}, nil
+}
+
+func (sd *SiftData) GetQueryAndTruth() (query []float32, nearestVecOffsets []uint32, err error) {
+	sd.Lock()
+	defer sd.Unlock()
+
+	query, err = sd.dec.Read()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	nearestVecOffsets, err = sd.truthDec.Read()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return query, nearestVecOffsets, nil
+}
+
+var otherStringData map[string][]string = map[string][]string{
+	"type":     []string{"Casual", "Formal", "Both", "None"},
+	"category": []string{"Shoes", "Trousers", "Shirts", "Socks"},
+	"country":  []string{"USA", "AUS", "IND", "CAN"},
+	"brand":    []string{"Nike", "Adidas", "Reebok", "Puma"},
+	"color":    []string{"Green", "Red", "Blue", "Black"},
+}
+
+var otherIntData map[string][]int = map[string][]int{
+	"size": []int{5},
 }
 
 func getSiftData(cfg Config, sd *SiftData, cnt *int64) (string, map[string]interface{}, error) {
@@ -113,6 +183,14 @@ func getSiftData(cfg Config, sd *SiftData, cnt *int64) (string, map[string]inter
 
 	if overflow%10 != 0 {
 		value["missing"] = "NotMissing"
+	}
+
+	for strKey, strValList := range otherStringData {
+		value[strKey] = strValList[overflow%len(strValList)]
+	}
+
+	for strKey, intValList := range otherIntData {
+		value[strKey] = intValList[overflow%len(intValList)]
 	}
 
 	value["phone"] = (10000000000 * (overflow % 10)) + randgen.Intn(100000000)

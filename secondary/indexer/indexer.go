@@ -13546,6 +13546,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	retryingMap := make(map[common.IndexInstId]map[common.PartitionId]bool)
 	successMap := make(map[common.IndexInstId]bool)
 	droppedInsts := make(map[common.IndexInstId]bool)
+	instTrainDurMap := make(map[common.IndexInstId]int64)
 	if retryTrainingInstRatioMap == nil {
 		retryTrainingInstRatioMap = make(map[common.IndexInstId]int)
 	}
@@ -13808,7 +13809,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 					// Update index inst. stat
 					trainDur := time.Since(start)
-					idx.stats.indexes[instId].cbTrainDuration.Set(trainDur.Nanoseconds())
+					instTrainDurMap[instId] = trainDur.Nanoseconds()
 
 					logging.Infof("Indexer::initiateTraining Training completed for vector index instance: %v, "+
 						"partnId: %v, elapsed: %v", instId, partnId, trainDur)
@@ -13849,7 +13850,6 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					logging.Errorf("Indexer::initiateTraining error observed while persisting codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
 					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
 					slice.ResetCodebook() // Reset codebook as build retry will initiate training again
-					idx.stats.indexes[instId].cbTrainDuration.Set(0)
 					continue
 				}
 			}
@@ -13895,6 +13895,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 			errMap:           errMap,
 			droppedInsts:     droppedInsts,
 			nlistInstPartMap: nlistMap,
+			instTrainDurMap:  instTrainDurMap,
 		}
 	}
 
@@ -14026,6 +14027,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	reqCtx := msg.GetReqCtx()
 	dropMap := msg.GetDropMap()
 	nlistInstPartMap := msg.GetNlistMap()
+	instTrainDurMap := msg.GetTrainDur()
 
 	if dropMap == nil {
 		dropMap = make(map[c.IndexInstId]MsgChannel)
@@ -14089,6 +14091,9 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		toBuildInstIds = append(toBuildInstIds, instId)
 		allInsts = append(allInsts, instId)
 
+		if _, ok := idx.stats.indexes[instId]; ok {
+			idx.stats.indexes[instId].cbTrainDuration.Set(instTrainDurMap[instId])
+		}
 	}
 
 	for instId, partnErrMap := range errMap {
@@ -14105,6 +14110,10 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 			logging.Infof("Indexer::handleIndexTrainingDone: errored index with inst id %v was dropped. skipping...",
 				instId)
 			continue // Instance was dropped and deleted. No need to process it further
+		}
+
+		if _, ok := idx.stats.indexes[instId]; ok {
+			idx.stats.indexes[instId].cbTrainDuration.Set(0)
 		}
 
 		inst, exists := idx.indexInstMap[instId]

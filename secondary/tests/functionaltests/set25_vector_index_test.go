@@ -10,6 +10,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/queryport/client"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -37,6 +38,7 @@ var expectedVectorPosTop100 = []uint32{2176, 3752, 882, 4009, 2837, 190, 3615, 8
 var vectorsLoaded = false
 var vecIndexCreated = false
 var vecPartnIndexCreated = false
+var multiIndexerConfig = false
 
 // Load Data
 // Dataset uses SIFT10K Small and repeats this 10K multifold by adding scalar fields with different cardinality
@@ -671,9 +673,108 @@ func TestVectorPartnIndexMultipleNodes(t *testing.T) {
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 
 	addTwoNodesAndRebalance("vectorPartnTest", t)
+	multiIndexerConfig = true
+
 	TestVectorPartitionedIndex(t)
 
 	testScalarPredicates(t, idx_sif10k_partn)
+}
+
+func TestVectorPartnIndexWithAllSIFTQueries(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	if !multiIndexerConfig {
+		addTwoNodesAndRebalance("vectorPartnTest", t)
+		multiIndexerConfig = true
+	}
+
+	if !vectorsLoaded {
+		vectorSetup(t, bucket, "", "", 10000)
+	}
+
+	// Drop all indexes from earlier tests
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	// Create Index
+	stmt := "CREATE INDEX " + idx_sif10k +
+		" ON default(`type`, `category`,`country`, `brand`, `color`, `size`, `sift` VECTOR, `vectornum`)" +
+		" WITH { \"defer_build\":true, \"num_replica\":1, \"num_partition\": 16, \"dimension\": 128," +
+		"      \"description\": \"IVF,SQ8\",  \"similarity\": \"COSINE\", \"scan_nprobes\": 50};"
+	err := createWithDeferAndBuild(idx_sif10k, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_sift10k", t)
+
+	queryFVecs := "../../tools/randdocs/siftsmall/siftsmall_query.fvecs"
+	truthIVecs := "../../tools/randdocs/siftsmall/siftsmall_groundtruth.ivecs"
+	sd, err := randdocs.OpenSiftQueryAndGroundTruth(queryFVecs, truthIVecs)
+	FailTestIfError(err, "Error while opening query and ground truth files", t)
+
+	overallRecallSum := float64(0)
+	numQueries := float64(0)
+	var query []float32
+	var truth []uint32
+	for query, truth, err = sd.GetQueryAndTruth(); err == nil; query, truth, err = sd.GetQueryAndTruth() {
+		var sb strings.Builder
+		for i, val := range query {
+			sb.WriteString(fmt.Sprintf("%v", val))
+			if i < len(query)-1 {
+				sb.WriteString(", ")
+			}
+		}
+		queryStr := sb.String()
+
+		queryStmtFmt := "SELECT vectornum FROM default " +
+			"WHERE `type`=\"Casual\" AND category=\"Shoes\" AND country=\"USA\" AND brand=\"Nike\" AND color=\"Green\" AND size=5 " +
+			"ORDER BY ANN(sift, [%v], \"COSINE\", 50) " +
+			"LIMIT 10"
+
+		queryStmt := fmt.Sprintf(queryStmtFmt, queryStr)
+
+		explainQueryStmt := fmt.Sprintf("EXPLAIN %v", queryStmt)
+
+		explainRes, err := execN1QL(BUCKET, explainQueryStmt)
+		if err != nil {
+			FailTestIfError(err, "Error in running query", t)
+		}
+
+		explainResText := fmt.Sprintf("%v", explainRes)
+		contains := strings.Contains(explainResText, idx_sif10k)
+		if !contains {
+			log.Fatalf("Query: %v is not using index", explainResText)
+		}
+
+		logging.Infof("Running Query: %s", queryStmt)
+
+		scanResults, err := execN1QL(BUCKET, queryStmt)
+		if err != nil {
+			FailTestIfError(err, "Error in running query", t)
+		}
+
+		scanResultsExtracted := make([]uint32, len(scanResults))
+		for i, res := range scanResults {
+			resDict, ok := res.(map[string]interface{})
+			if !ok {
+				log.Fatal("Invalid output 1 ", res, scanResults)
+			}
+
+			resFloat, ok := resDict["vectornum"].(float64)
+			if !ok {
+				log.Fatal("Invalid output 2 ", resDict, scanResults)
+			}
+
+			scanResultsExtracted[i] = uint32(resFloat)
+		}
+
+		recall := recallAtR(truth[0:10], scanResultsExtracted, 10)
+		overallRecallSum += recall
+		numQueries += 1
+		log.Printf("Recall: %v query: %v \n Truth: %v \n Results: %v", recall, queryStmt, truth[0:10], scanResultsExtracted)
+	}
+	overallRecall := 100 * (overallRecallSum / numQueries)
+	log.Printf("Overall Recall for SIFT10K dataset with %v Queries is %v", numQueries, overallRecall)
+	if overallRecall < 90 {
+		log.Fatal("Test failed as overall recall is less than 90%")
+	}
 }
 
 // There are three possible combinations in this test.

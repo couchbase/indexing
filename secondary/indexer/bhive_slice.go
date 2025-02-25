@@ -116,7 +116,11 @@ type bhiveSlice struct {
 
 	//
 	// rebalance
-	shardIds []plasma.Shard
+	shardIds []common.ShardId
+
+	// set to true if the slice is created as a part of rebalance
+	// This flag will be cleared at the end of rebalance
+	rebalRunning uint32
 
 	//
 	// stats
@@ -255,6 +259,16 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 	slice.idxStats = idxStats
 	slice.indexerMemoryQuota = memQuota
 
+	if len(shardIds) > 0 {
+		slice.SetRebalRunning()
+
+		logging.Infof("bhiveSlice::NewBhiveSlice Id: %v IndexInstId: %v PartitionId: %v "+
+			"using shardIds: %v, rebalance running: %v", sliceId, idxInstId, partitionId,
+			shardIds, slice.IsRebalRunning())
+
+		slice.shardIds = append(slice.shardIds, shardIds[0], shardIds[1])
+	}
+
 	// initialize main and back stores
 	if err := slice.initStores(isInitialBuild, cancelCh); err != nil {
 		// Index is unusable. Remove the data files and reinit
@@ -294,6 +308,10 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 				time.Since(codebookRecoveryStartTm))
 		}
 	}
+
+	slice.shardIds = nil // Reset the slice and read the actuals from the store
+	slice.shardIds = append(slice.shardIds, common.ShardId(slice.mainstore.GetShardId()))
+	slice.shardIds = append(slice.shardIds, common.ShardId(slice.backstore.GetShardId()))
 
 	return slice, nil
 }
@@ -399,6 +417,13 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 
 	mCfg.File = filepath.Join(slice.path, "mainIndex")
 	bCfg.File = filepath.Join(slice.path, "docIndex")
+
+	enableShardAffinity := slice.sysconf.GetDeploymentAwareShardAffinity() || common.IsServerlessDeployment()
+
+	if enableShardAffinity && len(slice.shardIds) > 0 && slice.IsRebalRunning() {
+		mCfg.UseShardId = plasma.ShardId(slice.shardIds[0])
+		bCfg.UseShardId = plasma.ShardId(slice.shardIds[1])
+	}
 
 	var wg sync.WaitGroup
 	var mErr, bErr error
@@ -1495,15 +1520,22 @@ func (mdb *bhiveSlice) SetStopWriteUnitBilling(disableBilling bool) {
 // //////////////////////////////////////////////////////////
 
 func (mdb *bhiveSlice) GetShardIds() []common.ShardId {
-	return nil
+	return mdb.shardIds
 }
 
-func (mdb *bhiveSlice) ClearRebalRunning() {
-
+func (mdb *bhiveSlice) IsRebalRunning() bool {
+	return atomic.LoadUint32(&mdb.rebalRunning) == 1
 }
 
 func (mdb *bhiveSlice) SetRebalRunning() {
+	atomic.StoreUint32(&mdb.rebalRunning, 1)
+}
 
+func (mdb *bhiveSlice) ClearRebalRunning() {
+	if mdb.IsRebalRunning() {
+		logging.Infof("BhiveSlice::ClearRebalRunning Clearing rebalance running for instId: %v, partnId: %v", mdb.idxInstId, mdb.idxPartnId)
+	}
+	atomic.StoreUint32(&mdb.rebalRunning, 0)
 }
 
 func (mdb *bhiveSlice) IsPersistanceActive() bool {
