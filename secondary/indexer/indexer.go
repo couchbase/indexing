@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth/service"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
@@ -650,6 +651,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	close(bootstrapFinCh)
 
 	go idx.monitorKVNodes()
+	go idx.monitorItemsCount()
 	go idx.destroyEmptyShards()
 
 	// enable inMemoryCompression feature on 7.1 cluster upgrade
@@ -14441,6 +14443,151 @@ func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
 					break
 				}
 			}
+		}
+	}
+}
+
+func (idx *indexer) monitorItemsCount() {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("Indexer::monitorItemsCount crashed: %v\n", r)
+			go idx.monitorItemsCount()
+		}
+	}()
+
+	selfRestart := func() {
+		time.Sleep(5000 * time.Millisecond)
+		go idx.monitorItemsCount()
+	}
+
+	clusterAddr := idx.config["clusterAddr"].String()
+	url, err := common.ClusterAuthUrl(clusterAddr)
+	if err != nil {
+		logging.Errorf("Indexer::monitorItemsCount, error observed while retrieving ClusterAuthUrl, err : %v", err)
+		selfRestart()
+		return
+	}
+
+	scn, err := common.NewServicesChangeNotifier(url, DEFAULT_POOL, "MonitorItemsCount")
+	if err != nil {
+		logging.Errorf("Indexer::monitorItemsCount, error observed while initializing ServicesChangeNotifier, err: %v", err)
+		selfRestart()
+		return
+	}
+	defer scn.Close()
+
+	cinfo, err := common.NewClusterInfoCache(url, DEFAULT_POOL)
+	if err != nil {
+		logging.Errorf("Indexer::monitorItemsCount, error observed during the initilization of clusterInfoCache, err : %v", err)
+		selfRestart()
+		return
+	}
+	cinfo.SetUserAgent("MonitorItemsCount")
+
+	var currActiveIndexerNodes []couchbase.Node
+
+	changeInIndexerNodes := func(prev []couchbase.Node, curr []couchbase.Node) bool {
+		if len(prev) != len(curr) {
+			return true
+		} else if len(prev) == 0 && len(curr) == 0 {
+			return false
+		} else {
+			for _, node_prev := range prev {
+				found := false
+				for _, node_curr := range curr {
+					if node_prev.NodeUUID == node_curr.NodeUUID {
+						found = true
+						break
+					}
+				}
+
+				if !found { // One of the nodes in the previous list is not present in the current list. There has been a change
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	// Force update the nodeToHostMap for the first time
+	if err := cinfo.FetchWithLock(); err != nil {
+		logging.Errorf("Indexer::monitorItemsCount, error observed while Fetching cluster info cache, err: %v", err)
+		selfRestart()
+		return
+	}
+
+	getAndProcessTimestampedCounts := func(force bool) {
+		if err := cinfo.FetchNodesAndSvsInfoWithLock(); err != nil {
+			logging.Errorf("Indexer::monitorItemsCount, error observed while updating cluster info cache, err: %v", err)
+			selfRestart()
+			return
+		}
+
+		changed := false
+		computeItemsCountMismatch := false
+		nodeId := ""
+
+		newActiveIndexerNodes := cinfo.GetActiveIndexerNodes()
+		if newActiveIndexerNodes == nil || len(newActiveIndexerNodes) == 0 {
+			selfRestart()
+			return
+		}
+
+		if changeInIndexerNodes(currActiveIndexerNodes, newActiveIndexerNodes) {
+			currActiveIndexerNodes = newActiveIndexerNodes
+			changed = true // There is a change in indexer nodes
+		}
+
+		// Get node with minNodeUUID
+		minNodeUUID := currActiveIndexerNodes[0].NodeUUID
+		for i := 1; i < len(currActiveIndexerNodes); i++ {
+			minNodeUUID = min(minNodeUUID, currActiveIndexerNodes[i].NodeUUID)
+		}
+
+		// Only the node with minNodeUUID will compute items_count mismatch
+		// All other nodes will reset existing stats and remain idle
+		for _, node := range currActiveIndexerNodes {
+			if node.ThisNode && node.NodeUUID == minNodeUUID {
+				// check for mismatch if it is either forced by ticker or if there is a change in topology
+				computeItemsCountMismatch = force || changed
+				nodeId = node.Hostname
+			}
+		}
+
+		if computeItemsCountMismatch {
+			logging.Infof("Indexer::monitorItemsCount computing items_count mismatch from node: %v", nodeId)
+		} else { // RESET any stats that are set on this node
+
+		}
+	}
+
+	// Periodically compute the items_count mismatch
+	// TODO: Make this setting configurable
+	ticker := time.NewTicker(time.Duration(30 * time.Minute))
+
+	ch := scn.GetNotifyCh()
+	for {
+		select {
+		case notif, ok := <-ch:
+			if !ok {
+				selfRestart()
+				return
+			}
+
+			// Process only PoolChangeNotification as any change to
+			// ClusterMembership is reflected only in PoolChangeNotification
+			if notif.Type != common.PoolChangeNotification {
+				continue
+			}
+
+			getAndProcessTimestampedCounts(false)
+
+		case <-ticker.C:
+			getAndProcessTimestampedCounts(true)
+
+		case <-idx.shutdownInitCh:
+			return
 		}
 	}
 }
