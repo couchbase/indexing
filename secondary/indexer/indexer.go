@@ -14451,6 +14451,8 @@ func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
 
 func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 
+	corruptedIndexesMap := make(map[string]interface{})
+
 	compareSeqnos := func(i, j int) bool {
 		firstSeqnos := sortedIndexInfo[i].timestamp
 		secondSeqnos := sortedIndexInfo[j].timestamp
@@ -14495,11 +14497,22 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 					sortedIndexInfo[i].IndexName, sortedIndexInfo[i].PartitionID, sortedIndexInfo[i].timestamp,
 					sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i].ItemsCount, sortedIndexInfo[i-1].ReplicaID, sortedIndexInfo[i-1].ItemsCount)
 
-				// TODO: Update stats
-				// TODO: Add to system events
+				// Update the map with the fully qualified index name
+				corruptedIndexesMap[sortedIndexInfo[i].IndexName] = true
+
+				// TODO: Update system events
 			}
 		}
 	}
+
+	// Set the number of corrupt indexes based on the map
+	idx.stats.numCorruptedIndexes.Set(int64(len(corruptedIndexesMap)))
+	idx.stats.corruptedIndexesMap.Set(corruptedIndexesMap)
+}
+
+func (idx *indexer) resetIndexCorruptionStats() {
+	idx.stats.numCorruptedIndexes.Set(0)
+	idx.stats.corruptedIndexesMap.Reset()
 }
 
 func (idx *indexer) getIndexInfoFromTsCounts(tsCounts []*TimestampedCounts) []*IndexInfo {
@@ -14714,7 +14727,7 @@ func (idx *indexer) monitorItemsCount() {
 			idx.checkForItemsCountMismatch(sortedIndexInfo)
 
 		} else { // RESET any stats that are set on this node
-
+			idx.resetIndexCorruptionStats()
 		}
 	}
 

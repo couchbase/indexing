@@ -887,6 +887,9 @@ type IndexerStats struct {
 
 	datapMaintBlockedDurHist stats.Histogram
 	datapInitBlockedDurHist  stats.Histogram
+
+	numCorruptedIndexes stats.Int64Val
+	corruptedIndexesMap *MapHolder
 }
 
 func (s *IndexerStats) Init() {
@@ -964,6 +967,10 @@ func (s *IndexerStats) Init() {
 
 	s.datapInitBlockedDurHist.InitLatency(common.PortBlockDist, prettyTimeToString)
 	s.datapMaintBlockedDurHist.InitLatency(common.PortBlockDist, prettyTimeToString)
+
+	s.numCorruptedIndexes.Init()
+	s.corruptedIndexesMap = &MapHolder{}
+	s.corruptedIndexesMap.Init()
 }
 
 // SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
@@ -1353,6 +1360,25 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	if is.datapInitBlockedDurHist.Map(statMap.spec.consumerFilter) {
 		statMap.AddStat("maint_port_blocked_total_dur", is.datapMaintBlockedDurHist.GetTotal())
 		statMap.AddStat("init_port_blocked_total_dur", is.datapInitBlockedDurHist.GetTotal())
+	}
+
+	statMap.AddStatValueFiltered("num_corrupted_indexes", &is.numCorruptedIndexes)
+	is.PopulateCorruptedIndexes(statMap)
+}
+
+func (is *IndexerStats) PopulateCorruptedIndexes(statMap *StatsMap) {
+	if is.corruptedIndexesMap == nil {
+		return
+	}
+
+	corrupted := is.corruptedIndexesMap.Get()
+
+	var val stats.BoolVal
+	val.Init()
+	val.Set(true)
+
+	for indexName := range corrupted {
+		statMap.AddStatValueFiltered(indexName+":is_corrupted", &val)
 	}
 }
 
@@ -3406,6 +3432,9 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnet_avg_scan_rate gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnet_avg_scan_rate %v\n", METRICS_PREFIX, is.netAvgScanRate.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_corrupted_indexes gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_corrupted_indexes %v\n", METRICS_PREFIX, is.numCorruptedIndexes.Value()))...)
 
 	// aggregated plasma stats
 	out = populateAggregatedStorageMetrics(out)
