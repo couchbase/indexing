@@ -3182,6 +3182,8 @@ type IndexInfo struct {
 	Bucket       string `json:"bucket"`       // bucket to which the index belogs
 	IsArrayIndex bool   `json:"isArrayIndex"` // Some validations happen only for non-array indexes
 	ItemsCount   uint64 `json:"items_count"`  // total number of items in the snapshot at the recorded timestamp
+
+	timestamp []uint64 // Used only for internal processing - not exported
 }
 
 type TimestampedCounts struct {

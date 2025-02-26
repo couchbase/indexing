@@ -24,12 +24,14 @@ import (
 	"runtime"
 	"runtime/debug"
 	"runtime/pprof"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/couchbase/cbauth/service"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	l "github.com/couchbase/indexing/secondary/logging"
 
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
@@ -14447,6 +14449,24 @@ func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
 	}
 }
 
+func (idx *indexer) getIndexInfoFromTsCounts(tsCounts []*TimestampedCounts) []*IndexInfo {
+	var out []*IndexInfo
+	for i := range tsCounts {
+		for j := range tsCounts[i].Indexes {
+			tsCounts[i].Indexes[j].timestamp = tsCounts[i].Timestamp
+		}
+		out = append(out, tsCounts[i].Indexes...)
+	}
+
+	// sort the output
+	sort.Slice(out, func(i, j int) bool {
+		return (out[i].IndexName < out[j].IndexName) ||
+			(out[i].IndexName == out[j].IndexName && out[i].PartitionID < out[j].PartitionID)
+	})
+
+	return out
+}
+
 func (idx *indexer) monitorItemsCount() {
 
 	defer func() {
@@ -14517,6 +14537,79 @@ func (idx *indexer) monitorItemsCount() {
 		return
 	}
 
+	getTimestampedCountsFromNode := func(addr string) []*TimestampedCounts {
+		resp, err := getWithAuth(addr + "/stats/timestampedCounts")
+		if err != nil {
+			logging.Warnf("Indexer::monitorItemsCount: Failed to get the timestampedCount stats from node: %v, err: %v. Ignoring the node", addr, err)
+			return nil
+		}
+
+		if resp == nil {
+			logging.Warnf("Indexer::monitorItemsCount: nil response received from timestampedCount stats req from node: %v. Ignoring the node", addr)
+			return nil
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			logging.Warnf("Indexer::monitorItemsCount: Invalid response received from timestampedCount stats req from node: %v, resp.StatusCode: %v. Ignoring the node", addr, resp.StatusCode)
+			return nil
+		}
+
+		var statusResp []*TimestampedCounts
+		bytes, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			l.Errorf("Indexer::monitorItemsCount Error while reading response from node: %v err: %v", addr, err)
+			return nil
+		}
+
+		if err = json.Unmarshal(bytes, &statusResp); err != nil {
+			l.Errorf("Indexer::monitorItemsCount Error unmarshal response from node: %v err: %v", addr, err)
+			return nil
+		}
+
+		return statusResp
+	}
+
+	getFromActiveIndexerNodes := func() []*TimestampedCounts {
+		var allTimestampedCounts []*TimestampedCounts
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+
+		nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
+		for _, nid := range nids {
+			// obtain the admin port for the indexer node
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
+			if err != nil {
+				logging.Errorf("Indexer::monitorItemsCount: Error from getting service address for node %v. Error = %v", nid, err)
+				return nil
+			}
+
+			restCall := func(nid common.NodeId, addr string) {
+				defer wg.Done()
+				t0 := time.Now()
+
+				resp := getTimestampedCountsFromNode(addr)
+
+				dur := time.Since(t0)
+				if dur > 30*time.Second {
+					logging.Warnf("Indexer::monitorItemsCount %v took %v for addr %v", dur, addr)
+				}
+
+				mu.Lock()
+				defer mu.Unlock()
+				if resp != nil {
+					allTimestampedCounts = append(allTimestampedCounts, resp...)
+				}
+			}
+
+			wg.Add(1)
+			go restCall(nid, addr)
+		}
+
+		wg.Wait()
+		return allTimestampedCounts
+	}
+
 	getAndProcessTimestampedCounts := func(force bool) {
 		if err := cinfo.FetchNodesAndSvsInfoWithLock(); err != nil {
 			logging.Errorf("Indexer::monitorItemsCount, error observed while updating cluster info cache, err: %v", err)
@@ -14557,6 +14650,12 @@ func (idx *indexer) monitorItemsCount() {
 
 		if computeItemsCountMismatch {
 			logging.Infof("Indexer::monitorItemsCount computing items_count mismatch from node: %v", nodeId)
+
+			// Step-1: Query all indexer nodes and get the timestamped counts
+			allTimestampedCounts := getFromActiveIndexerNodes()
+
+			idx.getIndexInfoFromTsCounts(allTimestampedCounts)
+
 		} else { // RESET any stats that are set on this node
 
 		}
