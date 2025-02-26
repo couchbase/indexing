@@ -14449,6 +14449,59 @@ func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
 	}
 }
 
+func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
+
+	compareSeqnos := func(i, j int) bool {
+		firstSeqnos := sortedIndexInfo[i].timestamp
+		secondSeqnos := sortedIndexInfo[j].timestamp
+
+		if len(firstSeqnos) != len(secondSeqnos) {
+			return false
+		}
+
+		for k := range firstSeqnos {
+			if firstSeqnos[k] != secondSeqnos[k] {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	compareItemsCount := func(i, j int) bool {
+		firstItemsCount := sortedIndexInfo[i].ItemsCount
+		secondItemsCount := sortedIndexInfo[j].ItemsCount
+
+		return firstItemsCount == secondItemsCount
+	}
+
+	for i := 1; i < len(sortedIndexInfo); i++ {
+		if sortedIndexInfo[i].Bucket == sortedIndexInfo[i-1].Bucket &&
+			sortedIndexInfo[i].IndexName == sortedIndexInfo[i-1].IndexName &&
+			sortedIndexInfo[i].PartitionID == sortedIndexInfo[i-1].PartitionID &&
+			sortedIndexInfo[i].ReplicaID != sortedIndexInfo[i-1].ReplicaID {
+			// compare seqnos. first
+			seqnosMatch := compareSeqnos(i, i-1)
+			itemsCountMatch := compareItemsCount(i, i-1)
+
+			if seqnosMatch && itemsCountMatch { // No need to process this pair of replicas as items count matched
+				continue
+			}
+
+			if seqnosMatch && !itemsCountMatch {
+				// seqnos. matched but items count did not match. Log fatal error and update stats
+				logging.Fatalf("Indexer::checkItemsCountMismatch Raising an alert as seqnos matched between replicas but items count did not match "+
+					"for index: %v, partnId: %v, timestamp: %v, items_count: (%v:%v, %v:%v)",
+					sortedIndexInfo[i].IndexName, sortedIndexInfo[i].PartitionID, sortedIndexInfo[i].timestamp,
+					sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i].ItemsCount, sortedIndexInfo[i-1].ReplicaID, sortedIndexInfo[i-1].ItemsCount)
+
+				// TODO: Update stats
+				// TODO: Add to system events
+			}
+		}
+	}
+}
+
 func (idx *indexer) getIndexInfoFromTsCounts(tsCounts []*TimestampedCounts) []*IndexInfo {
 	var out []*IndexInfo
 	for i := range tsCounts {
@@ -14654,7 +14707,11 @@ func (idx *indexer) monitorItemsCount() {
 			// Step-1: Query all indexer nodes and get the timestamped counts
 			allTimestampedCounts := getFromActiveIndexerNodes()
 
-			idx.getIndexInfoFromTsCounts(allTimestampedCounts)
+			// Step-2: Extract index info from timestamp counts
+			sortedIndexInfo := idx.getIndexInfoFromTsCounts(allTimestampedCounts)
+
+			// Step-3: Check for any items_count mismatches
+			idx.checkForItemsCountMismatch(sortedIndexInfo)
 
 		} else { // RESET any stats that are set on this node
 
