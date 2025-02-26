@@ -380,6 +380,7 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.LSSCleanerInterval = time.Duration(slice.sysconf["bhive.LSSCleanerInterval"].Int()) * time.Millisecond
 	cfg.LSSCleanerThreshold = float32(slice.sysconf["bhive.LSSCleanerThreshold"].Float64())
 	cfg.LSSCleanerMinSize = int64(slice.sysconf["bhive.LSSCleanerMinSize"].Int())
+	cfg.LSSReclaimBlockSize = int64(slice.sysconf["bhive.LSSReclaimBlockSize"].Int())
 
 	cfg.NumWriters = slice.maxNumWriters
 

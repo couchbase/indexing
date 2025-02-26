@@ -4415,6 +4415,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.bhive.LSSReclaimBlockSize": ConfigValue{
+		2 * 1024 * 1024,
+		"The granularity in bytes at which LSS is hole punched to reduce disk size of the log",
+		2 * 1024 * 1024,
+		false,
+		false,
+	},
 	"indexer.bhive.EnableRollbackFilterMerge": ConfigValue{
 		true,
 		"Enables or disables the lssVIndex rollback filter merge operation",
