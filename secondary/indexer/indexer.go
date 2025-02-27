@@ -8832,7 +8832,7 @@ func (idx *indexer) createRealInstIdMap() common.IndexInstMap {
 }
 
 func (idx *indexer) cleanupOrphanIndexes() {
-	storageDir := idx.config["storage_dir"].String()
+	storageDir, _ := common.GetStorageDirs(idx.config, common.NA_StorageEngine)
 
 	mode := idx.getLocalStorageMode(idx.config)
 	flist, err := ListSlices(mode, storageDir)
@@ -8891,7 +8891,7 @@ func (idx *indexer) cleanupOrphanIndexes() {
 }
 
 func (idx *indexer) cleanupRebalStagingDir() error {
-	storageDir := idx.config["storage_dir"].String()
+	storageDir, _ := common.GetStorageDirs(idx.config, common.NA_StorageEngine)
 	rpcDir := GetRPCRootDir()
 
 	if rpcDir != "" && common.GetStorageMode() == common.PLASMA {
@@ -9638,7 +9638,7 @@ func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
 		return
 	}
 
-	storageDir := idx.config["storage_dir"].String()
+	storageDir, _ := c.GetStorageDirs(idx.config, c.GetStorageEngineForIndexDefn(&indexInst.Defn))
 	corruptDataDir := filepath.Join(storageDir, CORRUPT_DATA_SUBDIR)
 	if err := iowrap.Os_MkdirAll(corruptDataDir, 0755); err != nil {
 		logging.Errorf("Indexer::backupCorruptIndexDataFiles %v %v error %v while taking backup:MkdirAll %v",
@@ -9946,12 +9946,12 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 	inst.Error = ""
 
 	// remove old files
-	storage_dir := idx.config["storage_dir"].String()
+	storage_dir, engineDir := c.GetStorageDirs(idx.config, c.GetStorageEngineForIndexDefn(&inst.Defn))
 
 	partnDefnList := inst.Pc.GetAllPartitions()
 	for _, partnDefn := range partnDefnList {
-		path := filepath.Join(storage_dir, IndexPath(inst, partnDefn.GetPartitionId(), SliceId(0)))
-		if err := DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), storage_dir, path); err != nil {
+		path := filepath.Join(engineDir, IndexPath(inst, partnDefn.GetPartitionId(), SliceId(0)))
+		if err := DestroySlice(storageMode, storage_dir, path); err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -10194,7 +10194,7 @@ func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceI
 // been initialized
 func (idx *indexer) forceCleanupPartitionData(inst *common.IndexInst, partitionId common.PartitionId, sliceId SliceId) error {
 
-	storage_dir := idx.config["storage_dir"].String()
+	storage_dir, _ := common.GetStorageDirs(idx.config, common.GetStorageEngineForIndexDefn(&inst.Defn))
 	path := filepath.Join(storage_dir, IndexPath(inst, partitionId, sliceId))
 	return DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), storage_dir, path)
 }
@@ -10993,7 +10993,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	}
 
 	// Default storage is forestdb
-	storage_dir := conf["storage_dir"].String()
+	storage_dir, _ := c.GetStorageDirs(conf, c.GetStorageEngineForIndexDefn(&indInst.Defn))
 	iowrap.Os_Mkdir(storage_dir, 0755)
 	if _, e := iowrap.Os_Stat(storage_dir); e != nil {
 		common.CrashOnError(e)
@@ -11036,6 +11036,7 @@ func DestroySlice(mode common.StorageMode, storageDir string, path string) error
 	case common.MOI, common.FORESTDB, common.NOT_SET:
 		return iowrap.Os_RemoveAll(path)
 	case common.PLASMA:
+		// determine if path has storageDir.BhiveDir as base. if yes, call bhive destroy
 		return DestroySlice_Plasma(storageDir, path)
 	}
 
@@ -13592,7 +13593,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		return bucket, scope, collection
 	}
 
-	storageDir := config["storage_dir"].String()
+	storageDir, _ := common.GetStorageDirs(config, c.NA_StorageEngine)
 	clusterAddr := idx.config["clusterAddr"].String()
 
 	bucket, scope, collection := getBucketScopeAndCollFromKeyspaceId(keyspaceId)
@@ -13616,7 +13617,6 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		logging.Infof("Indexer::initiateTraining updating retry from %v to %v", retry, maxRetry)
 		retry = maxRetry
 	} else if retry > 0 {
-
 		for _, ratio := range retryTrainingInstRatioMap {
 			maxRatio = max(maxRatio, ratio)
 		}
@@ -14339,7 +14339,10 @@ func (idx *indexer) persistCodebookToDisk(storageDir string,
 
 }
 
-func (idx *indexer) removeCodebookDir(storageDir string, idxInst common.IndexInst, partnId common.PartitionId, partnInstMap PartitionInstMap) {
+func (idx *indexer) removeCodebookDir(
+	storageDir string, idxInst common.IndexInst,
+	partnId common.PartitionId, partnInstMap PartitionInstMap,
+) {
 
 	partnInst := partnInstMap[partnId]
 	slices := partnInst.Sc.GetAllSlices()

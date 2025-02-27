@@ -95,10 +95,17 @@ func CodebookPath(inst *common.IndexInst, partnId common.PartitionId, sliceId Sl
 	return filepath.Join(indexPath, CODEBOOK_DIR, codebookName)
 }
 
-func InitCodebookDir(storageDir string, idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) error {
+func InitCodebookDir(
+	storageDir string, idxInst *common.IndexInst,
+	partnId common.PartitionId, sliceId SliceId,
+) error {
 
 	// Construct codebookDirPath path
-	codebookDirPath := filepath.Join(storageDir, IndexPath(idxInst, partnId, sliceId), CODEBOOK_DIR)
+	codebookDirPath := filepath.Join(
+		storageDir,
+		IndexPath(idxInst, partnId, sliceId),
+		CODEBOOK_DIR,
+	)
 
 	//  Check the presence of codebook dir. Create one if it does not exist
 	if _, err := iowrap.Os_Stat(codebookDirPath); err != nil {
@@ -113,8 +120,15 @@ func InitCodebookDir(storageDir string, idxInst *common.IndexInst, partnId commo
 	return nil
 }
 
-func RemoveCodebookDir(storageDir string, idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) error {
-	codebookDirPath := filepath.Join(storageDir, IndexPath(idxInst, partnId, sliceId), CODEBOOK_DIR)
+func RemoveCodebookDir(
+	storageDir string, idxInst *common.IndexInst,
+	partnId common.PartitionId, sliceId SliceId,
+) error {
+	codebookDirPath := filepath.Join(
+		storageDir,
+		IndexPath(idxInst, partnId, sliceId),
+		CODEBOOK_DIR,
+	)
 	return iowrap.Os_RemoveAll(codebookDirPath)
 }
 

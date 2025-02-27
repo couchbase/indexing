@@ -903,9 +903,10 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 			case common.PauseResumeTask:
 				meta[plasma.GSIPauseResume] = transferId
 			}
+			baseDir, _ := c.GetStorageDirs(stm.config, c.Plasma_StorageEngine)
 			meta[plasma.GSIShardID] = uint64(shardId)
 			meta[plasma.GSIShardUploadPath] = shardPath
-			meta[plasma.GSIStorageDir] = stm.config["storage_dir"].String()
+			meta[plasma.GSIStorageDir] = baseDir
 
 			if region != "" {
 				meta[plasma.GSIBucketRegion] = region
@@ -1060,7 +1061,11 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 			codebookMap[inst.InstId] = make(map[c.PartitionId]string)
 		}
 		for _, partnId := range inst.Defn.Partitions {
-			destPath := filepath.Join(stm.config["storage_dir"].String(), CodebookPath(&inst, partnId, SliceId(0)))
+			storageDir, _ := c.GetStorageDirs(stm.config, c.GetStorageEngineForIndexDefn(&inst.Defn))
+			destPath := filepath.Join(
+				storageDir,
+				CodebookPath(&inst, partnId, SliceId(0)),
+			)
 			codebookMap[inst.InstId][partnId] = destPath
 			codebookPaths = append(codebookPaths, destPath)
 		}
@@ -1143,7 +1148,7 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 
 func (stm *ShardTransferManager) RestoreCodebook(instRenameMap map[common.ShardId]map[string]string, vectorInst c.IndexInst, partnId c.PartitionId, srcRoot, destFilePath string) error {
 
-	storageDir := stm.config["storage_dir"].String()
+	storageDir, _ := c.GetStorageDirs(stm.config, c.GetStorageEngineForIndexDefn(&vectorInst.Defn))
 	relIdxPath := IndexPath(&vectorInst, partnId, SliceId(0))
 
 	// For shared instances create the index directory. For dedicated instances Shard Restore will have already created
@@ -1153,7 +1158,6 @@ func (stm *ShardTransferManager) RestoreCodebook(instRenameMap map[common.ShardI
 		logging.Errorf("ShardTransferManager::RestoreCodebook %v", err)
 		return err
 	}
-
 	// TODO: check for the sliceId information
 	srcFileName := genCodebookFileStagingName(destFilePath)
 	for _, renameMap := range instRenameMap {
@@ -1243,8 +1247,10 @@ func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message, no
 
 	start := time.Now()
 
-	storageDir := stm.config["storage_dir"].String()
+	storageDir, _ := c.GetStorageDirs(stm.config, c.Plasma_StorageEngine)
 	plasma.SetStorageDir(storageDir)
+
+	// TODO: add bhive.SetStorageDir(storageDir.BHiveDir)
 
 	msg := cmd.(*MsgDestroyLocalShardData)
 	logging.Infof("ShardTransferManager::processDestroyLocalShardMessage processing command: %v", msg)
@@ -1559,8 +1565,8 @@ func (stm *ShardTransferManager) initPeerRPCServerNoLock(rebalId string) error {
 	port := stm.config["shardTransferServerPort"].String()
 	nodeAddr := net.JoinHostPort("", port)
 
-	dir := stm.config["storage_dir"].String()
-	dir = filepath.Join(dir, plasma.RPCRootDir)
+	storageDirs, _ := c.GetStorageDirs(stm.config, c.Plasma_StorageEngine)
+	dir := filepath.Join(storageDirs, plasma.RPCRootDir)
 
 	cfg := loadRPCServerConfig(stm.config)
 	cfg.RPCHttpServerCfg.DoServe = false
@@ -1819,9 +1825,9 @@ func (stm *ShardTransferManager) handleClearShardType(cmd Message) {
 }
 
 func (stm *ShardTransferManager) TransferCodebook(codebookCopier plasma.Copier, codebookSrcPath string) error {
-	var srcDir, srcFile string
+	var srcFile string
 	var sz int64
-	srcDir = stm.config["storage_dir"].String()
+	srcDir, _ := c.GetStorageDirs(stm.config, c.Plasma_StorageEngine)
 
 	srcFile = filepath.Join(srcDir, codebookSrcPath)
 	if info, err := iowrap.Os_Stat(srcFile); info != nil {
