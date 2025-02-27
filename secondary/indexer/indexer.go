@@ -14731,9 +14731,13 @@ func (idx *indexer) monitorItemsCount() {
 		}
 	}
 
-	// Periodically compute the items_count mismatch
-	// TODO: Make this setting configurable
-	ticker := time.NewTicker(time.Duration(30 * time.Minute))
+	monitorItemsCountInterval := idx.config["monitor_items_count_interval"].Int()
+
+	// Periodically compute the items_count mismatch. Invoke the ticker every 1 min.
+	// Make the check every "monitorItemsCountInterval" minutes. This will make sure
+	// any config changes are applied within a window of 1 minute
+	ticker := time.NewTicker(time.Duration(1 * time.Minute))
+	lastCheck := time.Now()
 
 	ch := scn.GetNotifyCh()
 	for {
@@ -14750,10 +14754,31 @@ func (idx *indexer) monitorItemsCount() {
 				continue
 			}
 
+			// Disable the check for if monitorItemsCountInterval is "0" and reset the stats
+			if monitorItemsCountInterval == 0 {
+				idx.resetIndexCorruptionStats()
+				continue
+			}
+
 			getAndProcessTimestampedCounts(false)
 
 		case <-ticker.C:
-			getAndProcessTimestampedCounts(true)
+			// Disable the check for if monitorItemsCountInterval is "0" and reset the stats
+			if monitorItemsCountInterval == 0 {
+				idx.resetIndexCorruptionStats()
+				continue
+			}
+
+			if time.Since(lastCheck) > time.Duration(monitorItemsCountInterval)*time.Minute {
+				lastCheck = time.Now()
+				getAndProcessTimestampedCounts(true)
+			}
+
+			// Check for any change in config
+			newMonitorItemsCountInterval := idx.config["monitor_items_count_interval"].Int()
+			if newMonitorItemsCountInterval != monitorItemsCountInterval {
+				monitorItemsCountInterval = newMonitorItemsCountInterval
+			}
 
 		case <-idx.shutdownInitCh:
 			return

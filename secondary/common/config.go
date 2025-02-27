@@ -3988,6 +3988,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.monitor_items_count_interval": ConfigValue{
+		30,
+		"Time in minutes at which all the divergence in items_count is verified by indexer. " +
+			"set to 0 to disable",
+		30,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.serverless.maxInstancePerShard": ConfigValue{
 		uint64(math.MaxInt64),
 		"Maximum number of instances per shard for serverless",
