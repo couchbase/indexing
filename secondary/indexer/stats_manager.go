@@ -2658,6 +2658,37 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	return st
 }
 
+func (is *IndexerStats) populateIsCorruptedStat(out []byte) []byte {
+	corrupteIndexes := is.corruptedIndexesMap.Get()
+
+	var str, collectionLabels string
+	fmtStr := "%v%v{bucket=\"%v\", %vindex=\"%v\"} %v\n"
+
+	for indexName := range corrupteIndexes {
+		var bucket, scope, collection, index string
+		// Retrive bucket, scope, collection from the name
+		split := strings.Split(indexName, ":")
+		if len(split) == 2 { // bucket:index_name
+			bucket = split[0]
+			scope = common.DEFAULT_SCOPE
+			collection = common.DEFAULT_COLLECTION
+			index = split[1]
+		} else if len(split) == 4 {
+			bucket = split[0]
+			scope = split[1]
+			collection = split[2]
+			index = split[3]
+		} else {
+			// Ignore the index
+			continue
+		}
+		collectionLabels = fmt.Sprintf("scope=\"%v\", collection=\"%v\", ", scope, collection)
+		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "is_corrupted", bucket, collectionLabels, index, true)
+		out = append(out, []byte(str)...)
+	}
+	return out
+}
+
 // MarshalJSON reworks the layout of the stats in child call GetStats, then marshals the result to a
 // byte slice.
 func (is *IndexerStats) MarshalJSON(spec *statsSpec, creds cbauth.Creds) ([]byte, error) {
@@ -3497,6 +3528,8 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 	for _, s := range is.indexes {
 		out = s.populateMetrics(out)
 	}
+
+	out = is.populateIsCorruptedStat(out)
 
 	if common.IsServerlessDeployment() {
 		func() {
