@@ -234,6 +234,52 @@ loop:
 	}
 }
 
+func respWithErr(cmd Message, err error) {
+	// respWithErr can get blocking if the sender is not reading from the respCh before storageMgr
+	// sends a message to respCh. use this go-routine to not block storageMgr run loop. the main
+	// idea is to avoid any deadlock situation where storageMgr is blocked on respCh but the sender
+	// has also send another message on supervisor channel, which gets blocked until storageMgr
+	// responds to its command channel for current message, before reading from respCh
+
+	go func(cmd Message, err error) { // pass params to put them on stack rather than escaping to heap
+		logging.Errorf("%v", err)
+		errMsg := &MsgError{
+			err: Error{
+				code:     ERROR_INDEXER_INTERNAL_ERROR,
+				severity: FATAL,
+				cause:    err,
+			},
+		}
+		switch cmd.GetMsgType() {
+		case START_SHARD_TRANSFER:
+			msg := cmd.(*MsgStartShardTransfer)
+			respCh := msg.GetRespCh()
+			respCh <- errMsg
+		case START_SHARD_RESTORE:
+			msg := cmd.(*MsgStartShardRestore)
+			respCh := msg.GetRespCh()
+			respCh <- errMsg
+		case START_PEER_SERVER,
+			STOP_PEER_SERVER:
+			msg := cmd.(*MsgPeerServerCommand)
+			respCh := msg.GetRespCh()
+			respCh <- err
+		case LOCK_SHARDS,
+			UNLOCK_SHARDS, RESTORE_AND_UNLOCK_LOCKED_SHARDS:
+			msg := cmd.(*MsgLockUnlockShards)
+			respCh := msg.GetRespCh()
+			shardIDs := msg.GetShardIds()
+			errMap := make(map[common.ShardId]error)
+			for _, shardID := range shardIDs {
+				errMap[shardID] = err
+			}
+			respCh <- errMap
+		default:
+			// only message types which expect an error in resp get a reply. for all others we log error
+		}
+	}(cmd, err)
+}
+
 func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	switch cmd.GetMsgType() {
@@ -300,7 +346,8 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
 		} else {
-			common.CrashOnError(
+			respWithErr(
+				cmd,
 				fmt.Errorf("StorageMgr::handleSupervisorCommands ShardTransferManager Not Initialized during msg %v execution",
 					cmd),
 			)
@@ -322,7 +369,8 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
 		} else {
-			common.CrashOnError(
+			respWithErr(
+				cmd,
 				fmt.Errorf("StorageMgr::handleSupervisorCommands ShardTransferManager Not Initialized during msg %v execution",
 					cmd),
 			)
@@ -339,7 +387,8 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
 		} else {
-			common.CrashOnError(
+			respWithErr(
+				cmd,
 				fmt.Errorf("StorageMgr::handleSupervisorCommands ShardTransferManager Not Initialized during msg %v execution",
 					cmd),
 			)
@@ -2733,7 +2782,8 @@ func (s *storageMgr) handleShardTransfer(cmd Message) {
 	if s.stm != nil {
 		s.stm.ProcessCommand(cmd)
 	} else {
-		common.CrashOnError(
+		respWithErr(
+			cmd,
 			fmt.Errorf("StorageMgr::handleShardTransfer ShardTransferManager Not Initialized during msg %v execution",
 				cmd),
 		)
@@ -2755,7 +2805,8 @@ func (s *storageMgr) handlePopulateShardType(cmd Message) {
 	if s.stm != nil {
 		s.stm.ProcessCommand(cmd)
 	} else {
-		common.CrashOnError(
+		respWithErr(
+			cmd,
 			fmt.Errorf("StorageMgr::handlePopulateShardType ShardTransferManager Not Initialized during msg %v execution",
 				cmd),
 		)
@@ -2775,7 +2826,8 @@ func (s *storageMgr) handleClearShardType(cmd Message) {
 	if s.stm != nil {
 		s.stm.ProcessCommand(cmd)
 	} else {
-		common.CrashOnError(
+		respWithErr(
+			cmd,
 			fmt.Errorf("StorageMgr::handleClearShardType ShardTransferManager Not Initialized during msg %v execution",
 				cmd),
 		)
