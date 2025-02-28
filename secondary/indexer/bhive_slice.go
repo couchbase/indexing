@@ -361,7 +361,7 @@ func createBhiveSliceDir(storageDir string, path string, isNew bool) error {
 	_, err := iowrap.Os_Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			iowrap.Os_Mkdir(path, 0777)
+			iowrap.Os_MkdirAll(path, 0777)
 			return nil
 		}
 	} else if isNew {

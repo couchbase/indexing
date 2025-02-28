@@ -2287,21 +2287,6 @@ func GetStorageEngineForIndexDefn(defn *IndexDefn) StorageEngine {
 	return NA_StorageEngine
 }
 
-type StoragePaths struct {
-	// BaseDir - Base indexer directory. folder for local metadata, cache and indexes. its value
-	// is set from indexer config "storage_dir"
-	BaseDir string
-	// PlasmaDir - dir in which plasma indexes are stored and base dir for codebooks of vector
-	// indexes. in all cases, this value is the same as BaseDir
-	PlasmaDir string
-	// MoiDir - dir in which moi disk snapshots are stored. its value is the same as BaseDir
-	MoiDir string
-	// BhiveDir - dir for storing bhive indexes and codebooks. its value is BaseDir + BHIVE_DIR_PREFIX
-	BhiveDir string
-	// ForestDbDir - dir for storing forestdb indexes. its value is the same as BaseDir
-	ForestDbDir string
-}
-
 // GetStorageDirs - call this to get the storage paths for storage engine
 func GetStorageDirs(cfg Config, se StorageEngine) (string, string) {
 	baseDir := cfg.getIndexerConfigString("storage_dir")

@@ -4786,6 +4786,9 @@ func getCodebookPaths(tt *c.TransferToken) (codebookPaths []string) {
 					// It is an impossible path if the codebookPath has not been updated using the renameMap.
 				}
 
+				if idxInst.Defn.IsBhive() {
+					codebookPath = filepath.Join(c.BHIVE_DIR_PREFIX, codebookPath)
+				}
 				codebookPaths = append(codebookPaths, codebookPath)
 			}
 		}
