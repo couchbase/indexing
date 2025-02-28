@@ -13696,11 +13696,23 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				partnInstMap := indexPartnMap[replicaInstId]
 				codebook, err, partnId := getInstCodebookIfExists(partnInstMap)
 				if err != nil {
-					logging.Warnf("Indexer::initiateTraining getting serialized codebook from replica for instId: %v failed. err: %v", instId, err)
+					logging.Warnf("Indexer::initiateTraining getting serialized codebook from replica:%v for instId: %v failed. err: %v", replicaInstId, instId, err)
 				} else {
 					defnCodebook = codebook
 					setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, defnCodebook)
 					logging.Infof("Indexer::initiateTraining using serialized codebook from replica instance for instId: %v, partnId: %v", instId, partnId)
+				}
+			} else {
+				// Case when only subset of partitions of current instId are trained and indexer restarts.
+				// Check if there is codebook for any of the partitions of same instId
+				partnInstMap := indexPartnMap[instId]
+				codebook, err, partnId := getInstCodebookIfExists(partnInstMap)
+				if err != nil {
+					logging.Warnf("Indexer::initiateTraining getting serialized codebook from partitions of same inst for instId: %v failed. err: %v", instId, err)
+				} else {
+					defnCodebook = codebook
+					setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, defnCodebook)
+					logging.Infof("Indexer::initiateTraining using serialized codebook from partitions of same inst for instId: %v, partnId: %v", instId, partnId)
 				}
 			}
 		}
