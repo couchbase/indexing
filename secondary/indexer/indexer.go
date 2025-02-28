@@ -14452,6 +14452,8 @@ func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
 func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 
 	corruptedIndexesMap := make(map[string]interface{})
+	bucketSeqnos := make(map[string][]uint64) // seqnos. per bucket
+	cluster := idx.config["clusterAddr"].String()
 
 	compareSeqnos := func(i, j int) bool {
 		firstSeqnos := sortedIndexInfo[i].timestamp
@@ -14475,6 +14477,25 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 		secondItemsCount := sortedIndexInfo[j].ItemsCount
 
 		return firstItemsCount == secondItemsCount
+	}
+
+	computePendingItems := func(bucketSeqnos []uint64, indexSeqnos []uint64) (int64, bool) {
+		if len(bucketSeqnos) != len(indexSeqnos) {
+			return math.MaxInt64, false
+		}
+
+		var out int64
+		for i := range bucketSeqnos {
+			out += int64(bucketSeqnos[i] - indexSeqnos[i])
+		}
+		return out, true
+	}
+
+	abs := func(a int64) int64 {
+		if a < 0 {
+			return 0 - a
+		}
+		return a
 	}
 
 	for i := 1; i < len(sortedIndexInfo); i++ {
@@ -14501,6 +14522,48 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 				corruptedIndexesMap[sortedIndexInfo[i].IndexName] = true
 
 				// TODO: Update system events
+			}
+
+			// If seqnos. does not match, then compute the high seqnos. to compare the worstcase items_count difference
+			// This check works only for non-array indexes. For array indexes, we do not know how many array entries can
+			// exist with each index mutation. Hence, the check is disabled for array indexes
+			if !seqnosMatch && sortedIndexInfo[i].IsArrayIndex == false {
+				var err error
+				bucket := sortedIndexInfo[i].Bucket
+				if _, ok := bucketSeqnos[sortedIndexInfo[i].Bucket]; !ok {
+					bucketSeqnos[bucket], err = common.BucketSeqnos(cluster, "default", bucket)
+					if err != nil {
+						logging.Warnf("Indexer::checkForItemsCountMismatch Error observed while retrieving seqnos. for bucket: %v, err: %v", bucket, err)
+						continue
+					}
+				}
+
+				firstIndexPendingItems, ok := computePendingItems(bucketSeqnos[bucket], sortedIndexInfo[i-1].timestamp)
+				if !ok {
+					logging.Warnf("Indexer::checkForItemsCountMismatch Skipping seqnos. comparision due to mismtach in the length "+
+						"of seqnos between bucket and index. BucketSeqnos: %v, indexInfo: %v", bucketSeqnos[bucket], sortedIndexInfo[i])
+					continue
+				}
+				secondIndexPendingItems, ok := computePendingItems(bucketSeqnos[bucket], sortedIndexInfo[i].timestamp)
+				if !ok {
+					logging.Warnf("Indexer::checkForItemsCountMismatch Skipping seqnos. comparision due to mismtach in the length "+
+						"of seqnos between bucket and index. BucketSeqnos: %v, indexInfo: %v", bucketSeqnos[bucket], sortedIndexInfo[i-1])
+					continue
+				}
+
+				// The sum of firstIndexPendingItems and secondIndexPendingItems will determine the worst case
+				// mutations that are possible between the replicas. If the difference in items_count is greater
+				// than the worst case mutations, then the index may not be able to converge. Hence, raise an alert
+				if abs(int64(sortedIndexInfo[i].ItemsCount-sortedIndexInfo[i-1].ItemsCount)) > firstIndexPendingItems+secondIndexPendingItems {
+					logging.Fatalf("Indexer::checkItemsCountMismatch Raising an alert as the worstcase difference in pending items is less than items_count difference between replicas "+
+						"for index: %v, partnId: %v, items_count: (%v:%v, %v:%v), bucket seqnos: %v, index_seqnos: %v, %v",
+						sortedIndexInfo[i].IndexName, sortedIndexInfo[i].PartitionID, sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i].ItemsCount,
+						sortedIndexInfo[i-1].ReplicaID, sortedIndexInfo[i-1].ItemsCount, bucketSeqnos[bucket],
+						sortedIndexInfo[i].timestamp, sortedIndexInfo[i-1].timestamp)
+
+					// Update the map with the fully qualified index name
+					corruptedIndexesMap[sortedIndexInfo[i].IndexName] = true
+				}
 			}
 		}
 	}
