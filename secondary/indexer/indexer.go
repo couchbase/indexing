@@ -269,6 +269,8 @@ type indexer struct {
 	// training is in progress
 	muDropTraining          sync.Mutex
 	dropInstsDuringTraining map[c.IndexInstId]MsgChannel
+
+	refreshTimestampedCountStatsCh chan Message
 }
 
 type kvRequest struct {
@@ -383,9 +385,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		bucketPauseState: make(map[string]bucketStateEnum),
 		recoveryChMap:    make(map[common.IndexInstId]chan bool),
 
-		droppedIndexesDuringRebal: make(map[common.IndexInstId]bool),
-		dropCleanupPending:        make(map[common.IndexInstId][]Slice),
-		dropInstsDuringTraining:   make(map[common.IndexInstId]MsgChannel),
+		droppedIndexesDuringRebal:      make(map[common.IndexInstId]bool),
+		dropCleanupPending:             make(map[common.IndexInstId][]Slice),
+		dropInstsDuringTraining:        make(map[common.IndexInstId]MsgChannel),
+		refreshTimestampedCountStatsCh: make(chan Message, 1),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -1768,6 +1771,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		//forward to storage manager
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
+
+	case REFRESH_TIMESTAMPED_COUNT_STATS:
+		idx.refreshTimestampedCountStatsCh <- msg
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -14842,6 +14848,14 @@ func (idx *indexer) monitorItemsCount() {
 			if newMonitorItemsCountInterval != monitorItemsCountInterval {
 				monitorItemsCountInterval = newMonitorItemsCountInterval
 			}
+
+		case msg := <-idx.refreshTimestampedCountStatsCh: // Force refresh as requested
+			logging.Infof("Indexer::monitorItemsCount: Forcing the diverging replicas check")
+
+			respCh := msg.(*MsgTimestampedCountReq).GetRespCh()
+			getAndProcessTimestampedCounts(true)
+
+			respCh <- nil // return the response back to sender
 
 		case <-idx.shutdownInitCh:
 			return
