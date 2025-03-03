@@ -7421,8 +7421,8 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 		common.CrashOnError(respErr.cause)
 	}
 
-	reqLock := idx.acquireStreamRequestLock(keyspaceId, common.MAINT_STREAM)
-	collectionId := idx.streamKeyspaceIdCollectionId[common.MAINT_STREAM][bucket]
+	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
+	collectionId := idx.streamKeyspaceIdCollectionId[streamId][bucket]
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)

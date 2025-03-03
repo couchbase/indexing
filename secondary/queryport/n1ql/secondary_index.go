@@ -1994,7 +1994,7 @@ func (si *secondaryIndex6) AllowRerank() bool {
 }
 
 func (si *secondaryIndex6) RerankFactor() int32 {
-	if si.AllowRerank() {
+	if si.IsVector() {
 		config := si.gsi.gsiClient.Settings()
 		return config.RerankFactor()
 	} else {

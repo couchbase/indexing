@@ -70,6 +70,7 @@ const (
 	ProjVer_6_5_0
 	ProjVer_7_0_0
 	ProjVer_7_6_0
+	ProjVer_8_0_0
 )
 
 // Payload either carries `vbmap` or `vbs`.
@@ -175,7 +176,7 @@ type VbKeyVersions struct {
 func NewVbKeyVersions(keyspaceId string, vbno uint16,
 	vbuuid uint64, opaque2 uint64, maxMutations int) *VbKeyVersions {
 	vb := &VbKeyVersions{KeyspaceId: keyspaceId, Vbucket: vbno,
-		Vbuuid: vbuuid, Opaque2: opaque2, ProjVer: ProjVer_7_6_0}
+		Vbuuid: vbuuid, Opaque2: opaque2, ProjVer: ProjVer_8_0_0}
 	vb.Kvs = make([]*KeyVersions, 0, maxMutations)
 	vb.Uuid = StreamID(keyspaceId, vbno, opaque2)
 	return vb
