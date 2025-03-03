@@ -14451,7 +14451,7 @@ func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
 
 func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 
-	corruptedIndexesMap := make(map[string]interface{})
+	divergingReplicasMap := make(map[string]interface{})
 	bucketSeqnos := make(map[string][]uint64) // seqnos. per bucket
 	cluster := idx.config["clusterAddr"].String()
 
@@ -14519,7 +14519,7 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 					sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i].ItemsCount, sortedIndexInfo[i-1].ReplicaID, sortedIndexInfo[i-1].ItemsCount)
 
 				// Update the map with the fully qualified index name
-				corruptedIndexesMap[sortedIndexInfo[i].IndexName] = true
+				divergingReplicasMap[sortedIndexInfo[i].IndexName] = true
 
 				// TODO: Update system events
 			}
@@ -14562,20 +14562,20 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 						sortedIndexInfo[i].timestamp, sortedIndexInfo[i-1].timestamp)
 
 					// Update the map with the fully qualified index name
-					corruptedIndexesMap[sortedIndexInfo[i].IndexName] = true
+					divergingReplicasMap[sortedIndexInfo[i].IndexName] = true
 				}
 			}
 		}
 	}
 
-	// Set the number of corrupt indexes based on the map
-	idx.stats.numCorruptedIndexes.Set(int64(len(corruptedIndexesMap)))
-	idx.stats.corruptedIndexesMap.Set(corruptedIndexesMap)
+	// Set the number of diverging replcias indexes based on the map
+	idx.stats.numDivergingReplicaIndexes.Set(int64(len(divergingReplicasMap)))
+	idx.stats.divergingReplicaIndexesMap.Set(divergingReplicasMap)
 }
 
-func (idx *indexer) resetIndexCorruptionStats() {
-	idx.stats.numCorruptedIndexes.Set(0)
-	idx.stats.corruptedIndexesMap.Reset()
+func (idx *indexer) resetDivergingReplicaStats() {
+	idx.stats.numDivergingReplicaIndexes.Set(0)
+	idx.stats.divergingReplicaIndexesMap.Reset()
 }
 
 func (idx *indexer) getIndexInfoFromTsCounts(tsCounts []*TimestampedCounts) []*IndexInfo {
@@ -14790,7 +14790,7 @@ func (idx *indexer) monitorItemsCount() {
 			idx.checkForItemsCountMismatch(sortedIndexInfo)
 
 		} else { // RESET any stats that are set on this node
-			idx.resetIndexCorruptionStats()
+			idx.resetDivergingReplicaStats()
 		}
 	}
 
@@ -14819,7 +14819,7 @@ func (idx *indexer) monitorItemsCount() {
 
 			// Disable the check for if monitorItemsCountInterval is "0" and reset the stats
 			if monitorItemsCountInterval == 0 {
-				idx.resetIndexCorruptionStats()
+				idx.resetDivergingReplicaStats()
 				continue
 			}
 
@@ -14828,7 +14828,7 @@ func (idx *indexer) monitorItemsCount() {
 		case <-ticker.C:
 			// Disable the check for if monitorItemsCountInterval is "0" and reset the stats
 			if monitorItemsCountInterval == 0 {
-				idx.resetIndexCorruptionStats()
+				idx.resetDivergingReplicaStats()
 				continue
 			}
 
