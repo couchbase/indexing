@@ -14527,7 +14527,11 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 				// Update the map with the fully qualified index name
 				divergingReplicasMap[sortedIndexInfo[i].IndexName] = true
 
-				// TODO: Update system events
+				e := systemevent.NewDivergingReplicasEvent("checkForItemsCountMismatch", sortedIndexInfo[i].IndexName,
+					c.PartitionId(sortedIndexInfo[i].PartitionID), sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i-1].ReplicaID,
+					true, sortedIndexInfo[i].ItemsCount, sortedIndexInfo[i-1].ItemsCount, 0, 0)
+				systemevent.InfoEvent("Indexer", systemevent.EVENID_DIVERGING_REPLICAS, e)
+				continue
 			}
 
 			// If seqnos. does not match, then compute the high seqnos. to compare the worstcase items_count difference
@@ -14569,6 +14573,12 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 
 					// Update the map with the fully qualified index name
 					divergingReplicasMap[sortedIndexInfo[i].IndexName] = true
+
+					e := systemevent.NewDivergingReplicasEvent("checkForItemsCountMismatch", sortedIndexInfo[i].IndexName,
+						c.PartitionId(sortedIndexInfo[i].PartitionID), sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i-1].ReplicaID,
+						true, sortedIndexInfo[i].ItemsCount, sortedIndexInfo[i-1].ItemsCount, firstIndexPendingItems, secondIndexPendingItems)
+					systemevent.InfoEvent("Indexer", systemevent.EVENID_DIVERGING_REPLICAS, e)
+					continue
 				}
 			}
 		}
