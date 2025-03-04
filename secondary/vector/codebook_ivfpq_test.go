@@ -269,6 +269,8 @@ var computeDistanceEncodedTests = []codebookIVFPQTestCase{
 
 	{"PQ8x8 L2", 128, cbpkg.METRIC_L2, false, 1, 8, 8, false, 10000, 10000},
 	{"PQ32x8 L2", 128, cbpkg.METRIC_L2, false, 1, 32, 8, false, 10000, 10000},
+	{"PQ8x4 L2", 128, cbpkg.METRIC_L2, false, 1, 8, 4, false, 10000, 10000},
+	{"PQ8x10 L2", 128, cbpkg.METRIC_L2, false, 1, 8, 4, false, 10000, 10000},
 }
 
 func TestComputeDistanceEncodedPQ(t *testing.T) {
