@@ -155,11 +155,12 @@ type ScanRequest struct {
 	perPartnReaderCtx   map[common.PartitionId][]IndexReaderContext
 	readersPerPartition int
 
-	cklen            int // length of secondary expressions
-	allexprlen       int // length of secondary + include column expressions
-	indexKeyNames    []string
-	inlineFilter     string
-	inlineFilterExpr expression.Expression
+	cklen                int // length of secondary expressions
+	allexprlen           int // length of secondary + include column expressions
+	indexKeyNames        []string
+	inlineFilter         string
+	inlineFilterExpr     expression.Expression
+	includeColumnFilters []Filter
 }
 
 type IndexKeyOrder struct {
@@ -566,6 +567,15 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			if r.Scans, err = r.makeScans(req.GetScans()); err != nil {
 				return
 			}
+		}
+
+		includeColumnScans := req.GetIncludeColumnScans()
+		if includeColumnScans != nil {
+			if r.includeColumnFilters, err = r.makeIncludeColumnFilters(includeColumnScans); err != nil {
+				return
+			}
+		} else {
+			r.includeColumnFilters = nil
 		}
 
 		if err = r.fillGroupAggr(req.GetGroupAggr(), req.GetScans()); err != nil {
@@ -1596,6 +1606,72 @@ func (r *ScanRequest) makeScans(protoScans []*protobuf.Scan) (s []Scan, localErr
 	}
 
 	return scans, nil
+}
+
+func (r *ScanRequest) makeIncludeColumnFilters(protoScans []*protobuf.Scan) (s []Filter, localErr error) {
+
+	// include columns are currently supported only for BHIVE indexes
+	// BHIVE indexes do not support primary indexes. This will make
+	// indexer fallback to evaluation via inline filter expression
+	if len(protoScans) == 0 || r.isPrimary {
+		return nil, nil
+	}
+
+	// Array of Filters
+	var filters []Filter
+	var l, h IndexKey
+
+	for _, protoScan := range protoScans {
+
+		// If filters are nil, fall back to evaluation via
+		// inline filter expression
+		if len(protoScan.Filters) == 0 || r.areFiltersNil(protoScan) {
+			return nil, nil
+		}
+
+		var compFilters []CompositeElementFilter
+		skipScan := false
+		// Encode Filters
+		for _, fl := range protoScan.Filters {
+			if l, localErr = r.newLowKey(fl.Low); localErr != nil {
+				localErr = fmt.Errorf("Invalid low key %s (%s)", logging.TagStrUD(fl.Low), localErr)
+				return nil, localErr
+			}
+
+			if h, localErr = r.newHighKey(fl.High); localErr != nil {
+				localErr = fmt.Errorf("Invalid high key %s (%s)", logging.TagStrUD(fl.High), localErr)
+				return nil, localErr
+			}
+
+			if IndexKeyLessThan(h, l) {
+				skipScan = true
+				break
+			}
+
+			compfil := CompositeElementFilter{
+				Low:       l,
+				High:      h,
+				Inclusion: Inclusion(fl.GetInclusion()),
+			}
+			compFilters = append(compFilters, compfil)
+		}
+
+		if skipScan {
+			continue
+		}
+
+		filter := Filter{
+			CompositeFilters: compFilters,
+			Inclusion:        Both,
+		}
+
+		filters = append(filters, filter)
+
+		// TODO: Does single Composite Element Filter
+		// mean no filtering? Revisit single CEF
+	}
+
+	return filters, nil
 }
 
 func (s *Scan) setMultiCentroidScan(centroidOffsetLowKey, centroidLenLowKey,
