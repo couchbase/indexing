@@ -1819,6 +1819,7 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 						if idx.getIndexerState() == common.INDEXER_ACTIVE &&
 							common.GetStorageMode() == common.PLASMA {
 							RecoveryDone_Plasma()
+							RecoveryDone_Bhive()
 						}
 					}
 				} else {
