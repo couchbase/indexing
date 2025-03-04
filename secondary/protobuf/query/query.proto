@@ -95,6 +95,7 @@ message ScanRequest {
     optional IndexKeyOrder      indexOrder      = 21;
     repeated string             indexKeyNames   = 22;
     optional string             inlineFilter    = 23;
+    repeated Scan		        includeColumnScans       = 24;
 }
 
 // Full table scan request from indexer.

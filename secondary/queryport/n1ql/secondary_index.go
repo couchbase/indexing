@@ -1793,7 +1793,7 @@ func (si *secondaryIndex3) Scan3(
 	err := client.ScanInternal("scan3",
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
 		gsiprojection, offset, limit, gsigroupaggr, indexorder,
-		nil, "", nil, n1ql2GsiConsistency[cons], vector2ts(tsvector),
+		nil, "", nil, nil, n1ql2GsiConsistency[cons], vector2ts(tsvector),
 		broker, scanParams, nil, reqDeadline, reqDeadlineSlack)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
@@ -2006,7 +2006,7 @@ func (si *secondaryIndex6) RerankFactor() int32 {
 func (si *secondaryIndex6) Scan6(
 	requestId string,
 	spans datastore.Spans2,
-	inclSpans datastore.Spans2,
+	includeColumnScans datastore.Spans2,
 	reverse bool,
 	distinctAfterProjection bool,
 	projection *datastore.IndexProjection,
@@ -2058,6 +2058,7 @@ func (si *secondaryIndex6) Scan6(
 	}
 
 	gsiscans := n1qlspanstogsi(spans)
+	gsiIncludeColumnScans := n1qlspanstogsi(includeColumnScans)
 	gsiprojection := n1qlprojectiontogsi(projection)
 	gsigroupaggr := n1qlgroupaggrtogsi(groupAggs)
 	indexorder := n1qlindexordertogsi(indexOrders)
@@ -2068,7 +2069,7 @@ func (si *secondaryIndex6) Scan6(
 	err := client.ScanInternal("scan6",
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
 		gsiprojection, offset, limit, gsigroupaggr, indexorder,
-		indexKeyNames, inlineFilter, gsiPartnSets,
+		indexKeyNames, inlineFilter, gsiIncludeColumnScans, gsiPartnSets,
 		n1ql2GsiConsistency[cons], vector2ts(tsvector),
 		broker, scanParams, gsiIndexVector, reqDeadline, reqDeadlineSlack)
 	if err != nil {

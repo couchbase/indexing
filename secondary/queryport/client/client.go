@@ -1173,7 +1173,7 @@ func (c *GsiClient) Scan3(
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.ScanInternal("scan3", defnID, requestId, scans, reverse, distinct,
 		projection, offset, limit, groupAggr, indexOrder,
-		nil, "", nil, cons, tsvector, broker, scanParams,
+		nil, "", nil, nil, cons, tsvector, broker, scanParams,
 		nil, time.Time{}, 0)
 }
 
@@ -1182,7 +1182,7 @@ func (c *GsiClient) Scan6(
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	indexKeyNames []string, inlineFilter string,
-	partnSets [][]interface{},
+	includeColumnsScans Scans, partnSets [][]interface{},
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, scanParams map[string]interface{},
 	indexVector *IndexVector) (err error) {
@@ -1191,8 +1191,8 @@ func (c *GsiClient) Scan6(
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.ScanInternal("scan6", defnID, requestId, scans, reverse, distinct,
 		projection, offset, limit, groupAggr, indexOrder,
-		indexKeyNames, inlineFilter, partnSets, cons, tsvector, broker, scanParams,
-		indexVector, time.Time{}, 0)
+		indexKeyNames, inlineFilter, includeColumnsScans, partnSets, cons, tsvector,
+		broker, scanParams, indexVector, time.Time{}, 0)
 }
 
 func (c *GsiClient) ScanInternal(logPrefix string,
@@ -1200,7 +1200,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	indexKeyNames []string, inlineFilter string,
-	partnSets [][]interface{},
+	includeColumnScans Scans, partnSets [][]interface{},
 	cons common.Consistency, tsvector *TsConsistency,
 	broker *RequestBroker, scanParams map[string]interface{},
 	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration) (err error) {
@@ -1241,7 +1241,8 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 			projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 			broker.GetSorted(), cons, tsvector, handler, rollbackTime,
 			partitions, dataEncFmt, broker.DoRetry(), scanParams, indexVector,
-			reqDeadline, reqDeadlineSlack, indexOrder, indexKeyNames, inlineFilter)
+			reqDeadline, reqDeadlineSlack, indexOrder, indexKeyNames, inlineFilter,
+			includeColumnScans)
 	}
 
 	broker.SetScanRequestHandler(handler)
