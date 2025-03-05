@@ -3028,7 +3028,7 @@ func (m *RebalanceServiceManager) recoverRebalance() {
 			}
 		}
 
-		if m.rebalanceRunning {
+		if m.rebalanceRunning || m.rebalanceToken != nil {
 			m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
 		}
 	}
