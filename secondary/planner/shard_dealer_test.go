@@ -212,6 +212,19 @@ type createIdxParam struct {
 	defnid                              uint64
 }
 
+func (cip *createIdxParam) clone() *createIdxParam {
+	return &createIdxParam{
+		count:       cip.count,
+		isPrimary:   cip.isPrimary,
+		isVector:    cip.isVector,
+		isBhive:     cip.isBhive,
+		isMoi:       cip.isMoi,
+		numPartns:   cip.numPartns,
+		numReplicas: cip.numReplicas,
+		defnid:      cip.defnid,
+	}
+}
+
 func createDummyIndexerNode(nodeID nodeUUID, cips ...createIdxParam) *IndexerNode {
 	var indexerNode = IndexerNode{
 		NodeId:   "indexer-node-id-" + nodeID,
@@ -2739,7 +2752,15 @@ func TestMultiNode_Pass0(t *testing.T) {
 			nil,
 		)
 
-		var highReplicaCount = rand.Intn(10)
+		var highReplicaCount int
+		c.NewRetryHelper(10, 0, 1, func(_ int, _ error) error {
+			highReplicaCount = rand.Intn(10)
+			if highReplicaCount == 0 {
+				return fmt.Errorf("highReplicaCount is 0")
+			}
+			return nil
+		}).Run()
+
 		var cips = []createIdxParam{
 			{count: minShardsPerNode / 4, isPrimary: true, numReplicas: highReplicaCount},
 			{count: minShardsPerNode/2 - (minShardsPerNode / 4), numReplicas: rand.Intn(highReplicaCount)},
@@ -2825,7 +2846,15 @@ func TestMultiNode_Pass0(t *testing.T) {
 			nil,
 		)
 
-		var highReplicaCount = rand.Intn(10)
+		var highReplicaCount int
+		c.NewRetryHelper(10, 0, 1, func(_ int, _ error) error {
+			highReplicaCount = rand.Intn(10)
+			if highReplicaCount == 0 {
+				return fmt.Errorf("highReplicaCount is 0")
+			}
+			return nil
+		}).Run()
+
 		var cips = []createIdxParam{
 			{count: 1, isPrimary: true, numReplicas: highReplicaCount, numPartns: int(minShardsPerNode / 4)},
 			{count: 1, numReplicas: rand.Intn(highReplicaCount), numPartns: int(minShardsPerNode/2 - minShardsPerNode/4)},
@@ -3305,6 +3334,378 @@ func TestMultiNode_Pass3(t *testing.T) {
 		validateShardDealerInternals(dealer, cluster),
 		"internal shard dealer validation failed for basic test",
 	)
+}
+
+func TestMultiNode_RandomLayoutTests(t *testing.T) {
+	t.Parallel()
+
+	var testShardCapacity uint64 = 200
+
+	var numReps, numIndexesPerCat, numPartitions int
+
+	c.NewRetryHelper(10, 0, 1, func(_ int, _ error) error {
+		if numReps == 0 {
+			numReps = rand.Intn(7)
+		}
+		if numIndexesPerCat == 0 {
+			numIndexesPerCat = rand.Intn(10)
+		}
+		if numPartitions == 0 {
+			numPartitions = rand.Intn(int(minPartitionsPerShard) * 3)
+		}
+
+		if numReps == 0 || numIndexesPerCat == 0 || numPartitions == 0 {
+			return fmt.Errorf("invalid random values")
+		}
+		return nil
+	}).Run()
+
+	var numPartitionsCreated = 0
+
+	var ciplist = make([]createIdxParam, 0, 4*numIndexesPerCat)
+
+	for numPartitionsCreated < int(testShardCapacity)*numReps {
+		count := uint64(rand.Intn(numIndexesPerCat))
+		replicas := rand.Intn(numReps)
+		partitions := rand.Intn(numPartitions)
+
+		var cip = createIdxParam{
+			count:       count,
+			numReplicas: replicas,
+			numPartns:   partitions,
+		}
+
+		var coinToss = rand.Intn(2) == 0
+		if coinToss {
+			insertCip := cip.clone()
+			insertCip.isPrimary = true
+			ciplist = append(ciplist, *insertCip)
+			numPartitionsCreated += int(count) * (replicas + 1) * partitions
+		}
+
+		coinToss = rand.Intn(2) == 0
+		if coinToss {
+			insertCip := cip.clone()
+			ciplist = append(ciplist, *insertCip)
+			numPartitionsCreated += int(count) * (replicas + 1) * partitions
+		}
+
+		coinToss = rand.Intn(2) == 0
+		if coinToss {
+			insertCip := cip.clone()
+			insertCip.isVector = true
+			ciplist = append(ciplist, *insertCip)
+			numPartitionsCreated += int(count) * (replicas + 1) * partitions
+		}
+
+		coinToss = rand.Intn(2) == 0
+		if coinToss {
+			insertCip := cip.clone()
+			insertCip.isBhive = true
+			ciplist = append(ciplist, *insertCip)
+			numPartitionsCreated += int(count) * (replicas + 1) * partitions
+		}
+	}
+
+	var cluster = createDummyIndexerNodes(numReps, ciplist...)
+
+	var dealer = NewShardDealer(
+		minShardsPerNode,
+		minPartitionsPerShard,
+		maxDiskUsagePerShard,
+		testShardCapacity,
+		createNewAlternateShardIDGenerator(),
+		genMoveInstanceCb(cluster),
+	)
+
+	var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+
+	var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
+	for defnID := 0; defnID < len(replicaMaps); defnID++ {
+		for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
+			slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, 0)
+
+			if slotID == 0 {
+				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+					t.Name(), repmap)
+			}
+
+			slotIDs[slotID] = true
+		}
+	}
+
+	assert.NoErrorf(
+		t,
+		validateShardDealerInternals(dealer, cluster),
+		"internal shard dealer validation failed for random cluster layout test. cluster - %v.\nshard dealer - %v",
+		clusterStr(cluster...),
+		dealer,
+	)
+}
+
+func TestMultiNode_HighReuseTests(t *testing.T) {
+	t.Parallel()
+
+	var testShardCapacity uint64 = 10
+
+	var numReps = 2
+	var numIndexesPerCat = testShardCapacity * 2
+	var numPartitions = 3
+
+	var ciplist = []createIdxParam{
+		{count: 1, isPrimary: true, numReplicas: numReps, numPartns: numPartitions},
+		{count: 1, numReplicas: numReps, numPartns: numPartitions},
+		{count: 1, isVector: true, numReplicas: numReps, numPartns: numPartitions},
+		{count: 1, isBhive: true, numReplicas: numReps, numPartns: numPartitions},
+		{count: uint64(numIndexesPerCat), isPrimary: true, numReplicas: numReps, numPartns: numPartitions},
+		{count: uint64(numIndexesPerCat), numReplicas: numReps, numPartns: numPartitions},
+		{count: uint64(numIndexesPerCat), isVector: true, numReplicas: numReps, numPartns: numPartitions},
+		{count: uint64(numIndexesPerCat), isBhive: true, numReplicas: numReps, numPartns: numPartitions},
+	}
+
+	var cluster = createDummyIndexerNodes(3, ciplist...)
+
+	var dealer = NewShardDealer(
+		minShardsPerNode,
+		1,
+		maxDiskUsagePerShard,
+		testShardCapacity,
+		createNewAlternateShardIDGenerator(),
+		genMoveInstanceCb(cluster),
+	)
+
+	var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+
+	var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
+	var tracker uint64
+	for defnID := 0; defnID < len(replicaMaps); defnID++ {
+		for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
+			tracker++
+			slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker)
+
+			if slotID == 0 {
+				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+					t.Name(), repmap)
+			}
+
+			slotIDs[slotID] = true
+		}
+	}
+
+	if len(slotIDs) > int(testShardCapacity) {
+		t.Fatalf("%v slots created are %v but should have been only %v slots",
+			t.Name(), slotIDs, testShardCapacity)
+	}
+
+	assert.NoError(
+		t,
+		validateShardDealerInternals(dealer, cluster),
+		"internal shard dealer validation failed for high reuse test",
+	)
+}
+
+func clusterStr(cluster ...*IndexerNode) string {
+	var sb strings.Builder
+	for _, node := range cluster {
+		sb.WriteString(fmt.Sprintf("* node %v (%v). Num Indexes - %v\n", node.NodeUUID, node.NodeId, len(node.Indexes)))
+		for _, index := range node.Indexes {
+			sb.WriteString(
+				fmt.Sprintf("\t** defnID %v partn ID %v replicaID %v isPrimary %v isBhive %v isVector %v alternateShardIDs %v\n",
+					index.DefnId, index.PartnId, index.Instance.ReplicaId, index.IsPrimary,
+					index.Instance.Defn.IsBhive(), index.Instance.Defn.IsVectorIndex, index.AlternateShardIds,
+				))
+		}
+	}
+	return sb.String()
+}
+
+// TestMultiNode_UnevenDistribution tests the first pass case where we have one node above
+// minShardsPerNode and the rest are below minShardsPerNode.
+// there are 2 cases here, each node has 1 slot common and other is each pair of nodes has 1 slot common
+// in both the cases, we are mainly targeting to test shard reuse logic and the logic to ensure
+// that index-replicaID and slot-replicaID mapping is aligned
+func TestMultiNode_UnevenDistribution(t *testing.T) {
+	t.Parallel()
+
+	{
+		// each node has 1 slot common
+		var testShardCapacity uint64 = 10
+
+		var testMinShardsPerNode = uint64(10)
+		var testMinPartitionsPerShard = uint64(1)
+		var testMaxDiskUsagePerShard = uint64(1000)
+
+		var ciplist = []createIdxParam{
+			{count: testMinShardsPerNode/2 - 1},
+			{count: 1, numReplicas: 2},
+		}
+
+		var cluster = createDummyIndexerNodes(0, ciplist...)
+
+		var dealer = NewShardDealer(
+			testMinShardsPerNode,
+			testMinPartitionsPerShard,
+			testMaxDiskUsagePerShard,
+			testShardCapacity,
+			createNewAlternateShardIDGenerator(),
+			genMoveInstanceCb(cluster),
+		)
+
+		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+
+		var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
+		var tracker uint64
+		for defnID := 0; defnID < len(replicaMaps); defnID++ {
+			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
+				tracker++
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker)
+
+				if slotID == 0 {
+					t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+						t.Name(), repmap)
+				}
+
+				slotIDs[slotID] = true
+			}
+		}
+
+		var defnID = len(replicaMaps) + 1
+		replicas := createDummyReplicaIndexUsages(createIdxParam{count: 1, numReplicas: 2})
+		for i, replica := range replicas {
+			replica.DefnId = c.IndexDefnId(defnID)
+			cluster[i].Indexes = append(cluster[i].Indexes, replica)
+			replica.initialNode = cluster[i]
+		}
+
+		replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
+
+		for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
+			slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, 0)
+			if slotID == 0 {
+				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+					t.Name(), repmap)
+			}
+
+			if _, exists := slotIDs[slotID]; !exists {
+				t.Fatalf("%v new slot id %v used for index but we should have re-used slot", t.Name(), slotID)
+			}
+		}
+
+		if len(slotIDs) > int(testMinShardsPerNode) {
+			t.Fatalf("%v slots created are %v but should have been only %v slots",
+				t.Name(), slotIDs, testMinShardsPerNode)
+		}
+
+		assert.NoError(
+			t,
+			validateShardDealerInternals(dealer, cluster),
+			"internal shard dealer validation failed for uneven distribution test",
+		)
+	}
+
+	{
+		// each pair of nodes has 1 slot common
+		var testShardCapacity uint64 = 10
+
+		var testMinShardsPerNode = uint64(10)
+		var testMinPartitionsPerShard = uint64(1)
+		var testMaxDiskUsagePerShard = uint64(1000)
+
+		var ciplist = []createIdxParam{
+			{count: testMinShardsPerNode/2 - 1},
+		}
+
+		var node0 = createDummyIndexerNode("0", ciplist...)
+		var node1 = createDummyIndexerNode("1")
+		var node2 = createDummyIndexerNode("2")
+
+		defnID := len(node0.Indexes) + 1
+		var replica1s = createDummyReplicaIndexUsages(createIdxParam{count: 1, numReplicas: 1})
+		var replica2s = createDummyReplicaIndexUsages(createIdxParam{count: 1, numReplicas: 1})
+
+		node0.Indexes = append(node0.Indexes, replica1s[0])
+		node1.Indexes = append(node1.Indexes, replica1s[1])
+		replica1s[0].initialNode = node0
+		replica1s[1].initialNode = node1
+		replica1s[0].DefnId = c.IndexDefnId(defnID)
+		replica1s[1].DefnId = c.IndexDefnId(defnID)
+
+		defnID++
+		node0.Indexes = append(node0.Indexes, replica2s[0])
+		node2.Indexes = append(node2.Indexes, replica2s[1])
+		replica2s[0].initialNode = node0
+		replica2s[1].initialNode = node2
+		replica2s[0].DefnId = c.IndexDefnId(defnID)
+		replica2s[1].DefnId = c.IndexDefnId(defnID)
+
+		var cluster = []*IndexerNode{node0, node1, node2}
+
+		var dealer = NewShardDealer(
+			testMinShardsPerNode,
+			testMinPartitionsPerShard,
+			testMaxDiskUsagePerShard,
+			testShardCapacity,
+			createNewAlternateShardIDGenerator(),
+			genMoveInstanceCb(cluster),
+		)
+
+		var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+
+		var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
+		var tracker uint64
+		for defnID := 0; defnID < len(replicaMaps); defnID++ {
+			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
+				tracker++
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker)
+
+				if slotID == 0 {
+					t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+						t.Name(), repmap)
+				}
+
+				slotIDs[slotID] = true
+			}
+		}
+
+		defnID = len(replicaMaps) + 1
+
+		var replica3s = createDummyReplicaIndexUsages(createIdxParam{count: 1, numReplicas: 2})
+
+		node0.Indexes = append(node0.Indexes, replica3s[0])
+		node1.Indexes = append(node1.Indexes, replica3s[1])
+		node2.Indexes = append(node2.Indexes, replica3s[2])
+		replica3s[0].initialNode = node0
+		replica3s[1].initialNode = node1
+		replica3s[2].initialNode = node2
+		replica3s[0].DefnId = c.IndexDefnId(defnID)
+		replica3s[1].DefnId = c.IndexDefnId(defnID)
+		replica3s[2].DefnId = c.IndexDefnId(defnID)
+
+		replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
+
+		for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
+			slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, 0)
+			if slotID == 0 {
+				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+					t.Name(), repmap)
+			}
+
+			if _, exists := slotIDs[slotID]; !exists {
+				t.Fatalf("%v new slot id %v used for index but we should have re-used slot", t.Name(), slotID)
+			}
+		}
+
+		if len(slotIDs) > int(testMinShardsPerNode) {
+			t.Fatalf("%v slots created are %v but should have been only %v slots",
+				t.Name(), slotIDs, testMinShardsPerNode)
+		}
+
+		assert.NoError(
+			t,
+			validateShardDealerInternals(dealer, cluster),
+			"internal shard dealer validation failed for uneven distribution test",
+		)
+	}
 }
 
 // TODO: add tests for disk usage check in recordIndex
