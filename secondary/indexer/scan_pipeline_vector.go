@@ -114,6 +114,8 @@ type ScanWorker struct {
 	// doneCh in the ScanJob or jobsWg
 	outCh chan<- *Row // To send output back
 
+	config c.Config
+
 	// Sender vars
 	currJob     *ScanJob
 	senderCh    chan *Row
@@ -181,8 +183,10 @@ type ScanWorker struct {
 }
 
 func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- *Row,
-	stopCh chan struct{}, errCh chan error, wg *sync.WaitGroup, senderChSize,
-	senderBatchSize int, sendLastRowPerJob bool) *ScanWorker {
+	stopCh chan struct{}, errCh chan error, wg *sync.WaitGroup, config c.Config,
+	sendLastRowPerJob bool) *ScanWorker {
+
+	senderChSize := config["scan.vector.scanworker_senderch_size"].Int()
 
 	w := &ScanWorker{
 		id:                   id,
@@ -193,7 +197,6 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		jobsWg:               wg,
 		errCh:                errCh,
 		senderChSize:         senderChSize,
-		senderBatchSize:      senderBatchSize,
 		includeColumnExplode: make([]bool, len(r.IndexInst.Defn.Include)),
 		includeColumnDecode:  make([]bool, len(r.IndexInst.Defn.Include)),
 		includeColumncktemp:  make([][]byte, len(r.IndexInst.Defn.Include)),
@@ -201,16 +204,19 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		sendLastRowPerJob:    sendLastRowPerJob,
 		includeColumnLen:     len(r.IndexInst.Defn.Include),
 		cktmp:                make([][]byte, len(r.IndexInst.Defn.SecExprs)),
+		config:               config,
 	}
 
 	//init temp buffers
 	w.vectorDim = r.getVectorDim()
 	w.codeSize = r.getVectorCodeSize()
 
-	w.currBatchRows = make([]*Row, 0, senderBatchSize)
-	w.codes = make([]byte, 0, senderBatchSize*r.getVectorCodeSize())
-	w.fvecs = make([]float32, senderBatchSize*r.getVectorDim())
-	w.dists = make([]float32, senderBatchSize)
+	bufferInitBatchSize := w.getBufferInitBatchSize()
+
+	w.currBatchRows = make([]*Row, 0, bufferInitBatchSize)
+	w.codes = make([]byte, 0, bufferInitBatchSize*r.getVectorCodeSize())
+	w.fvecs = make([]float32, bufferInitBatchSize*r.getVectorDim())
+	w.dists = make([]float32, bufferInitBatchSize)
 
 	for i := len(r.IndexInst.Defn.SecExprs); i < len(r.IndexInst.Defn.SecExprs)+len(r.IndexInst.Defn.Include); i++ {
 		index := i - len(r.IndexInst.Defn.SecExprs)
@@ -235,7 +241,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		w.heap, _ = NewTopKRowHeap(w.heapSize, false, r.getRowCompare())
 
 		//pre-allocate rows twice the size of buffer+heapSize
-		w.rowBuf = NewAtomicRowBuffer((senderBatchSize + w.heapSize) * 2)
+		w.rowBuf = NewAtomicRowBuffer((bufferInitBatchSize + w.heapSize) * 2)
 	}
 
 	w.logPrefix = fmt.Sprintf("%v[%v]ScanWorker[%v]", r.LogPrefix, r.RequestId, id)
@@ -246,7 +252,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		var m *allocator
 		if v := w.r.connCtx.Get(fmt.Sprintf("%v%v", VectorScanWorker, id)); v == nil {
 			bufPool := w.r.connCtx.GetVectorBufPool(id)
-			m = newAllocator(int64(senderBatchSize), bufPool)
+			m = newAllocator(int64(bufferInitBatchSize), bufPool)
 		} else {
 			m = v.(*allocator)
 		}
@@ -258,9 +264,65 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	w.exprContext = expression.NewIndexContext()
 	w.svPool = value.NewStringValuePoolForIndex(len(r.IndexInst.Defn.Include) + 1) // +1 is required for meta().id
 
+	logging.Tracef("%v bufferInitBatchSize: %v", w.logPrefix, bufferInitBatchSize)
+
 	go w.Scanner()
 
 	return w
+}
+
+//This function calculates the batch size which should be used for initializing temp buffers
+//based on the quantization and similarity metric.
+func (w *ScanWorker) getBufferInitBatchSize() int {
+
+	batchSize := w.config["scan.vector.scanworker_batch_size"].Int()
+	largeBatchSize := w.config["scan.vector.scanworker_large_batch_size"].Int()
+
+	qtype := w.r.IndexInst.Defn.VectorMeta.Quantizer.Type
+	if qtype == c.SQ {
+		return batchSize
+	}
+	similarity := w.r.IndexInst.Defn.VectorMeta.Similarity
+	metric, _ := codebook.ConvertSimilarityToMetric(similarity)
+	if metric != codebook.METRIC_L2 {
+		return batchSize
+	}
+
+	//use a large batch size for PQ + L2
+	if qtype == c.PQ && metric == codebook.METRIC_L2 {
+		return largeBatchSize
+	}
+	return batchSize
+}
+
+func (w *ScanWorker) setSenderBatchSize() {
+
+	batchSize := w.config["scan.vector.scanworker_batch_size"].Int()
+	largeBatchSize := w.config["scan.vector.scanworker_large_batch_size"].Int()
+
+	qtype := w.r.IndexInst.Defn.VectorMeta.Quantizer.Type
+	if qtype == c.SQ {
+		w.senderBatchSize = batchSize
+		return
+	}
+
+	similarity := w.r.IndexInst.Defn.VectorMeta.Similarity
+	metric, _ := codebook.ConvertSimilarityToMetric(similarity)
+	if metric != codebook.METRIC_L2 {
+		w.senderBatchSize = batchSize
+		return
+	}
+
+	//Use a large batch size for PQ + L2 for a single centroid scan.
+	//Such scans reuse the distance table and large batch size reduces the
+	//overheads associated with each batch processing as less number of
+	//such calls need to be made to the faiss library.
+	if !w.currJob.scan.MultiCentroid && qtype == c.PQ && metric == codebook.METRIC_L2 {
+		w.senderBatchSize = largeBatchSize
+	} else {
+		w.senderBatchSize = batchSize
+	}
+
 }
 
 func (w *ScanWorker) Close() {
@@ -334,6 +396,10 @@ func (w *ScanWorker) Scanner() {
 		}
 
 		fincb := w.finishCallback
+
+		//set batch size for each scan job
+		w.setSenderBatchSize()
+		logging.Tracef("%v senderBatchSize: %v", w.logPrefix, w.senderBatchSize)
 
 		// VECTOR_TODO: Check if we can move this logic to another goroutine so that
 		// this main goroutine is free for error handling and check if use of row.last
@@ -1080,10 +1146,12 @@ type WorkerPool struct {
 	mergeSort  bool
 	mergeHeap  *TopKRowHeap
 	r          *ScanRequest
+
+	config c.Config
 }
 
 // NewWorkerPool creates a new WorkerPool
-func NewWorkerPool(r *ScanRequest, numWorkers int, mergeSort bool) (*WorkerPool, error) {
+func NewWorkerPool(r *ScanRequest, numWorkers int, mergeSort bool, config c.Config) (*WorkerPool, error) {
 	wp := &WorkerPool{
 		r:          r,
 		jobs:       make(chan *ScanJob, 0),
@@ -1093,6 +1161,7 @@ func NewWorkerPool(r *ScanRequest, numWorkers int, mergeSort bool) (*WorkerPool,
 		stopCh:     make(chan struct{}),
 		workers:    make([]*ScanWorker, numWorkers),
 		mergeSort:  mergeSort,
+		config:     config,
 	}
 	if wp.mergeSort {
 		wp.recvChList = make([]chan *Row, numWorkers)
@@ -1114,7 +1183,7 @@ func (wp *WorkerPool) Close() {
 	}
 }
 
-func (wp *WorkerPool) Init(scanWorkerSenderChSize, scanWorkerBatchSize int) {
+func (wp *WorkerPool) Init() {
 	wp.sendCh = make(chan *Row, 50*wp.numWorkers)
 
 	var outCh chan<- *Row
@@ -1129,7 +1198,7 @@ func (wp *WorkerPool) Init(scanWorkerSenderChSize, scanWorkerBatchSize int) {
 		}
 
 		wp.workers[i] = NewScanWorker(i, wp.r, wp.jobs, outCh, wp.stopCh, wp.errCh,
-			&wp.jobsWg, scanWorkerSenderChSize, scanWorkerBatchSize, wp.mergeSort)
+			&wp.jobsWg, wp.config, wp.mergeSort)
 	}
 }
 
@@ -1778,10 +1847,6 @@ func (s *IndexScanSource2) Routine() error {
 	scans := s.p.req.vectorScans
 	codebooks := s.p.req.codebookMap
 
-	// Get values from config
-	scanWorkerBatchSize := s.p.config["scan.vector.scanworker_batch_size"].Int()
-	scanWorkerSenderChSize := s.p.config["scan.vector.scanworker_senderch_size"].Int()
-
 	// Merge sort of data across partitions is only needed when ordering and limit
 	// are pushed down and we are scanning multiple partitions in this scan
 	mergeSort := s.p.req.MultiPartnScan() && s.p.req.ScanRangeSequencing()
@@ -1793,13 +1858,13 @@ func (s *IndexScanSource2) Routine() error {
 	}
 
 	// Spawn Scan Workers
-	wp, err := NewWorkerPool(s.p.req, readersPerPartition*len(s.p.req.PartitionIds), mergeSort)
+	wp, err := NewWorkerPool(s.p.req, readersPerPartition*len(s.p.req.PartitionIds), mergeSort, s.p.config)
 	if err != nil {
 		s.CloseWithError(err)
 		return err
 	}
 
-	wp.Init(scanWorkerSenderChSize, scanWorkerBatchSize)
+	wp.Init()
 	defer wp.Close()
 
 	wpOutCh := wp.GetOutCh() // Output of Workerpool is input of MergeOperator

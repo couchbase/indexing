@@ -1,6 +1,10 @@
 package codebook
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/couchbase/indexing/secondary/common"
+)
 
 var (
 	ErrCodebookNotTrained = errors.New("Codebook is not trained")
@@ -29,6 +33,18 @@ func (m MetricType) String() string {
 	}
 
 	return ""
+}
+
+func ConvertSimilarityToMetric(similarity common.VectorSimilarity) (MetricType, bool) {
+	switch similarity {
+	case common.EUCLIDEAN_SQUARED, common.L2_SQUARED, common.EUCLIDEAN, common.L2:
+		return METRIC_L2, false // Default to L2
+	case common.DOT:
+		return METRIC_INNER_PRODUCT, false
+	case common.COSINE:
+		return METRIC_INNER_PRODUCT, true
+	}
+	return METRIC_L2, false // Always default to L2
 }
 
 type Codebook interface {
