@@ -9890,7 +9890,7 @@ func (idx *indexer) upgradeStorage() bool {
 	//
 	for instId, index := range idx.indexInstMap {
 
-		if index.State != common.INDEX_STATE_DELETED || index.State != common.INDEX_STATE_ERROR {
+		if index.State != common.INDEX_STATE_DELETED && index.State != common.INDEX_STATE_ERROR {
 
 			indexStorageMode := common.IndexTypeToStorageMode(index.Defn.Using)
 			targetStorageMode := idx.promoteStorageModeIfNecessaryInternal(indexStorageMode, disable, override)
@@ -9916,7 +9916,7 @@ func (idx *indexer) upgradeStorage() bool {
 
 		for instId, index := range idx.indexInstMap {
 
-			if index.State != common.INDEX_STATE_DELETED || index.State != common.INDEX_STATE_ERROR {
+			if index.State != common.INDEX_STATE_DELETED && index.State != common.INDEX_STATE_ERROR {
 
 				indexStorageMode := common.IndexTypeToStorageMode(index.Defn.Using)
 
@@ -11868,7 +11868,7 @@ func (idx *indexer) canSetStorageMode(sm string) bool {
 	for _, inst := range idx.indexInstMap {
 
 		if common.IndexTypeToStorageMode(inst.Defn.Using).String() != sm &&
-			(inst.State != common.INDEX_STATE_DELETED || inst.State != common.INDEX_STATE_ERROR) {
+			(inst.State != common.INDEX_STATE_DELETED && inst.State != common.INDEX_STATE_ERROR) {
 			logging.Warnf("Indexer::canSetStorageMode Cannot Set Storage Mode %v. Found Index %v", sm, inst)
 			return false
 		}
@@ -11911,7 +11911,7 @@ func (idx *indexer) getIndexStorageMode() common.StorageMode {
 	storageMode := common.StorageMode(common.NOT_SET)
 	for _, inst := range idx.indexInstMap {
 
-		if inst.State != common.INDEX_STATE_DELETED || inst.State != common.INDEX_STATE_ERROR {
+		if inst.State != common.INDEX_STATE_DELETED && inst.State != common.INDEX_STATE_ERROR {
 
 			indexStorageMode := common.IndexTypeToStorageMode(inst.Defn.Using)
 
