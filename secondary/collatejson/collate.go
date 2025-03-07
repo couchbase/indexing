@@ -1038,7 +1038,7 @@ func (codec *Codec) code2n1qlpooled(code, text []byte, decode bool, pos int, svP
 		var strb []byte
 		strb, remaining, err = suffixDecodeString(code[1:], text)
 		if decode && err == nil {
-			n1qlVal = svPool.Get(pos, conversions.ByteSliceToString(strb))
+			n1qlVal = svPool.Get(pos, conversions.ByteSliceToString(code[1:1+len(strb)]))
 		}
 		return n1qlVal, remaining, err
 	default:
