@@ -811,17 +811,6 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	includeColumn := value[codeSize:]
 	value = value[:codeSize]
 
-	if len(includeColumn) > 0 && w.r.inlineFilter != "" {
-		processRow, err := w.inlineFilterCb(meta, entry)
-		if err != nil {
-			return err
-		}
-		if !processRow { // Skip the row from further processing
-			// VECTOR_TODO: Add stat for num_rows_filtered
-			return nil // return if the row is being filtered
-		}
-	}
-
 	var newRow *Row
 	if w.r.useHeapForVectorIndex() {
 		//Store reference to entry, value in the row struct.
