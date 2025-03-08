@@ -954,7 +954,7 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 			withExpr += fmt.Sprintf(" \"train_list\":%v", def.VectorMeta.TrainList)
 		}
 
-		if def.VectorMeta.PersistFullVector == false { // Check only for 'false' as default is true
+		if def.IsBhive() && def.VectorMeta.PersistFullVector == false { // Check only for 'false' as default is true
 			if len(withExpr) != 0 {
 				withExpr += ","
 			}
