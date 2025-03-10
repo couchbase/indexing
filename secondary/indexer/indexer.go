@@ -14833,6 +14833,11 @@ func (idx *indexer) monitorItemsCount() {
 				continue
 			}
 
+			clusterVersion := common.GetClusterVersion()
+			if clusterVersion < common.INDEXER_80_VERSION { // disable the check if cluster version is less than 8.0.0
+				continue
+			}
+
 			// Disable the check for if monitorItemsCountInterval is "0" and reset the stats
 			if monitorItemsCountInterval == 0 {
 				idx.resetDivergingReplicaStats()
@@ -14845,6 +14850,11 @@ func (idx *indexer) monitorItemsCount() {
 			// Disable the check for if monitorItemsCountInterval is "0" and reset the stats
 			if monitorItemsCountInterval == 0 {
 				idx.resetDivergingReplicaStats()
+				continue
+			}
+
+			clusterVersion := common.GetClusterVersion()
+			if clusterVersion < common.INDEXER_80_VERSION { // disable the check if cluster version is less than 8.0.0
 				continue
 			}
 
