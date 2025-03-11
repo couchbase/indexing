@@ -2924,6 +2924,10 @@ func gsistatnameton1ql(name string) (datastore.IndexStatType, bool) {
 		return datastore.IX_STAT_BHIVE_GRAPH_DISK_SIZE, true
 	case qclient.STAT_BHIVE_FULL_VEC_SIZE:
 		return datastore.IX_STAT_BHIVE_FULL_VEC_SIZE, true
+	case qclient.STAT_BHIVE_NUM_ITEMS:
+		return datastore.IX_STAT_BHIVE_NUM_ITEMS, true
+	case qclient.STAT_BHIVE_AVG_ITEM_SIZE:
+		return datastore.IX_STAT_BHIVE_AVG_ITEM_SIZE, true
 	}
 	return datastore.IndexStatType(""), false
 }

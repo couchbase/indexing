@@ -1291,6 +1291,8 @@ const STAT_BHIVE_GRAPH_HIT_RATIO = "GRAPH_HIT_RATIO"
 const STAT_BHIVE_NUM_VEC_OPS = "NUM_VEC_OPS"
 const STAT_BHIVE_GRAPH_DISK_SIZE = "GRAPH_DISK_SIZE"
 const STAT_BHIVE_FULL_VEC_SIZE = "FULL_VEC_SIZE"
+const STAT_BHIVE_NUM_ITEMS = "BHIVE_NUM_ITEMS"
+const STAT_BHIVE_AVG_ITEM_SIZE = "BHIVE_AVG_ITEM_SIZE"
 
 // A set of partitions for given index definition is chosen using metaclient's
 // GetScanport. It returns a set of target replica InstanceIds with corresponding
@@ -1501,6 +1503,8 @@ func getStatsForPartition(instStats StorageStats, storageMode string) map[string
 
 		// Bhive specific stats
 		if _, exists := mainStoreStats["graph_resident_ratio"]; exists {
+			storageStats[STAT_BHIVE_NUM_ITEMS] = mainStoreStats["items_count"]
+			storageStats[STAT_BHIVE_AVG_ITEM_SIZE] = mainStoreStats["avg_item_size"]
 			storageStats[STAT_BHIVE_GRAPH_RES_RATIO] = mainStoreStats["graph_resident_ratio"]
 			storageStats[STAT_BHIVE_GRAPH_HIT_RATIO] = mainStoreStats["graph_hit_ratio"]
 			storageStats[STAT_BHIVE_NUM_VEC_OPS] = mainStoreStats["num_vec_ops_per_cell"]
