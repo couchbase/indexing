@@ -886,9 +886,16 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 
 	selectedTokens = make(map[string]*c.TransferToken)
 
-	var numIndexNodes int // total index nodes remaining if known (Rebalance), else assumes 1 (Move)
+	var numIndexNodes int // total index nodes remaining if known (Rebalance) - considering the excludeNode parameters , else assumes 1 (Move)
 	if r.topologyChange != nil {
-		numIndexNodes = len(r.topologyChange.KeepNodes)
+		for _, destIdMap := range r.toBuildTTsByDestId {
+			if len(destIdMap) > 0 {
+				numIndexNodes++
+			}
+		}
+		if numIndexNodes == 0 {
+			numIndexNodes = 1
+		}
 	} else {
 		numIndexNodes = 1
 	}
