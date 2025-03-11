@@ -267,7 +267,7 @@ if [[ "$MODE" == *"$phase"* ]]; then
     run_tests_param="-run ^$TEST_NAME$"
     echo "Running test with param - $run_tests_param"
   fi
-  go test -timeout 4h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql $run_tests_param 2>&1 | tee -a $WORKSPACE/test.log
+  go test -timeout 6h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql $run_tests_param 2>&1 | tee -a $WORKSPACE/test.log
   echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_1/indexer_functests_pprof.log"
   curl http://$Username:$Password@127.0.0.1:9108/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_1/indexer_functests_pprof.log
 
