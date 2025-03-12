@@ -24,11 +24,14 @@ import (
 	"runtime"
 	"runtime/debug"
 	"runtime/pprof"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/couchbase/cbauth/service"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	l "github.com/couchbase/indexing/secondary/logging"
 
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
@@ -650,6 +653,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	close(bootstrapFinCh)
 
 	go idx.monitorKVNodes()
+	go idx.monitorItemsCount()
 	go idx.destroyEmptyShards()
 
 	// enable inMemoryCompression feature on 7.1 cluster upgrade
@@ -1756,6 +1760,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.handleBhiveGraphReady(msg)
 
 	case BHIVE_BUILD_GRAPH:
+		//forward to storage manager
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
+
+	case TIMESTAMPED_COUNT_STATS:
 		//forward to storage manager
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
@@ -14436,6 +14445,343 @@ func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
 					break
 				}
 			}
+		}
+	}
+}
+
+func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
+
+	corruptedIndexesMap := make(map[string]interface{})
+
+	compareSeqnos := func(i, j int) bool {
+		firstSeqnos := sortedIndexInfo[i].timestamp
+		secondSeqnos := sortedIndexInfo[j].timestamp
+
+		if len(firstSeqnos) != len(secondSeqnos) {
+			return false
+		}
+
+		for k := range firstSeqnos {
+			if firstSeqnos[k] != secondSeqnos[k] {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	compareItemsCount := func(i, j int) bool {
+		firstItemsCount := sortedIndexInfo[i].ItemsCount
+		secondItemsCount := sortedIndexInfo[j].ItemsCount
+
+		return firstItemsCount == secondItemsCount
+	}
+
+	for i := 1; i < len(sortedIndexInfo); i++ {
+		if sortedIndexInfo[i].Bucket == sortedIndexInfo[i-1].Bucket &&
+			sortedIndexInfo[i].IndexName == sortedIndexInfo[i-1].IndexName &&
+			sortedIndexInfo[i].PartitionID == sortedIndexInfo[i-1].PartitionID &&
+			sortedIndexInfo[i].ReplicaID != sortedIndexInfo[i-1].ReplicaID {
+			// compare seqnos. first
+			seqnosMatch := compareSeqnos(i, i-1)
+			itemsCountMatch := compareItemsCount(i, i-1)
+
+			if seqnosMatch && itemsCountMatch { // No need to process this pair of replicas as items count matched
+				continue
+			}
+
+			if seqnosMatch && !itemsCountMatch {
+				// seqnos. matched but items count did not match. Log fatal error and update stats
+				logging.Fatalf("Indexer::checkItemsCountMismatch Raising an alert as seqnos matched between replicas but items count did not match "+
+					"for index: %v, partnId: %v, timestamp: %v, items_count: (%v:%v, %v:%v)",
+					sortedIndexInfo[i].IndexName, sortedIndexInfo[i].PartitionID, sortedIndexInfo[i].timestamp,
+					sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i].ItemsCount, sortedIndexInfo[i-1].ReplicaID, sortedIndexInfo[i-1].ItemsCount)
+
+				// Update the map with the fully qualified index name
+				corruptedIndexesMap[sortedIndexInfo[i].IndexName] = true
+
+				// TODO: Update system events
+			}
+		}
+	}
+
+	// Set the number of corrupt indexes based on the map
+	idx.stats.numCorruptedIndexes.Set(int64(len(corruptedIndexesMap)))
+	idx.stats.corruptedIndexesMap.Set(corruptedIndexesMap)
+}
+
+func (idx *indexer) resetIndexCorruptionStats() {
+	idx.stats.numCorruptedIndexes.Set(0)
+	idx.stats.corruptedIndexesMap.Reset()
+}
+
+func (idx *indexer) getIndexInfoFromTsCounts(tsCounts []*TimestampedCounts) []*IndexInfo {
+	var out []*IndexInfo
+	for i := range tsCounts {
+		for j := range tsCounts[i].Indexes {
+			tsCounts[i].Indexes[j].timestamp = tsCounts[i].Timestamp
+		}
+		out = append(out, tsCounts[i].Indexes...)
+	}
+
+	// sort the output
+	sort.Slice(out, func(i, j int) bool {
+		return (out[i].IndexName < out[j].IndexName) ||
+			(out[i].IndexName == out[j].IndexName && out[i].PartitionID < out[j].PartitionID)
+	})
+
+	return out
+}
+
+func (idx *indexer) monitorItemsCount() {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("Indexer::monitorItemsCount crashed: %v\n", r)
+			go idx.monitorItemsCount()
+		}
+	}()
+
+	selfRestart := func() {
+		time.Sleep(5000 * time.Millisecond)
+		go idx.monitorItemsCount()
+	}
+
+	clusterAddr := idx.config["clusterAddr"].String()
+	url, err := common.ClusterAuthUrl(clusterAddr)
+	if err != nil {
+		logging.Errorf("Indexer::monitorItemsCount, error observed while retrieving ClusterAuthUrl, err : %v", err)
+		selfRestart()
+		return
+	}
+
+	scn, err := common.NewServicesChangeNotifier(url, DEFAULT_POOL, "MonitorItemsCount")
+	if err != nil {
+		logging.Errorf("Indexer::monitorItemsCount, error observed while initializing ServicesChangeNotifier, err: %v", err)
+		selfRestart()
+		return
+	}
+	defer scn.Close()
+
+	cinfo, err := common.NewClusterInfoCache(url, DEFAULT_POOL)
+	if err != nil {
+		logging.Errorf("Indexer::monitorItemsCount, error observed during the initilization of clusterInfoCache, err : %v", err)
+		selfRestart()
+		return
+	}
+	cinfo.SetUserAgent("MonitorItemsCount")
+
+	var currActiveIndexerNodes []couchbase.Node
+
+	changeInIndexerNodes := func(prev []couchbase.Node, curr []couchbase.Node) bool {
+		if len(prev) != len(curr) {
+			return true
+		} else if len(prev) == 0 && len(curr) == 0 {
+			return false
+		} else {
+			for _, node_prev := range prev {
+				found := false
+				for _, node_curr := range curr {
+					if node_prev.NodeUUID == node_curr.NodeUUID {
+						found = true
+						break
+					}
+				}
+
+				if !found { // One of the nodes in the previous list is not present in the current list. There has been a change
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	// Force update the nodeToHostMap for the first time
+	if err := cinfo.FetchWithLock(); err != nil {
+		logging.Errorf("Indexer::monitorItemsCount, error observed while Fetching cluster info cache, err: %v", err)
+		selfRestart()
+		return
+	}
+
+	getTimestampedCountsFromNode := func(addr string) []*TimestampedCounts {
+		resp, err := getWithAuth(addr + "/stats/timestampedCounts")
+		if err != nil {
+			logging.Warnf("Indexer::monitorItemsCount: Failed to get the timestampedCount stats from node: %v, err: %v. Ignoring the node", addr, err)
+			return nil
+		}
+
+		if resp == nil {
+			logging.Warnf("Indexer::monitorItemsCount: nil response received from timestampedCount stats req from node: %v. Ignoring the node", addr)
+			return nil
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			logging.Warnf("Indexer::monitorItemsCount: Invalid response received from timestampedCount stats req from node: %v, resp.StatusCode: %v. Ignoring the node", addr, resp.StatusCode)
+			return nil
+		}
+
+		var statusResp []*TimestampedCounts
+		bytes, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			l.Errorf("Indexer::monitorItemsCount Error while reading response from node: %v err: %v", addr, err)
+			return nil
+		}
+
+		if err = json.Unmarshal(bytes, &statusResp); err != nil {
+			l.Errorf("Indexer::monitorItemsCount Error unmarshal response from node: %v err: %v", addr, err)
+			return nil
+		}
+
+		return statusResp
+	}
+
+	getFromActiveIndexerNodes := func() []*TimestampedCounts {
+		var allTimestampedCounts []*TimestampedCounts
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+
+		nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
+		for _, nid := range nids {
+			// obtain the admin port for the indexer node
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
+			if err != nil {
+				logging.Errorf("Indexer::monitorItemsCount: Error from getting service address for node %v. Error = %v", nid, err)
+				return nil
+			}
+
+			restCall := func(nid common.NodeId, addr string) {
+				defer wg.Done()
+				t0 := time.Now()
+
+				resp := getTimestampedCountsFromNode(addr)
+
+				dur := time.Since(t0)
+				if dur > 30*time.Second {
+					logging.Warnf("Indexer::monitorItemsCount %v took %v for addr %v", dur, addr)
+				}
+
+				mu.Lock()
+				defer mu.Unlock()
+				if resp != nil {
+					allTimestampedCounts = append(allTimestampedCounts, resp...)
+				}
+			}
+
+			wg.Add(1)
+			go restCall(nid, addr)
+		}
+
+		wg.Wait()
+		return allTimestampedCounts
+	}
+
+	getAndProcessTimestampedCounts := func(force bool) {
+		if err := cinfo.FetchNodesAndSvsInfoWithLock(); err != nil {
+			logging.Errorf("Indexer::monitorItemsCount, error observed while updating cluster info cache, err: %v", err)
+			selfRestart()
+			return
+		}
+
+		changed := false
+		computeItemsCountMismatch := false
+		nodeId := ""
+
+		newActiveIndexerNodes := cinfo.GetActiveIndexerNodes()
+		if newActiveIndexerNodes == nil || len(newActiveIndexerNodes) == 0 {
+			selfRestart()
+			return
+		}
+
+		if changeInIndexerNodes(currActiveIndexerNodes, newActiveIndexerNodes) {
+			currActiveIndexerNodes = newActiveIndexerNodes
+			changed = true // There is a change in indexer nodes
+		}
+
+		// Get node with minNodeUUID
+		minNodeUUID := currActiveIndexerNodes[0].NodeUUID
+		for i := 1; i < len(currActiveIndexerNodes); i++ {
+			minNodeUUID = min(minNodeUUID, currActiveIndexerNodes[i].NodeUUID)
+		}
+
+		// Only the node with minNodeUUID will compute items_count mismatch
+		// All other nodes will reset existing stats and remain idle
+		for _, node := range currActiveIndexerNodes {
+			if node.ThisNode && node.NodeUUID == minNodeUUID {
+				// check for mismatch if it is either forced by ticker or if there is a change in topology
+				computeItemsCountMismatch = force || changed
+				nodeId = node.Hostname
+			}
+		}
+
+		if computeItemsCountMismatch {
+			logging.Infof("Indexer::monitorItemsCount computing items_count mismatch from node: %v", nodeId)
+
+			// Step-1: Query all indexer nodes and get the timestamped counts
+			allTimestampedCounts := getFromActiveIndexerNodes()
+
+			// Step-2: Extract index info from timestamp counts
+			sortedIndexInfo := idx.getIndexInfoFromTsCounts(allTimestampedCounts)
+
+			// Step-3: Check for any items_count mismatches
+			idx.checkForItemsCountMismatch(sortedIndexInfo)
+
+		} else { // RESET any stats that are set on this node
+			idx.resetIndexCorruptionStats()
+		}
+	}
+
+	monitorItemsCountInterval := idx.config["monitor_items_count_interval"].Int()
+
+	// Periodically compute the items_count mismatch. Invoke the ticker every 1 min.
+	// Make the check every "monitorItemsCountInterval" minutes. This will make sure
+	// any config changes are applied within a window of 1 minute
+	ticker := time.NewTicker(time.Duration(1 * time.Minute))
+	lastCheck := time.Now()
+
+	ch := scn.GetNotifyCh()
+	for {
+		select {
+		case notif, ok := <-ch:
+			if !ok {
+				selfRestart()
+				return
+			}
+
+			// Process only PoolChangeNotification as any change to
+			// ClusterMembership is reflected only in PoolChangeNotification
+			if notif.Type != common.PoolChangeNotification {
+				continue
+			}
+
+			// Disable the check for if monitorItemsCountInterval is "0" and reset the stats
+			if monitorItemsCountInterval == 0 {
+				idx.resetIndexCorruptionStats()
+				continue
+			}
+
+			getAndProcessTimestampedCounts(false)
+
+		case <-ticker.C:
+			// Disable the check for if monitorItemsCountInterval is "0" and reset the stats
+			if monitorItemsCountInterval == 0 {
+				idx.resetIndexCorruptionStats()
+				continue
+			}
+
+			if time.Since(lastCheck) > time.Duration(monitorItemsCountInterval)*time.Minute {
+				lastCheck = time.Now()
+				getAndProcessTimestampedCounts(true)
+			}
+
+			// Check for any change in config
+			newMonitorItemsCountInterval := idx.config["monitor_items_count_interval"].Int()
+			if newMonitorItemsCountInterval != monitorItemsCountInterval {
+				monitorItemsCountInterval = newMonitorItemsCountInterval
+			}
+
+		case <-idx.shutdownInitCh:
+			return
 		}
 	}
 }

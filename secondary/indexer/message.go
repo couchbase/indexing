@@ -185,6 +185,7 @@ const (
 	SCAN_STATS
 	MUTATION_STATS
 	INDEX_PROGRESS_STATS
+	TIMESTAMPED_COUNT_STATS
 	INDEXER_STATS
 	INDEX_STATS_DONE
 	INDEX_STATS_BROADCAST
@@ -3503,6 +3504,24 @@ func (m *MsgClearShardType) GetDoneCh() chan bool {
 	return m.doneCh
 }
 
+type MsgTimestampedCountReq struct {
+	mType  MsgType
+	doLog  bool
+	respCh chan interface{}
+}
+
+func (m *MsgTimestampedCountReq) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgTimestampedCountReq) GetDoLog() bool {
+	return m.doLog
+}
+
+func (m *MsgTimestampedCountReq) GetRespCh() chan interface{} {
+	return m.respCh
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3778,6 +3797,8 @@ func (m MsgType) String() string {
 		return "SCAN_STATS"
 	case INDEX_PROGRESS_STATS:
 		return "INDEX_PROGRESS_STATS"
+	case TIMESTAMPED_COUNT_STATS:
+		return "TIMESTAMPED_COUNT_STATS"
 	case INDEXER_STATS:
 		return "INDEXER_STATS"
 	case INDEX_STATS_DONE:

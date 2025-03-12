@@ -1023,17 +1023,8 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 	return countResp.GetCount(), ru, nil
 }
 
-func (c *GsiScanClient) Scan(
-	defnID uint64, requestId string, scans Scans,
-	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
-	groupAggr *GroupAggr, sorted bool,
-	cons common.Consistency, tsvector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
-	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration,
-	indexOrderForVector *IndexKeyOrder, indexKeyNames []string, inlineFilter string) (error, bool) {
+func getProtoScansFromScans(scans Scans) ([]*protobuf.Scan, error) {
 
-	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
 	for i, scan := range scans {
 		if scan != nil {
@@ -1046,7 +1037,7 @@ func (c *GsiScanClient) Scan(
 				for i, seek := range scan.Seek {
 					s, err := json.Marshal(seek)
 					if err != nil {
-						return err, false
+						return nil, err
 					}
 					equals[i] = s
 				}
@@ -1059,13 +1050,13 @@ func (c *GsiScanClient) Scan(
 						if f.Low != common.MinUnbounded { // Do not encode if unbounded
 							l, err = json.Marshal(f.Low)
 							if err != nil {
-								return err, false
+								return nil, err
 							}
 						}
 						if f.High != common.MaxUnbounded { // Do not encode if unbounded
 							h, err = json.Marshal(f.High)
 							if err != nil {
-								return err, false
+								return nil, err
 							}
 						}
 
@@ -1083,6 +1074,30 @@ func (c *GsiScanClient) Scan(
 			}
 			protoScans[i] = s
 		}
+	}
+	return protoScans, nil
+}
+
+func (c *GsiScanClient) Scan(
+	defnID uint64, requestId string, scans Scans,
+	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
+	groupAggr *GroupAggr, sorted bool,
+	cons common.Consistency, tsvector *TsConsistency,
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
+	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
+	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration,
+	indexOrderForVector *IndexKeyOrder, indexKeyNames []string,
+	inlineFilter string, includeColumnScans Scans) (error, bool) {
+
+	// serialize scans
+	protoScans, err := getProtoScansFromScans(scans)
+	if err != nil {
+		return err, false
+	}
+
+	protoIncludeColumnScans, err := getProtoScansFromScans(includeColumnScans)
+	if err != nil {
+		return err, false
 	}
 
 	//IndexProjection
@@ -1169,26 +1184,27 @@ func (c *GsiScanClient) Scan(
 		Span: &protobuf.Span{
 			Range: nil,
 		},
-		RequestId:        proto.String(requestId),
-		Distinct:         proto.Bool(distinct),
-		Limit:            proto.Int64(limit),
-		Cons:             proto.Uint32(uint32(cons)),
-		Scans:            protoScans,
-		Indexprojection:  protoProjection,
-		Reverse:          proto.Bool(reverse),
-		Offset:           proto.Int64(offset),
-		RollbackTime:     proto.Int64(rollbackTime),
-		PartitionIds:     partnIds,
-		GroupAggr:        protoGroupAggr,
-		Sorted:           proto.Bool(sorted),
-		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
-		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
-		User:             proto.String(scanParams["user"].(string)),
-		IndexVector:      protoIndexVector,
-		ReqTimeout:       proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
-		IndexOrder:       protoIndexKeyOrder,
-		IndexKeyNames:    indexKeyNames,
-		InlineFilter:     proto.String(inlineFilter),
+		RequestId:          proto.String(requestId),
+		Distinct:           proto.Bool(distinct),
+		Limit:              proto.Int64(limit),
+		Cons:               proto.Uint32(uint32(cons)),
+		Scans:              protoScans,
+		Indexprojection:    protoProjection,
+		Reverse:            proto.Bool(reverse),
+		Offset:             proto.Int64(offset),
+		RollbackTime:       proto.Int64(rollbackTime),
+		PartitionIds:       partnIds,
+		GroupAggr:          protoGroupAggr,
+		Sorted:             proto.Bool(sorted),
+		DataEncFmt:         proto.Uint32(uint32(dataEncFmt)),
+		SkipReadMetering:   proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:               proto.String(scanParams["user"].(string)),
+		IndexVector:        protoIndexVector,
+		ReqTimeout:         proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
+		IndexOrder:         protoIndexKeyOrder,
+		IndexKeyNames:      indexKeyNames,
+		InlineFilter:       proto.String(inlineFilter),
+		IncludeColumnScans: protoIncludeColumnScans,
 	}
 	if tsvector != nil {
 		req.TsVector = protobuf.NewTsConsistency(

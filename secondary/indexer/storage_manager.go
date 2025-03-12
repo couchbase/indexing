@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -416,6 +417,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case BHIVE_BUILD_GRAPH:
 		s.handleBuildBhiveGraph(cmd)
+
+	case TIMESTAMPED_COUNT_STATS:
+		s.handleGetTimestampedItemsCount(cmd)
 
 	}
 
@@ -3165,4 +3169,138 @@ func (sm *storageMgr) handleBuildBhiveGraph(cmd Message) {
 			}
 		}
 	}
+}
+
+// These structures are used for validating items_count across multiple replicas
+// to identify if an index is corrupt or not
+type IndexInfo struct {
+	// The fully qualified name of the index (<bucket_name>:<scope_name>:<coll_name>:<index_name>)
+	IndexName string `json:"indexName"`
+
+	ReplicaID    int    `json:"replica_id"`   // replica ID of the index
+	PartitionID  int    `json:"partition_id"` // partition ID of the index
+	Bucket       string `json:"bucket"`       // bucket to which the index belogs
+	IsArrayIndex bool   `json:"isArrayIndex"` // Some validations happen only for non-array indexes
+	ItemsCount   uint64 `json:"items_count"`  // total number of items in the snapshot at the recorded timestamp
+
+	timestamp []uint64 // Used only for internal processing - not exported
+}
+
+type TimestampedCounts struct {
+	// Timestamp (seqnos) when ItemsCount was recorded from the snapshot. All indexes
+	// sharing the same timestamp will be grouped together to reduce payload in REST requests
+
+	Timestamp []uint64     `json:"timestamp"`
+	NodeId    string       `json:"nodeId"`  // address of the node on which the index exists
+	Indexes   []*IndexInfo `json:"indexes"` // List of all the indexes that share the same timestamp
+}
+
+func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
+
+	s.supvCmdch <- &MsgSuccess{}
+
+	respCh := cmd.(*MsgTimestampedCountReq).GetRespCh()
+	doLog := cmd.(*MsgTimestampedCountReq).GetDoLog()
+
+	// Disable for forestDB. See the comment at CountTotal() invocation
+	// in this method for more details
+	if common.GetStorageMode() == common.FORESTDB {
+		respCh <- nil
+		return
+	}
+
+	nodeId := s.config["clusterAddr"].String()
+	var indexSnapMap IndexSnapMap
+	var indexInstMap common.IndexInstMap
+
+	func() {
+		s.muSnap.Lock()
+		defer s.muSnap.Unlock()
+
+		indexSnapMap = s.indexSnapMap.Get()
+		indexInstMap = s.indexInstMap.Get()
+	}()
+
+	getTimestampedKey := func(timestamp []uint64) string {
+		var str strings.Builder
+		for i := range timestamp {
+			fmt.Fprintf(&str, "%v,", timestamp[i])
+		}
+		return str.String()
+	}
+
+	timestampedCountsMap := make(map[string]*TimestampedCounts)
+
+	for instId, snapC := range indexSnapMap {
+
+		func() {
+			snapC.Lock()
+			defer snapC.Unlock()
+
+			indexInst, ok := indexInstMap[instId]
+			if !ok ||
+				snapC.deleted || // If snap container is deleted, it means index is deleted. Skip the index
+				indexInst.Stream != common.MAINT_STREAM || // Process only MAINT_STREAM indexes
+				indexInst.State != common.INDEX_STATE_ACTIVE || // process only active indexes
+				indexInst.RState != common.REBAL_ACTIVE { // Skip indexes in rebalance
+				if doLog || logging.IsEnabled(logging.Verbose) {
+					logging.Infof("storageMgr::handleGetTimestampedItemsCount Skip processing inst: %v, partn: %v due to one of the following being true. "+
+						"snapC.deleted: %v, state: %v, rstate: %v, stream: %v, arrayIndex: %v",
+						snapC.deleted, indexInst.State, indexInst.Stream, indexInst.Defn.IsArrayIndex, indexInst.RState)
+				}
+				return
+			}
+
+			// Since we want to get fully qualified name, use INIT_STREAM so that the keyspace has bucket:scope:collection
+			// included in it
+			indexName := fmt.Sprintf("%v:%v", indexInst.Defn.KeyspaceId(common.INIT_STREAM), indexInst.Defn.Name)
+			replicaID := indexInst.ReplicaId
+
+			partnSnaps := snapC.snap.Partitions()
+			for partnId, partnSnap := range partnSnaps {
+
+				sc := partnSnap.Slices()
+				for _, sliceSnap := range sc {
+					timestamp := sliceSnap.Snapshot().Timestamp().Seqnos
+					// Use CountTotal() instead of StatCountTotal()
+					// StatCountTotal() will read from slice.committedCount which gets set
+					// after a snapshot is created. Since this loop runs async to shapshotting loop,
+					// it is possible that the timestamp is read from one snapshot while StatCountTotal()
+					// is read from another snapshot.
+					//
+					// For memdb, plasma, bhive - This method directly reads from snapshot and it is an O(1)
+					// operation. For ForestDB, the check is skipped as FDB will iterate over the entire index
+					count, err := sliceSnap.Snapshot().CountTotal(nil, nil)
+					if err != nil {
+						logging.Warnf("storageMgr::handleGetTimestampedItemsCount error observed while retrieving snapshot count "+
+							"for instId: %v, partnId: %v. Skipping this index from further processing", indexInst.InstId, partnId)
+						continue
+					}
+
+					key := getTimestampedKey(timestamp)
+					if _, ok := timestampedCountsMap[key]; !ok {
+						timestampedCountsMap[key] = &TimestampedCounts{Timestamp: timestamp, NodeId: nodeId}
+					}
+
+					indexInfo := &IndexInfo{
+						IndexName:    indexName,
+						ReplicaID:    replicaID,
+						PartitionID:  int(partnId),
+						Bucket:       indexInst.Defn.Bucket,
+						IsArrayIndex: indexInst.Defn.IsArrayIndex,
+						ItemsCount:   count,
+					}
+					timestampedCountsMap[key].Indexes = append(timestampedCountsMap[key].Indexes, indexInfo)
+
+				}
+			}
+		}()
+	}
+
+	var out []*TimestampedCounts
+	for _, tsCounts := range timestampedCountsMap {
+		out = append(out, tsCounts)
+	}
+
+	respCh <- out
 }

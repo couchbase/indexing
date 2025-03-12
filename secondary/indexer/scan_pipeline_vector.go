@@ -163,6 +163,7 @@ type ScanWorker struct {
 	includeColumncktemp  [][]byte
 	includeColumndktemp  value.Values
 	svPool               *value.StringValuePoolForIndex
+	includeColumnLen     int
 
 	//For caching values
 	cv          *value.ScopeValue
@@ -189,6 +190,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		includeColumncktemp:  make([][]byte, len(r.IndexInst.Defn.Include)),
 		includeColumndktemp:  make(n1qlval.Values, len(r.IndexInst.Defn.Include)),
 		sendLastRowPerJob:    sendLastRowPerJob,
+		includeColumnLen:     len(r.IndexInst.Defn.Include),
 	}
 
 	//init temp buffers
@@ -331,7 +333,9 @@ func (w *ScanWorker) Scanner() {
 		} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
 			err = snap.Range(ctx, scan.Low, scan.High, scan.Incl, handler, fincb)
 		} else if w.r.isBhiveScan {
-			if w.r.inlineFilterExpr != nil {
+			if w.r.includeColumnFilters != nil {
+				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, handler, fincb, w.inlineFilterCb2)
+			} else if w.r.inlineFilterExpr != nil {
 				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, handler, fincb, w.inlineFilterCb)
 			} else {
 				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, handler, fincb, nil)
@@ -761,12 +765,12 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 	// VECTOR_TODO: No need to explode all experssions. Explode only upto those expressions
 	// that are required in index definition
 	_, explodedIncludeValues, err := jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf,
-		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, len(w.r.IndexInst.Defn.Include), w.svPool)
+		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, w.includeColumnLen, w.svPool)
 	if err != nil {
 		if err == collatejson.ErrorOutputLen {
 			w.includeColumnBuf = make([]byte, 0, len(includeColumn)*3)
 			_, explodedIncludeValues, err = jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf,
-				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, len(w.r.IndexInst.Defn.Include), w.svPool)
+				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, w.includeColumnLen, w.svPool)
 		}
 		if err != nil {
 			return false, err
@@ -783,6 +787,50 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 		return false, nil
 	}
 
+	return false, nil
+}
+
+func (w *ScanWorker) inlineFilterCb2(meta []byte, docid []byte) (bool, error) {
+
+	if !w.r.isBhiveScan {
+		return false, errors.New("Include column filtering is only supported with BHIVE indexes")
+	}
+
+	includeColumn := meta[w.codeSize:]
+	w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(includeColumn))
+
+	compositeKeys, _, err := jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
+		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, nil, w.includeColumnLen)
+	if err != nil {
+		if err == collatejson.ErrorOutputLen {
+			w.includeColumnBuf = make([]byte, 0, len(includeColumn)*3)
+			compositeKeys, _, err = jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
+				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, nil, w.includeColumnLen)
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+
+	// Iterate over each scan for include columns.
+	// Even if the row qualifies one scan, return "true"
+	// Return false only if the row does not qualify all scans
+	for _, inclScan := range w.r.includeColumnFilters {
+		rowMatched := true
+		compositeFilter := inclScan.CompositeFilters
+
+		if len(compositeFilter) > w.includeColumnLen {
+			// There cannot be more ranges than number of composite keys
+			err = errors.New("There are more ranges than number of composite elements in the index")
+			return false, err
+		}
+		rowMatched = applyFilter(compositeKeys, compositeFilter)
+		if rowMatched {
+			return true, nil
+		}
+	}
+
+	// Row did not qualify any of the scans. Return false
 	return false, nil
 }
 
@@ -810,17 +858,6 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	// the "includeColumn" value
 	includeColumn := value[codeSize:]
 	value = value[:codeSize]
-
-	if len(includeColumn) > 0 && w.r.inlineFilter != "" {
-		processRow, err := w.inlineFilterCb(meta, entry)
-		if err != nil {
-			return err
-		}
-		if !processRow { // Skip the row from further processing
-			// VECTOR_TODO: Add stat for num_rows_filtered
-			return nil // return if the row is being filtered
-		}
-	}
 
 	var newRow *Row
 	if w.r.useHeapForVectorIndex() {
