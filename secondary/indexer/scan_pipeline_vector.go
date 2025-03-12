@@ -164,6 +164,7 @@ type ScanWorker struct {
 	includeColumndktemp  value.Values
 	svPool               *value.StringValuePoolForIndex
 	includeColumnLen     int
+	explodeUpto          int
 
 	//For caching values
 	cv          *value.ScopeValue
@@ -207,6 +208,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		if r.indexKeyNames != nil && r.indexKeyNames[i] != "" {
 			w.includeColumnExplode[index] = true
 			w.includeColumnDecode[index] = true
+			w.explodeUpto = index
 		}
 	}
 
@@ -762,15 +764,13 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 
 	w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(includeColumn))
 
-	// VECTOR_TODO: No need to explode all experssions. Explode only upto those expressions
-	// that are required in index definition
 	_, explodedIncludeValues, err := jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf,
-		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, w.includeColumnLen, w.svPool)
+		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, w.explodeUpto, w.svPool)
 	if err != nil {
 		if err == collatejson.ErrorOutputLen {
 			w.includeColumnBuf = make([]byte, 0, len(includeColumn)*3)
 			_, explodedIncludeValues, err = jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf,
-				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, w.includeColumnLen, w.svPool)
+				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, w.explodeUpto, w.svPool)
 		}
 		if err != nil {
 			return false, err
@@ -800,12 +800,12 @@ func (w *ScanWorker) inlineFilterCb2(meta []byte, docid []byte) (bool, error) {
 	w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(includeColumn))
 
 	compositeKeys, _, err := jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
-		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, nil, w.includeColumnLen)
+		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, nil, w.explodeUpto)
 	if err != nil {
 		if err == collatejson.ErrorOutputLen {
 			w.includeColumnBuf = make([]byte, 0, len(includeColumn)*3)
 			compositeKeys, _, err = jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
-				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, nil, w.includeColumnLen)
+				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, nil, w.explodeUpto)
 		}
 		if err != nil {
 			return false, err
