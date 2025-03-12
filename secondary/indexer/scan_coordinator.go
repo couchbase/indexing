@@ -538,6 +538,8 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 		if err != nil && s.tryRespondWithError(w, req, err) {
 			return
 		}
+
+		req.setExplodePositions()
 	}
 
 	// Do the scan

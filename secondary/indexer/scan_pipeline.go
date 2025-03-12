@@ -1622,6 +1622,14 @@ func (e *entryCache) Stats() string {
 
 }
 
+func (e *entryCache) Hits() int64 {
+	return e.hit
+}
+
+func (e *entryCache) Misses() int64 {
+	return e.miss
+}
+
 func (e *entryCache) CacheHitRatio() int {
 
 	if e.hit+e.miss != 0 {

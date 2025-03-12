@@ -205,6 +205,7 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		r.setExplodePositions()
 
 		mcb := codebook.NewMockCodebook(r.IndexInst.Defn.VectorMeta)
 		if injectCompDistErr != nil {
@@ -357,6 +358,7 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		r.setExplodePositions()
 
 		wp, _ := NewWorkerPool(r, 2, false)
 		wp.Init(20, 1)
