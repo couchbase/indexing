@@ -1691,9 +1691,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.enableCompressFullMarshal": ConfigValue{
-		true,
+		false,
 		"Compress page after full marshal",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1873,9 +1873,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.enableCompressFullMarshal": ConfigValue{
-		true,
+		false,
 		"Compress page after full marshal",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
