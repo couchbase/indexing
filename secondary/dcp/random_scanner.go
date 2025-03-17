@@ -26,9 +26,9 @@ type RandomScanner interface {
 
 var debugId = uint32(1)
 
-const KV_CPU_MULTIPLIER = 1
+const KV_CPU_MULTIPLIER = 0.25
 const DEFAULT_FETCH_SIZE = 1000
-const RESULT_CHANNEL_SIZE = 2000
+const RESULT_CHANNEL_SIZE = 10000
 
 type randomScan struct {
 	b *Bucket //bucket pointer
