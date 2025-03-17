@@ -725,7 +725,7 @@ func TestVectorPartnIndexWithAllSIFTQueries(t *testing.T) {
 
 		queryStmtFmt := "SELECT vectornum FROM default " +
 			"WHERE `type`=\"Casual\" AND category=\"Shoes\" AND country=\"USA\" AND brand=\"Nike\" AND color=\"Green\" AND size=5 " +
-			"ORDER BY ANN(sift, [%v], \"COSINE\", 50) " +
+			"ORDER BY APPROX_VECTOR_DISTANCE(sift, [%v], \"COSINE\", 50) " +
 			"LIMIT 10"
 
 		queryStmt := fmt.Sprintf(queryStmtFmt, queryStr)
