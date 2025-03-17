@@ -4194,7 +4194,7 @@ func (s *plasmaSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) 
 		s.slice.meteringStats.recordReadUsageStats(ru)
 	}
 	if s.slice.idxStats.useArrItemsCount {
-		return s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(uint64), nil
+		return uint64(s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(int64)), nil
 	}
 	return uint64(s.MainSnap.Count()), nil
 }
