@@ -1120,9 +1120,9 @@ func (r *ScanRequest) fillFilterLowHigh(compFilters []CompositeElementFilter, fi
 	if len(lows2) > 0 {
 		var lows2bytes [][]byte
 		for pos, l := range lows2 {
-			if r.isVectorScan && !r.isBhiveScan && r.vectorPos == pos {
+			if r.isVectorScan && !r.isBhiveScan {
 				if pos < r.vectorPos {
-					filter.centroidOffsetLowKey += len(lows2bytes)
+					filter.centroidOffsetLowKey += len(l.Bytes())
 				} else if pos == r.vectorPos {
 					filter.centroidLenLowKey += len(l.Bytes())
 				}
@@ -1144,7 +1144,7 @@ func (r *ScanRequest) fillFilterLowHigh(compFilters []CompositeElementFilter, fi
 	if len(highs2) > 0 {
 		var highs2bytes [][]byte
 		for pos, l := range highs2 {
-			if r.isVectorScan && !r.isBhiveScan && r.vectorPos == pos {
+			if r.isVectorScan && !r.isBhiveScan {
 				if pos < r.vectorPos {
 					filter.centroidOffsetHighKey += len(l.Bytes())
 				} else if pos == r.vectorPos {

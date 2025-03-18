@@ -1836,7 +1836,7 @@ func (stm *ShardTransferManager) TransferCodebook(codebookCopier plasma.Copier, 
 	xferBytes, err := codebookCopier.CopyFile(codebookCopier.Context(), srcFile, dstFile, 0, sz)
 
 	logging.Infof("ShardTransferManager::TransferCodebook For codebook: srcFile:%v, dstFile:%v"+
-		"transferred bytes:%v, err:%v", srcFile, dstFile, xferBytes, err)
+		" transferred bytes:%v, err:%v", srcFile, dstFile, xferBytes, err)
 	return err
 }
 
