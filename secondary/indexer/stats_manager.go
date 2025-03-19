@@ -1055,6 +1055,7 @@ func (s *IndexerStats) SetIndexStatusFilters() {
 }
 
 func (s *IndexerStats) SetPlannerFilters() {
+	s.memoryTotalStorage.AddFilter(stats.PlannerFilter)
 	s.memoryUsedStorage.AddFilter(stats.PlannerFilter)
 	s.memoryUsed.AddFilter(stats.PlannerFilter)
 	s.memoryQuota.AddFilter(stats.PlannerFilter)

@@ -580,6 +580,11 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		indexer.NumTenants = uint64(numTenants.(float64))
 	}
 
+	var actualMemTotalStorage uint64
+	if memTotalStorage, ok := statsMap["memory_total_storage"]; ok {
+		actualMemTotalStorage = uint64(memTotalStorage.(float64))
+	}
+
 	// uptime
 	var elapsed uint64
 	if uptimeStat, ok := statsMap["uptime"]; ok {
@@ -610,6 +615,8 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			"Defaulting to 256M of memory quota for this node", indexer.String())
 		indexer.memQuota = 256 * 1024 * 1024
 	}
+
+	indexerHeap := actualTotalMem - actualMemTotalStorage
 
 	if shardCompatVersion, ok := statsMap["shard_compat_version"]; ok {
 		indexer.ShardCompatVersion = int(shardCompatVersion.(float64))
@@ -878,6 +885,11 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			index.ActualMemOverhead = 0
 		}
 
+		actualIndexJemallocFrag := uint64(0)
+		if actualMemTotalStorage > actualStorageMem {
+			actualIndexJemallocFrag = uint64(float64(actualMemTotalStorage-actualStorageMem) * ratio)
+		}
+
 		// If index is not fully build, estimate memory consumption after it is fully build
 		// at the same resident ratio.
 		if index.ActualBuildPercent != 0 {
@@ -924,13 +936,27 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		// If index has resident memory, then compute minimum memory usage using current memory usage.
 		if !index.NoUsageInfo {
 			if index.ActualResidentPercent > 0 {
-				ratio := float64(index.ActualResidentPercent) / 100
+				resRatio := float64(index.ActualResidentPercent) / 100
 				if index.ActualMemUsage < combinedMemSzIdx {
 					combinedMemSzIdx = 0
 				}
+
 				memSize := index.ActualMemUsage - combinedMemSzIdx
-				scaledMem := float64(memSize+index.ActualMemOverhead) / ratio
-				index.ActualMemMin = combinedMemSzIdx + uint64(scaledMem*minRatio) + index.ActualCodebookMemUsage
+				scaledMem := float64(memSize) / resRatio
+
+				memJemallocFragScaled := float64(actualIndexJemallocFrag) / resRatio
+
+				// Capping the Jemalloc fragmentation at memFragThreshold
+				memFragThreshold := config["indexer.plasma.memFragThreshold"].Float64()
+				maxEstJemallocFragMem := (memFragThreshold * scaledMem) / (1 - memFragThreshold)
+				if memJemallocFragScaled > maxEstJemallocFragMem {
+					memJemallocFragScaled = maxEstJemallocFragMem // this is estimated for 100% RR
+				}
+
+				// take the contribution of the indexer heap and other overheads
+				otherMemOverheadScaled := (float64(indexerHeap) * ratio / resRatio) * minRatio
+
+				index.ActualMemMin = combinedMemSzIdx + uint64((scaledMem+memJemallocFragScaled)*minRatio) + uint64(otherMemOverheadScaled) + index.ActualCodebookMemUsage
 			} else if index.ActualNumDocs > 0 {
 				// If index has no resident memory but it has keys, then estimate using sizing equation.
 				dataSize := index.ActualDataSize
