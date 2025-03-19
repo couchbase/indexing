@@ -851,13 +851,20 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 
 	codeSize := w.codeSize
 	storeId, recordId, meta := w.currJob.snap.Snapshot().DecodeMeta(value)
-	value = meta
+
+	// The minimum length of decoded meta has to be "codeSize"
+	// If it is less - Then there is a bug in decode meta logic
+	if len(meta) == 0 || len(meta) < codeSize {
+		logging.Fatalf("ScanWorker::bhiveIteratorCallback len(meta) is less than expected size. value: %v, len(value): %v, "+
+			"meta: %v, len(meta): %v, codeSize: %v, docid: %v for indexInst: %v, partnId: %v, cid: %v, storeId: %v, recordId: %v",
+			value, len(value), meta, len(meta), codeSize, entry, w.r.IndexInstId, w.currJob.pid, w.currJob.cid, storeId, recordId)
+	}
 
 	// The value field will contain both quantized codes and include column fields.
 	// The first "codeSize" bytes contain quantized codes. Remaining bytes contain
 	// the "includeColumn" value
-	includeColumn := value[codeSize:]
-	value = value[:codeSize]
+	includeColumn := meta[codeSize:]
+	value = meta[:codeSize]
 
 	var newRow *Row
 	if w.r.useHeapForVectorIndex() {
