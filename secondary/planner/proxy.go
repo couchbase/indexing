@@ -944,6 +944,11 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 
 				// take the contribution of the indexer heap and other overheads
 				otherMemOverheadScaled := (float64(indexerHeap) * ratio / resRatio) * minRatio
+				maxEstIndexerHeap := float64(indexer.memQuota) * 0.1
+				if indexerHeap > uint64(maxEstIndexerHeap) || otherMemOverheadScaled > maxEstIndexerHeap*ratio {
+					// take 10% of Quota and then scale it based on the contribution factor (ratio of memUsage of Index to totalIndexMemUsage)
+					otherMemOverheadScaled = maxEstIndexerHeap * ratio
+				}
 
 				index.ActualMemMin = combinedMemSzIdx + uint64((scaledMem+memJemallocFragScaled)*minRatio) + uint64(otherMemOverheadScaled)
 			} else if index.ActualNumDocs > 0 {
