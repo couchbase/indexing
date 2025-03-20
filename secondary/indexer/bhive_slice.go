@@ -2449,11 +2449,15 @@ func (mdb *bhiveSlice) handleN1QLStorageStatistics() (StorageStatistics, error) 
 	mstats := mdb.mainstore.GetStats()
 	internalData := fmt.Sprintf("{\n\"MainStore\":\n"+
 		"{\n"+
+		"\"items_count\":%d,\n"+
+		"\"avg_item_size\":%.5f,\n"+
 		"\"graph_resident_ratio\":%.5f,\n"+
 		"\"graph_hit_ratio\":%.2f,\n"+
 		"\"num_vec_ops_per_cell\":%d,\n"+
 		"\"norm_graph_disk_size\":%.5f,\n"+
 		"\"norm_full_vector_size\":%.5f\n}\n}",
+		mstats.ItemCount,
+		mstats.AvgItemSz,
 		mstats.GraphRR,
 		mstats.GraphHitRatio,
 		mstats.NumVectorOp,
@@ -2463,6 +2467,8 @@ func (mdb *bhiveSlice) handleN1QLStorageStatistics() (StorageStatistics, error) 
 	sts.InternalData = []string{internalData}
 
 	internalDataMap := make(map[string]interface{})
+	internalDataMap["items_count"] = mstats.ItemCount
+	internalDataMap["avg_item_size"] = mstats.AvgItemSz
 	internalDataMap["graph_resident_ratio"] = mstats.GraphRR
 	internalDataMap["graph_hit_ratio"] = mstats.GraphHitRatio
 	internalDataMap["num_vec_ops_per_cell"] = mstats.NumVectorOp

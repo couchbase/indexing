@@ -149,15 +149,16 @@ func TestBhiveVectorIndex(t *testing.T) {
 	queryVectorStr = queryVectorStr[:len(queryVectorStr)-1]
 	queryVectorStr += "]"
 
-	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, ANN(sift, qvec, \"L2_SQUARED\", %v, true) from %v ORDER BY ANN(sift, qvec, \"L2_SQUARED\", %v, true) limit %v",
-		queryVectorStr, indexVector.Probes, bucket, indexVector.Probes, limit)
+	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v, true) as distance "+
+		"from %v ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, bucket, limit)
 
 	annScanResults, err := execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
 	validateScanStats(bucket, idx_bhive, 1, limit, t)
 
 	// validate the results using KNN
-	knnScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, KNN(sift, qvec, \"L2_SQUARED\") from %v ORDER BY KNN(sift, qvec, \"L2_SQUARED\") limit %v",
+	knnScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\") as distance "+
+		"from %v ORDER BY distance limit %v",
 		queryVectorStr, bucket, limit)
 
 	knnScanResults, err := execN1QL(bucket, knnScanStmt)
@@ -187,7 +188,7 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	// Create Index
 	stmt := "CREATE VECTOR INDEX " + idx_bhive_include +
 		" ON default(sift VECTOR) INCLUDE(`count`, `direction`, `docnum`, `vectornum`, `gender`) " +
-		" WITH { \"dimension\":128, \"description\": \"IVF32,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+		" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
 	err := createWithDeferAndBuild(idx_bhive_include, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
 	FailTestIfError(err, "Error in creating idx_sift10k", t)
 
@@ -199,15 +200,15 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	queryVectorStr += "]"
 
 	// Case-1: Scan only the vector field with meta().id and distance in projection
-	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, ANN(sift, qvec, \"L2_SQUARED\", %v) from %v ORDER BY ANN(sift, qvec, \"L2_SQUARED\", %v) limit %v",
-		queryVectorStr, indexVector.Probes, bucket, indexVector.Probes, limit)
+	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance "+
+		"from %v ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err := execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
 	validateScanStats(bucket, idx_bhive_include, 1, limit, t)
 
 	// validate the results using KNN
-	knnScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, KNN(sift, qvec, \"L2_SQUARED\") from %v ORDER BY KNN(sift, qvec, \"L2_SQUARED\") limit %v",
-		queryVectorStr, bucket, limit)
+	knnScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\") as distance "+
+		"from %v ORDER BY distance limit %v", queryVectorStr, bucket, limit)
 
 	knnScanResults, err := execN1QL(bucket, knnScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
@@ -220,17 +221,15 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	}
 
 	// Case-2: Let projection contain all the include fields with out filtering on include fields
-	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, ANN(sift, qvec, \"L2_SQUARED\", %v), count, direction, docnum, vectornum, gender "+
-		" from %v ORDER BY ANN(sift, qvec, \"L2_SQUARED\", %v) limit %v",
-		queryVectorStr, indexVector.Probes, bucket, indexVector.Probes, limit)
+	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance, "+
+		"count, direction, docnum, vectornum, gender from %v ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err = execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
 	validateScanStats(bucket, idx_bhive_include, 2, 2*limit, t)
 
 	// validate the results using KNN
-	knnScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, KNN(sift, qvec, \"L2_SQUARED\"), count, direction, docnum, vectornum, gender "+
-		" from %v ORDER BY KNN(sift, qvec, \"L2_SQUARED\") limit %v",
-		queryVectorStr, bucket, limit)
+	knnScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\") as distance, "+
+		"count, direction, docnum, vectornum, gender from %v ORDER BY distance limit %v", queryVectorStr, bucket, limit)
 
 	knnScanResults, err = execN1QL(bucket, knnScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
@@ -243,17 +242,15 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	}
 
 	// Case-3: Let projection contain few the include fields with out filtering on include fields
-	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, ANN(sift, qvec, \"L2_SQUARED\", %v), count, direction, docnum "+
-		" from %v ORDER BY ANN(sift, qvec, \"L2_SQUARED\", %v) limit %v",
-		queryVectorStr, indexVector.Probes, bucket, indexVector.Probes, limit)
+	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance, "+
+		" count, direction, docnum from %v ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err = execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
 	validateScanStats(bucket, idx_bhive_include, 3, 3*limit, t)
 
 	// validate the results using KNN
-	knnScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, KNN(sift, qvec, \"L2_SQUARED\"), count, direction, docnum "+
-		" from %v ORDER BY KNN(sift, qvec, \"L2_SQUARED\") limit %v",
-		queryVectorStr, bucket, limit)
+	knnScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\") as distance, "+
+		"count, direction, docnum from %v ORDER BY distance limit %v", queryVectorStr, bucket, limit)
 
 	knnScanResults, err = execN1QL(bucket, knnScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
@@ -266,16 +263,15 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	}
 
 	// Case-4: Let projection contain few the include fields with filtering on one include fields
-	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, ANN(sift, qvec, \"L2_SQUARED\", %v), count, direction, docnum "+
-		" from %v where direction = \"east\" ORDER BY ANN(sift, qvec, \"L2_SQUARED\", %v) limit %v",
-		queryVectorStr, indexVector.Probes, bucket, indexVector.Probes, limit)
+	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance, "+
+		"count, direction, docnum from %v where direction = \"east\" ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err = execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
 	validateScanStats(bucket, idx_bhive_include, 4, 4*limit, t)
 
 	// validate the results using KNN
-	knnScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, KNN(sift, qvec, \"L2_SQUARED\"), count, direction, docnum "+
-		" from %v where direction = \"east\" ORDER BY KNN(sift, qvec, \"L2_SQUARED\") limit %v",
+	knnScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\") as distance, "+
+		"count, direction, docnum from %v where direction = \"east\" ORDER BY distance limit %v",
 		queryVectorStr, bucket, limit)
 
 	knnScanResults, err = execN1QL(bucket, knnScanStmt)
@@ -289,16 +285,16 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	}
 
 	// Case-5: Let projection contain few the include fields with filtering on multiple include fields
-	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, ANN(sift, qvec, \"L2_SQUARED\", %v), direction, docnum "+
-		" from %v where direction = \"east\" and docnum > 1000 ORDER BY ANN(sift, qvec, \"L2_SQUARED\", %v) limit %v",
-		queryVectorStr, indexVector.Probes, bucket, indexVector.Probes, limit)
+	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance, "+
+		"direction, docnum from %v where direction = \"east\" and docnum > 1000 ORDER BY distance limit %v",
+		queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err = execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
 	validateScanStats(bucket, idx_bhive_include, 5, 5*limit, t)
 
 	// validate the results using KNN
-	knnScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, KNN(sift, qvec, \"L2_SQUARED\"), direction, docnum "+
-		" from %v where direction = \"east\" and docnum > 1000 ORDER BY KNN(sift, qvec, \"L2_SQUARED\") limit %v",
+	knnScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\") as distance, "+
+		"direction, docnum from %v where direction = \"east\" and docnum > 1000 ORDER BY distance limit %v",
 		queryVectorStr, bucket, limit)
 
 	knnScanResults, err = execN1QL(bucket, knnScanStmt)
@@ -312,17 +308,16 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	}
 
 	// Case-6: Include column fields are present in projection but not in filter
-	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, direction, docnum, ANN(sift, qvec, \"L2_SQUARED\", %v) "+
-		" from %v ORDER BY ANN(sift, qvec, \"L2_SQUARED\", %v) limit %v",
-		queryVectorStr, indexVector.Probes, bucket, indexVector.Probes, limit)
+	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, direction, docnum, "+
+		"APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance from %v ORDER BY distance limit %v",
+		queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err = execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
 	validateScanStats(bucket, idx_bhive_include, 6, 6*limit, t)
 
 	// validate the results using KNN
-	knnScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, direction, docnum, KNN(sift, qvec, \"L2_SQUARED\") "+
-		" from %v ORDER BY KNN(sift, qvec, \"L2_SQUARED\") limit %v",
-		queryVectorStr, bucket, limit)
+	knnScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, direction, docnum, VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\") as distance"+
+		" from %v ORDER BY distance limit %v", queryVectorStr, bucket, limit)
 
 	knnScanResults, err = execN1QL(bucket, knnScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
@@ -350,7 +345,7 @@ func TestPartitionSetsWithBhiveIndex(t *testing.T) {
 	// Create Index
 	stmt := "CREATE VECTOR INDEX " + idx_bhive_partnsets +
 		" ON default(sift VECTOR) INCLUDE(`count`, `docnum`, `vectornum`, `gender`) partition by hash(`direction`)" +
-		" WITH { \"dimension\":128, \"description\": \"IVF32,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+		" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
 	err := createWithDeferAndBuild(idx_bhive_partnsets, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
 	FailTestIfError(err, "Error in creating idx_bhive_partnsets", t)
 
@@ -362,8 +357,8 @@ func TestPartitionSetsWithBhiveIndex(t *testing.T) {
 	queryVectorStr += "]"
 
 	// Case-1: Scan the vector fields where direction = "east"
-	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, ANN(sift, qvec, \"L2_SQUARED\", %v) from %v where direction = \"east\" ORDER BY ANN(sift, qvec, \"L2_SQUARED\", %v) limit %v",
-		queryVectorStr, indexVector.Probes, bucket, indexVector.Probes, limit)
+	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance "+
+		"from %v where direction = \"east\" ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err := execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
 
@@ -372,7 +367,6 @@ func TestPartitionSetsWithBhiveIndex(t *testing.T) {
 	if e != nil {
 		t.Fatalf("Error observed while marshalling direction. err: %v", e)
 	}
-	log.Printf("VarunLog: annScanResults are: %v", annScanResults)
 
 	numPartition := 8
 	partnId := common.HashKeyPartition(v, int(numPartition), common.CRC32)
@@ -388,7 +382,8 @@ func TestPartitionSetsWithBhiveIndex(t *testing.T) {
 	validateScanStatsForPartns(bucket, idx_bhive_partnsets, expectedRequests, numPartition, t)
 
 	// validate the results using KNN
-	knnScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, KNN(sift, qvec, \"L2_SQUARED\") from %v where direction = \"east\" ORDER BY KNN(sift, qvec, \"L2_SQUARED\") limit %v",
+	knnScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\") as distance "+
+		"from %v where direction = \"east\" ORDER BY distance limit %v",
 		queryVectorStr, bucket, limit)
 
 	knnScanResults, err := execN1QL(bucket, knnScanStmt)
