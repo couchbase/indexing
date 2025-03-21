@@ -158,3 +158,5 @@ GoModBuild (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/c
   GOVERSION SUPPORTED_NEWER)
 
 AddMetricsMetadata (JSON secondary/docs/metrics_metadata.json COMPONENT index)
+
+GoModTidySetup()
