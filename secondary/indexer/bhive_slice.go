@@ -531,6 +531,11 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 		return err
 	}
 
+	// Initialize readers
+	for i := 0; i < cap(slice.readers); i++ {
+		slice.readers <- slice.mainstore.NewReader()
+	}
+
 	if !slice.newBorn {
 
 		logging.Infof("bhiveSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Recovering from recovery point ..",
@@ -544,11 +549,6 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 		} else {
 			return err
 		}
-	}
-
-	// Initialize readers
-	for i := 0; i < cap(slice.readers); i++ {
-		slice.readers <- slice.mainstore.NewReader()
 	}
 
 	slice.persistFullVector = mCfg.PersistFullVector
