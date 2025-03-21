@@ -39,6 +39,11 @@ type ScanJob struct {
 	bytesRead    uint64
 	rowsScanned  uint64
 	rowsReturned uint64
+	// when inline filter is pushed down, not all rows come to scan pipeline
+	// rowsFiltered captures those rows that have been skipped by storage
+	// from further processing. num_rows_scanned + num_rows_filtered will
+	// give the total rows that are processed in the scan pipeline
+	rowsFiltered uint64
 
 	decodeDur int64
 	decodeCnt int64
@@ -76,7 +81,8 @@ func (j *ScanJob) SetStartTime() {
 
 func (j *ScanJob) PrintStats() {
 	getDebugStr := func() string {
-		s := fmt.Sprintf("%v stats rowsScanned: %v rowsReturned: %v", j.logPrefix, j.rowsScanned, j.rowsReturned)
+		s := fmt.Sprintf("%v stats rowsScanned: %v, rowsReturned: %v, rowsFiltered: %v",
+			j.logPrefix, j.rowsScanned, j.rowsReturned, j.rowsFiltered)
 		if logging.IsEnabled(logging.Timing) {
 			s += fmt.Sprintf(" timeTaken: %v", time.Since(j.startTime))
 		}
@@ -872,6 +878,7 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 	case bool:
 		return evalValue.Actual().(bool), nil
 	default:
+		w.currJob.rowsFiltered++
 		return false, nil
 	}
 
@@ -917,6 +924,8 @@ func (w *ScanWorker) inlineFilterCb2(meta []byte, docid []byte) (bool, error) {
 			return true, nil
 		}
 	}
+
+	w.currJob.rowsFiltered++
 
 	// Row did not qualify any of the scans. Return false
 	return false, nil
@@ -1354,6 +1363,7 @@ type MergeOperator struct {
 
 	rowsReceived    uint64
 	rowsOffsetCount uint64
+	rowsReranked    uint64
 
 	logPrefix string
 	startTime time.Time
@@ -1695,6 +1705,8 @@ func (fio *MergeOperator) rerankOnHeap() {
 	close(fio.rerankCh)
 	wg.Wait()
 
+	fio.rowsReranked += uint64(len(allRows))
+
 	// sort the rows based on distance
 	sort.Slice(allRows, func(i, j int) bool {
 		return allRows[i].dist < allRows[j].dist
@@ -1930,6 +1942,7 @@ func (s *IndexScanSource2) Routine() error {
 				logging.Verbosef("%v decode %v, dist %v, cnt %v, scanned %v", job.logPrefix,
 					job.decodeDur, job.distCmpDur, job.decodeCnt, job.rowsScanned)
 				s.p.rowsScanned += job.rowsScanned
+				s.p.rowsFiltered += job.rowsFiltered
 				s.p.bytesRead += job.bytesRead
 				s.p.decodeDur += job.decodeDur
 				s.p.decodeCnt += job.decodeCnt
@@ -1937,6 +1950,7 @@ func (s *IndexScanSource2) Routine() error {
 				s.p.distCmpCnt += job.distCmpCnt
 			}
 		}
+		s.p.rowsReranked += fanIn.rowsReranked
 	}()
 
 	doneCh := make(chan struct{})
