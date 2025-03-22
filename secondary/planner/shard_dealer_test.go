@@ -239,14 +239,9 @@ func createDummyIndexerNode(nodeID nodeUUID, cips ...createIdxParam) *IndexerNod
 			cip.defnid = id
 			if cip.numPartns > 0 {
 				var newIndex = createDummyPartitionedIndexUsages(cip)
-
-				for _, partn := range newIndex {
-					partn.initialNode = &indexerNode
-				}
 				indexerNode.Indexes = append(indexerNode.Indexes, newIndex...)
 			} else {
 				var newIndex = createDummyIndexUsage(cip)
-				newIndex.initialNode = &indexerNode
 				indexerNode.Indexes = append(indexerNode.Indexes, newIndex)
 			}
 			id++
@@ -303,7 +298,6 @@ func createDummyIndexerNodes(nNodesHint int, cips ...createIdxParam) []*IndexerN
 				shuffleNodes(nodesForThisReplica)
 
 				for j := 0; j <= cip.numReplicas; j++ {
-					indexes[j][i].initialNode = nodesForThisReplica[j]
 					nodesForThisReplica[j].Indexes = append(nodesForThisReplica[j].Indexes, indexes[j][i])
 				}
 			}
@@ -413,7 +407,6 @@ func TestSingleNode_Pass0(t *testing.T) {
 
 		cip = createIdxParam{defnid: minShardsPerNode + 1, isPrimary: true}
 		var extraIndex = createDummyIndexUsage(cip)
-		extraIndex.initialNode = indexerNode
 		indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
 
 		var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
@@ -1326,7 +1319,6 @@ func TestSingleNode_Pass2(t *testing.T) {
 		cip = createIdxParam{defnid: shardCapacity + 1}
 		// create extra index. it should not create a new shard
 		var extraIndex = createDummyIndexUsage(cip)
-		extraIndex.initialNode = indexerNode
 		indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
 
 		var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
@@ -1631,7 +1623,6 @@ func TestSingleNode_Pass3(t *testing.T) {
 		var cip = createIdxParam{defnid: uint64(len(indexerNode.Indexes))}
 		// create extra index. it should not create a new shard
 		var extraIndex = createDummyIndexUsage(cip)
-		extraIndex.initialNode = indexerNode
 		indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
 
 		var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
@@ -1745,7 +1736,6 @@ func TestSingleNode_Pass3(t *testing.T) {
 		var cip = createIdxParam{defnid: uint64(len(indexerNode.Indexes))}
 		// create extra index. it should not create a new shard
 		var extraIndex = createDummyIndexUsage(cip)
-		extraIndex.initialNode = indexerNode
 		indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
 
 		var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
@@ -2597,7 +2587,6 @@ func TestMultiNode_NegTestSameIndexOnAllNodes(t *testing.T) {
 	for _, indexerNode := range cluster {
 		var idx = index.clone()
 		indexerNode.Indexes = append(indexerNode.Indexes, idx)
-		idx.initialNode = indexerNode
 	}
 
 	var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
@@ -2631,9 +2620,6 @@ func TestMultiNode_NegTestSameDefnMultiReplicaSameNode(t *testing.T) {
 	var cip = createIdxParam{defnid: 1, numReplicas: 2}
 	var indexes = createDummyReplicaIndexUsages(cip)
 	indexerNode.Indexes = append(indexerNode.Indexes, indexes...)
-	for _, index := range indexes {
-		index.initialNode = indexerNode
-	}
 
 	var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 	for defnID, repMaps := range replicaMaps {
@@ -3574,7 +3560,6 @@ func TestMultiNode_UnevenDistribution(t *testing.T) {
 		for i, replica := range replicas {
 			replica.DefnId = c.IndexDefnId(defnID)
 			cluster[i].Indexes = append(cluster[i].Indexes, replica)
-			replica.initialNode = cluster[i]
 		}
 
 		replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
@@ -3625,16 +3610,12 @@ func TestMultiNode_UnevenDistribution(t *testing.T) {
 
 		node0.Indexes = append(node0.Indexes, replica1s[0])
 		node1.Indexes = append(node1.Indexes, replica1s[1])
-		replica1s[0].initialNode = node0
-		replica1s[1].initialNode = node1
 		replica1s[0].DefnId = c.IndexDefnId(defnID)
 		replica1s[1].DefnId = c.IndexDefnId(defnID)
 
 		defnID++
 		node0.Indexes = append(node0.Indexes, replica2s[0])
 		node2.Indexes = append(node2.Indexes, replica2s[1])
-		replica2s[0].initialNode = node0
-		replica2s[1].initialNode = node2
 		replica2s[0].DefnId = c.IndexDefnId(defnID)
 		replica2s[1].DefnId = c.IndexDefnId(defnID)
 
@@ -3674,9 +3655,6 @@ func TestMultiNode_UnevenDistribution(t *testing.T) {
 		node0.Indexes = append(node0.Indexes, replica3s[0])
 		node1.Indexes = append(node1.Indexes, replica3s[1])
 		node2.Indexes = append(node2.Indexes, replica3s[2])
-		replica3s[0].initialNode = node0
-		replica3s[1].initialNode = node1
-		replica3s[2].initialNode = node2
 		replica3s[0].DefnId = c.IndexDefnId(defnID)
 		replica3s[1].DefnId = c.IndexDefnId(defnID)
 		replica3s[2].DefnId = c.IndexDefnId(defnID)
@@ -3706,6 +3684,73 @@ func TestMultiNode_UnevenDistribution(t *testing.T) {
 			"internal shard dealer validation failed for uneven distribution test",
 		)
 	}
+}
+
+func TestMultiNode_MixedModeRebalance(t *testing.T) {
+	t.Parallel()
+
+	var testShardCapacity uint64 = 10
+
+	var testMinShardsPerNode = uint64(1)
+	var testMinPartitionsPerShard = uint64(1)
+	var testMaxDiskUsagePerShard = uint64(1000)
+
+	var ciplist = []createIdxParam{
+		{count: 6, numReplicas: 2},
+	}
+
+	var cluster = createDummyIndexerNodes(0, ciplist...)
+
+	var dealer = NewShardDealer(
+		testMinShardsPerNode,
+		testMinPartitionsPerShard,
+		testMaxDiskUsagePerShard,
+		testShardCapacity,
+		createNewAlternateShardIDGenerator(),
+		genMoveInstanceCb(cluster),
+	)
+
+	// shuffle initial nodes of all indexes except the first one
+	for _, node := range cluster[1:] {
+		for _, index := range node.Indexes {
+			index.initialNode = cluster[rand.Intn(len(cluster)-1)+1]
+		}
+	}
+
+	var node0ReplicaMap = getReplicaMapsForIndexerNodes(cluster[0])
+	var recordedDefnID c.IndexDefnId = 0
+
+	for defnID, repMap := range node0ReplicaMap {
+		for partnID, repmap := range repMap {
+			slotID := dealer.GetSlot(defnID, partnID, repmap, 0)
+			if slotID == 0 {
+				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass", t.Name(), repmap)
+			}
+			t.Logf("Slot %v recorded for defnID %v partnID %v", slotID, defnID, partnID)
+			break
+		}
+		recordedDefnID = defnID
+		break
+	}
+
+	delete(node0ReplicaMap, recordedDefnID)
+
+	var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
+
+	for defnID, repMap := range replicaMaps {
+		for partnID, repmap := range repMap {
+			slotID := dealer.GetSlot(defnID, partnID, repmap, 0)
+			if slotID == 0 {
+				t.Fatalf("%v failed to get slot id for replicaMap %v", t.Name(), repmap)
+			}
+		}
+	}
+
+	assert.NoError(
+		t,
+		validateShardDealerInternals(dealer, cluster),
+		"internal shard dealer validation failed for mixed mode rebalance test",
+	)
 }
 
 // TODO: add tests for disk usage check in recordIndex
