@@ -703,13 +703,9 @@ findCategory:
 
 	var ensureReplicaPosition = func() error {
 		if mainstoreShard == nil {
-			panic("ShardDealer ensureReplicaPosition called without setting shards")
+			return fmt.Errorf("shard dealer ensureReplicaPosition called without setting shards")
 		}
 		var slotID = mainstoreShard.GetSlotId()
-		var slotToGroupMap = sd.slotsMap[slotID]
-		if slotToGroupMap == nil {
-			return nil
-		}
 		var newReplicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
 
 		var replicaSlotToNodeMap = sd.slotsToNodeMap[slotID]
@@ -720,45 +716,46 @@ findCategory:
 					continue
 				}
 
-				if slotReplicaNode, exists := replicaSlotToNodeMap[uint8(indexReplicaID)]; exists {
-					if node.NodeUUID != slotReplicaNode {
-						logging.Infof("ShardDealer::GetSlot: moving %v to %v to maintain index-replica and slot-replica alignment for slot %v (pass %v)",
-							defnJSONLog(indexReplicaID, node.NodeUUID),
-							slotReplicaNode,
-							slotID,
-							passes[currPassItr],
-						)
-						updatedMap, err := sd.moveInstance(
-							node.NodeUUID /* srcNode */, slotReplicaNode, /* destNode */
-							partn, /* partn *Indexusage */
-						)
-						if err != nil {
-							logging.Tracef("ShardDealer::GetSlot replicaMap for defn - %v",
-								defnDbgLog)
-							for rID, nodeMap := range replicaMap {
-								for n, index := range nodeMap {
-									logging.Tracef("ShardDealer::GetSlot index %v node %v (%v) rID %v -",
-										index, n.NodeId, n.NodeUUID, rID)
-								}
+				if slotReplicaNode, exists := replicaSlotToNodeMap[uint8(indexReplicaID)]; exists &&
+					node.NodeUUID != slotReplicaNode {
+					logging.Infof("ShardDealer::GetSlot: moving %v to %v to maintain index-replica and slot-replica alignment for slot %v (pass %v)",
+						defnJSONLog(indexReplicaID, node.NodeUUID),
+						slotReplicaNode,
+						slotID,
+						passes[currPassItr],
+					)
+					updatedMap, err := sd.moveInstance(
+						node.NodeUUID /* srcNode */, slotReplicaNode, /* destNode */
+						partn, /* partn *Indexusage */
+					)
+					if err != nil {
+						logging.Tracef("ShardDealer::GetSlot replicaMap for defn - %v",
+							defnDbgLog)
+						for rID, nodeMap := range replicaMap {
+							for n, index := range nodeMap {
+								logging.Tracef("ShardDealer::GetSlot index %v node %v (%v) rID %v -",
+									index, n.NodeId, n.NodeUUID, rID)
 							}
-							logging.Fatalf("ShardDealer::GetSlot: cannot ensure replica placement. move failed with err %v",
-								err)
-							return err
 						}
-						newReplicaMap[indexReplicaID] = updatedMap
+						logging.Fatalf("ShardDealer::GetSlot: cannot ensure replica placement. move failed with err %v",
+							err)
+						return err
 					}
+					newReplicaMap[indexReplicaID] = updatedMap
 				} else if !exists {
+					// ***** this is only valid in case of create index *****
 					// in case of partial index-shard affinity in cluster, it can happen that some
 					// slots don't exist in the cluster. we should validate that the replicaID of
 					// partn is the same as replicaID of the slot. if not, we need to move index
+
 					var slotReplicaOnSrcNode uint8 = 0
 					var slotReplicaExists bool = false
 
 					if sd.nodeToSlotMap[node.NodeUUID] != nil {
 						slotReplicaOnSrcNode, slotReplicaExists = sd.nodeToSlotMap[node.NodeUUID][slotID]
-						if !slotReplicaExists {
-							continue
-						}
+					}
+					if !slotReplicaExists {
+						continue
 					}
 
 					if slotReplicaOnSrcNode != uint8(partn.Instance.ReplicaId) {
@@ -1272,11 +1269,20 @@ func (sd *ShardDealer) isSlotOnAllRequiredNodes(
 	replicaMap map[int]map[*IndexerNode]*IndexUsage,
 ) bool {
 
-	// var replicaIDsOfSlots = make([]asReplicaID, 0, len(replicaMap))
-
 	// it should never be that the slotMap for `slotID` is nil as slotID exists on atleast
 	// one node from `nodes`
 	if sd.slotsMap[slotID] == nil {
+		return false
+	}
+
+	var canMoveReplica = func(indexReplicaID int, newDestNode nodeUUID) bool {
+		repMap := replicaMap[(indexReplicaID)]
+		if len(repMap) > 1 {
+			return false
+		}
+		for node, partn := range repMap {
+			return partn.initialNode == nil || node.NodeUUID == newDestNode
+		}
 		return false
 	}
 
@@ -1290,12 +1296,12 @@ func (sd *ShardDealer) isSlotOnAllRequiredNodes(
 
 			var found = false
 			for nodeUUID := range nodes {
-				var nodeSlots = sd.nodeToSlotMap[nodeUUID]
-				if nodeSlots == nil {
+				if sd.nodeToSlotMap[nodeUUID] == nil {
 					continue
 				}
 				if slotReplicaID, replicaSlotExists := sd.nodeToSlotMap[nodeUUID][slotID]; replicaSlotExists &&
-					int(slotReplicaID) == indexReplicaID {
+					int(slotReplicaID) == indexReplicaID &&
+					canMoveReplica(indexReplicaID, nodeUUID) {
 					found = true
 					break
 				}
