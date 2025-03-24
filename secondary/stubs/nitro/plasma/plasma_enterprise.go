@@ -13,7 +13,7 @@ func SetMemoryQuota(sz int64, force bool) {
 	ee.SetMemoryQuota2(sz, force)
 }
 
-func GetMandatoryQuota() int64 {
+func GetMandatoryQuota() (int64, int64) {
 	return ee.GetMandatoryQuota()
 }
 

@@ -15,8 +15,8 @@ var Diag StubType
 func SetMemoryQuota(_ int64, _ bool) {
 }
 
-func GetMandatoryQuota() int64 {
-	return 0
+func GetMandatoryQuota() (int64, int64) {
+	return 0, 0
 }
 
 func SetLogReclaimBlockSize(_ int64) {
