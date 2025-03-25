@@ -2145,7 +2145,20 @@ func (s *memdbSnapshot) StatCountTotal() (uint64, error) {
 
 func (s *memdbSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error) {
 	if s.slice.idxStats.useArrItemsCount {
-		return s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(uint64), nil
+		switch s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(type) {
+		case float64:
+			return uint64(s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(float64)), nil
+		case float32:
+			return uint64(s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(float32)), nil
+		case uint64:
+			return s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(uint64), nil
+		case int64:
+			return uint64(s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(int64)), nil
+		case int:
+			return uint64(s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(int)), nil
+		default:
+			panic("Unexpected type for SNAP_STATS_ARR_ITEMS_COUNT")
+		}
 	}
 	return uint64(s.info.MainSnap.Count()), nil
 }

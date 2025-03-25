@@ -277,7 +277,7 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 				"fatal error occured: %v", sliceId, idxInstId, partitionId, isNew, err)
 		}
 		if isNew {
-			destroyBhiveSlice(storage_dir, path)
+			destroySlice_Bhive(storage_dir, path)
 		}
 		return nil, err
 	}
@@ -314,6 +314,46 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 	slice.shardIds = append(slice.shardIds, common.ShardId(slice.backstore.GetShardId()))
 
 	return slice, nil
+}
+
+// BackupCorruptedSlice_Bhive - save corrupted instance to a backup location
+func BackupCorruptedSlice_Bhive(
+	storageDir, prefix string,
+	rename func(string) (string, error),
+	clean func(string),
+) error {
+	return backupCorruptedSlice_Bhive(storageDir, prefix, rename, clean)
+}
+
+// DestroySlice_Bhive - destroy corrupt or deleted bhive instance
+func DestroySlice_Bhive(storageDir string, path string) error {
+	return destroySlice_Bhive(storageDir, path)
+}
+
+// GetEmptyShardInfo_Bhive - get list of empty bhive shards
+func GetEmptyShardInfo_Bhive() ([]common.ShardId, error) {
+	bhiveShards, err := bhive.GetCurrentEmptyShardsInfo()
+	var gsiShards []common.ShardId
+	for _, shard := range bhiveShards {
+		gsiShards = append(gsiShards, common.ShardId(shard))
+	}
+	return gsiShards, err
+}
+
+// DestroyShard_Bhive - destroy bhive shard usually called to delete empty bhive shards
+func DestroyShard_Bhive(shardId common.ShardId) error {
+	return bhive.DestroyShardID(plasma.ShardId(shardId))
+}
+
+// RecoveryDone_Bhive - called after indexer is finished with recovery
+func RecoveryDone_Bhive() {
+	bhive.RecoveryDone()
+}
+
+// GetShardCompatVersion_Bhive - get bhive shard compatibility version. changing them across versions
+// will prevent older versions of indexers to use DCP rebalance over file based rebalance
+func GetShardCompatVersion_Bhive() int {
+	return bhive.ShardCompatVersion
 }
 
 func createBhiveSliceDir(storageDir string, path string, isNew bool) error {
@@ -408,6 +448,15 @@ func (slice *bhiveSlice) setupBackstoreConfig() bhive.Config {
 
 	cfg.NumWriters = slice.maxNumWriters
 	return cfg
+}
+
+func backupCorruptedSlice_Bhive(
+	storageDir, prefix string,
+	rename func(string) (string, error),
+	clean func(string),
+) error {
+	// TODO: implement post bhive backup API is ready
+	return fmt.Errorf("Not implemented")
 }
 
 func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) error {
@@ -531,6 +580,11 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 		return err
 	}
 
+	// Initialize readers
+	for i := 0; i < cap(slice.readers); i++ {
+		slice.readers <- slice.mainstore.NewReader()
+	}
+
 	if !slice.newBorn {
 
 		logging.Infof("bhiveSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Recovering from recovery point ..",
@@ -544,11 +598,6 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 		} else {
 			return err
 		}
-	}
-
-	// Initialize readers
-	for i := 0; i < cap(slice.readers); i++ {
-		slice.readers <- slice.mainstore.NewReader()
 	}
 
 	slice.persistFullVector = mCfg.PersistFullVector
@@ -2675,7 +2724,7 @@ func (mdb *bhiveSlice) Destroy() {
 func tryDeleteBhiveSlice(mdb *bhiveSlice) {
 
 	//cleanup the disk directory
-	if err := destroyBhiveSlice(mdb.storageDir, mdb.path); err != nil {
+	if err := destroySlice_Bhive(mdb.storageDir, mdb.path); err != nil {
 		logging.Errorf("bhiveSlice::Destroy Error Cleaning Up Slice Id %v, "+
 			"IndexInstId %v, PartitionId %v, IndexDefnId %v. Error %v", mdb.id,
 			mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, err)
@@ -2697,7 +2746,7 @@ func tryCloseBhiveSlice(mdb *bhiveSlice) {
 	mdb.backstore.Close()
 }
 
-func destroyBhiveSlice(storageDir string, path string) error {
+func destroySlice_Bhive(storageDir string, path string) error {
 	if err := bhive.DestroyInstance(storageDir, path); err != nil {
 		return err
 	}

@@ -4419,6 +4419,11 @@ func (m *RebalanceServiceManager) canAllowDDLDuringRebalance() bool {
 // Rest API handlers for shard locking and unlocking
 ////////////////////////////////////////////////////////
 
+type ShardLockUnlockReq struct {
+	ShardIds  []common.ShardId `json:"shardIds"`
+	ShardType common.ShardType `json:"shardType"`
+}
+
 func (m *RebalanceServiceManager) handleLockShards(w http.ResponseWriter, r *http.Request) {
 	creds, ok := m.validateAuth(w, r)
 	if !ok {
@@ -4437,16 +4442,19 @@ func (m *RebalanceServiceManager) handleLockShards(w http.ResponseWriter, r *htt
 			m.writeError(w, fmt.Errorf("RebalanceServiceManager::handleLockShards Error observed while reading request body, err: %v", err))
 			return
 		}
-		var shardIds []common.ShardId
-		if err := json.Unmarshal(bytes, &shardIds); err != nil {
+		var shardLockUnlockReq ShardLockUnlockReq
+		if err := json.Unmarshal(bytes, &shardLockUnlockReq); err != nil {
 			send(http.StatusBadRequest, w, err.Error())
 			return
 		}
+		logging.Infof("RebalanceServiceManager::handleLockShards Populating shard type: %v for shardIds: %v as requested by user",
+			shardLockUnlockReq.ShardType, shardLockUnlockReq.ShardIds)
+		populateShardType("RebalanceServiceManager::handleLockShards", shardLockUnlockReq.ShardIds, shardLockUnlockReq.ShardType, m.supvMsgch)
 
-		logging.Infof("RebalanceServiceManager::handleLockShards Locking shards: %v as requested by user", shardIds)
-		err = lockShards(shardIds, m.supvMsgch, false)
+		logging.Infof("RebalanceServiceManager::handleLockShards Locking shards: %v as requested by user", shardLockUnlockReq.ShardIds)
+		err = lockShards(shardLockUnlockReq.ShardIds, m.supvMsgch, false)
 		if err != nil {
-			logging.Infof("RebalanceServiceManager::handleLockShards Error observed when locking shards: %v, err: %v", shardIds, err)
+			logging.Infof("RebalanceServiceManager::handleLockShards Error observed when locking shards: %v, err: %v", shardLockUnlockReq.ShardIds, err)
 			m.writeError(w, err)
 			return
 		}
@@ -4475,16 +4483,19 @@ func (m *RebalanceServiceManager) handleUnlockShards(w http.ResponseWriter, r *h
 			m.writeError(w, fmt.Errorf("RebalanceServiceManager::handleUnlockShards Error observed while reading request body, err: %v", err))
 			return
 		}
-		var shardIds []common.ShardId
-		if err := json.Unmarshal(bytes, &shardIds); err != nil {
+		var shardLockUnlockReq ShardLockUnlockReq
+		if err := json.Unmarshal(bytes, &shardLockUnlockReq); err != nil {
 			send(http.StatusBadRequest, w, err.Error())
 			return
 		}
+		logging.Infof("RebalanceServiceManager::handleUnlockShards Populating shard type: %v for shardIds: %v as requested by user",
+			shardLockUnlockReq.ShardType, shardLockUnlockReq.ShardIds)
+		populateShardType("RebalanceServiceManager::handleUnlockShards", shardLockUnlockReq.ShardIds, shardLockUnlockReq.ShardType, m.supvMsgch)
 
-		logging.Infof("RebalanceServiceManager::handleUnlockShards Unlocking shards: %v as requested by user", shardIds)
-		err = unlockShards(shardIds, m.supvMsgch)
+		logging.Infof("RebalanceServiceManager::handleUnlockShards Unlocking shards: %v as requested by user", shardLockUnlockReq.ShardIds)
+		err = unlockShards(shardLockUnlockReq.ShardIds, m.supvMsgch)
 		if err != nil {
-			logging.Infof("RebalanceServiceManager::handleUnlockShards Error observed when unlocking shards: %v, err: %v", shardIds, err)
+			logging.Infof("RebalanceServiceManager::handleUnlockShards Error observed when unlocking shards: %v, err: %v", shardLockUnlockReq.ShardIds, err)
 			m.writeError(w, err)
 			return
 		}

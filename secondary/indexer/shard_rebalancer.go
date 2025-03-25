@@ -4654,6 +4654,22 @@ func isBuildAlreadyInProgress(errMsg string) bool {
 	return strings.Contains(errMsg, "Build Already In Progress")
 }
 
+func populateShardType(transferId string, shardIds []common.ShardId, shardType common.ShardType, supvMsgch MsgChannel) {
+
+	doneCh := make(chan bool)
+	msg := &MsgPopulateShardType{
+		transferId: transferId,
+		shardType:  shardType,
+		shardIds:   shardIds,
+		doneCh:     doneCh,
+	}
+
+	supvMsgch <- msg
+
+	// Wait for the update to happen in the shardTypeMapper
+	<-doneCh
+}
+
 func lockShards(shardIds []common.ShardId, supvMsgch MsgChannel, lockedForRecovery bool) error {
 
 	respCh := make(chan map[common.ShardId]error)

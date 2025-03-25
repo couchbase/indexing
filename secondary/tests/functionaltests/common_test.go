@@ -133,9 +133,6 @@ func TestMain(m *testing.M) {
 		tc.HandleError(err, "Error in ChangeIndexerSettings")
 	}
 
-	err = secondaryindex.ChangeQuerySettings("queryN1QLFeatCtrl", uint64(4194380), clusterconfig.Username, clusterconfig.Password, kvaddress)
-	tc.HandleError(err, "Error in change setting for /settings/querySettings queryN1QLFeatCtrl")
-
 	time.Sleep(5 * time.Second)
 
 	secondaryindex.CheckCollation = true

@@ -2108,7 +2108,7 @@ func (s *storageMgr) handleRecoveryDone() {
 	s.supvCmdch <- &MsgSuccess{}
 
 	if common.GetStorageMode() == common.PLASMA {
-		RecoveryDone()
+		RecoveryDone_Plasma()
 	}
 }
 
@@ -2972,13 +2972,13 @@ func (sm *storageMgr) handleDestroyEmptyShards() {
 	sm.muSnap.Lock()
 	defer sm.muSnap.Unlock()
 
-	emptyShards, err := GetEmptyShardInfo()
+	emptyShards, err := GetEmptyShardInfo_Plasma()
 	if err != nil {
 		logging.Errorf("StorageMgr::handleDestroyEmptyShards Error observed while retrieving empty shardInfo, err: %v", err)
 	} else {
 		logging.Infof("StorageMgr::handleDestroyEmptyShards destroying empty shards: %v", emptyShards)
 		for _, shardId := range emptyShards {
-			err := DestroyShard(shardId)
+			err := DestroyShard_Plasma(shardId)
 			if err != nil {
 				logging.Errorf("StorageMgr::handleDestroyEmptyShards Error observed while destroying shard: %v, err: %v", shardId, err)
 			}
@@ -3229,78 +3229,86 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 		return str.String()
 	}
 
-	timestampedCountsMap := make(map[string]*TimestampedCounts)
+	go func() {
 
-	for instId, snapC := range indexSnapMap {
+		// serialise on statsLock so that rollback and snapshot access
+		// do not happen simultaneously
+		s.statsLock.Lock()
+		defer s.statsLock.Unlock()
 
-		func() {
-			snapC.Lock()
-			defer snapC.Unlock()
+		timestampedCountsMap := make(map[string]*TimestampedCounts)
 
-			indexInst, ok := indexInstMap[instId]
-			if !ok ||
-				snapC.deleted || // If snap container is deleted, it means index is deleted. Skip the index
-				indexInst.Stream != common.MAINT_STREAM || // Process only MAINT_STREAM indexes
-				indexInst.State != common.INDEX_STATE_ACTIVE || // process only active indexes
-				indexInst.RState != common.REBAL_ACTIVE { // Skip indexes in rebalance
-				if doLog || logging.IsEnabled(logging.Verbose) {
-					logging.Infof("storageMgr::handleGetTimestampedItemsCount Skip processing inst: %v, partn: %v due to one of the following being true. "+
-						"snapC.deleted: %v, state: %v, rstate: %v, stream: %v, arrayIndex: %v",
-						snapC.deleted, indexInst.State, indexInst.Stream, indexInst.Defn.IsArrayIndex, indexInst.RState)
+		for instId, snapC := range indexSnapMap {
+
+			func() {
+				snapC.Lock()
+				defer snapC.Unlock()
+
+				indexInst, ok := indexInstMap[instId]
+				if !ok ||
+					snapC.deleted || // If snap container is deleted, it means index is deleted. Skip the index
+					indexInst.Stream != common.MAINT_STREAM || // Process only MAINT_STREAM indexes
+					indexInst.State != common.INDEX_STATE_ACTIVE || // process only active indexes
+					indexInst.RState != common.REBAL_ACTIVE { // Skip indexes in rebalance
+					if doLog || logging.IsEnabled(logging.Verbose) {
+						logging.Infof("storageMgr::handleGetTimestampedItemsCount Skip processing inst: %v, partn: %v due to one of the following being true. "+
+							"snapC.deleted: %v, state: %v, rstate: %v, stream: %v, arrayIndex: %v",
+							snapC.deleted, indexInst.State, indexInst.Stream, indexInst.Defn.IsArrayIndex, indexInst.RState)
+					}
+					return
 				}
-				return
-			}
 
-			// Since we want to get fully qualified name, use INIT_STREAM so that the keyspace has bucket:scope:collection
-			// included in it
-			indexName := fmt.Sprintf("%v:%v", indexInst.Defn.KeyspaceId(common.INIT_STREAM), indexInst.Defn.Name)
-			replicaID := indexInst.ReplicaId
+				// Since we want to get fully qualified name, use INIT_STREAM so that the keyspace has bucket:scope:collection
+				// included in it
+				indexName := fmt.Sprintf("%v:%v", indexInst.Defn.KeyspaceId(common.INIT_STREAM), indexInst.Defn.Name)
+				replicaID := indexInst.ReplicaId
 
-			partnSnaps := snapC.snap.Partitions()
-			for partnId, partnSnap := range partnSnaps {
+				partnSnaps := snapC.snap.Partitions()
+				for partnId, partnSnap := range partnSnaps {
 
-				sc := partnSnap.Slices()
-				for _, sliceSnap := range sc {
-					timestamp := sliceSnap.Snapshot().Timestamp().Seqnos
-					// Use CountTotal() instead of StatCountTotal()
-					// StatCountTotal() will read from slice.committedCount which gets set
-					// after a snapshot is created. Since this loop runs async to shapshotting loop,
-					// it is possible that the timestamp is read from one snapshot while StatCountTotal()
-					// is read from another snapshot.
-					//
-					// For memdb, plasma, bhive - This method directly reads from snapshot and it is an O(1)
-					// operation. For ForestDB, the check is skipped as FDB will iterate over the entire index
-					count, err := sliceSnap.Snapshot().CountTotal(nil, nil)
-					if err != nil {
-						logging.Warnf("storageMgr::handleGetTimestampedItemsCount error observed while retrieving snapshot count "+
-							"for instId: %v, partnId: %v. Skipping this index from further processing", indexInst.InstId, partnId)
-						continue
+					sc := partnSnap.Slices()
+					for _, sliceSnap := range sc {
+						timestamp := sliceSnap.Snapshot().Timestamp().Seqnos
+						// Use CountTotal() instead of StatCountTotal()
+						// StatCountTotal() will read from slice.committedCount which gets set
+						// after a snapshot is created. Since this loop runs async to shapshotting loop,
+						// it is possible that the timestamp is read from one snapshot while StatCountTotal()
+						// is read from another snapshot.
+						//
+						// For memdb, plasma, bhive - This method directly reads from snapshot and it is an O(1)
+						// operation. For ForestDB, the check is skipped as FDB will iterate over the entire index
+						count, err := sliceSnap.Snapshot().CountTotal(nil, nil)
+						if err != nil {
+							logging.Warnf("storageMgr::handleGetTimestampedItemsCount error observed while retrieving snapshot count "+
+								"for instId: %v, partnId: %v. Skipping this index from further processing", indexInst.InstId, partnId)
+							continue
+						}
+
+						key := getTimestampedKey(timestamp)
+						if _, ok := timestampedCountsMap[key]; !ok {
+							timestampedCountsMap[key] = &TimestampedCounts{Timestamp: timestamp, NodeId: nodeId}
+						}
+
+						indexInfo := &IndexInfo{
+							IndexName:    indexName,
+							ReplicaID:    replicaID,
+							PartitionID:  int(partnId),
+							Bucket:       indexInst.Defn.Bucket,
+							IsArrayIndex: indexInst.Defn.IsArrayIndex,
+							ItemsCount:   count,
+						}
+						timestampedCountsMap[key].Indexes = append(timestampedCountsMap[key].Indexes, indexInfo)
+
 					}
-
-					key := getTimestampedKey(timestamp)
-					if _, ok := timestampedCountsMap[key]; !ok {
-						timestampedCountsMap[key] = &TimestampedCounts{Timestamp: timestamp, NodeId: nodeId}
-					}
-
-					indexInfo := &IndexInfo{
-						IndexName:    indexName,
-						ReplicaID:    replicaID,
-						PartitionID:  int(partnId),
-						Bucket:       indexInst.Defn.Bucket,
-						IsArrayIndex: indexInst.Defn.IsArrayIndex,
-						ItemsCount:   count,
-					}
-					timestampedCountsMap[key].Indexes = append(timestampedCountsMap[key].Indexes, indexInfo)
-
 				}
-			}
-		}()
-	}
+			}()
+		}
 
-	var out []*TimestampedCounts
-	for _, tsCounts := range timestampedCountsMap {
-		out = append(out, tsCounts)
-	}
+		var out []*TimestampedCounts
+		for _, tsCounts := range timestampedCountsMap {
+			out = append(out, tsCounts)
+		}
 
-	respCh <- out
+		respCh <- out
+	}()
 }

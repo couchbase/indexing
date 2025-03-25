@@ -52,6 +52,8 @@ const (
 	// Logged when index background creation of index fails
 	EVENTID_INDEX_SCHED_CREATE_ERROR
 
+	// Logged when 2 replicas of same index are diverging in items_count
+	EVENID_DIVERGING_REPLICAS
 	// *****
 	// Note: Add events here. Don't add events above in between the Events.
 	// EventID once assigned should not be changed.
@@ -77,6 +79,7 @@ var eventIDToDescriptionMap = map[SystemEventID]string{
 	EVENTID_INDEX_PARTITION_ERROR:        "Index Instance or Partition Error State Change",
 	EVENTID_INDEX_SCHED_CREATE:           "Index Scheduled for Creation",
 	EVENTID_INDEX_SCHED_CREATE_ERROR:     "Index Scheduled Creation Error",
+	EVENID_DIVERGING_REPLICAS:            "Index replicas are diverging in items_count",
 }
 
 // Configuration values for SystemEventLogger
@@ -214,6 +217,42 @@ func NewDDLSystemEvent(mod string, defnId common.IndexDefnId,
 		IndexerID:      indexerId,
 		IsProxyInst:    realInstId != 0,
 		ErrorString:    errorStr,
+	}
+	return e
+}
+
+type divergingReplicasEvent struct {
+	Group          string             `json:"group"`
+	Module         string             `json:"module"`
+	IndexName      string             `json:"index_name"`
+	PartitionId    common.PartitionId `json:"partition_id"`
+	ReplicaID_1    int                `json:"replica_id_1"`
+	ReplicaID_2    int                `json:"replica_id_2"`
+	ItemsCount_1   uint64             `json:"items_count_1"`
+	ItemsCount_2   uint64             `json:"items_count_2"`
+	TimestampMatch bool               `json:"timestamp_match"`
+
+	PendingItems_1 int64 `json:"pending_items_1,omitempty"`
+	PendingItems_2 int64 `json:"pending_items_2,omitempty"`
+}
+
+func NewDivergingReplicasEvent(mod string, indexName string,
+	partnId common.PartitionId, replicaId_1 int, replicaId_2 int,
+	timestampMatch bool, itemsCount_1, itemsCount_2 uint64,
+	firstIndexPending, secondIndexPending int64) divergingReplicasEvent {
+
+	e := divergingReplicasEvent{
+		Group:          "ItemsCountCheck",
+		Module:         mod,
+		IndexName:      indexName,
+		PartitionId:    partnId,
+		ReplicaID_1:    replicaId_1,
+		ReplicaID_2:    replicaId_2,
+		ItemsCount_1:   itemsCount_1,
+		ItemsCount_2:   itemsCount_2,
+		TimestampMatch: timestampMatch,
+		PendingItems_1: firstIndexPending,
+		PendingItems_2: secondIndexPending,
 	}
 	return e
 }

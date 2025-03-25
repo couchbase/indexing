@@ -131,10 +131,13 @@ type ScanWorker struct {
 	mem    *allocator
 	itrRow Row
 
-	// VECTOR_TODO: handle rollback
 	bytesRead    uint64
 	rowsScanned  uint64
 	rowsReturned uint64
+
+	// VECTOR_TODO: Add cache entry hits and misses
+	cacheEntryHits uint64
+	cacheEntryMiss uint64
 
 	logPrefix string
 	startTime time.Time
@@ -153,6 +156,9 @@ type ScanWorker struct {
 	codes []byte
 	fvecs []float32
 	dists []float32
+
+	cktmp       [][]byte
+	cachedEntry entryCache
 
 	rowBuf *AtomicRowBuffer
 
@@ -192,6 +198,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		includeColumndktemp:  make(n1qlval.Values, len(r.IndexInst.Defn.Include)),
 		sendLastRowPerJob:    sendLastRowPerJob,
 		includeColumnLen:     len(r.IndexInst.Defn.Include),
+		cktmp:                make([][]byte, len(r.IndexInst.Defn.SecExprs)),
 	}
 
 	//init temp buffers
@@ -971,8 +978,10 @@ func (w *ScanWorker) skipRow(entry []byte) (skipRow bool, err error) {
 		if len(entry) > cap(*w.buf) {
 			*w.buf = make([]byte, 0, len(entry)+1024)
 		}
-		// VECTOR_TODO: Update this to filterScanRow2
-		skipRow, _, err = filterScanRow(entry, w.currJob.scan, (*w.buf)[:0])
+
+		// ck and dk returned should be used in group aggregates and projections
+		skipRow, _, _, err = filterScanRow2(entry, w.currJob.scan, (*w.buf)[:0],
+			w.cktmp, nil, w.r, &w.cachedEntry)
 		if err != nil {
 			return true, err
 		}

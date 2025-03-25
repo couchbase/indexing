@@ -200,7 +200,7 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	queryVectorStr += "]"
 
 	// Case-1: Scan only the vector field with meta().id and distance in projection
-	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance "+
+	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v, true) as distance "+
 		"from %v ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err := execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
@@ -221,7 +221,7 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	}
 
 	// Case-2: Let projection contain all the include fields with out filtering on include fields
-	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance, "+
+	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v, true) as distance, "+
 		"count, direction, docnum, vectornum, gender from %v ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err = execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
@@ -242,7 +242,7 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	}
 
 	// Case-3: Let projection contain few the include fields with out filtering on include fields
-	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance, "+
+	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v, true) as distance, "+
 		" count, direction, docnum from %v ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err = execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
@@ -263,7 +263,7 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	}
 
 	// Case-4: Let projection contain few the include fields with filtering on one include fields
-	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance, "+
+	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v, true) as distance, "+
 		"count, direction, docnum from %v where direction = \"east\" ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err = execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
@@ -285,7 +285,7 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	}
 
 	// Case-5: Let projection contain few the include fields with filtering on multiple include fields
-	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance, "+
+	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v, true) as distance, "+
 		"direction, docnum from %v where direction = \"east\" and docnum > 1000 ORDER BY distance limit %v",
 		queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err = execN1QL(bucket, annScanStmt)
@@ -309,7 +309,7 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 
 	// Case-6: Include column fields are present in projection but not in filter
 	annScanStmt = fmt.Sprintf("with qvec as (%v) select meta().id, direction, docnum, "+
-		"APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance from %v ORDER BY distance limit %v",
+		"APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v, true) as distance from %v ORDER BY distance limit %v",
 		queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err = execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)
@@ -357,7 +357,7 @@ func TestPartitionSetsWithBhiveIndex(t *testing.T) {
 	queryVectorStr += "]"
 
 	// Case-1: Scan the vector fields where direction = "east"
-	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v) as distance "+
+	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v, true) as distance "+
 		"from %v where direction = \"east\" ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, bucket, limit)
 	annScanResults, err := execN1QL(bucket, annScanStmt)
 	FailTestIfError(err, "Error during secondary index scan", t)

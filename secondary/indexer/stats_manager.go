@@ -888,8 +888,8 @@ type IndexerStats struct {
 	datapMaintBlockedDurHist stats.Histogram
 	datapInitBlockedDurHist  stats.Histogram
 
-	numCorruptedIndexes stats.Int64Val
-	corruptedIndexesMap *MapHolder
+	numDivergingReplicaIndexes stats.Int64Val
+	divergingReplicaIndexesMap *MapHolder
 }
 
 func (s *IndexerStats) Init() {
@@ -968,9 +968,9 @@ func (s *IndexerStats) Init() {
 	s.datapInitBlockedDurHist.InitLatency(common.PortBlockDist, prettyTimeToString)
 	s.datapMaintBlockedDurHist.InitLatency(common.PortBlockDist, prettyTimeToString)
 
-	s.numCorruptedIndexes.Init()
-	s.corruptedIndexesMap = &MapHolder{}
-	s.corruptedIndexesMap.Init()
+	s.numDivergingReplicaIndexes.Init()
+	s.divergingReplicaIndexesMap = &MapHolder{}
+	s.divergingReplicaIndexesMap.Init()
 }
 
 // SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
@@ -1351,7 +1351,7 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 		statMap.AddStat("rebalance_transfer_progress", is.RebalanceTransferProgress.Get())
 	}
 
-	is.ShardCompatVersion.Set(int64(GetShardCompactVersion()))
+	is.ShardCompatVersion.Set(int64(GetShardCompatVersion_Plasma()))
 	statMap.AddStatValueFiltered("shard_compat_version", &is.ShardCompatVersion)
 
 	statMap.AddStatValueFiltered("maint_port_blocked_hist", &is.datapMaintBlockedDurHist)
@@ -1362,23 +1362,23 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 		statMap.AddStat("init_port_blocked_total_dur", is.datapInitBlockedDurHist.GetTotal())
 	}
 
-	statMap.AddStatValueFiltered("num_corrupted_indexes", &is.numCorruptedIndexes)
+	statMap.AddStatValueFiltered("num_diverging_replica_indexes", &is.numDivergingReplicaIndexes)
 	is.PopulateCorruptedIndexes(statMap)
 }
 
 func (is *IndexerStats) PopulateCorruptedIndexes(statMap *StatsMap) {
-	if is.corruptedIndexesMap == nil {
+	if is.divergingReplicaIndexesMap == nil {
 		return
 	}
 
-	corrupted := is.corruptedIndexesMap.Get()
+	divergingReplicas := is.divergingReplicaIndexesMap.Get()
 
 	var val stats.BoolVal
 	val.Init()
 	val.Set(true)
 
-	for indexName := range corrupted {
-		statMap.AddStatValueFiltered(indexName+":is_corrupted", &val)
+	for indexName := range divergingReplicas {
+		statMap.AddStatValueFiltered(indexName+":is_diverging_replica", &val)
 	}
 }
 
@@ -2659,7 +2659,7 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 }
 
 func (is *IndexerStats) populateIsCorruptedStat(out []byte) []byte {
-	corrupteIndexes := is.corruptedIndexesMap.Get()
+	corrupteIndexes := is.divergingReplicaIndexesMap.Get()
 
 	var str, collectionLabels string
 	fmtStr := "%v%v{bucket=\"%v\", %vindex=\"%v\"} %v\n"
@@ -3209,6 +3209,7 @@ func (s *statsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/storage/jemalloc/profileDump", s.jemallocMemoryProfileDumpHandler)
 	mux.HandleFunc("/stats/cinfolite", common.HandleCICLStats)
 	mux.HandleFunc("/stats/timestampedCounts", s.handleTimestampedCountsReq)
+	mux.HandleFunc("/stats/refreshTimestampedCounts", s.handleRefreshTimestampedCountsReq)
 	mux.HandleFunc("/_prometheusMetrics", s.handleMetrics)
 	mux.HandleFunc("/_prometheusMetricsHigh", s.handleMetricsHigh)
 }
@@ -3465,7 +3466,7 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out = append(out, []byte(fmt.Sprintf("%vnet_avg_scan_rate %v\n", METRICS_PREFIX, is.netAvgScanRate.Value()))...)
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_corrupted_indexes gauge\n", METRICS_PREFIX))...)
-	out = append(out, []byte(fmt.Sprintf("%vnum_corrupted_indexes %v\n", METRICS_PREFIX, is.numCorruptedIndexes.Value()))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_corrupted_indexes %v\n", METRICS_PREFIX, is.numDivergingReplicaIndexes.Value()))...)
 
 	// aggregated plasma stats
 	out = populateAggregatedStorageMetrics(out)
@@ -3677,6 +3678,194 @@ func (s *statsManager) handleTimestampedCountsReq(w http.ResponseWriter, r *http
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("Unsupported method"))
 		return
+	}
+}
+
+func (s *statsManager) handleRefreshTimestampedCountsReq(w http.ResponseWriter, r *http.Request) {
+	creds, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleRefreshTimestampedCountsReq", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
+		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.stats!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("StatsManager::handleTimestampedCountsReq not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
+	}
+
+	if r.Method != "GET" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("Unsupported method"))
+		return
+	}
+
+	stats := s.stats.Get()
+	if common.IndexerState(stats.indexerState.Value()) == common.INDEXER_BOOTSTRAP {
+		w.WriteHeader(http.StatusServiceUnavailable) // Send 503 as indexer is not ready to serve the request
+		w.Write([]byte("[]"))
+		return
+	}
+
+	broadcast := true
+	if r.URL.Query().Get("broadcast") == "false" {
+		broadcast = false
+	}
+
+	doLog := false
+	if r.URL.Query().Get("log") == "true" {
+		doLog = true
+	}
+
+	clusterAddr := s.config.Load()["clusterAddr"].String()
+	logging.Infof("statsMgr::handleRefreshTimestampedCountsReq Received request on node: %v with broadcast: %v, log: %v", clusterAddr, broadcast, doLog)
+	// broadcast the request to all nodes
+	if broadcast {
+		// Get cluster info cache, and send the request to all nodes
+		url, err := common.ClusterAuthUrl(clusterAddr)
+		if err != nil {
+			logging.Errorf("statsMgr::handleRefreshTimestampedCountsReq, error observed while retrieving ClusterAuthUrl, err : %v", err)
+			w.WriteHeader(http.StatusInternalServerError) // Send 408 timeout as indexer is not ready to serve the request
+			w.Write([]byte("[]"))
+			return
+		}
+
+		cinfo, err := common.NewClusterInfoCache(url, DEFAULT_POOL)
+		if err != nil {
+			logging.Errorf("statsMgr::handleRefreshTimestampedCountsReq, error observed during the initilization of clusterInfoCache, err : %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("[]"))
+			return
+		}
+		cinfo.SetUserAgent("statsMgr::handleRefreshTimestampedCountReq")
+
+		if err := cinfo.FetchNodesAndSvsInfoWithLock(); err != nil {
+			logging.Errorf("statsMgr::handleRefreshTimestampedCountsReq, error observed while Updating cluster info cache, err: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("[]"))
+			return
+		}
+
+		uri := fmt.Sprintf("/stats/refreshTimestampedCounts?broadcast=false&log=%v", doLog)
+		refreshTimestampedCounts := func(addr string) error {
+			resp, err := getWithAuth(addr + uri)
+			if err != nil {
+				logging.Warnf("statsMgr::handleRefreshTimestampedCountsReq: Failed to refresh timestamped count stats from node: %v, err: %v.", addr, err)
+				return err
+			}
+
+			if resp == nil {
+				logging.Warnf("statsMgr::handleRefreshTimestampedCountsReq: nil response received from refreshing timestamped count stats stats req from node: %v", addr)
+				return fmt.Errorf("nil repsonse from node: %v", addr)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				logging.Warnf("statsMgr::handleRefreshTimestampedCountsReq: Invalid response received from timestampedCount stats req from node: %v, resp.StatusCode: %v", addr, resp.StatusCode)
+				return fmt.Errorf("invalid resp code: %v received from node: %v", resp.StatusCode, addr)
+			}
+
+			return nil
+		}
+
+		var wg sync.WaitGroup
+		errMap := make(map[string]error)
+		var mu sync.Mutex
+
+		nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
+		for _, nid := range nids {
+			// obtain the admin port for the indexer node
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
+			if err != nil {
+				logging.Errorf("statsMgr::handleRefreshTimestampedCountsReq: Error from getting service address for node %v. Error = %v", nid, err)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte("[]"))
+				return
+			}
+
+			restCall := func(nid common.NodeId, addr string) {
+				defer wg.Done()
+
+				err := refreshTimestampedCounts(addr)
+				if err != nil {
+					mu.Lock()
+					defer mu.Unlock()
+
+					errMap[addr] = err
+				}
+			}
+
+			wg.Add(1)
+			go restCall(nid, addr)
+		}
+
+		wg.Wait()
+
+		if len(errMap) > 0 {
+			var errStr string
+			for _, err := range errMap {
+				errStr += err.Error() + ","
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("\"" + errStr[:len(errStr)-1] + "\""))
+			return
+
+		} else {
+			w.WriteHeader(http.StatusOK) // Send Ok as everything is fine
+			w.Write([]byte("[]"))
+			return
+		}
+
+	} else {
+
+		// Make a buffered channel so that stats manager can receive the response inspite of a timeout
+		respCh := make(chan interface{}, 1)
+
+		msg := &MsgTimestampedCountReq{
+			mType:  REFRESH_TIMESTAMPED_COUNT_STATS,
+			doLog:  doLog,
+			respCh: respCh,
+		}
+
+		s.supvMsgch <- msg
+
+		startTime := time.Now()
+		timer := time.NewTimer(120 * time.Second)
+		defer timer.Stop()
+
+		select {
+		case <-timer.C:
+			logging.Warnf("statsManager::handleRefreshTimestampedCountsReq Req. timedout. Req. started at: %v", startTime)
+			w.WriteHeader(http.StatusRequestTimeout) // Send 408 timeout as indexer is not ready to serve the request
+			w.Write([]byte("[]"))
+			return
+		case resp := <-respCh:
+
+			// Send 200 ok as the cases where nil is sent is either for FDB (or)
+			// if there are no indexes on the node
+			if resp == nil {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("[]"))
+				return
+			} else { // Only nil response is expected for this request
+				logging.Warnf("statsManager::handleRefreshTimestampedCountsReq Invalid response received, resp: %v", resp)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte("[]"))
+				return
+			}
+		}
 	}
 }
 

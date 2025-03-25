@@ -39,30 +39,35 @@ func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 		numVBuckets, replicaId, shardIds, cancelCh, codebookPath)
 }
 
-func DestroyPlasmaSlice(storageDir string, path string) error {
-	return destroyPlasmaSlice(storageDir, path)
+// DestroySlice_Plasma - Destroy a plasma slice which cannot be initialised (usually due to
+// corruption)
+func DestroySlice_Plasma(storageDir string, path string) error {
+	return destroySlice_Plasma(storageDir, path)
 }
 
 func ListPlasmaSlices() ([]string, error) {
 	return listPlasmaSlices()
 }
 
-func BackupCorruptedPlasmaSlice(storageDir string, prefix string, rename func(string) (string, error), clean func(string)) error {
-	return backupCorruptedPlasmaSlice(storageDir, prefix, rename, clean)
+func BackupCorruptedSlice_Plasma(storageDir string, prefix string, rename func(string) (string, error), clean func(string)) error {
+	return backupCorruptedSlice_Plasma(storageDir, prefix, rename, clean)
 }
 
-func RecoveryDone() {
+func RecoveryDone_Plasma() {
 	plasma.RecoveryDone()
 }
 
-func GetShardCompactVersion() int {
+// GetShardCompatVersion_Plasma - Get the compatibility version of plasma shards changing them across
+// versions will prevent older versions of indexers to use DCP rebalance over file based rebalance
+func GetShardCompatVersion_Plasma() int {
 	if common.IsServerlessDeployment() {
 		return plasma.ShardCompatVersionServerless
 	}
 	return plasma.ShardCompatVersion
 }
 
-func GetEmptyShardInfo() ([]common.ShardId, error) {
+// GetEmptyShardInfo_Plasma - Get the list of empty plasma shards on recovery
+func GetEmptyShardInfo_Plasma() ([]common.ShardId, error) {
 	plasmaShards, err := plasma.GetCurrentEmptyShardsInfo()
 	var gsiShards []common.ShardId
 	for _, shard := range plasmaShards {
@@ -71,7 +76,8 @@ func GetEmptyShardInfo() ([]common.ShardId, error) {
 	return gsiShards, err
 }
 
-func DestroyShard(shardId common.ShardId) error {
+// DestroyShard_Plasma - Destroy empty plasma shards
+func DestroyShard_Plasma(shardId common.ShardId) error {
 	return plasma.DestroyShardID(plasma.ShardId(shardId))
 }
 

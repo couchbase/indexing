@@ -269,6 +269,8 @@ type indexer struct {
 	// training is in progress
 	muDropTraining          sync.Mutex
 	dropInstsDuringTraining map[c.IndexInstId]MsgChannel
+
+	refreshTimestampedCountStatsCh chan Message
 }
 
 type kvRequest struct {
@@ -383,9 +385,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		bucketPauseState: make(map[string]bucketStateEnum),
 		recoveryChMap:    make(map[common.IndexInstId]chan bool),
 
-		droppedIndexesDuringRebal: make(map[common.IndexInstId]bool),
-		dropCleanupPending:        make(map[common.IndexInstId][]Slice),
-		dropInstsDuringTraining:   make(map[common.IndexInstId]MsgChannel),
+		droppedIndexesDuringRebal:      make(map[common.IndexInstId]bool),
+		dropCleanupPending:             make(map[common.IndexInstId][]Slice),
+		dropInstsDuringTraining:        make(map[common.IndexInstId]MsgChannel),
+		refreshTimestampedCountStatsCh: make(chan Message, 1),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -1769,6 +1772,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
+	case REFRESH_TIMESTAMPED_COUNT_STATS:
+		idx.refreshTimestampedCountStatsCh <- msg
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -1812,7 +1818,7 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 						logging.Infof("Indexer::updateStorageMode Storage Mode Set %v. ", common.GetStorageMode())
 						if idx.getIndexerState() == common.INDEXER_ACTIVE &&
 							common.GetStorageMode() == common.PLASMA {
-							RecoveryDone()
+							RecoveryDone_Plasma()
 						}
 					}
 				} else {
@@ -11030,7 +11036,7 @@ func DestroySlice(mode common.StorageMode, storageDir string, path string) error
 	case common.MOI, common.FORESTDB, common.NOT_SET:
 		return iowrap.Os_RemoveAll(path)
 	case common.PLASMA:
-		return DestroyPlasmaSlice(storageDir, path)
+		return DestroySlice_Plasma(storageDir, path)
 	}
 
 	return fmt.Errorf("unable to delete instance %v : unrecognized storage type %v", path, mode)
@@ -11102,7 +11108,7 @@ func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId com
 	case common.PLASMA:
 		indexPath := IndexPath(indexInst, partnId, sliceId)
 		srcPath := filepath.Join(sourceDir, indexPath)
-		return BackupCorruptedPlasmaSlice(storageDir, srcPath, rename, clean)
+		return BackupCorruptedSlice_Plasma(storageDir, srcPath, rename, clean)
 	}
 	return fmt.Errorf("unable to move instance : unrecognized storage type %v", mode)
 }
@@ -14451,7 +14457,7 @@ func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
 
 func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 
-	corruptedIndexesMap := make(map[string]interface{})
+	divergingReplicasMap := make(map[string]interface{})
 	bucketSeqnos := make(map[string][]uint64) // seqnos. per bucket
 	cluster := idx.config["clusterAddr"].String()
 
@@ -14519,9 +14525,13 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 					sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i].ItemsCount, sortedIndexInfo[i-1].ReplicaID, sortedIndexInfo[i-1].ItemsCount)
 
 				// Update the map with the fully qualified index name
-				corruptedIndexesMap[sortedIndexInfo[i].IndexName] = true
+				divergingReplicasMap[sortedIndexInfo[i].IndexName] = true
 
-				// TODO: Update system events
+				e := systemevent.NewDivergingReplicasEvent("checkForItemsCountMismatch", sortedIndexInfo[i].IndexName,
+					c.PartitionId(sortedIndexInfo[i].PartitionID), sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i-1].ReplicaID,
+					true, sortedIndexInfo[i].ItemsCount, sortedIndexInfo[i-1].ItemsCount, 0, 0)
+				systemevent.InfoEvent("Indexer", systemevent.EVENID_DIVERGING_REPLICAS, e)
+				continue
 			}
 
 			// If seqnos. does not match, then compute the high seqnos. to compare the worstcase items_count difference
@@ -14562,20 +14572,26 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 						sortedIndexInfo[i].timestamp, sortedIndexInfo[i-1].timestamp)
 
 					// Update the map with the fully qualified index name
-					corruptedIndexesMap[sortedIndexInfo[i].IndexName] = true
+					divergingReplicasMap[sortedIndexInfo[i].IndexName] = true
+
+					e := systemevent.NewDivergingReplicasEvent("checkForItemsCountMismatch", sortedIndexInfo[i].IndexName,
+						c.PartitionId(sortedIndexInfo[i].PartitionID), sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i-1].ReplicaID,
+						true, sortedIndexInfo[i].ItemsCount, sortedIndexInfo[i-1].ItemsCount, firstIndexPendingItems, secondIndexPendingItems)
+					systemevent.InfoEvent("Indexer", systemevent.EVENID_DIVERGING_REPLICAS, e)
+					continue
 				}
 			}
 		}
 	}
 
-	// Set the number of corrupt indexes based on the map
-	idx.stats.numCorruptedIndexes.Set(int64(len(corruptedIndexesMap)))
-	idx.stats.corruptedIndexesMap.Set(corruptedIndexesMap)
+	// Set the number of diverging replcias indexes based on the map
+	idx.stats.numDivergingReplicaIndexes.Set(int64(len(divergingReplicasMap)))
+	idx.stats.divergingReplicaIndexesMap.Set(divergingReplicasMap)
 }
 
-func (idx *indexer) resetIndexCorruptionStats() {
-	idx.stats.numCorruptedIndexes.Set(0)
-	idx.stats.corruptedIndexesMap.Reset()
+func (idx *indexer) resetDivergingReplicaStats() {
+	idx.stats.numDivergingReplicaIndexes.Set(0)
+	idx.stats.divergingReplicaIndexesMap.Reset()
 }
 
 func (idx *indexer) getIndexInfoFromTsCounts(tsCounts []*TimestampedCounts) []*IndexInfo {
@@ -14790,7 +14806,7 @@ func (idx *indexer) monitorItemsCount() {
 			idx.checkForItemsCountMismatch(sortedIndexInfo)
 
 		} else { // RESET any stats that are set on this node
-			idx.resetIndexCorruptionStats()
+			idx.resetDivergingReplicaStats()
 		}
 	}
 
@@ -14817,9 +14833,14 @@ func (idx *indexer) monitorItemsCount() {
 				continue
 			}
 
+			clusterVersion := common.GetClusterVersion()
+			if clusterVersion < common.INDEXER_80_VERSION { // disable the check if cluster version is less than 8.0.0
+				continue
+			}
+
 			// Disable the check for if monitorItemsCountInterval is "0" and reset the stats
 			if monitorItemsCountInterval == 0 {
-				idx.resetIndexCorruptionStats()
+				idx.resetDivergingReplicaStats()
 				continue
 			}
 
@@ -14828,7 +14849,12 @@ func (idx *indexer) monitorItemsCount() {
 		case <-ticker.C:
 			// Disable the check for if monitorItemsCountInterval is "0" and reset the stats
 			if monitorItemsCountInterval == 0 {
-				idx.resetIndexCorruptionStats()
+				idx.resetDivergingReplicaStats()
+				continue
+			}
+
+			clusterVersion := common.GetClusterVersion()
+			if clusterVersion < common.INDEXER_80_VERSION { // disable the check if cluster version is less than 8.0.0
 				continue
 			}
 
@@ -14842,6 +14868,14 @@ func (idx *indexer) monitorItemsCount() {
 			if newMonitorItemsCountInterval != monitorItemsCountInterval {
 				monitorItemsCountInterval = newMonitorItemsCountInterval
 			}
+
+		case msg := <-idx.refreshTimestampedCountStatsCh: // Force refresh as requested
+			logging.Infof("Indexer::monitorItemsCount: Forcing the diverging replicas check")
+
+			respCh := msg.(*MsgTimestampedCountReq).GetRespCh()
+			getAndProcessTimestampedCounts(true)
+
+			respCh <- nil // return the response back to sender
 
 		case <-idx.shutdownInitCh:
 			return
