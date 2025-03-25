@@ -779,7 +779,7 @@ func (stm *ShardTransferManager) cleanupStagingDirOnRestore(cmd Message) {
 			"taskId: %v, transferId: %v", taskType, taskId, transferId)
 		if err != nil {
 			logging.Infof("ShardTransferManager::cleanupStagingDirOnRestore Error observed during cleanup of local staging "+
-				" directory for taskType: %v, taskId: %v, transferId: %v, err: %v", taskType, taskId, transferId, err)
+				"directory for taskType: %v, taskId: %v, transferId: %v, err: %v", taskType, taskId, transferId, err)
 		}
 	}
 
@@ -1166,7 +1166,7 @@ func (stm *ShardTransferManager) RestoreCodebook(instRenameMap map[common.ShardI
 
 	srcFilePath := filepath.Join(storageDir, srcRoot, srcFileName)
 	if _, err := iowrap.Os_Stat(srcFilePath); err != nil {
-		err = fmt.Errorf("error encountered for codebook in staging directory. path: %v for"+
+		err = fmt.Errorf("error encountered for codebook in staging directory. path: %v for "+
 			"instId: %v, realInstId:%v, partnId: %v, err: %v",
 			filepath.Join(srcRoot, genCodebookFileStagingName(destFilePath)),
 			vectorInst.InstId, vectorInst.RealInstId, partnId, err)
@@ -1190,7 +1190,7 @@ func (stm *ShardTransferManager) RestoreCodebook(instRenameMap map[common.ShardI
 	}
 
 	if err := c.MoveDir(srcFilePath, destFilePath, canUseRename); err != nil {
-		err = fmt.Errorf("error observed while moving codebook for"+
+		err = fmt.Errorf("error observed while moving codebook for "+
 			"instId: %v, realInstId:%v, partnId: %v, sliceId: %v, srcPath:%v, destPath:%v. err:%v ",
 			vectorInst.InstId, vectorInst.RealInstId, partnId, SliceId(0),
 			filepath.Join(srcRoot, genCodebookFileStagingName(destFilePath)),
@@ -1274,8 +1274,8 @@ func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message, no
 		}
 
 		if err != nil {
-			logging.Errorf("ShardTransferManager::processDestroyLocalShardMessage Error cleaning-up shardId: %v"+
-				" of shard type: %v from local file system, err: %v", shardId, shardType, err)
+			logging.Errorf("ShardTransferManager::processDestroyLocalShardMessage Error cleaning-up shardId: %v "+
+				"of shard type: %v from local file system, err: %v", shardId, shardType, err)
 		} else {
 			// Since the shard is being destroyed, delete the shard from book-keeping as
 			// there is no need to unlock a deleted shard
@@ -1793,7 +1793,7 @@ func (stm *ShardTransferManager) handlePopulateShardType(cmd Message) {
 
 	stm.shardTypeMapper.AddShardIds(shardType, shardIds)
 
-	logging.Infof("ShardTransferManager::handlePopulateShardType: ttid:%v"+
+	logging.Infof("ShardTransferManager::handlePopulateShardType: ttid:%v "+
 		"populated the ShardType:%v for shardIds %v", ttid, shardType, shardIds)
 
 }
@@ -1813,8 +1813,8 @@ func (stm *ShardTransferManager) handleClearShardType(cmd Message) {
 
 	stm.shardTypeMapper.DeleteShardIds(clearShardIds)
 
-	logging.Infof("ShardTransferManager::handleClearShardType: cleared"+
-		" shard type value for shardIds %v", clearShardIds)
+	logging.Infof("ShardTransferManager::handleClearShardType: cleared "+
+		"shard type value for shardIds %v", clearShardIds)
 
 }
 
@@ -1835,8 +1835,8 @@ func (stm *ShardTransferManager) TransferCodebook(codebookCopier plasma.Copier, 
 	dstFile := joinURIPath(dstPath, genCodebookFileStagingName(codebookSrcPath))
 	xferBytes, err := codebookCopier.CopyFile(codebookCopier.Context(), srcFile, dstFile, 0, sz)
 
-	logging.Infof("ShardTransferManager::TransferCodebook For codebook: srcFile:%v, dstFile:%v"+
-		" transferred bytes:%v, err:%v", srcFile, dstFile, xferBytes, err)
+	logging.Infof("ShardTransferManager::TransferCodebook For codebook: srcFile:%v, dstFile:%v "+
+		"transferred bytes:%v, err:%v", srcFile, dstFile, xferBytes, err)
 	return err
 }
 
