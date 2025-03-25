@@ -666,8 +666,19 @@ func performCodebookTransferValidation(subt *testing.T, idxNames []string) *tc.I
 			indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username, clusterconfig.Password, host)
 
 			for _, partnId := range status.PartitionMap[host] {
-				slicePath, err := tc.GetIndexSlicePath(status.Name, status.Bucket, storageDirMap[indexerAddr], c.PartitionId(partnId))
-				FailTestIfError(err, "Error while GetIndexSlicePath", subt)
+				cvsSlicePath, err1 := tc.GetIndexSlicePath(status.Name, status.Bucket, storageDirMap[indexerAddr], c.PartitionId(partnId))
+				bhiveDir := filepath.Join(storageDirMap[indexerAddr], c.BHIVE_DIR_PREFIX)
+				bhiveSlicePath, err2 := tc.GetIndexSlicePath(status.Name, status.Bucket, bhiveDir, c.PartitionId(partnId))
+				if err1 != nil && err2 != nil {
+					FailTestIfError(err1, "Error while GetIndexSlicePath", subt)
+					FailTestIfError(err2, "Error while GetIndexSlicePath", subt)
+				} else if len(cvsSlicePath) == 0 && len(bhiveSlicePath) == 0 {
+					FailTestIfError(fmt.Errorf("slice path empty for all storages"), "Error while GetIndexSlicePath", subt)
+				}
+				slicePath := cvsSlicePath
+				if len(cvsSlicePath) == 0 {
+					slicePath = bhiveSlicePath
+				}
 
 				codebookName := tc.GetCodebookName(status.Name, status.Bucket, status.InstId, c.PartitionId(partnId))
 				codebookPath := filepath.Join(slicePath, tc.CODEBOOK_DIR, codebookName)
