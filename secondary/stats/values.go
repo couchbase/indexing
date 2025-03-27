@@ -2,6 +2,7 @@ package stats
 
 import (
 	"fmt"
+	"math"
 	"sync/atomic"
 	"unsafe"
 )
@@ -254,6 +255,51 @@ func (v *MapVal) GetValue() interface{} {
 
 func (v *MapVal) AddFilter(filter uint64) {
 	v.bitmap |= filter
+}
+
+type Float64Val struct {
+	val    *uint64
+	bitmap uint64 // bitmap to decide stat filter
+}
+
+func (v *Float64Val) Init() {
+	var val = math.Float64bits(0.0)
+	v.val = &val
+
+	// Set the default value of filter bitmap to AllStatsFilter
+	v.bitmap = AllStatsFilter
+}
+
+func (v *Float64Val) Add(delta float64) {
+	atomic.AddUint64(v.val, math.Float64bits(delta))
+}
+
+func (v *Float64Val) Set(nv float64) {
+	atomic.StoreUint64(v.val, math.Float64bits(nv))
+}
+
+func (v *Float64Val) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprint(math.Float64frombits(atomic.LoadUint64(v.val)))), nil
+}
+
+func (v *Float64Val) CAS(old, new float64) bool {
+	return atomic.CompareAndSwapUint64(v.val, math.Float64bits(old), math.Float64bits(new))
+}
+
+func (v *Float64Val) Value() float64 {
+	return math.Float64frombits(atomic.LoadUint64(v.val))
+}
+
+func (v *Float64Val) GetValue() interface{} {
+	return math.Float64frombits(atomic.LoadUint64(v.val))
+}
+
+func (v *Float64Val) AddFilter(filter uint64) {
+	v.bitmap |= filter
+}
+
+func (v *Float64Val) Map(bitmap uint64) bool {
+	return (v.bitmap & bitmap) != 0
 }
 
 // ------------------------------------------------------------------------
