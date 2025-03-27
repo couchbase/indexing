@@ -3079,54 +3079,82 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		return
 	}
 
-	pMandQuota := plasma.GetMandatoryQuota()
+	pMandQuota, pMinQuota := plasma.GetMandatoryQuota()
 	if pMandQuota < 0 {
 		pMandQuota = 0
 	}
-	bMandQuota := bhive.GetMandatoryQuota()
+	bMandQuota, bMinQuota := bhive.GetMandatoryQuota()
 	if bMandQuota < 0 {
 		bMandQuota = 0
 	}
 
 	var bhiveQuota, plasmaQuota int64
-
 	remainingQuota := storageQuota
-	if (pMandQuota + bMandQuota) > storageQuota {
-		// there is not enough to satisfy even the mandatory
 
-		if bMandQuota < remainingQuota {
-			// give at least bhive the mandatory
-			bhiveQuota = bMandQuota
-			remainingQuota -= bMandQuota
-
-		} else {
-			// not enough even for bhive to get mandatory
-			bhiveQuota = remainingQuota
-			remainingQuota = 0
-
+	tryAssignQuotas := func(pq, bq int64) bool {
+		if (pq + bq) > remainingQuota {
+			// there is not enough quota to satisfy the request
+			return false
 		}
 
-		plasmaQuota = remainingQuota
-		remainingQuota = 0
+		// there is enough to satisfy both, give plasma the requested and bhive the requested+what ever is left
+		plasmaQuota = pq
+		remainingQuota -= pq
 
-	} else {
-		// there is enough to give mandatory to both
-		plasmaQuota = pMandQuota
-		remainingQuota -= pMandQuota
-
+		// at this point, remainingQuota >= bq
 		bhiveQuota = remainingQuota
 		remainingQuota = 0
+
+		logging.Infof("storageMgr:redistributeMemoryQuota: bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] "+
+			"pMandQuota[%d] bMandQuota[%d] pMinQuota[%d] bMinQuota[%d]",
+			bhiveQuota, plasmaQuota, storageQuota, pMandQuota, bMandQuota, pMinQuota, bMinQuota)
+
+		if bhiveQuota > 0 {
+			bhive.SetMemoryQuota(bhiveQuota)
+		}
+
+		if plasmaQuota > 0 {
+			plasma.SetMemoryQuota(plasmaQuota, false)
+		}
+
+		return true
 	}
 
-	logging.Infof("storageMgr:redistributeMemoryQuota: bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] "+
-		"pMandQuota[%d] bMandQuota[%d]", bhiveQuota, plasmaQuota, storageQuota, pMandQuota, bMandQuota)
-
-	if bhiveQuota > 0 {
-		bhive.SetMemoryQuota(bhiveQuota)
+	// First try to give both mandatory
+	if tryAssignQuotas(pMandQuota, bMandQuota) {
+		return
 	}
 
-	if plasmaQuota > 0 {
-		plasma.SetMemoryQuota(plasmaQuota, false)
+	// Couldn't give both mandatory, try to give plasma min
+	if tryAssignQuotas(pMinQuota, bMandQuota) {
+		return
+	}
+
+	// Couldn't give only plasma min, try to give both min
+	if tryAssignQuotas(pMinQuota, bMinQuota) {
+		return
+	}
+
+	// Couldn't give both min, quota is probably undersized or min is over reported
+	// plasma recovery may fail if minimum is not given, try to give plasma the minimum
+	if pMinQuota < remainingQuota {
+		if !tryAssignQuotas(pMinQuota, remainingQuota-pMinQuota) {
+			// Should surely have returned true, log error just in case
+			logging.Errorf("storageMgr:redistributeMemoryQuota: Failed to give plasma min: "+
+				"bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] pMandQuota[%d] bMandQuota[%d] pMinQuota[%d] "+
+				"bMinQuota[%d]",
+				bhiveQuota, plasmaQuota, storageQuota, pMandQuota, bMandQuota, pMinQuota, bMinQuota)
+		}
+	}
+
+	// Couldn't even give plasma the minimum, give both 50-50
+	half := remainingQuota / 2
+	if !tryAssignQuotas(half, remainingQuota-half) {
+		// Should surely have returned true, log error just in case
+		logging.Errorf("storageMgr:redistributeMemoryQuota: Failed to give plasma min: "+
+			"bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] pMandQuota[%d] bMandQuota[%d] pMinQuota[%d] "+
+			"bMinQuota[%d] half[%d]",
+			bhiveQuota, plasmaQuota, storageQuota, pMandQuota, bMandQuota, pMinQuota, bMinQuota, half)
 	}
 }
 
