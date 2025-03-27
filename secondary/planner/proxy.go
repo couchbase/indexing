@@ -948,6 +948,10 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 
 				// Capping the Jemalloc fragmentation at memFragThreshold
 				memFragThreshold := config["indexer.plasma.memFragThreshold"].Float64()
+				// if the override is present, use that value
+				if fragThresholdOverride, ok := config["indexer.planner.overrideMemFragThreshold"]; ok && fragThresholdOverride.Float64() > 0.0 {
+					memFragThreshold = fragThresholdOverride.Float64()
+				}
 				maxEstJemallocFragMem := (memFragThreshold * scaledMem) / (1 - memFragThreshold)
 				if memJemallocFragScaled > maxEstJemallocFragMem {
 					memJemallocFragScaled = maxEstJemallocFragMem // this is estimated for 100% RR
