@@ -3523,6 +3523,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.planner.overrideMemFragThreshold": ConfigValue{
+		float64(0.0),
+		"override for maximum jemalloc malloc fragmentation percent for the min memory calculation during the " +
+			"planning phase. If set to 0.0 override is disabled, use the system default indexer.plasma.memFragThreshold" +
+			"setting to float64(1.0) would ensure the exact previous behaviour since fragmentation should never be 1.0",
+		float64(0.0),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.planner.internal.minIterPerTemp": ConfigValue{
 		100,
 		"Minimum number of iterations - per temperature - to be used by simulated annealing index planner.",
