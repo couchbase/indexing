@@ -730,6 +730,37 @@ func (s *IndexStats) partnAvgInt64Stats(f func(*IndexStats) int64) int64 {
 	return s.int64Stats(f)
 }
 
+func (s *IndexStats) partnMaxFloat64Stats(f func(*IndexStats) float64) float64 {
+
+	var v float64
+	for _, ps := range s.partitions {
+		pv := f(ps)
+		if pv > v {
+			v = pv
+		}
+	}
+	return v
+}
+
+func (s *IndexStats) partnFloat64Stats(f func(*IndexStats) float64) float64 {
+
+	var v float64
+	for _, ps := range s.partitions {
+		v += f(ps)
+	}
+
+	if v != 0 {
+		return v
+	}
+
+	return f(s)
+}
+
+func (s *IndexStats) partnAvgFloat64Stats(f func(*IndexStats) float64) float64 {
+
+	return s.float64Stats(f)
+}
+
 // int64Stats will execute the passed-in function f to extract a stat from an
 // IndexStats object. If the IndexStats receiver represents a partitioned index,
 // int64Stats will return the average of f over all of partitions where it is
@@ -770,6 +801,24 @@ func (s *IndexStats) partnTimingStats(f func(*IndexStats) *stats.TimingStat) str
 	}
 
 	return f(s).Value()
+}
+
+func (s *IndexStats) float64Stats(f func(*IndexStats) float64) float64 {
+
+	var v float64
+	var count int64
+	for _, ps := range s.partitions {
+		if psv := f(ps); psv != 0 {
+			v += psv
+			count++
+		}
+	}
+
+	if v != 0 {
+		return v / float64(count)
+	}
+
+	return f(s)
 }
 
 type BucketStats struct {
@@ -2621,6 +2670,8 @@ func NewIndexerStats() *IndexerStats {
 // ----------------------------------------------------------------------------
 type StatAggrFunc func(func(*IndexStats) int64) int64
 
+type FloatStatAggrFunc func(func(*IndexStats) float64) float64
+
 type TimingStatAggrFunc func(func(*IndexStats) *stats.TimingStat) string
 
 // ----------------------------------------------------------------------------
@@ -2755,6 +2806,22 @@ func (st *StatsMap) AddStatByInstId(k string, v interface{}) {
 // The reference to the function passed to AddAggrStatFiltered (f) has to be a valid function.
 func (st *StatsMap) AddAggrStatFiltered(k string, f func(*IndexStats) int64,
 	stat stats.StatVal, aggr StatAggrFunc) {
+	if !stat.Map(st.spec.consumerFilter) {
+		return
+	}
+
+	var v interface{}
+	if aggr != nil {
+		v = aggr(f)
+	} else {
+		v = stat.GetValue()
+	}
+	st.AddStat(k, v)
+}
+
+// The reference to the function passed to AddAggrStatFiltered (f) has to be a valid function.
+func (st *StatsMap) AddAggrFloatStatFiltered(k string, f func(*IndexStats) float64,
+	stat stats.StatVal, aggr FloatStatAggrFunc) {
 	if !stat.Map(st.spec.consumerFilter) {
 		return
 	}

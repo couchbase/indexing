@@ -1339,6 +1339,14 @@ func ComputePercent(a, b int64) int64 {
 	return 0
 }
 
+func ComputePercentFloat(a, b int64) float64 {
+	if a+b > 0 {
+		return (float64(a) * 100) / float64(a+b)
+	}
+
+	return 0.0
+}
+
 func SetIpv6(isIpv6 bool) {
 	security.SetIpv6(isIpv6)
 }
