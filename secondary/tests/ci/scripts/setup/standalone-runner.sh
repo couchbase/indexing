@@ -14,6 +14,7 @@ fi;
 
 echo "cloning custom repo into $WORKSPACE"
 cp -r /mnt/project/* $WORKSPACE
+rm -rf $WORKSPACE/analytics/CMakeLists.txt
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
 cp -r secondary/tests/ci/scripts/* /home/bot/bin/
 
@@ -54,6 +55,6 @@ echo "Build Log: <a href='make-$TS.log'>make-$TS.log</a>"
 echo "Server Log: <a href='logs-$TS.tar.gz'>logs-$TS.tar.gz</a>"
 echo "</pre><h1>Finished</h1></body></html>"
 
-cp $WORKSPACE/logs.tar /mnt/project/
+cp $WORKSPACE/logs.tar.gz /mnt/project/
 cp $WORKSPACE/make.log /mnt/project/
 cp $WORKSPACE/test.log /mnt/project/
