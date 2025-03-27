@@ -280,8 +280,8 @@ type IndexStats struct {
 	lastDiskBytes             stats.Int64Val
 	lastRollbackTime          stats.TimeVal
 	progressStatTime          stats.TimeVal
-	residentPercent           stats.Int64Val // resident ratio for mainstore
-	combinedResidentPercent   stats.Int64Val // resident ratio for mainstore and backstore
+	residentPercent           stats.Int64Val   // resident ratio for mainstore
+	combinedResidentPercent   stats.Float64Val // resident ratio for mainstore and backstore
 	cacheHitPercent           stats.Int64Val
 	cacheHits                 stats.Int64Val
 	cacheMisses               stats.Int64Val
@@ -2314,11 +2314,11 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			return ss.residentPercent.Value()
 		},
 		&s.residentPercent, s.partnAvgInt64Stats)
-	statMap.AddAggrStatFiltered("combined_resident_percent",
-		func(ss *IndexStats) int64 {
+	statMap.AddAggrFloatStatFiltered("combined_resident_percent",
+		func(ss *IndexStats) float64 {
 			return ss.combinedResidentPercent.Value()
 		},
-		&s.combinedResidentPercent, s.partnAvgInt64Stats)
+		&s.combinedResidentPercent, s.partnAvgFloat64Stats)
 
 	statMap.AddAggrStatFiltered("combined_memory_size_index",
 		func(ss *IndexStats) int64 {
