@@ -1686,9 +1686,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.enableDecompressDuringSwapin": ConfigValue{
-		false,
+		true,
 		"Enable decompression of compressed items during swapin",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1708,8 +1708,22 @@ var SystemConfig = Config{
 	},
 	"indexer.plasma.mainIndex.compressMemoryThresholdPercent": ConfigValue{
 		95,
-		"Percent of quota that memory usage should be greater than to compress after swapin",
+		"Percent of quota that memory usage should be greater than to compress in-memory",
 		95,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.compressMemoryLowThresholdPercent": ConfigValue{
+		85,
+		"Percent of quota that memory usage should be lower than to decompress in-memory",
+		85,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.minCPUsForInMemCompression": ConfigValue{
+		8,
+		"minimum value of GOMAXPROCS above which, in-mem compression may occur",
+		8,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1868,9 +1882,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.enableDecompressDuringSwapin": ConfigValue{
-		false,
+		true,
 		"Enable decompression of compressed items during swapin",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1890,8 +1904,22 @@ var SystemConfig = Config{
 	},
 	"indexer.plasma.backIndex.compressMemoryThresholdPercent": ConfigValue{
 		95,
-		"Percent of quota that memory usage should be greater than to compress after swapin",
+		"Percent of quota that memory usage should be greater than to compress in-memory",
 		95,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.compressMemoryLowThresholdPercent": ConfigValue{
+		85,
+		"Percent of quota that memory usage should be lower than to decompress in-memory",
+		85,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.minCPUsForInMemCompression": ConfigValue{
+		8,
+		"minimum value of GOMAXPROCS above which, in-mem compression may occur",
+		8,
 		false, // mutable
 		false, // case-insensitive
 	},
