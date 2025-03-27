@@ -341,9 +341,7 @@ func getIndexInfo1(txt string, skipNew bool) (string, int, string, string, strin
 	return name, replicaId, bucket, scope, collection, common.IndexDefnId(defnId), common.IndexInstId(instId), common.PartitionId(partnId), false, nil
 }
 
-//
 // Most of getIndexInfo2 is same as getIndexerInfo2
-//
 func getIndexInfo2(txt string) (uint64, uint64, uint64, float64, uint64, uint64, uint64, error) {
 	s := strings.Split(txt, "Index total memory:")
 	if len(s) != 2 {
@@ -513,7 +511,7 @@ func getIndex(scanner *bufio.Scanner, skipNew bool, warnings []string, useLive b
 		index.ActualDiskUsage = io
 		index.ActualDrainRate = drain
 		index.ActualScanRate = scan
-		index.ActualResidentPercent = rr
+		index.ActualResidentPercent = float64(rr)
 		index.ActualBuildPercent = build
 	} else {
 		index.MemUsage = mem

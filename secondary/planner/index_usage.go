@@ -56,15 +56,15 @@ type IndexUsage struct {
 	ActualBuildPercent uint64  `json:"actualBuildPercent"`
 	// in planner for plasma we use combined resident percent from mainstore as well as backstore
 	// so the value of stat "combined_resident_percent will be stored in ActualResidentPercent"
-	ActualResidentPercent uint64 `json:"actualResidentPercent"`
-	ActualDataSize        uint64 `json:"actualDataSize"`
-	ActualNumDocs         uint64 `json:"actualNumDocs"`
-	ActualDiskUsage       uint64 `json:"actualDiskUsage"`
-	ActualMemStats        uint64 `json:"actualMemStats"`
-	ActualDrainRate       uint64 `json:"actualDrainRate"`
-	ActualScanRate        uint64 `json:"actualScanRate"`
-	ActualMemMin          uint64 `json:"actualMemMin"`
-	ActualUnitsUsage      uint64 `json:"actualUnitsUsage"`
+	ActualResidentPercent float64 `json:"actualResidentPercent"`
+	ActualDataSize        uint64  `json:"actualDataSize"`
+	ActualNumDocs         uint64  `json:"actualNumDocs"`
+	ActualDiskUsage       uint64  `json:"actualDiskUsage"`
+	ActualMemStats        uint64  `json:"actualMemStats"`
+	ActualDrainRate       uint64  `json:"actualDrainRate"`
+	ActualScanRate        uint64  `json:"actualScanRate"`
+	ActualMemMin          uint64  `json:"actualMemMin"`
+	ActualUnitsUsage      uint64  `json:"actualUnitsUsage"`
 
 	// Available from 7.6+ version of server
 
@@ -691,9 +691,9 @@ func (o *IndexUsage) Normalize() {
 	o.ActualDrainRate = max(o.MutationRate, o.DrainRate)
 
 	if o.TotalRecords > 0 {
-		o.ActualResidentPercent = uint64(float64(o.ActualRecsInMem) * 100.0 / float64(o.TotalRecords))
+		o.ActualResidentPercent = float64(o.ActualRecsInMem) * 100.0 / float64(o.TotalRecords)
 	} else {
-		o.ActualResidentPercent = o.ActualResidentPercent / o.NumInstances
+		o.ActualResidentPercent = o.ActualResidentPercent / float64(o.NumInstances)
 	}
 
 	// Compute the AcutalKeySize
@@ -770,7 +770,7 @@ func (in *IndexUsage) updateProxyStats(shardStats *common.ShardStats) {
 	}
 
 	if in.TotalRecords > 0 {
-		in.ActualResidentPercent = in.ActualRecsInMem * 100.0 / in.TotalRecords
+		in.ActualResidentPercent = (float64(in.ActualRecsInMem) * 100.0) / float64(in.TotalRecords)
 	}
 }
 
