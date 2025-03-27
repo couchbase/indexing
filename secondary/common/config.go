@@ -1734,6 +1734,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.enableCompressInSwapper": ConfigValue{
+		false,
+		"Compress pages marked as canCompress in swapper under memory pressure",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.enablePageBloomFilter": ConfigValue{
 		false,
 		"Enable maintenance and use of bloom filter for lookup of swapped out items",
@@ -1926,6 +1933,13 @@ var SystemConfig = Config{
 	"indexer.plasma.backIndex.enableCompressFullMarshal": ConfigValue{
 		false,
 		"Compress page after full marshal",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.enableCompressInSwapper": ConfigValue{
+		false,
+		"Compress pages marked as canCompress in swapper under memory pressure",
 		false,
 		false, // mutable
 		false, // case-insensitive
