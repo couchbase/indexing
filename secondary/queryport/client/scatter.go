@@ -1992,17 +1992,46 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 		}
 		for _, order := range c.indexOrder.KeyPos {
 			if !projection[int64(order)] {
-				c.projections.EntryKeys = append(c.projections.EntryKeys, int64(order))
-				if _, ok := c.indexOrderPosPruneMap[int64(order)]; !ok {
-					// If not present the map, add
-					c.indexOrderPosPruneMap[int64(order)] = true
+				if c.defn.NonBhiveVectorIndex() {
+					// For vector indexes, maintain sorted order and track positions
+					insertPos := 0
+					for ; insertPos < len(c.projections.EntryKeys); insertPos++ {
+						if c.projections.EntryKeys[insertPos] > int64(order) {
+							break
+						}
+					}
+
+					// Before inserting, update positions of existing entries that will shift
+					for k, v := range c.indexPosToProjnPos {
+						if v >= insertPos {
+							c.indexPosToProjnPos[k] = v + 1
+						}
+					}
+
+					// Insert at the correct position
+					c.projections.EntryKeys = append(c.projections.EntryKeys, 0)
+					copy(c.projections.EntryKeys[insertPos+1:], c.projections.EntryKeys[insertPos:])
+					c.projections.EntryKeys[insertPos] = int64(order)
+					c.indexPosToProjnPos[order] = insertPos
+
+					if _, ok := c.indexOrderPosPruneMap[int64(insertPos)]; !ok {
+						// Track the projected position for pruning
+						c.indexOrderPosPruneMap[int64(insertPos)] = true
+					}
+				} else {
+					// For non-vector indexes, simply append as query engine guarantees order
+					c.projections.EntryKeys = append(c.projections.EntryKeys, int64(order))
+
+					if _, ok := c.indexOrderPosPruneMap[int64(order)]; !ok {
+						// If not present in the map, add
+						c.indexOrderPosPruneMap[int64(order)] = true
+					}
 				}
 				projection[int64(order)] = true
-				if c.defn.NonBhiveVectorIndex() {
-					c.indexPosToProjnPos[order] = len(c.projections.EntryKeys) - 1
-				}
 			}
 		}
+
+		logging.Verbosef("REQUEST[%v] sortkeyNeeded: %v c.indexPosToProjnPos: %+v c.indexOrderPosPruneMap: %+v c.projections.EntryKeys: %+v", c.requestId, c.sortkeyNeeded, c.indexPosToProjnPos, c.indexOrderPosPruneMap, c.projections.EntryKeys)
 	}
 }
 
