@@ -200,7 +200,8 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	// the metadataRepo (including watcher) is operational (e.g.
 	// finish sync with remote metadata repo master).
 	//mgr.repo, err = NewMetadataRepo(requestAddr, leaderAddr, config, mgr)
-	mgr.basepath = config["storage_dir"].String()
+	storagDir, _ := common.GetStorageDirs(config, common.NA_StorageEngine)
+	mgr.basepath = storagDir
 	iowrap.Os_Mkdir(mgr.basepath, 0755)
 	mgr.repoName = filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
 

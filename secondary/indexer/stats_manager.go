@@ -3179,7 +3179,8 @@ func NewStatsManager(supvCmdch MsgChannel,
 	}
 
 	s.config.Store(config)
-	statsDir := path.Join(config["storage_dir"].String(), STATS_DATA_DIR)
+	storageDir, _ := common.GetStorageDirs(config, common.NA_StorageEngine)
+	statsDir := path.Join(storageDir, STATS_DATA_DIR)
 	chunkSz := config["statsPersistenceChunkSize"].Int()
 	fileName := "stats"
 	newFileName := "stats_new"
@@ -4307,8 +4308,8 @@ func (s *statsManager) jemallocMemoryProfileDump(w http.ResponseWriter, r *http.
 
 	// create a tmp file
 	conf := s.config.Load()
-	tmpDir := conf["storage_dir"].String()
-	file, err := iowrap.Ioutil_TempFile(tmpDir, "jemalloc_memory_profile")
+	storageDir, _ := common.GetStorageDirs(conf, common.NA_StorageEngine)
+	file, err := iowrap.Ioutil_TempFile(storageDir, "jemalloc_memory_profile")
 	if err != nil {
 		return writeAndLogError(w, fmt.Sprintf("jemallocMemoryProfileDump: Failed to create temp file: %v", err))
 	}

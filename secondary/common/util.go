@@ -2232,3 +2232,70 @@ func MonitorServiceForPortChanges(clusterAddr string) {
 		}
 	}
 }
+
+// BHIVE_DIR_PREFIX - prefix for bhive directory over indexer storageDir
+const BHIVE_DIR_PREFIX = "@bhive"
+
+// StorageEngine - enum for storage engines
+type StorageEngine byte
+
+const (
+	// NA_StorageEngine - not applicable
+	NA_StorageEngine StorageEngine = iota
+	// ForestDB_StorageEngine - forestdb
+	ForestDB_StorageEngine
+	// Plasma_StorageEngine - plasma
+	Plasma_StorageEngine
+	// Moi_StorageEngine - moi
+	Moi_StorageEngine
+	// Bhive_StorageEngine - bhive
+	Bhive_StorageEngine
+)
+
+func (se StorageEngine) String() string {
+	switch se {
+	case NA_StorageEngine:
+		return "NA"
+	case ForestDB_StorageEngine:
+		return "ForestDB"
+	case Plasma_StorageEngine:
+		return "Plasma"
+	case Moi_StorageEngine:
+		return "Moi"
+	case Bhive_StorageEngine:
+		return "Bhive"
+	}
+	return ""
+}
+
+// GetStorageEngineForIndexDefn - get the storage engine for an index definition
+func GetStorageEngineForIndexDefn(defn *IndexDefn) StorageEngine {
+	if defn == nil {
+		return NA_StorageEngine
+	}
+	if defn.IsBhive() {
+		return Bhive_StorageEngine
+	}
+	switch IndexTypeToStorageMode(defn.Using) {
+	case PLASMA:
+		return Plasma_StorageEngine
+	case MOI:
+		return Moi_StorageEngine
+	case FORESTDB:
+		return ForestDB_StorageEngine
+	}
+	return NA_StorageEngine
+}
+
+// GetStorageDirs - call this to get the storage paths for storage engine
+func GetStorageDirs(cfg Config, se StorageEngine) (string, string) {
+	baseDir := cfg.getIndexerConfigString("storage_dir")
+	engineDir := ""
+	switch se {
+	case Bhive_StorageEngine:
+		engineDir = filepath.Join(baseDir, BHIVE_DIR_PREFIX)
+	default:
+		engineDir = baseDir
+	}
+	return baseDir, engineDir
+}

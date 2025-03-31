@@ -95,15 +95,21 @@ func CodebookPath(inst *common.IndexInst, partnId common.PartitionId, sliceId Sl
 	return filepath.Join(indexPath, CODEBOOK_DIR, codebookName)
 }
 
-func InitCodebookDir(storageDir string, idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) error {
-
+func InitCodebookDir(
+	storeEngineDir string, idxInst *common.IndexInst,
+	partnId common.PartitionId, sliceId SliceId,
+) error {
 	// Construct codebookDirPath path
-	codebookDirPath := filepath.Join(storageDir, IndexPath(idxInst, partnId, sliceId), CODEBOOK_DIR)
+	codebookDirPath := filepath.Join(
+		storeEngineDir,
+		IndexPath(idxInst, partnId, sliceId),
+		CODEBOOK_DIR,
+	)
 
 	//  Check the presence of codebook dir. Create one if it does not exist
 	if _, err := iowrap.Os_Stat(codebookDirPath); err != nil {
 		if os.IsNotExist(err) {
-			return iowrap.Os_Mkdir(codebookDirPath, 0755)
+			return iowrap.Os_MkdirAll(codebookDirPath, 0755)
 		} else {
 			logging.Errorf("InitCodebookDir: Error observed while checking the presence of "+
 				"codebookDir: %v, err: %v", codebookDirPath, err)
@@ -113,8 +119,17 @@ func InitCodebookDir(storageDir string, idxInst *common.IndexInst, partnId commo
 	return nil
 }
 
-func RemoveCodebookDir(storageDir string, idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) error {
-	codebookDirPath := filepath.Join(storageDir, IndexPath(idxInst, partnId, sliceId), CODEBOOK_DIR)
+func RemoveCodebookDir(
+	storeEngineDir string, idxInst *common.IndexInst,
+	partnId common.PartitionId, sliceId SliceId,
+) error {
+
+	codebookDirPath := filepath.Join(
+		storeEngineDir,
+		IndexPath(idxInst, partnId, sliceId),
+		CODEBOOK_DIR,
+	)
+
 	return iowrap.Os_RemoveAll(codebookDirPath)
 }
 
@@ -126,6 +141,8 @@ func GetIndexPathPattern() string {
 // This has to follow the pattern in IndexPath function defined above.
 func GetInstIdPartnIdFromPath(idxPath string) (common.IndexInstId,
 	common.PartitionId, error) {
+
+	idxPath = strings.TrimPrefix(idxPath, common.BHIVE_DIR_PREFIX)
 
 	pathComponents := strings.Split(idxPath, "_")
 	if len(pathComponents) < 4 {

@@ -291,7 +291,8 @@ func RegisterRequestHandler(mgr *manager.IndexManager, mux *http.ServeMux, confi
 		mux.HandleFunc("/getInternalVersion", handlerContext.handleInternalVersionRequest)
 
 		// Create cache for getIndexStatus results
-		cacheDir := path.Join(config["storage_dir"].String(), "cache")
+		storageDir, _ := common.GetStorageDirs(config, common.NA_StorageEngine)
+		cacheDir := path.Join(storageDir, "cache")
 		handlerContext.rhc = NewRequestHandlerCache(cacheDir)
 
 		// Misc other configurations

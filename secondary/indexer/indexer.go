@@ -8832,10 +8832,19 @@ func (idx *indexer) createRealInstIdMap() common.IndexInstMap {
 }
 
 func (idx *indexer) cleanupOrphanIndexes() {
-	storageDir := idx.config["storage_dir"].String()
+	_, baseStoreDirs := c.GetStorageDirs(idx.config, c.NA_StorageEngine)
 
 	mode := idx.getLocalStorageMode(idx.config)
-	flist, err := ListSlices(mode, storageDir)
+	idx.doCleanupOrphanIndexes(mode, baseStoreDirs)
+
+	if mode == c.PLASMA {
+		_, storeEngineDir := common.GetStorageDirs(idx.config, c.Bhive_StorageEngine)
+		idx.doCleanupOrphanIndexes(mode, storeEngineDir)
+	}
+}
+
+func (idx *indexer) doCleanupOrphanIndexes(mode c.StorageMode, storeEngineDir string) {
+	flist, err := ListSlices(mode, storeEngineDir)
 	if err != nil {
 		logging.Warnf("Error %v during cleaning up the orphan indexes.", err)
 		return
@@ -8858,7 +8867,7 @@ func (idx *indexer) cleanupOrphanIndexes() {
 
 	realInstIdMap := idx.createRealInstIdMap()
 
-	stDirPathLen := len(storageDir) + len(string(os.PathSeparator))
+	stDirPathLen := len(storeEngineDir) + len(string(os.PathSeparator))
 	orphanIndexList := make([]string, 0, len(flist))
 	for _, f := range flist {
 		instId, partnId, err := GetInstIdPartnIdFromPath(f[stDirPathLen:])
@@ -8882,7 +8891,7 @@ func (idx *indexer) cleanupOrphanIndexes() {
 	}
 
 	for _, f := range orphanIndexList {
-		if err := DestroySlice(mode, storageDir, f); err != nil {
+		if err := DestroySlice(mode, storeEngineDir, f); err != nil {
 			logging.Warnf("Error %v while removing orphan index data for %v.", err, f)
 		} else {
 			logging.Infof("Cleaned up the orphan index slice %v.", f)
@@ -8891,7 +8900,7 @@ func (idx *indexer) cleanupOrphanIndexes() {
 }
 
 func (idx *indexer) cleanupRebalStagingDir() error {
-	storageDir := idx.config["storage_dir"].String()
+	storageDir, _ := common.GetStorageDirs(idx.config, common.NA_StorageEngine)
 	rpcDir := GetRPCRootDir()
 
 	if rpcDir != "" && common.GetStorageMode() == common.PLASMA {
@@ -9638,8 +9647,9 @@ func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
 		return
 	}
 
-	storageDir := idx.config["storage_dir"].String()
-	corruptDataDir := filepath.Join(storageDir, CORRUPT_DATA_SUBDIR)
+	storageDir, storeEngineDir := c.GetStorageDirs(idx.config, c.GetStorageEngineForIndexDefn(&indexInst.Defn))
+	corruptDataDir := filepath.Join(storeEngineDir, CORRUPT_DATA_SUBDIR)
+
 	if err := iowrap.Os_MkdirAll(corruptDataDir, 0755); err != nil {
 		logging.Errorf("Indexer::backupCorruptIndexDataFiles %v %v error %v while taking backup:MkdirAll %v",
 			indexInst.InstId, partnId, err, corruptDataDir)
@@ -9648,7 +9658,7 @@ func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
 	}
 
 	err := MoveSlice(common.IndexTypeToStorageMode(indexInst.Defn.Using), indexInst, partnId, sliceId,
-		storageDir, storageDir, corruptDataDir, rebalanceId)
+		storageDir, storeEngineDir, corruptDataDir, rebalanceId)
 	if err != nil {
 		warnStr := fmt.Sprintf("Indexer::backupCorruptIndexDataFiles: failed to backup index %v partn %v from %v to %v with error <%v>",
 			indexInst, partnId, storageDir, corruptDataDir, err)
@@ -9946,12 +9956,12 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 	inst.Error = ""
 
 	// remove old files
-	storage_dir := idx.config["storage_dir"].String()
+	storage_dir, engineDir := c.GetStorageDirs(idx.config, c.GetStorageEngineForIndexDefn(&inst.Defn))
 
 	partnDefnList := inst.Pc.GetAllPartitions()
 	for _, partnDefn := range partnDefnList {
-		path := filepath.Join(storage_dir, IndexPath(inst, partnDefn.GetPartitionId(), SliceId(0)))
-		if err := DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), storage_dir, path); err != nil {
+		path := filepath.Join(engineDir, IndexPath(inst, partnDefn.GetPartitionId(), SliceId(0)))
+		if err := DestroySlice(storageMode, storage_dir, path); err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -10194,9 +10204,9 @@ func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceI
 // been initialized
 func (idx *indexer) forceCleanupPartitionData(inst *common.IndexInst, partitionId common.PartitionId, sliceId SliceId) error {
 
-	storage_dir := idx.config["storage_dir"].String()
-	path := filepath.Join(storage_dir, IndexPath(inst, partitionId, sliceId))
-	return DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), storage_dir, path)
+	_, storeEngineDir := c.GetStorageDirs(idx.config, c.GetStorageEngineForIndexDefn(&inst.Defn))
+	path := filepath.Join(storeEngineDir, IndexPath(inst, partitionId, sliceId))
+	return DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), storeEngineDir, path)
 }
 
 // On warmup, if an index is found in MAINT_STREAM and state INITIAL
@@ -10993,12 +11003,14 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	}
 
 	// Default storage is forestdb
-	storage_dir := conf["storage_dir"].String()
+	storage_dir, storeEngineDir := c.GetStorageDirs(conf, c.GetStorageEngineForIndexDefn(&indInst.Defn))
+
 	iowrap.Os_Mkdir(storage_dir, 0755)
 	if _, e := iowrap.Os_Stat(storage_dir); e != nil {
 		common.CrashOnError(e)
 	}
-	path := filepath.Join(storage_dir, IndexPath(indInst, partnInst.Defn.GetPartitionId(), id))
+
+	path := filepath.Join(storeEngineDir, IndexPath(indInst, partnInst.Defn.GetPartitionId(), id))
 
 	partitionId := partnInst.Defn.GetPartitionId()
 	numPartitions := indInst.Pc.GetNumPartitions()
@@ -11014,13 +11026,13 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 		slice, err = NewForestDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			partnStats[partitionId])
 	case common.PlasmaDB:
-
 		if indInst.Defn.IsVectorIndex && indInst.Defn.VectorMeta.IsBhive {
-			slice, err = NewBhiveSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, numPartitions, conf,
+			// safety call to make sure base dir exists before bhive directory is created
+			slice, err = NewBhiveSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
 				CodebookPath(indInst, partitionId, id))
 		} else {
-			slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
+			slice, err = NewPlasmaSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
 				CodebookPath(indInst, partitionId, id))
 		}
@@ -11030,23 +11042,27 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	return
 }
 
-func DestroySlice(mode common.StorageMode, storageDir string, path string) error {
+func DestroySlice(mode common.StorageMode, storeEngineDir string, path string) error {
 
 	switch mode {
 	case common.MOI, common.FORESTDB, common.NOT_SET:
 		return iowrap.Os_RemoveAll(path)
 	case common.PLASMA:
-		return DestroySlice_Plasma(storageDir, path)
+		// determine if path has BHIVE_DIR_PREFIX as base. if yes, call bhive destroy
+		if strings.HasSuffix(storeEngineDir, c.BHIVE_DIR_PREFIX) {
+			return DestroySlice_Bhive(storeEngineDir, path)
+		}
+		return DestroySlice_Plasma(storeEngineDir, path)
 	}
 
 	return fmt.Errorf("unable to delete instance %v : unrecognized storage type %v", path, mode)
 }
 
-func ListSlices(mode common.StorageMode, storageDir string) ([]string, error) {
+func ListSlices(mode common.StorageMode, storeEngineDir string) ([]string, error) {
 
 	listFiles := func() ([]string, error) {
 		pattern := GetIndexPathPattern()
-		return filepath.Glob(filepath.Join(storageDir, pattern))
+		return filepath.Glob(filepath.Join(storeEngineDir, pattern))
 	}
 
 	switch mode {
@@ -11108,6 +11124,9 @@ func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId com
 	case common.PLASMA:
 		indexPath := IndexPath(indexInst, partnId, sliceId)
 		srcPath := filepath.Join(sourceDir, indexPath)
+		if indexInst.Defn.IsBhive() {
+			return BackupCorruptedSlice_Bhive(sourceDir, srcPath, rename, clean)
+		}
 		return BackupCorruptedSlice_Plasma(storageDir, srcPath, rename, clean)
 	}
 	return fmt.Errorf("unable to move instance : unrecognized storage type %v", mode)
@@ -13592,7 +13611,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		return bucket, scope, collection
 	}
 
-	storageDir := config["storage_dir"].String()
+	// storageDir, _ := common.GetStorageDirs(config, c.NA_StorageEngine)
 	clusterAddr := idx.config["clusterAddr"].String()
 
 	bucket, scope, collection := getBucketScopeAndCollFromKeyspaceId(keyspaceId)
@@ -13616,7 +13635,6 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		logging.Infof("Indexer::initiateTraining updating retry from %v to %v", retry, maxRetry)
 		retry = maxRetry
 	} else if retry > 0 {
-
 		for _, ratio := range retryTrainingInstRatioMap {
 			maxRatio = max(maxRatio, ratio)
 		}
@@ -13674,6 +13692,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	indexDefnCodebookMap := make(map[common.IndexDefnId][]byte)
 
 	for i, idxInst := range vectorInsts {
+		_, storeEngineDir := c.GetStorageDirs(config, c.GetStorageEngineForIndexDefn(&idxInst.Defn))
 		instId := idxInst.InstId
 		partnInstMap := indexPartnMap[instId]
 
@@ -13872,7 +13891,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				}
 
 				// Persist codebook to disk
-				err = idx.persistCodebookToDisk(storageDir, idxInst, partnId, slice.Id(), defnCodebook)
+				err = idx.persistCodebookToDisk(storeEngineDir, idxInst, partnId, slice.Id(), defnCodebook)
 				if err != nil {
 					logging.Errorf("Indexer::initiateTraining error observed while persisting codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
 					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
@@ -13897,7 +13916,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				partnInstMap := indexPartnMap[instId]
 
 				for partnId := range partnErrMap {
-					idx.removeCodebookDir(storageDir, idxInst, partnId, partnInstMap)
+					idx.removeCodebookDir(storeEngineDir, idxInst, partnId, partnInstMap)
 				}
 			}
 			// For dropped instances, the codebook dir will be removed
@@ -14309,19 +14328,19 @@ func (idx *indexer) isTransientErrorForVectorBuild(err error, isRebalOrResume bo
 	return true
 }
 
-func (idx *indexer) persistCodebookToDisk(storageDir string,
+func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 	idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId,
 	codebook []byte) error {
 
 	// Initialize codebook if it does not exist
-	if err := InitCodebookDir(storageDir, idxInst, partnId, sliceId); err != nil {
+	if err := InitCodebookDir(storeEngineDir, idxInst, partnId, sliceId); err != nil {
 		logging.Errorf("Indexer::persistCodebookToDisk Error observed while initializing codebook dir for "+
 			"instId: %v, partnId: %v, sliceId: %v", idxInst.InstId, partnId, sliceId)
 		return err
 	}
 
 	// Construct the codebook path
-	codebookPath := filepath.Join(storageDir, CodebookPath(idxInst, partnId, sliceId))
+	codebookPath := filepath.Join(storeEngineDir, CodebookPath(idxInst, partnId, sliceId))
 	if err := idx.removeResidualFile(codebookPath); err != nil {
 		logging.Errorf("Indexer::persistCodebookToDisk Error observed while removing residual files at path: %v, err: %v", codebookPath, err)
 		return err
@@ -14339,13 +14358,16 @@ func (idx *indexer) persistCodebookToDisk(storageDir string,
 
 }
 
-func (idx *indexer) removeCodebookDir(storageDir string, idxInst common.IndexInst, partnId common.PartitionId, partnInstMap PartitionInstMap) {
+func (idx *indexer) removeCodebookDir(
+	storeEngineDir string, idxInst common.IndexInst,
+	partnId common.PartitionId, partnInstMap PartitionInstMap,
+) {
 
 	partnInst := partnInstMap[partnId]
 	slices := partnInst.Sc.GetAllSlices()
 
 	for _, slice := range slices {
-		err := RemoveCodebookDir(storageDir, &idxInst, partnId, slice.Id())
+		err := RemoveCodebookDir(storeEngineDir, &idxInst, partnId, slice.Id())
 		if err != nil {
 			logging.Warnf("Indexer::removeCodebookDir, error observed while removing codebook dir for "+
 				"instId: %v, partnId: %v, err: %v", idxInst.InstId, partnId, err)
