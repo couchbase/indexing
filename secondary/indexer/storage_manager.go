@@ -3218,6 +3218,7 @@ type IndexInfo struct {
 	// The fully qualified name of the index (<bucket_name>:<scope_name>:<coll_name>:<index_name>)
 	IndexName string `json:"indexName"`
 
+	InstId       uint64 `json:"instId"`       // Index instanceId
 	ReplicaID    int    `json:"replica_id"`   // replica ID of the index
 	PartitionID  int    `json:"partition_id"` // partition ID of the index
 	Bucket       string `json:"bucket"`       // bucket to which the index belogs
@@ -3225,6 +3226,8 @@ type IndexInfo struct {
 	ItemsCount   uint64 `json:"items_count"`  // total number of items in the snapshot at the recorded timestamp
 
 	timestamp []uint64 // Used only for internal processing - not exported
+	nodeId    string   // ID of the node on which the replica partition exists - Used only for internal processing
+
 }
 
 type TimestampedCounts struct {
@@ -3332,6 +3335,7 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 
 						indexInfo := &IndexInfo{
 							IndexName:    indexName,
+							InstId:       uint64(indexInst.InstId),
 							ReplicaID:    replicaID,
 							PartitionID:  int(partnId),
 							Bucket:       indexInst.Defn.Bucket,
