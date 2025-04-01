@@ -14514,6 +14514,9 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 
 		var out int64
 		for i := range bucketSeqnos {
+			if bucketSeqnos[i] < indexSeqnos[i] {
+				return math.MaxInt64, false
+			}
 			out += int64(bucketSeqnos[i] - indexSeqnos[i])
 		}
 		return out, true
