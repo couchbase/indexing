@@ -14547,8 +14547,9 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 					sortedIndexInfo[i].nodeId, sortedIndexInfo[i].InstId, sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i].ItemsCount,
 					sortedIndexInfo[i-1].nodeId, sortedIndexInfo[i-1].InstId, sortedIndexInfo[i-1].ReplicaID, sortedIndexInfo[i-1].ItemsCount)
 
+				key := fmt.Sprintf("%v:%v", sortedIndexInfo[i].IndexName, sortedIndexInfo[i].PartitionID)
 				// Update the map with the fully qualified index name
-				divergingReplicasMap[sortedIndexInfo[i].IndexName] = true
+				divergingReplicasMap[key] = true
 
 				e := systemevent.NewDivergingReplicasEvent("checkForItemsCountMismatch", sortedIndexInfo[i].IndexName,
 					c.PartitionId(sortedIndexInfo[i].PartitionID),
@@ -14598,8 +14599,9 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 						sortedIndexInfo[i-1].nodeId, sortedIndexInfo[i-1].InstId, sortedIndexInfo[i-1].ReplicaID, sortedIndexInfo[i-1].ItemsCount,
 						bucketSeqnos[bucket], sortedIndexInfo[i].timestamp, sortedIndexInfo[i-1].timestamp)
 
-					// Update the map with the fully qualified index name
-					divergingReplicasMap[sortedIndexInfo[i].IndexName] = true
+					key := fmt.Sprintf("%v:%v", sortedIndexInfo[i].IndexName, sortedIndexInfo[i].PartitionID)
+					// Update the map with the fully qualified index name, partitionId
+					divergingReplicasMap[key] = true
 
 					e := systemevent.NewDivergingReplicasEvent("checkForItemsCountMismatch", sortedIndexInfo[i].IndexName,
 						c.PartitionId(sortedIndexInfo[i].PartitionID),
