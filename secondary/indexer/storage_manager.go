@@ -2984,6 +2984,19 @@ func (sm *storageMgr) handleDestroyEmptyShards() {
 			}
 		}
 	}
+
+	emptyBhiveShards, err := GetEmptyShardInfo_Bhive()
+	if err != nil {
+		logging.Errorf("StorageMgr::handleDestroyEmptyShards Error observed while retrieving empty Bhive shardInfo, err: %v", err)
+	} else {
+		logging.Infof("StorageMgr::handleDestroyEmptyShards destroying empty bhive shards: %v", emptyBhiveShards)
+		for _, shardId := range emptyBhiveShards {
+			err := DestroyShard_Bhive(shardId)
+			if err != nil {
+				logging.Errorf("StorageMgr::handleDestroyEmptyShards Error observed while destroying bhive shard: %v, err: %v", shardId, err)
+			}
+		}
+	}
 }
 
 func (sm *storageMgr) handlePersistanceStatus(msg Message) {

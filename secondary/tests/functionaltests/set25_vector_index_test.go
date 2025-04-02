@@ -681,9 +681,21 @@ func TestVectorPartnIndexMultipleNodes(t *testing.T) {
 }
 
 func TestVectorPartnIndexWithAllSIFTQueries(t *testing.T) {
+	testVectorPartnIndexWithAllSIFTQueries(t, 0, 4, "COSINE")
+	testVectorPartnIndexWithAllSIFTQueries(t, 0, 4, "L2_SQUARED")
+}
+
+func TestVectorReplcatedPartnIndexWithAllSIFTQueries(t *testing.T) {
+	testVectorPartnIndexWithAllSIFTQueries(t, 1, 16, "COSINE")
+	testVectorPartnIndexWithAllSIFTQueries(t, 1, 16, "L2_SQUARED")
+}
+
+func testVectorPartnIndexWithAllSIFTQueries(t *testing.T, numReplica, numPartition int, similarity string) {
 	skipIfNotPlasma(t)
 
-	if !multiIndexerConfig {
+	printClusterConfig(t.Name(), "entry")
+
+	if !multiIndexerConfig && !is4NodeCluster() {
 		addTwoNodesAndRebalance("vectorPartnTest", t)
 		multiIndexerConfig = true
 	}
@@ -697,10 +709,20 @@ func TestVectorPartnIndexWithAllSIFTQueries(t *testing.T) {
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 
 	// Create Index
-	stmt := "CREATE INDEX " + idx_sif10k +
-		" ON default(`type`, `category`,`country`, `brand`, `color`, `size`, `sift` VECTOR, `vectornum`)" +
-		" WITH { \"defer_build\":true, \"num_replica\":1, \"num_partition\": 16, \"dimension\": 128," +
-		"      \"description\": \"IVF,SQ8\",  \"similarity\": \"COSINE\", \"scan_nprobes\": 50};"
+	var stmt string
+	if numReplica > 0 {
+		stmt = "CREATE INDEX " + idx_sif10k +
+			" ON default(`type`, `category`,`country`, `brand`, `color`, `size`, `sift` VECTOR, `vectornum`)" +
+			" PARTITION BY HASH(meta().id)" +
+			" WITH { \"defer_build\":true, \"num_replica\":" + strconv.Itoa(numReplica) + ", \"num_partition\": " + strconv.Itoa(numPartition) + ", \"dimension\": 128," +
+			"      \"description\": \"IVF,SQ8\",  \"similarity\": \"" + similarity + "\", \"scan_nprobes\": 50};"
+	} else {
+		stmt = "CREATE INDEX " + idx_sif10k +
+			" ON default(`type`, `category`,`country`, `brand`, `color`, `size`, `sift` VECTOR, `vectornum`)" +
+			" PARTITION BY HASH(meta().id)" +
+			" WITH { \"defer_build\":true, \"num_partition\": " + strconv.Itoa(numPartition) + ", \"dimension\": 128," +
+			"      \"description\": \"IVF,SQ8\",  \"similarity\": \"" + similarity + "\", \"scan_nprobes\": 50};"
+	}
 	err := createWithDeferAndBuild(idx_sif10k, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
 	FailTestIfError(err, "Error in creating idx_sift10k", t)
 
@@ -725,7 +747,7 @@ func TestVectorPartnIndexWithAllSIFTQueries(t *testing.T) {
 
 		queryStmtFmt := "SELECT vectornum FROM default " +
 			"WHERE `type`=\"Casual\" AND category=\"Shoes\" AND country=\"USA\" AND brand=\"Nike\" AND color=\"Green\" AND size=5 " +
-			"ORDER BY APPROX_VECTOR_DISTANCE(sift, [%v], \"COSINE\", 50) " +
+			"ORDER BY APPROX_VECTOR_DISTANCE(sift, [%v], \"" + similarity + "\", 50) " +
 			"LIMIT 10"
 
 		queryStmt := fmt.Sprintf(queryStmtFmt, queryStr)
@@ -775,6 +797,12 @@ func TestVectorPartnIndexWithAllSIFTQueries(t *testing.T) {
 	if overallRecall < 90 {
 		log.Fatal("Test failed as overall recall is less than 90%")
 	}
+}
+
+func TestVectorResetCluster(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	resetCluster(t)
 }
 
 // There are three possible combinations in this test.
@@ -856,12 +884,6 @@ func TestNullAndMissingForVectorIndex(t *testing.T) {
 	}
 }
 
-func TestVectorResetCluster(t *testing.T) {
-	skipIfNotPlasma(t)
-
-	resetCluster(t)
-}
-
 // This test covers case where we need to increase sample size nearer to items_count
 // because number of docs with vector field(300) is close to number of centroids(256)
 func TestVectorIndexRetry(t *testing.T) {
@@ -926,7 +948,7 @@ func TestVectorIndexRetry2(t *testing.T) {
 	e := loadVectorData(t, bucket, "", "", 256)
 	FailTestIfError(e, "Error in loading vector data", t)
 
-	err := secondaryindex.BuildIndexes([]string{"idx_sif10k"}, bucket, indexManagementAddress, indexActiveTimeout)
+	err := secondaryindex.BuildIndexes([]string{"idx_sif10k"}, bucket, indexManagementAddress, vectorIndexActiveTimeout)
 	if err != nil {
 		log.Printf("Building Index failed err: %v", err)
 		FailTestIfError(err, "Error in building idx_sift10k", t)
