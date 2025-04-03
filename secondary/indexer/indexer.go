@@ -14186,11 +14186,28 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		// and only train those partitions that are not trained
 		inst.TrainingPhase = c.TRAINING_NOT_STARTED
 		errStr := ""
-		for partnId, err := range partnErrMap {
-			errStr += fmt.Sprintf("%v for partnId:%v ", err, partnId)
-			inst.Nlist[partnId] = 0 // Reset nlist per partition Id
+
+		// Check if error is same for all partitions & do not populate it for all partitions.
+		errMap2 := make(map[string]bool)
+		for _, err := range partnErrMap {
+			errMap2[err.Error()] = true
 		}
-		inst.Error = errStr
+
+		if len(partnErrMap) > 1 && len(errMap2) == 1 {
+			var errStr string
+			for k := range errMap2 {
+				errStr = k
+				continue
+			}
+			inst.Error = errStr
+		} else {
+			for partnId, err := range partnErrMap {
+				errStr += fmt.Sprintf("%v for partnId:%v ", err, partnId)
+				inst.Nlist[partnId] = 0 // Reset nlist per partition Id
+			}
+			inst.Error = errStr
+
+		}
 
 		idx.indexInstMap[instId] = inst
 		allInsts = append(allInsts, instId)
