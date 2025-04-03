@@ -2444,9 +2444,13 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	sts.DiskSize += int64(bStats.TotalDiskUsage)
 	sts.DataSizeOnDisk += int64(bStats.TotalDataSize)
 	sts.LogSpace += int64(bStats.TotalDiskUsage)
-	sts.DataSize = int64(float32(mStats.TotalDataSize) * mStats.CompressionRatio)
+	sts.DataSize += int64(float32(bStats.TotalDataSize) * bStats.CompressionRatio)
 
-	if consumerFilter == statsMgmt.AllStatsFilter {
+	mainStoreStatsLoggingEnabled := false
+	backStoreStatsLoggingEnabled := false
+
+	if mStats.StatsLoggingEnabled || (consumerFilter == statsMgmt.AllStatsFilter) {
+		mainStoreStatsLoggingEnabled = true
 		internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", mStats))
 
 		statsMap1 := make(map[string]interface{})
@@ -2458,8 +2462,15 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 				mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, mdb.id, err)
 			internalDataMap["MainStore"] = fmt.Sprintf("%v", mStats)
 		}
+	}
 
-		internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", bStats))
+	if bStats.StatsLoggingEnabled || (consumerFilter == statsMgmt.AllStatsFilter) {
+		backStoreStatsLoggingEnabled = true
+		if mainStoreStatsLoggingEnabled {
+			internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", bStats))
+		} else {
+			internalData = append(internalData, fmt.Sprintf("{\n\"BackStore\":\n%s", bStats))
+		}
 
 		statsMap2 := make(map[string]interface{})
 		if err := json.Unmarshal([]byte(bStats.String()), &statsMap2); err == nil {
@@ -2468,15 +2479,17 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 			logging.Errorf("bhiveSlice::Statistics unable to unmarshal backstore stats for"+
 				" IndexInstId %v, PartitionId %v, IndexDefnId %v SliceId %v err: %v",
 				mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, mdb.id, err)
-			internalDataMap["BackStore"] = fmt.Sprintf("%v", mStats)
+			internalDataMap["BackStore"] = fmt.Sprintf("%v", bStats)
 		}
+	}
 
+	if mainStoreStatsLoggingEnabled || backStoreStatsLoggingEnabled {
 		internalData = append(internalData, "}\n")
 	}
 
 	sts.InternalData = internalData
 	sts.InternalDataMap = internalDataMap
-	sts.LoggingDisabled = false
+	sts.LoggingDisabled = (mainStoreStatsLoggingEnabled == false) && (backStoreStatsLoggingEnabled == false)
 
 	mdb.idxStats.docidCount.Set(docidCount)
 	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
