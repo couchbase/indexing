@@ -14514,6 +14514,9 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 
 		var out int64
 		for i := range bucketSeqnos {
+			if bucketSeqnos[i] < indexSeqnos[i] {
+				return math.MaxInt64, false
+			}
 			out += int64(bucketSeqnos[i] - indexSeqnos[i])
 		}
 		return out, true
@@ -14542,16 +14545,21 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 			if seqnosMatch && !itemsCountMatch {
 				// seqnos. matched but items count did not match. Log fatal error and update stats
 				logging.Fatalf("Indexer::checkItemsCountMismatch Raising an alert as seqnos matched between replicas but items count did not match "+
-					"for index: %v, partnId: %v, timestamp: %v, items_count: (%v:%v, %v:%v)",
+					"for index: %v, partnId: %v, timestamp: %v, items_count: (%v:%v:%v:%v, %v:%v:%v:%v)",
 					sortedIndexInfo[i].IndexName, sortedIndexInfo[i].PartitionID, sortedIndexInfo[i].timestamp,
-					sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i].ItemsCount, sortedIndexInfo[i-1].ReplicaID, sortedIndexInfo[i-1].ItemsCount)
+					sortedIndexInfo[i].nodeId, sortedIndexInfo[i].InstId, sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i].ItemsCount,
+					sortedIndexInfo[i-1].nodeId, sortedIndexInfo[i-1].InstId, sortedIndexInfo[i-1].ReplicaID, sortedIndexInfo[i-1].ItemsCount)
 
+				key := fmt.Sprintf("%v:%v", sortedIndexInfo[i].IndexName, sortedIndexInfo[i].PartitionID)
 				// Update the map with the fully qualified index name
-				divergingReplicasMap[sortedIndexInfo[i].IndexName] = true
+				divergingReplicasMap[key] = true
 
 				e := systemevent.NewDivergingReplicasEvent("checkForItemsCountMismatch", sortedIndexInfo[i].IndexName,
-					c.PartitionId(sortedIndexInfo[i].PartitionID), sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i-1].ReplicaID,
-					true, sortedIndexInfo[i].ItemsCount, sortedIndexInfo[i-1].ItemsCount, 0, 0)
+					c.PartitionId(sortedIndexInfo[i].PartitionID),
+					sortedIndexInfo[i].nodeId, sortedIndexInfo[i].InstId, sortedIndexInfo[i].ReplicaID,
+					sortedIndexInfo[i].ItemsCount, 0,
+					sortedIndexInfo[i-1].nodeId, sortedIndexInfo[i-1].InstId, sortedIndexInfo[i-1].ReplicaID,
+					sortedIndexInfo[i-1].ItemsCount, 0, true)
 				systemevent.InfoEvent("Indexer", systemevent.EVENID_DIVERGING_REPLICAS, e)
 				continue
 			}
@@ -14588,17 +14596,23 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 				// than the worst case mutations, then the index may not be able to converge. Hence, raise an alert
 				if abs(int64(sortedIndexInfo[i].ItemsCount-sortedIndexInfo[i-1].ItemsCount)) > firstIndexPendingItems+secondIndexPendingItems {
 					logging.Fatalf("Indexer::checkItemsCountMismatch Raising an alert as the worstcase difference in pending items is less than items_count difference between replicas "+
-						"for index: %v, partnId: %v, items_count: (%v:%v, %v:%v), bucket seqnos: %v, index_seqnos: %v, %v",
-						sortedIndexInfo[i].IndexName, sortedIndexInfo[i].PartitionID, sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i].ItemsCount,
-						sortedIndexInfo[i-1].ReplicaID, sortedIndexInfo[i-1].ItemsCount, bucketSeqnos[bucket],
-						sortedIndexInfo[i].timestamp, sortedIndexInfo[i-1].timestamp)
+						"for index: %v, partnId: %v, items_count: (%v:%v:%v:%v, %v:%v:%v:%v), bucket seqnos: %v, index_seqnos: %v, %v",
+						sortedIndexInfo[i].IndexName, sortedIndexInfo[i].PartitionID,
+						sortedIndexInfo[i].nodeId, sortedIndexInfo[i].InstId, sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i].ItemsCount,
+						sortedIndexInfo[i-1].nodeId, sortedIndexInfo[i-1].InstId, sortedIndexInfo[i-1].ReplicaID, sortedIndexInfo[i-1].ItemsCount,
+						bucketSeqnos[bucket], sortedIndexInfo[i].timestamp, sortedIndexInfo[i-1].timestamp)
 
-					// Update the map with the fully qualified index name
-					divergingReplicasMap[sortedIndexInfo[i].IndexName] = true
+					key := fmt.Sprintf("%v:%v", sortedIndexInfo[i].IndexName, sortedIndexInfo[i].PartitionID)
+					// Update the map with the fully qualified index name, partitionId
+					divergingReplicasMap[key] = true
 
 					e := systemevent.NewDivergingReplicasEvent("checkForItemsCountMismatch", sortedIndexInfo[i].IndexName,
-						c.PartitionId(sortedIndexInfo[i].PartitionID), sortedIndexInfo[i].ReplicaID, sortedIndexInfo[i-1].ReplicaID,
-						true, sortedIndexInfo[i].ItemsCount, sortedIndexInfo[i-1].ItemsCount, firstIndexPendingItems, secondIndexPendingItems)
+						c.PartitionId(sortedIndexInfo[i].PartitionID),
+						sortedIndexInfo[i].nodeId, sortedIndexInfo[i].InstId, sortedIndexInfo[i].ReplicaID,
+						sortedIndexInfo[i].ItemsCount, firstIndexPendingItems,
+						sortedIndexInfo[i-1].nodeId, sortedIndexInfo[i-1].InstId, sortedIndexInfo[i-1].ReplicaID,
+						sortedIndexInfo[i-1].ItemsCount, secondIndexPendingItems, false)
+
 					systemevent.InfoEvent("Indexer", systemevent.EVENID_DIVERGING_REPLICAS, e)
 					continue
 				}
@@ -14621,6 +14635,7 @@ func (idx *indexer) getIndexInfoFromTsCounts(tsCounts []*TimestampedCounts) []*I
 	for i := range tsCounts {
 		for j := range tsCounts[i].Indexes {
 			tsCounts[i].Indexes[j].timestamp = tsCounts[i].Timestamp
+			tsCounts[i].Indexes[j].nodeId = tsCounts[i].NodeId
 		}
 		out = append(out, tsCounts[i].Indexes...)
 	}
@@ -14880,7 +14895,7 @@ func (idx *indexer) monitorItemsCount() {
 				continue
 			}
 
-			if time.Since(lastCheck) > time.Duration(monitorItemsCountInterval)*time.Minute {
+			if time.Since(lastCheck) > time.Duration(monitorItemsCountInterval)*time.Minute-time.Second {
 				lastCheck = time.Now()
 				getAndProcessTimestampedCounts(true)
 			}
@@ -14889,6 +14904,7 @@ func (idx *indexer) monitorItemsCount() {
 			newMonitorItemsCountInterval := idx.config["monitor_items_count_interval"].Int()
 			if newMonitorItemsCountInterval != monitorItemsCountInterval {
 				monitorItemsCountInterval = newMonitorItemsCountInterval
+				logging.Infof("Indexer::monitorItemsCount: Updated the items_count check interval to %v", monitorItemsCountInterval)
 			}
 
 		case msg := <-idx.refreshTimestampedCountStatsCh: // Force refresh as requested

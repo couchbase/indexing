@@ -2658,32 +2658,35 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	return st
 }
 
-func (is *IndexerStats) populateIsCorruptedStat(out []byte) []byte {
-	corrupteIndexes := is.divergingReplicaIndexesMap.Get()
+func (is *IndexerStats) populateIsDivergingReplicaStat(out []byte) []byte {
+	divergingReplicaIndexes := is.divergingReplicaIndexesMap.Get()
 
 	var str, collectionLabels string
-	fmtStr := "%v%v{bucket=\"%v\", %vindex=\"%v\"} %v\n"
+	fmtStr := "%v%v{bucket=\"%v\", %vindex=\"%v\", partition=\"%v\"} %v\n"
 
-	for indexName := range corrupteIndexes {
-		var bucket, scope, collection, index string
+	for indexName := range divergingReplicaIndexes {
+		var bucket, scope, collection, index, partn string
 		// Retrive bucket, scope, collection from the name
 		split := strings.Split(indexName, ":")
-		if len(split) == 2 { // bucket:index_name
+		if len(split) == 3 { // bucket:index_name
 			bucket = split[0]
 			scope = common.DEFAULT_SCOPE
 			collection = common.DEFAULT_COLLECTION
 			index = split[1]
-		} else if len(split) == 4 {
+			partn = split[2]
+		} else if len(split) == 5 {
 			bucket = split[0]
 			scope = split[1]
 			collection = split[2]
 			index = split[3]
+			partn = split[4]
 		} else {
 			// Ignore the index
 			continue
 		}
+
 		collectionLabels = fmt.Sprintf("scope=\"%v\", collection=\"%v\", ", scope, collection)
-		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "is_corrupted", bucket, collectionLabels, index, true)
+		str = fmt.Sprintf(fmtStr, PARTN_METRICS_PREFIX, "is_diverging_replica", bucket, collectionLabels, index, partn, true)
 		out = append(out, []byte(str)...)
 	}
 	return out
@@ -3466,8 +3469,8 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnet_avg_scan_rate gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnet_avg_scan_rate %v\n", METRICS_PREFIX, is.netAvgScanRate.Value()))...)
 
-	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_corrupted_indexes gauge\n", METRICS_PREFIX))...)
-	out = append(out, []byte(fmt.Sprintf("%vnum_corrupted_indexes %v\n", METRICS_PREFIX, is.numDivergingReplicaIndexes.Value()))...)
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_diverging_replica_indexes gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_diverging_replica_indexes %v\n", METRICS_PREFIX, is.numDivergingReplicaIndexes.Value()))...)
 
 	// aggregated plasma stats
 	out = populateAggregatedStorageMetrics(out)
@@ -3531,7 +3534,7 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 		out = s.populateMetrics(out)
 	}
 
-	out = is.populateIsCorruptedStat(out)
+	out = is.populateIsDivergingReplicaStat(out)
 
 	if common.IsServerlessDeployment() {
 		func() {

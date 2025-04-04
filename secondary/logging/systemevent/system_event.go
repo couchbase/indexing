@@ -222,37 +222,51 @@ func NewDDLSystemEvent(mod string, defnId common.IndexDefnId,
 }
 
 type divergingReplicasEvent struct {
-	Group          string             `json:"group"`
-	Module         string             `json:"module"`
-	IndexName      string             `json:"index_name"`
-	PartitionId    common.PartitionId `json:"partition_id"`
-	ReplicaID_1    int                `json:"replica_id_1"`
-	ReplicaID_2    int                `json:"replica_id_2"`
-	ItemsCount_1   uint64             `json:"items_count_1"`
-	ItemsCount_2   uint64             `json:"items_count_2"`
-	TimestampMatch bool               `json:"timestamp_match"`
+	Group       string             `json:"group"`
+	Module      string             `json:"module"`
+	IndexName   string             `json:"index_name"`
+	PartitionId common.PartitionId `json:"partition_id"`
 
-	PendingItems_1 int64 `json:"pending_items_1,omitempty"`
-	PendingItems_2 int64 `json:"pending_items_2,omitempty"`
+	NodeId_1       string `json:"nodeId_1"`
+	InstId_1       uint64 `json:"instId_1"`
+	ReplicaID_1    int    `json:"replica_id_1"`
+	ItemsCount_1   uint64 `json:"items_count_1"`
+	PendingItems_1 int64  `json:"pending_items_1,omitempty"`
+
+	NodeId_2       string `json:"nodeId_2"`
+	InstId_2       uint64 `json:"instId_2"`
+	ReplicaID_2    int    `json:"replica_id_2"`
+	ItemsCount_2   uint64 `json:"items_count_2"`
+	PendingItems_2 int64  `json:"pending_items_2,omitempty"`
+
+	TimestampMatch bool `json:"timestamp_match"`
 }
 
 func NewDivergingReplicasEvent(mod string, indexName string,
-	partnId common.PartitionId, replicaId_1 int, replicaId_2 int,
-	timestampMatch bool, itemsCount_1, itemsCount_2 uint64,
-	firstIndexPending, secondIndexPending int64) divergingReplicasEvent {
+	partnId common.PartitionId,
+	nodeId_1 string, instId_1 uint64, replicaId_1 int, itemsCount_1 uint64, pending_1 int64,
+	nodeId_2 string, instId_2 uint64, replicaId_2 int, itemsCount_2 uint64, pending_2 int64,
+	timestampMatch bool) divergingReplicasEvent {
 
 	e := divergingReplicasEvent{
-		Group:          "ItemsCountCheck",
-		Module:         mod,
-		IndexName:      indexName,
-		PartitionId:    partnId,
+		Group:       "ItemsCountCheck",
+		Module:      mod,
+		IndexName:   indexName,
+		PartitionId: partnId,
+
+		NodeId_1:       nodeId_1,
+		InstId_1:       instId_1,
 		ReplicaID_1:    replicaId_1,
-		ReplicaID_2:    replicaId_2,
 		ItemsCount_1:   itemsCount_1,
+		PendingItems_1: pending_1,
+
+		NodeId_2:       nodeId_2,
+		InstId_2:       instId_2,
+		ReplicaID_2:    replicaId_2,
 		ItemsCount_2:   itemsCount_2,
+		PendingItems_2: pending_2,
+
 		TimestampMatch: timestampMatch,
-		PendingItems_1: firstIndexPending,
-		PendingItems_2: secondIndexPending,
 	}
 	return e
 }

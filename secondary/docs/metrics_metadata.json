@@ -352,6 +352,19 @@
         ],
         "notes": "This metric is valid only for partitioned indexes."
     },
+    "index_partn_is_diverging_replica": {
+        "type": "gauge",
+        "help": "Set to true if the index partition has diverging replica item counts",
+        "added": "8.0.0",
+        "labels": [
+            "bucket",
+            "scope",
+            "collection",
+            "index",
+            "partition"
+        ],
+        "notes": "Valid only for memory optimized, plasma indexes"
+    },
     "index_memory_used_total": {
         "type": "gauge",
         "help": "Total memory used by the indexer process",
@@ -634,5 +647,11 @@
         "unit": "bytes",
         "added": "7.6.0",
         "notes": "Valid only for standard GSI indexes."
+    },
+    "index_num_diverging_replica_indexes": {
+        "type": "gauge",
+        "help": "Number of index partitions with diverging replica item counts.",
+        "added": "8.0.0",
+        "notes": "Valid only for memory optimised, plasma storage modes."
     }
 }
