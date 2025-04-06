@@ -13311,7 +13311,7 @@ func (idx *indexer) filterNeedsTrainingInsts(instIdList []c.IndexInstId, errMap 
 
 }
 
-func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c.VectorMetadata, keyspaceId string) error {
+func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c.VectorMetadata, keyspaceId string, itemsCount uint64) error {
 
 	minCentroidsRequired := nlist
 	if vm.Quantizer.Type == c.PQ {
@@ -13322,6 +13322,12 @@ func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c
 		// This value ensures that there is atleast one vector for every centroid
 		// in the keyspace at the time of build
 		minCentroidsRequired = max(1<<vm.Quantizer.Nbits, nlist)
+	}
+
+	if itemsCount < uint64(vm.TrainList) {
+		errStr := c.ERR_TRAINING + fmt.Sprintf("The number train_list: %v in keyspace: %v is greater than the "+
+			"number of documents: %v", vm.TrainList, keyspaceId, itemsCount)
+		return errors.New(errStr)
 	}
 
 	if trainlistSize < uint64(minCentroidsRequired) {
@@ -13387,7 +13393,7 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 			trainListSize = itemsCount
 		}
 
-		if err := idx.validateTrainListSize(trainListSize, centroids, inst.Defn.VectorMeta, keyspaceId); err != nil {
+		if err := idx.validateTrainListSize(trainListSize, centroids, inst.Defn.VectorMeta, keyspaceId, itemsCount); err != nil {
 			errMap[instId] = err
 			continue
 		}
@@ -13826,6 +13832,14 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					if retryTrainingInstRatioMap != nil || len(retryTrainingInstRatioMap) > 0 {
 						delete(retryTrainingInstRatioMap, instId)
 					}
+				}
+
+				// Qualifying vectors are less than user provided TrainList, change idx state to err.
+				if len(vectors[i])/vm.Dimension < vm.TrainList {
+					errStr := c.ERR_TRAINING + fmt.Sprintf("The number train_list: %v in keyspace: %v is greater than the "+
+						"number of qualifying documents: %v", vm.TrainList, keyspaceId, instVectorsMap[instId])
+					updateErrMap(instId, partnId, errors.New(errStr))
+					continue
 				}
 
 				if slice.IsTrained() {
