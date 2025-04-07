@@ -5526,6 +5526,19 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 		common.CrashOnError(err)
 	}
 
+	deletedVectInstIds := make([]c.IndexInstId, 0)
+	for _, instId := range deletedInstIds {
+		if indexInst, ok := idx.indexInstMap[instId]; ok {
+			if indexInst.Defn.IsVectorIndex && indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+				deletedVectInstIds = append(deletedVectInstIds, instId)
+				idx.updateDropInstsDuringTrainingMap(instId, nil)
+			}
+		}
+	}
+	if len(deletedVectInstIds) > 0 {
+		logging.Infof("Indexer::handleKeyspaceNotFound updated drop for instances: %v as training is in progress", deletedVectInstIds)
+	}
+
 	// If there is a pending collection drop at this point, it means
 	// flush is in progress. Skip clean-up here as the index data will
 	// be cleaned-up once flush is done
@@ -14190,12 +14203,23 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	// it is sufficient to cleanup index data without bothering about
 	// the streams
 	for instId, clientCh := range dropMap {
-		indexInst := idx.indexInstMap[instId]
-		idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh)
-		logging.Infof("Indexer::handleIndexTrainingDone Cleanup Successful for "+
-			"Index that is dropped during training phase %v", indexInst)
+		indexInst, exists := idx.indexInstMap[instId]
+		if exists {
+			idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh)
+			logging.Infof("Indexer::handleIndexTrainingDone Cleanup Successful for "+
+				"Index that is dropped during training phase %v", indexInst)
+		} else {
+			// Case of handleKeyspaceNotFound where cleanupIndexData happened already for instance.
+			logging.Infof("Indexer::handleIndexTrainingDone Cleanup instId: %v not found.", instId)
+		}
+
 		idx.removeFromDropInstsDuringTrainingMap(instId)
-		clientCh <- &MsgSuccess{}
+
+		// Channel can be nil for INDEXER_KEYSPACE_NOT_FOUND case.
+		// For CLUST_MGR_DROP_INDEX_DDL, wait is there until response written to clientCh
+		if clientCh != nil {
+			clientCh <- &MsgSuccess{}
+		}
 	}
 
 	if len(allInsts) > 0 {
