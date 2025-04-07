@@ -2686,7 +2686,7 @@ func (is *IndexerStats) populateIsDivergingReplicaStat(out []byte) []byte {
 		}
 
 		collectionLabels = fmt.Sprintf("scope=\"%v\", collection=\"%v\", ", scope, collection)
-		str = fmt.Sprintf(fmtStr, PARTN_METRICS_PREFIX, "is_diverging_replica", bucket, collectionLabels, index, partn, true)
+		str = fmt.Sprintf(fmtStr, PARTN_METRICS_PREFIX, "is_diverging_replica", bucket, collectionLabels, index, partn, 1)
 		out = append(out, []byte(str)...)
 	}
 	return out

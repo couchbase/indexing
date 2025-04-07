@@ -354,7 +354,7 @@
     },
     "index_partn_is_diverging_replica": {
         "type": "gauge",
-        "help": "Set to true if the index partition has diverging replica item counts",
+        "help": "Set to '1' if the index partition has diverging replica item counts",
         "added": "8.0.0",
         "labels": [
             "bucket",
