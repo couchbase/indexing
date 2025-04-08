@@ -277,9 +277,12 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, is
 	}
 
 	if index.IsShardProxy {
-		// TODO: handle adding shard proxies recursively
-		// or we can also use the shard proxy in a separate call to also use the stats from shard
-		// proxy (reported by shard directly)
+		for _, subIndex := range index.GroupedIndexes {
+			if err := sd.RecordIndexUsage(subIndex, node, isInit); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	var category = getIndexCategory(index)
@@ -1406,4 +1409,14 @@ func (sd *ShardDealer) UpdateStatsForShard(shardStats *c.ShardStats) {
 			}
 		}
 	}
+}
+
+// Reset the internal book keeping of the shard dealer. config does not change
+func (sd *ShardDealer) Reset() {
+	sd.slotsPerCategory = make(map[ShardCategory]map[asSlotID]bool)
+	sd.slotsMap = make(map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer)
+	sd.slotsToNodeMap = make(map[asSlotID]map[asReplicaID]nodeUUID)
+	sd.partnSlots = make(map[c.IndexDefnId]map[c.PartitionId]asSlotID)
+	sd.nodeToSlotMap = make(map[nodeUUID]map[asSlotID]asReplicaID)
+	sd.nodeToShardCountMap = make(map[nodeUUID]uint64)
 }

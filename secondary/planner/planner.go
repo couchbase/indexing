@@ -1335,6 +1335,9 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 
 							if indexSlot != 0 {
 								// update slotMap and index slots for indexer
+								if s.shardDealer != nil {
+									s.shardDealer.RecordIndexUsage(cloned, indexer, false)
+								}
 								s.addToIndexSlots(cloned.DefnId, replicaId, cloned.PartnId, indexSlot)
 								s.addToSlotMap(indexSlot, indexer, replicaId)
 							}

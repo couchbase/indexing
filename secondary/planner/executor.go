@@ -6541,6 +6541,10 @@ func NeedsReplan(s *Solution) (bool, []*IndexUsage) {
 					updateSlotMap = false
 					s.updateSlotMapEntry(indexSlot, index.destNode, indexer, replicaId)
 					s.addToIndexSlots(index.DefnId, index.Instance.ReplicaId, index.PartnId, indexSlot)
+
+					if s.shardDealer != nil {
+						s.shardDealer.RecordIndexUsage(index, indexer, false)
+					}
 				} else {
 					// Index is moving to appropriate destination node
 					// No action needed
@@ -6551,6 +6555,10 @@ func NeedsReplan(s *Solution) (bool, []*IndexUsage) {
 		if updateSlotMap {
 			s.addToSlotMap(indexSlot, index.destNode, index.Instance.ReplicaId)
 			s.addToIndexSlots(index.DefnId, index.Instance.ReplicaId, index.PartnId, indexSlot)
+
+			if s.shardDealer != nil {
+				s.shardDealer.RecordIndexUsage(index, index.destNode, false)
+			}
 		}
 	}
 
