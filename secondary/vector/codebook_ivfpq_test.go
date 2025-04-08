@@ -137,7 +137,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 			t.Logf("Num Decodes %v", len(dvecs)/tc.dim)
 			t.Logf("Decode timing %v", delta)
 
-			validate_decoded(t, dvec)
+			validate_decoded(t, dvecs)
 
 			//find the distance between qvec and multiple decoded vecs
 			qvec := vecs[n-1]
@@ -263,6 +263,142 @@ func TestCodebookIVFPQ(t *testing.T) {
 
 	}
 
+}
+
+var computeDistanceEncodedTests = []codebookIVFPQTestCase{
+
+	{"PQ8x8 L2", 128, cbpkg.METRIC_L2, false, 1, 8, 8, false, 10000, 10000},
+	{"PQ32x8 L2", 128, cbpkg.METRIC_L2, false, 1, 32, 8, false, 10000, 10000},
+	{"PQ8x4 L2", 128, cbpkg.METRIC_L2, false, 1, 8, 4, false, 10000, 10000},
+	{"PQ8x10 L2", 128, cbpkg.METRIC_L2, false, 1, 8, 4, false, 10000, 10000},
+}
+
+func TestComputeDistanceEncodedPQ(t *testing.T) {
+	seed := time.Now().UnixNano()
+	for _, tc := range computeDistanceEncodedTests {
+		t.Run(tc.name, func(t *testing.T) {
+
+			codebook, err := NewCodebookIVFPQ(tc.dim, tc.nsub, tc.nbits, tc.nlist, tc.metric, tc.useCosine, tc.useFastScan)
+			if err != nil || codebook == nil {
+				t.Errorf("Unable to create index. Err %v", err)
+			}
+
+			//generate random vectors
+			vecs := genRandomVecs(tc.dim, tc.num_vecs, seed)
+
+			//set verbose log level
+			cb := codebook.(*codebookIVFPQ)
+			cb.index.SetVerbose(1)
+
+			//train the codebook using 10000 vecs
+			train_vecs := convertTo1D(vecs[:tc.trainlist])
+			t0 := time.Now()
+			err = codebook.Train(train_vecs)
+			delta := time.Now().Sub(t0)
+			t.Logf("Train timing %v vectors %v", tc.trainlist, delta)
+
+			if err != nil || !codebook.IsTrained() {
+				t.Errorf("Unable to train index. Err %v", err)
+			}
+
+			//sanity check quantizer
+			quantizer, err := cb.index.Quantizer()
+			if err != nil {
+				t.Errorf("Unable to get index quantizer. Err %v", err)
+			}
+
+			if quantizer.Ntotal() != int64(tc.nlist) {
+				t.Errorf("Unexpected number of quantizer items %v. Expected %v", quantizer.Ntotal(), tc.nlist)
+			}
+
+			//find the nearest centroid
+			query_vec := convertTo1D(vecs[:1])
+			t0 = time.Now()
+			label, err := codebook.FindNearestCentroids(query_vec, 1)
+			delta = time.Now().Sub(t0)
+			t.Logf("Assign results %v %v", label, err)
+			t.Logf("Assign timing %v", delta)
+			for _, l := range label {
+				if l > int64(tc.nlist) || l == -1 {
+					t.Errorf("Result label out of range. Total %v. Label %v", tc.nlist, l)
+				}
+			}
+
+			codeSize, err := codebook.CodeSize()
+			if err != nil {
+				t.Errorf("Error fetching code size %v", err)
+			}
+			t.Logf("CodeSize %v", codeSize)
+
+			//encode multiple vectors
+			n := 10
+			query_vecs := convertTo1D(vecs[:n])
+			codes := make([]byte, n*codeSize)
+			t0 = time.Now()
+			err = codebook.EncodeVectors(query_vecs, codes)
+			delta = time.Now().Sub(t0)
+			if err != nil {
+				t.Errorf("Error encoding vector %v", err)
+			}
+
+			validate_code_size(t, codes, codeSize, n)
+			t.Logf("Num Encodes %v", len(codes)/codeSize)
+			t.Logf("Encode timing %v", delta)
+
+			dvecs := make([]float32, n*tc.dim)
+			t0 = time.Now()
+			err = codebook.DecodeVectors(n, codes, dvecs)
+			if err != nil {
+				t.Errorf("Error encoding vector %v", err)
+			}
+			delta = time.Now().Sub(t0)
+			t.Logf("Num Decodes %v", len(dvecs)/tc.dim)
+			t.Logf("Decode timing %v", delta)
+
+			validate_decoded(t, dvecs)
+
+			//find the distance between qvec and multiple decoded vecs
+			qvec := vecs[n-1]
+			dist := make([]float32, n)
+			t0 = time.Now()
+			err = codebook.ComputeDistance(qvec, dvecs, dist)
+			if err != nil {
+				t.Errorf("Error computing distance %v", err)
+			}
+			delta = time.Now().Sub(t0)
+			t.Logf("Computed distance %v", dist)
+			t.Logf("Computed distance timing %v", delta)
+
+			dist2 := make([]float32, n)
+			//remove labels from codes
+			coarseSize := computeCoarseCodeSize(tc.nlist)
+			icodes := make([]byte, 0)
+
+			var listno int64
+			for i := 0; i < n; i++ {
+				codeStart := i*codeSize + coarseSize
+				listno = decodeListNo(codes[i*codeSize : codeStart])
+				icodes = append(icodes, codes[codeStart:(i+1)*codeSize]...)
+				if err != nil {
+					t.Errorf("Error computing encoded distance %v", err)
+				}
+			}
+			t0 = time.Now()
+			dtable := make([]float32, tc.nsub*(1<<tc.nbits))
+			err = codebook.ComputeDistanceTable(qvec, dtable)
+			if err != nil {
+				t.Errorf("Error computing distance table %v", err)
+			}
+
+			err = codebook.ComputeDistanceEncoded(qvec, n, icodes, dist2, dtable, listno)
+			if err != nil {
+				t.Errorf("Error computing encoded distance %v", err)
+			}
+			delta = time.Now().Sub(t0)
+			t.Logf("Computed distance encoded %v, expected %v", dist2, dist)
+			t.Logf("Computed distance encoded timing %v", delta)
+		})
+	}
 }
 
 type pqTimingTestCase struct {

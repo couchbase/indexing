@@ -58,27 +58,15 @@ func convertToFaissMetric(metric codebook.MetricType) int {
 	return faiss.MetricL2
 }
 
-func convertSimilarityToMetric(similarity common.VectorSimilarity) (codebook.MetricType, bool) {
-	switch similarity {
-	case common.EUCLIDEAN_SQUARED, common.L2_SQUARED, common.EUCLIDEAN, common.L2:
-		return codebook.METRIC_L2, false // Default to L2
-	case common.DOT:
-		return codebook.METRIC_INNER_PRODUCT, false
-	case common.COSINE:
-		return codebook.METRIC_INNER_PRODUCT, true
-	}
-	return codebook.METRIC_L2, false // Always default to L2
-}
-
-func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (codebook codebook.Codebook, err error) {
-	metric, useCosine := convertSimilarityToMetric(vectorMeta.Similarity)
+func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (cb codebook.Codebook, err error) {
+	metric, useCosine := codebook.ConvertSimilarityToMetric(vectorMeta.Similarity)
 	switch vectorMeta.Quantizer.Type {
 	case common.PQ:
 		nsub := vectorMeta.Quantizer.SubQuantizers
 		if vectorMeta.Quantizer.FastScan {
 			nsub = vectorMeta.Quantizer.BlockSize
 		}
-		codebook, err = NewCodebookIVFPQ(vectorMeta.Dimension, nsub, vectorMeta.Quantizer.Nbits,
+		cb, err = NewCodebookIVFPQ(vectorMeta.Dimension, nsub, vectorMeta.Quantizer.Nbits,
 			nlist, metric, useCosine, vectorMeta.Quantizer.FastScan)
 		if err != nil {
 			return nil, err
@@ -88,7 +76,7 @@ func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (codebook codeboo
 			vectorMeta.Quantizer.Nbits, nlist, vectorMeta.Quantizer.FastScan, metric, useCosine)
 
 	case common.SQ:
-		codebook, err = NewCodebookIVFSQ(vectorMeta.Dimension, nlist, vectorMeta.Quantizer.SQRange, metric, useCosine)
+		cb, err = NewCodebookIVFSQ(vectorMeta.Dimension, nlist, vectorMeta.Quantizer.SQRange, metric, useCosine)
 		if err != nil {
 			return nil, err
 		}
@@ -100,5 +88,5 @@ func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (codebook codeboo
 		return nil, errors.New("Unsupported quantisation type")
 	}
 
-	return codebook, nil
+	return cb, nil
 }

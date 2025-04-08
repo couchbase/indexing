@@ -298,11 +298,12 @@ func (idx *IndexImpl) DecodeVectors(nx int, codes []byte, x []float32) (err erro
 	return err
 }
 
-// Compute the distance between a vector with a list of flat quantized codes.
-// This function needs a listno as input and all the codes must belong to
-// the same listno. The computed distances are returned in `dists`.
-func (idx *IndexImpl) ComputeDistanceEncodedSQ(qvec []float32,
-	nx int, codes []byte, dists []float32, listno int64, metric int, qt int, dim int) (err error) {
+//Compute the distance between a vector with a list of flat quantized codes.
+//This function needs a listno as input and all the codes must belong to
+//the same listno. The computed distances are returned in `dists`.
+func (idx *IndexImpl) ComputeDistanceEncoded(qvec []float32,
+	nx int, codes []byte, dists []float32,
+	dtable []float32, listno int64, metric int, dim int) (err error) {
 
 	// runtime.LockOSThread()
 	// defer runtime.UnlockOSThread()
@@ -312,13 +313,47 @@ func (idx *IndexImpl) ComputeDistanceEncodedSQ(qvec []float32,
 		return fmt.Errorf("index is not of ivf type")
 	}
 
-	if C.faiss_IndexIVF_compute_distance_to_codes_for_list(
+	if dtable == nil {
+
+		if C.faiss_IndexIVF_compute_distance_to_codes_for_list(
+			ivfPtr,
+			C.faiss_idx_t(listno),
+			(*C.float)(&qvec[0]),
+			C.faiss_idx_t(nx),
+			(*C.uint8_t)(&codes[0]),
+			(*C.float)(&dists[0]),
+			(*C.float)(nil)) != 0 { //Pass NULL for dtable
+			err = getLastError()
+			return
+		}
+	} else {
+
+		if C.faiss_IndexIVF_compute_distance_to_codes_for_list(
+			ivfPtr,
+			C.faiss_idx_t(listno),
+			(*C.float)(&qvec[0]),
+			C.faiss_idx_t(nx),
+			(*C.uint8_t)(&codes[0]),
+			(*C.float)(&dists[0]),
+			(*C.float)(&dtable[0])) != 0 {
+			err = getLastError()
+			return
+		}
+	}
+	return
+}
+
+func (idx *IndexImpl) ComputeDistanceTable(qvec []float32, dtable []float32) (err error) {
+
+	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
+	if ivfPtr == nil {
+		return fmt.Errorf("index is not of ivf type")
+	}
+
+	if C.faiss_IndexIVF_compute_distance_table(
 		ivfPtr,
-		C.faiss_idx_t(listno),
 		(*C.float)(&qvec[0]),
-		C.faiss_idx_t(nx),
-		(*C.uint8_t)(&codes[0]),
-		(*C.float)(&dists[0])) != 0 {
+		(*C.float)(&dtable[0])) != 0 {
 		err = getLastError()
 		return
 	}

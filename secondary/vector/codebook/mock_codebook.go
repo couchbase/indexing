@@ -141,20 +141,23 @@ func (mc *MockCodebook) EncodeVectors(vecs []float32, codes []byte) error { retu
 func (mc *MockCodebook) EncodeAndAssignVectors(vecs []float32, codes []byte, labels []int64) error {
 	return nil
 }
-func (mc *MockCodebook) ComputeDistanceEncoded(qvec []float32, n int, codes []byte, dists []float32, listno int64) error {
+
+func (mc *MockCodebook) ComputeDistanceEncoded(qvec []float32, n int, codes []byte,
+	dists []float32, dtable []float32, listno int64) error {
 	mc.compDistCurrCount++
 	if mc.compDistCurrCount == mc.CompDistErrOnCount {
 		return mc.InjectedErr
 	}
 	return nil
 }
-func (mc *MockCodebook) ComputeDistanceTable(vec []float32) ([][]float32, error)       { return nil, nil }
-func (mc *MockCodebook) ComputeDistanceWithDT(code []byte, dtable [][]float32) float32 { return 0.0 }
-func (mc *MockCodebook) Size() int64                                                   { return 0 }
-func (mc *MockCodebook) Close() error                                                  { return nil }
-func (mc *MockCodebook) Marshal() ([]byte, error)                                      { return nil, nil }
-func (mc *MockCodebook) NumCentroids() int                                             { return 0 }
-func (mc *MockCodebook) MetricType() MetricType                                        { return METRIC_L2 }
+
+func (mc *MockCodebook) ComputeDistanceTable(vec []float32, dtable []float32) error  { return nil }
+func (mc *MockCodebook) ComputeDistanceWithDT(code []byte, dtable []float32) float32 { return 0.0 }
+func (mc *MockCodebook) Size() int64                                                 { return 0 }
+func (mc *MockCodebook) Close() error                                                { return nil }
+func (mc *MockCodebook) Marshal() ([]byte, error)                                    { return nil, nil }
+func (mc *MockCodebook) NumCentroids() int                                           { return 0 }
+func (mc *MockCodebook) MetricType() MetricType                                      { return METRIC_L2 }
 
 // -----------------
 // KMeans Clustering

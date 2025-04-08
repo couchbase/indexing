@@ -159,7 +159,7 @@ func TestCodebookIVFSQ(t *testing.T) {
 				codeStart := i*codeSize + coarseSize
 				listno := decodeListNo(codes[i*codeSize : codeStart])
 				tdist := make([]float32, 1)
-				err = codebook.ComputeDistanceEncoded(qvec, 1, codes[codeStart:(i+1)*codeSize], tdist, listno)
+				err = codebook.ComputeDistanceEncoded(qvec, 1, codes[codeStart:(i+1)*codeSize], tdist, nil, listno)
 				dist2[i] = tdist[0]
 				if err != nil {
 					t.Errorf("Error computing encoded distance %v", err)

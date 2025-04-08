@@ -221,7 +221,11 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 		errCh := make(chan error, 1)
 		doneCh := make(chan struct{})
 
-		NewScanWorker(1, r, workCh, recvCh, stopCh, errCh, nil, senderChSize, senderBatchSize, false)
+		cfg := common.SystemConfig.SectionConfig("indexer.", true)
+		cfg.SetValue("scan.vector.scanworker_batch_size", senderBatchSize)
+		cfg.SetValue("scan.vector.scanworker_senderch_size", senderChSize)
+
+		NewScanWorker(1, r, workCh, recvCh, stopCh, errCh, nil, cfg, false)
 
 		var j = ScanJob{
 			pid:      c.PartitionId(0),
@@ -360,8 +364,12 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 		}
 		r.setExplodePositions()
 
-		wp, _ := NewWorkerPool(r, 2, false)
-		wp.Init(20, 1)
+		cfg := common.SystemConfig.SectionConfig("indexer.", true)
+		cfg.SetValue("scan.vector.scanworker_batch_size", 1)
+		cfg.SetValue("scan.vector.scanworker_senderch_size", 20)
+
+		wp, _ := NewWorkerPool(r, 2, false, cfg)
+		wp.Init()
 		recvCh := wp.GetOutCh()
 
 		var j1 = ScanJob{
@@ -586,8 +594,12 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		wp, _ := NewWorkerPool(r, 2, false)
-		wp.Init(100, 50)
+		cfg := common.SystemConfig.SectionConfig("indexer.", true)
+		cfg.SetValue("scan.vector.scanworker_batch_size", 50)
+		cfg.SetValue("scan.vector.scanworker_senderch_size", 100)
+
+		wp, _ := NewWorkerPool(r, 2, false, cfg)
+		wp.Init()
 		recvCh := wp.GetOutCh()
 
 		var j1 = ScanJob{

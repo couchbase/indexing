@@ -409,11 +409,11 @@ func (ms *mockSnapshot) FindNearestCentroids(vec []float32, k int64) ([]int64, e
 	return nil, nil
 }
 
-func (ms *mockSnapshot) ComputeDistanceTable(vec []float32) ([][]float32, error) {
-	return nil, nil
+func (ms *mockSnapshot) ComputeDistanceTable(vec []float32, dtable []float32) error {
+	return nil
 }
 
-func (ms *mockSnapshot) ComputeDistanceWithDT(code []byte, dtable [][]float32) float32 {
+func (ms *mockSnapshot) ComputeDistanceWithDT(code []byte, dtable []float32) float32 {
 	return 0
 }
 

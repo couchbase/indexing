@@ -1,6 +1,10 @@
 package codebook
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/couchbase/indexing/secondary/common"
+)
 
 var (
 	ErrCodebookNotTrained = errors.New("Codebook is not trained")
@@ -29,6 +33,18 @@ func (m MetricType) String() string {
 	}
 
 	return ""
+}
+
+func ConvertSimilarityToMetric(similarity common.VectorSimilarity) (MetricType, bool) {
+	switch similarity {
+	case common.EUCLIDEAN_SQUARED, common.L2_SQUARED, common.EUCLIDEAN, common.L2:
+		return METRIC_L2, false // Default to L2
+	case common.DOT:
+		return METRIC_INNER_PRODUCT, false
+	case common.COSINE:
+		return METRIC_INNER_PRODUCT, true
+	}
+	return METRIC_L2, false // Always default to L2
 }
 
 type Codebook interface {
@@ -69,11 +85,11 @@ type Codebook interface {
 	//Distance table is a matrix of dimension M * ksub where
 	//M = number of subquantizers
 	//ksub = number of centroids for each subquantizer (2**nbits)
-	ComputeDistanceTable(vec []float32) ([][]float32, error)
+	ComputeDistanceTable(qvec []float32, dtable []float32) error
 
 	//Compute the distance between a vector using distance table and
 	//quantized code of another vector.
-	ComputeDistanceWithDT(code []byte, dtable [][]float32) float32
+	ComputeDistanceWithDT(code []byte, dtable []float32) float32
 
 	//Compute the distance between a vector with another given set of vectors.
 	ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error
@@ -82,7 +98,8 @@ type Codebook interface {
 	//Quantized codes are decoded first before distance comparison.
 	//Codes must be provided without coarse code(i.e. centroid ID).
 	//This function only works with vectors belonging to the same centroid(input as listno).
-	ComputeDistanceEncoded(qvec []float32, n int, codes []byte, dists []float32, listno int64) error
+	ComputeDistanceEncoded(qvec []float32, n int, codes []byte,
+		dists []float32, dtable []float32, listno int64) error
 
 	//Decode the quantized code and return float32 vector.
 	//Must be run on a trained codebook.

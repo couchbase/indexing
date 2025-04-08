@@ -3561,6 +3561,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.scan.vector.scanworker_large_batch_size": ConfigValue{
+		500, // Set to 500 for cases which benefit from a large batch size
+		"batchSize for processing docs in scan workers. This is used for decoding, distance calculation etc." +
+			"Some quantizations benefit from larger batch size, this config is used in such specific cases.",
+		500,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.scan.vector.scanworker_senderch_size": ConfigValue{
 		100,
 		"Channel size between the IO bound Worker(Scanner) and CPU bound Worker(Sender) in scanworker",
