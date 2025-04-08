@@ -159,8 +159,7 @@ type ScanWorker struct {
 	fvecs []float32
 	dists []float32
 
-	cktmp       [][]byte
-	cachedEntry entryCache
+	cktmp [][]byte
 
 	dtable []float32
 
@@ -1063,7 +1062,7 @@ func (w *ScanWorker) skipRow(entry []byte) (skipRow bool, err error) {
 
 		// ck and dk returned should be used in group aggregates and projections
 		skipRow, _, _, err = filterScanRow2(entry, w.currJob.scan, (*w.buf)[:0],
-			w.cktmp, nil, w.r, &w.cachedEntry)
+			w.cktmp, nil, w.r, nil)
 		if err != nil {
 			return true, err
 		}
