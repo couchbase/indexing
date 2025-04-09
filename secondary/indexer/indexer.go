@@ -2584,8 +2584,6 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 			common.CrashOnError(err)
 		}
 
-		// Cleanup the book-keeping
-		delete(idx.indexInstMap, indexInst.InstId)
 		return
 	}
 
