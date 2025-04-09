@@ -670,7 +670,7 @@ func filterScanRow2(key []byte, scan Scan, buf []byte, cktmp [][]byte,
 	var decodedkeys value.Values
 	var err error
 
-	if !r.isPrimary && cachedEntry.Exists() {
+	if !r.isPrimary && cachedEntry != nil && cachedEntry.Exists() {
 		if cachedEntry.EqualsEntry(key) {
 			compositekeys, decodedkeys = cachedEntry.Get()
 			cachedEntry.SetValid(true)
@@ -694,10 +694,10 @@ func filterScanRow2(key []byte, scan Scan, buf []byte, cktmp [][]byte,
 		}
 	}
 
-	if !cachedEntry.Exists() {
+	if cachedEntry != nil && !cachedEntry.Exists() {
 		cachedEntry.Init(r)
 	}
-	if !cachedEntry.Valid() {
+	if cachedEntry != nil && !cachedEntry.Valid() {
 		cachedEntry.Update(key, compositekeys, decodedkeys)
 	}
 
