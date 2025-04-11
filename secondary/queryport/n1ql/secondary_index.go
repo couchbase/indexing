@@ -1979,7 +1979,7 @@ func (si *secondaryIndex6) NumberOfCentroids() int {
 
 // [VECTOR_TODO] stub function, needs to be updated
 func (si *secondaryIndex6) NumberOfPartitions() int {
-	return int(0)
+	return si.numPartition
 }
 
 func (si *secondaryIndex6) MaxHeapSize() int {
