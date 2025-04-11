@@ -2456,6 +2456,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.bhive.quotaSplitPercent": ConfigValue{
+		-1,
+		"Percent of storage quota to give to bhive. Rest is given to plasma. If <0, then computed storage mandatory quotas are used to split the quota.",
+		-1,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
 		uint64(500),

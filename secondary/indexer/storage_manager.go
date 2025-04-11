@@ -3092,6 +3092,30 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		return
 	}
 
+	// There are bhive indexes on this node, need to split the storageQuota between bhive and plasma
+
+	bhiveQuotaPercent := int64(s.config["bhive.quotaSplitPercent"].Int())
+	var bhiveQuota, plasmaQuota int64
+
+	if bhiveQuotaPercent >= 0 {
+		// user has set config to fix percent of quota to give to bhive
+		bhiveQuota = (storageQuota * bhiveQuotaPercent) / 100
+		bhive.SetMemoryQuota(bhiveQuota)
+
+		plasmaQuota = storageQuota - bhiveQuota
+		if plasmaQuota > 0 {
+			plasma.SetMemoryQuota(plasmaQuota, false)
+		}
+
+		logging.Infof("storageMgr:redistributeMemoryQuota: Fixed quota split enabled. bhiveQuotaPercent[%d%%]"+
+			" bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] ",
+			bhiveQuotaPercent, bhiveQuota, plasmaQuota, storageQuota)
+
+		return
+	}
+
+	// bhiveQuotaPercent is set to -1 by default, use mandatory quotas to split
+
 	pMandQuota, pMinQuota := plasma.GetMandatoryQuota()
 	if pMandQuota < 0 {
 		pMandQuota = 0
@@ -3101,7 +3125,6 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		bMandQuota = 0
 	}
 
-	var bhiveQuota, plasmaQuota int64
 	remainingQuota := storageQuota
 
 	tryAssignQuotas := func(pq, bq int64) bool {
