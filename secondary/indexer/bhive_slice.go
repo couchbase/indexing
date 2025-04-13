@@ -179,7 +179,7 @@ type bhiveSnapshotInfo struct {
 	InstId     common.IndexInstId
 	PartnId    common.PartitionId
 
-	docSeqno uint64
+	DocSeqno uint64
 }
 
 type bhiveSnapshot struct {
@@ -1926,14 +1926,14 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 		return
 	}
 
-	logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v "+
-		"Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id)
+	logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v DocSeqno %v "+
+		"Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, atomic.LoadUint64(&mdb.docSeqno))
 	t0 := time.Now()
 
 	s.info.Version = SNAPSHOT_META_VERSION_BHIVE_1
 	s.info.InstId = mdb.idxInstId
 	s.info.PartnId = mdb.idxPartnId
-	s.info.docSeqno = atomic.LoadUint64(&mdb.docSeqno)
+	s.info.DocSeqno = atomic.LoadUint64(&mdb.docSeqno)
 
 	meta, err := json.Marshal(s.info)
 	common.CrashOnError(err)
@@ -2170,7 +2170,10 @@ func (mdb *bhiveSlice) getRPSnapInfo(rp *bhive.RecoveryPoint) (*bhiveSnapshotInf
 	}
 	info.Ts = snapInfo.Ts
 	info.IndexStats = snapInfo.IndexStats
-
+	info.Version = snapInfo.Version
+	info.InstId = snapInfo.InstId
+	info.PartnId = snapInfo.PartnId
+	info.DocSeqno = snapInfo.DocSeqno
 	return info, nil
 }
 
@@ -2300,7 +2303,11 @@ func (mdb *bhiveSlice) restore(o SnapshotInfo) error {
 
 	// Update stats available in snapshot info
 	mdb.updateStatsFromSnapshotMeta(o)
-	atomic.StoreUint64(&mdb.docSeqno, info.docSeqno)
+	atomic.StoreUint64(&mdb.docSeqno, info.DocSeqno)
+
+	logging.Infof("bhiveSlice::Rollback Slice Id %v IndexInstId %v PartitionId %v DocSeqno %v",
+		mdb.Id, mdb.idxInstId, mdb.idxPartnId, atomic.LoadUint64(&mdb.docSeqno))
+
 	return nil
 }
 
