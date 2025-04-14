@@ -1877,7 +1877,6 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 	s.info.IndexStats = snapshotStats
 
 	mdb.persistorLock.Lock()
-	defer mdb.persistorLock.Unlock()
 
 	var wg sync.WaitGroup
 
@@ -1907,6 +1906,10 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 		mdb.closeQueuedSnapNoLock()
 		mdb.persistorQueue = s
 	}
+
+	// for an enqueued snapshot, we should release the lock as persistSnapshot
+	// reacquires the lock to dequeue.
+	mdb.persistorLock.Unlock()
 
 	select {
 	case <-s.chkpointCh:
