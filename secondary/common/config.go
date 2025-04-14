@@ -3585,6 +3585,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.scan.vector.max_heap_size": ConfigValue{
+		8192,
+		"Maximum heap that indexer can have when limit is pushed down per scan request",
+		8192,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.planner.timeout": ConfigValue{
 		300,
 		"timeout (sec) on planner",

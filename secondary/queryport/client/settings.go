@@ -71,6 +71,7 @@ type ClientSettings struct {
 
 	// Vector settings
 	rerankFactor int32
+	maxHeapSize  int32
 }
 
 func NewClientSettings(needRefresh bool, toolsConfig common.Config) *ClientSettings {
@@ -429,6 +430,13 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: invalid setting value for rerankFactor=%v", rerankFactor)
 	}
 
+	maxHeapSize := int32(config["indexer.scan.vector.max_heap_size"].Int())
+	if maxHeapSize > 0 {
+		atomic.StoreInt32(&s.maxHeapSize, maxHeapSize)
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for maxHeapSize=%v", maxHeapSize)
+	}
+
 	setShardDealerConfig(s, config)
 }
 
@@ -558,6 +566,10 @@ func (s *ClientSettings) MinPartitionsPerShard() map[uint64]uint64 {
 
 func (s *ClientSettings) RerankFactor() int32 {
 	return atomic.LoadInt32(&s.rerankFactor)
+}
+
+func (s *ClientSettings) MaxHeapSize() int32 {
+	return atomic.LoadInt32(&s.maxHeapSize)
 }
 
 func setShardDealerConfig(s *ClientSettings, config common.Config) {
