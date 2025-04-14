@@ -1878,20 +1878,28 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 
 	mdb.persistorLock.Lock()
 
-	var wg sync.WaitGroup
+	// waitgroup to notify completion of bhive magma and lss vindex checkpoints
+	var chkpWg sync.WaitGroup
 
 	s.chkpointCh = make(chan bool)
-	// do not resume mutations until checkpoint callback is completed.
-	// This is needed for rollback to ensure both vindex(full vector)
-	// and pindex (quantized) processed the same mutations when we
-	// checkpoint for a snapshot. checkpoint is an memory operation for us;
-	// actual persistence happens lazily.
+	// a)do not resume mutations until checkpoint callback is completed.
+	// This is needed to ensure both vindex(full vector) and pindex (quantized)
+	// workers has processed all the mutations for the snapshot.
+	// b)lss checkpoint is an memory operation, actual persistence happens lazily
+	// c)magma checkpoint currently persists memtables to disk.
 	s.chkpointCb = func(b *bhive.Bhive) error {
-		wg.Done()
+		chkpWg.Done()
 		return nil
 	}
-	wg.Add(2) // mainIndex : vindex (lsm) + pindex (lss)
-	wg.Add(1) // docIndex  : vindex (lsm)
+
+	// mainIndex
+	chkpWg.Add(1) // lss
+	if mdb.persistFullVector {
+		chkpWg.Add(1) // magma
+	}
+
+	// docIndex
+	chkpWg.Add(1) // magma
 
 	s.MainSnap.Open() // close in CreateRecoveryPoint
 	s.BackSnap.Open() // close in CreateRecoveryPoint
@@ -1914,7 +1922,7 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 	select {
 	case <-s.chkpointCh:
 	default:
-		wg.Wait()
+		chkpWg.Wait()
 	}
 }
 
