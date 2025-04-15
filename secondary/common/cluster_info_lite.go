@@ -350,7 +350,7 @@ func (ni *NodesInfo) validateNodesAndSvs(connHost string) {
 
 	for _, n := range ni.nodes {
 		hostsFromNodes = append(hostsFromNodes, n.Hostname)
-		_, err := getServerVersionFromVersionString(n.Version)
+		_, err := readVersionForNode(n)
 		if err != nil {
 			logging.Warnf("validateNodesAndSvs: Failed as node version is not parsable err: %v, node: %v", err, n)
 			ni.valid = false
@@ -1850,7 +1850,7 @@ func (ni *NodesInfo) GetServerVersion(nid NodeId) (int, error) {
 	if int(nid) >= len(ni.nodes) {
 		return 0, ErrInvalidNodeId
 	}
-	return getServerVersionFromVersionString(ni.nodes[nid].Version)
+	return readVersionForNode(ni.nodes[nid])
 }
 
 func (ni *NodesInfo) GetLocalNodeUUID() string {
