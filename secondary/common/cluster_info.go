@@ -1359,61 +1359,80 @@ func (c *ClusterInfoCache) GetServerVersion(nid NodeId) (int, error) {
 	if int(nid) >= len(c.nodes) {
 		return 0, ErrInvalidNodeId
 	}
-	return getServerVersionFromVersionString(c.nodes[nid].Version)
+	return readVersionForNode(c.nodes[nid])
 }
 
-func getServerVersionFromVersionString(v string) (int, error) {
+func readVersionForNode(node couchbase.Node) (int, error) {
+	var ver, minorv uint32 = readVersionFromString(node.Version)
+	if ver == 0 {
+		ver, minorv = readVersionFromClusterComptability(node.ClusterCompatibility)
+	}
+	return computeServerVersion(ver, minorv)
+}
+
+func readVersionFromClusterComptability(clusterCompat int) (uint32, uint32) {
+	v := uint32(clusterCompat / 65536)
+	minorv := uint32(clusterCompat) - (v * 65536)
+	return v, minorv
+}
+
+func readVersionFromString(v string) (uint32, uint32) {
 	// Couchbase-server version will be of the form
 	// <major>.<minor>.<maint_release>-<build_number>-<community/enterprise>
 	// E.g. 6.5.0-0000-enterprise, 6.0.3-2855-enterprise etc.
 	versionStr := strings.Split(v, ".")
 	if len(versionStr) < 3 {
-		err := fmt.Errorf("%v splitting %v to %v", ErrInvalidVersion, v, versionStr)
-		return 0, err
+		return 0, 0
+	}
+	ver, err := strconv.Atoi(versionStr[0])
+	if err != nil {
+		logging.Warnf("ClusterInfoCache:readVersionFromString - Failed as version is not parsable err: %v version: %v", err, versionStr)
+		return 0, 0
+	}
+	minorv, err := strconv.Atoi(versionStr[1])
+	if err != nil {
+		logging.Warnf("ClusterInfoCache:readVersionFromString - Failed as minor version is not parsable err: %v version: %v", err, versionStr)
+		return 0, 0
+	}
+	return uint32(ver), uint32(minorv)
+}
+
+func computeServerVersion(v, minorv uint32) (int, error) {
+	if v == 0 {
+		return 0, fmt.Errorf("invalid version %v.%v", v, minorv)
 	}
 
-	var version, minorVersion int
-	var err error
-	if version, err = strconv.Atoi(versionStr[0]); err != nil {
-		err = fmt.Errorf("%v. err: %v parsing version from %v", ErrInvalidVersion, err, v)
-		return 0, err
-	}
-	if minorVersion, err = strconv.Atoi(versionStr[1]); err != nil {
-		err = fmt.Errorf("%v. err: %v parsing minorVersion from %v", ErrInvalidVersion, err, v)
-		return 0, err
-	}
-
-	if version < 5 {
+	if v < 5 {
 		return INDEXER_45_VERSION, nil
 	}
-	if version == 5 {
-		if minorVersion < 5 {
+	if v == 5 {
+		if minorv < 5 {
 			return INDEXER_50_VERSION, nil
 		}
-		if minorVersion >= 5 {
+		if minorv >= 5 {
 			return INDEXER_55_VERSION, nil
 		}
 	}
-	if version == 6 {
-		if minorVersion >= 5 {
+	if v == 6 {
+		if minorv >= 5 {
 			return INDEXER_65_VERSION, nil
 		}
 	}
-	if version == 7 {
-		if minorVersion >= 7 {
+	if v == 7 {
+		if minorv >= 7 {
 			return INDEXER_77_VERSION, nil
-		} else if minorVersion == 6 {
+		} else if minorv == 6 {
 			return INDEXER_76_VERSION, nil
-		} else if minorVersion == 5 {
+		} else if minorv == 5 {
 			return INDEXER_75_VERSION, nil
-		} else if minorVersion == 2 {
+		} else if minorv == 2 {
 			return INDEXER_72_VERSION, nil
-		} else if minorVersion == 1 {
+		} else if minorv == 1 {
 			return INDEXER_71_VERSION, nil
 		}
 		return INDEXER_70_VERSION, nil
 	}
-	if version == 8 {
+	if v == 8 {
 		return INDEXER_80_VERSION, nil
 	}
 
@@ -1435,12 +1454,19 @@ func (c *ClusterInfoCache) validateCache(isIPv6 bool) bool {
 	var hostList1 []string
 	var addressFamily []string
 
+	// Validate nodes version
 	for _, n := range c.nodes {
 		hostList1 = append(hostList1, n.Hostname)
 		addressFamily = append(addressFamily, n.AddressFamily)
 
-		_, err := getServerVersionFromVersionString(n.Version)
+		_, err := readVersionForNode(n)
 		if err != nil {
+			// Skip version validation if node is not healthy
+			if strings.ToLower(n.Status) != "healthy" {
+				logging.Warnf("ClusterInfoCache:validateCache - skipping node %v as it is not healthy", n.Hostname)
+				continue
+			}
+
 			logging.Warnf("ClusterInfoCache:validateCache - Failed as node version is not parsable err: %v node: %v", err, n)
 			return false
 		}
