@@ -842,19 +842,19 @@ func (ies *IndexEvaluatorStats) GetErrorSkipAll() int64 {
 func (ies *IndexEvaluatorStats) GetVectorErrs() map[string]int64 {
 	out := make(map[string]int64)
 	if ies.ErrDataOutOfBounds.Value() > 0 {
-		out[ErrDataOutOfBounds.Error()] = ies.ErrDataOutOfBounds.Value()
+		out[getVectorStatStr(ErrDataOutOfBounds)] = ies.ErrDataOutOfBounds.Value()
 	}
 
 	if ies.ErrInvalidVectorDimension.Value() > 0 {
-		out[ErrInvalidVectorDimension.Error()] = ies.ErrInvalidVectorDimension.Value()
+		out[getVectorStatStr(ErrInvalidVectorDimension)] = ies.ErrInvalidVectorDimension.Value()
 	}
 
 	if ies.ErrHeterogenousVectorData.Value() > 0 {
-		out[ErrHeterogenousVectorData.Error()] = ies.ErrHeterogenousVectorData.Value()
+		out[getVectorStatStr(ErrHeterogenousVectorData)] = ies.ErrHeterogenousVectorData.Value()
 	}
 
 	if ies.ErrInvalidVectorType.Value() > 0 {
-		out[ErrInvalidVectorType.Error()] = ies.ErrInvalidVectorType.Value()
+		out[getVectorStatStr(ErrInvalidVectorType)] = ies.ErrInvalidVectorType.Value()
 	}
 
 	return out
