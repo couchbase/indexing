@@ -2632,8 +2632,6 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 			common.CrashOnError(err)
 		}
 
-		// Cleanup the book-keeping
-		delete(idx.indexInstMap, indexInst.InstId)
 		return
 	}
 
@@ -13313,7 +13311,7 @@ func (idx *indexer) filterNeedsTrainingInsts(instIdList []c.IndexInstId, errMap 
 
 }
 
-func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c.VectorMetadata, keyspaceId string) error {
+func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c.VectorMetadata, keyspaceId string, itemsCount uint64) error {
 
 	minCentroidsRequired := nlist
 	if vm.Quantizer.Type == c.PQ {
@@ -13324,6 +13322,12 @@ func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c
 		// This value ensures that there is atleast one vector for every centroid
 		// in the keyspace at the time of build
 		minCentroidsRequired = max(1<<vm.Quantizer.Nbits, nlist)
+	}
+
+	if itemsCount < uint64(vm.TrainList) {
+		errStr := c.ERR_TRAINING + fmt.Sprintf("The number train_list: %v in keyspace: %v is greater than the "+
+			"number of documents: %v", vm.TrainList, keyspaceId, itemsCount)
+		return errors.New(errStr)
 	}
 
 	if trainlistSize < uint64(minCentroidsRequired) {
@@ -13389,7 +13393,7 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 			trainListSize = itemsCount
 		}
 
-		if err := idx.validateTrainListSize(trainListSize, centroids, inst.Defn.VectorMeta, keyspaceId); err != nil {
+		if err := idx.validateTrainListSize(trainListSize, centroids, inst.Defn.VectorMeta, keyspaceId, itemsCount); err != nil {
 			errMap[instId] = err
 			continue
 		}
@@ -13830,6 +13834,14 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					}
 				}
 
+				// Qualifying vectors are less than user provided TrainList, change idx state to err.
+				if len(vectors[i])/vm.Dimension < vm.TrainList {
+					errStr := c.ERR_TRAINING + fmt.Sprintf("The number train_list: %v in keyspace: %v is greater than the "+
+						"number of qualifying documents: %v", vm.TrainList, keyspaceId, instVectorsMap[instId])
+					updateErrMap(instId, partnId, errors.New(errStr))
+					continue
+				}
+
 				if slice.IsTrained() {
 					logging.Infof("Indexer::initateTraining Skipping training for slice as it is already trained instId: %v, partnId: %v", instId, partnId)
 					continue
@@ -14188,11 +14200,28 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		// and only train those partitions that are not trained
 		inst.TrainingPhase = c.TRAINING_NOT_STARTED
 		errStr := ""
-		for partnId, err := range partnErrMap {
-			errStr += fmt.Sprintf("%v for partnId:%v ", err, partnId)
-			inst.Nlist[partnId] = 0 // Reset nlist per partition Id
+
+		// Check if error is same for all partitions & do not populate it for all partitions.
+		errMap2 := make(map[string]bool)
+		for _, err := range partnErrMap {
+			errMap2[err.Error()] = true
 		}
-		inst.Error = errStr
+
+		if len(partnErrMap) > 1 && len(errMap2) == 1 {
+			var errStr string
+			for k := range errMap2 {
+				errStr = k
+				continue
+			}
+			inst.Error = errStr
+		} else {
+			for partnId, err := range partnErrMap {
+				errStr += fmt.Sprintf("%v for partnId:%v ", err, partnId)
+				inst.Nlist[partnId] = 0 // Reset nlist per partition Id
+			}
+			inst.Error = errStr
+
+		}
 
 		idx.indexInstMap[instId] = inst
 		allInsts = append(allInsts, instId)

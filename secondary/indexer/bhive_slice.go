@@ -179,7 +179,7 @@ type bhiveSnapshotInfo struct {
 	InstId     common.IndexInstId
 	PartnId    common.PartitionId
 
-	docSeqno uint64
+	DocSeqno uint64
 }
 
 type bhiveSnapshot struct {
@@ -1877,22 +1877,29 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 	s.info.IndexStats = snapshotStats
 
 	mdb.persistorLock.Lock()
-	defer mdb.persistorLock.Unlock()
 
-	var wg sync.WaitGroup
+	// waitgroup to notify completion of bhive magma and lss vindex checkpoints
+	var chkpWg sync.WaitGroup
 
 	s.chkpointCh = make(chan bool)
-	// do not resume mutations until checkpoint callback is completed.
-	// This is needed for rollback to ensure both vindex(full vector)
-	// and pindex (quantized) processed the same mutations when we
-	// checkpoint for a snapshot. checkpoint is an memory operation for us;
-	// actual persistence happens lazily.
+	// a)do not resume mutations until checkpoint callback is completed.
+	// This is needed to ensure both vindex(full vector) and pindex (quantized)
+	// workers has processed all the mutations for the snapshot.
+	// b)lss checkpoint is an memory operation, actual persistence happens lazily
+	// c)magma checkpoint currently persists memtables to disk.
 	s.chkpointCb = func(b *bhive.Bhive) error {
-		wg.Done()
+		chkpWg.Done()
 		return nil
 	}
-	wg.Add(2) // mainIndex : vindex (lsm) + pindex (lss)
-	wg.Add(1) // docIndex  : vindex (lsm)
+
+	// mainIndex
+	chkpWg.Add(1) // lss
+	if mdb.persistFullVector {
+		chkpWg.Add(1) // magma
+	}
+
+	// docIndex
+	chkpWg.Add(1) // magma
 
 	s.MainSnap.Open() // close in CreateRecoveryPoint
 	s.BackSnap.Open() // close in CreateRecoveryPoint
@@ -1908,10 +1915,14 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 		mdb.persistorQueue = s
 	}
 
+	// for an enqueued snapshot, we should release the lock as persistSnapshot
+	// reacquires the lock to dequeue.
+	mdb.persistorLock.Unlock()
+
 	select {
 	case <-s.chkpointCh:
 	default:
-		wg.Wait()
+		chkpWg.Wait()
 	}
 }
 
@@ -1926,14 +1937,14 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 		return
 	}
 
-	logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v "+
-		"Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id)
+	logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v DocSeqno %v "+
+		"Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, atomic.LoadUint64(&mdb.docSeqno))
 	t0 := time.Now()
 
 	s.info.Version = SNAPSHOT_META_VERSION_BHIVE_1
 	s.info.InstId = mdb.idxInstId
 	s.info.PartnId = mdb.idxPartnId
-	s.info.docSeqno = atomic.LoadUint64(&mdb.docSeqno)
+	s.info.DocSeqno = atomic.LoadUint64(&mdb.docSeqno)
 
 	meta, err := json.Marshal(s.info)
 	common.CrashOnError(err)
@@ -2170,7 +2181,10 @@ func (mdb *bhiveSlice) getRPSnapInfo(rp *bhive.RecoveryPoint) (*bhiveSnapshotInf
 	}
 	info.Ts = snapInfo.Ts
 	info.IndexStats = snapInfo.IndexStats
-
+	info.Version = snapInfo.Version
+	info.InstId = snapInfo.InstId
+	info.PartnId = snapInfo.PartnId
+	info.DocSeqno = snapInfo.DocSeqno
 	return info, nil
 }
 
@@ -2300,7 +2314,11 @@ func (mdb *bhiveSlice) restore(o SnapshotInfo) error {
 
 	// Update stats available in snapshot info
 	mdb.updateStatsFromSnapshotMeta(o)
-	atomic.StoreUint64(&mdb.docSeqno, info.docSeqno)
+	atomic.StoreUint64(&mdb.docSeqno, info.DocSeqno)
+
+	logging.Infof("bhiveSlice::Rollback Slice Id %v IndexInstId %v PartitionId %v DocSeqno %v",
+		mdb.Id, mdb.idxInstId, mdb.idxPartnId, atomic.LoadUint64(&mdb.docSeqno))
+
 	return nil
 }
 
@@ -2494,7 +2512,7 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	mdb.idxStats.docidCount.Set(docidCount)
 	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
 	mdb.idxStats.cacheHitPercent.Set(common.ComputePercent(cacheHits, cacheMiss))
-	mdb.idxStats.combinedResidentPercent.Set(common.ComputePercent((numRecsMem + bsNumRecsMem), (numRecsDisk + bsNumRecsDisk)))
+	mdb.idxStats.combinedResidentPercent.Set(common.ComputePercentFloat((numRecsMem + bsNumRecsMem), (numRecsDisk + bsNumRecsDisk)))
 	mdb.idxStats.cacheHits.Set(cacheHits)
 	mdb.idxStats.cacheMisses.Set(cacheMiss)
 	mdb.idxStats.numRecsInMem.Set(numRecsMem)

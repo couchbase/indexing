@@ -639,10 +639,10 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		// most of the code uses resident ratio of mainstore only and they will continue to use "resident_percent" stat
 		// but for planner we need to use resident ratio combined for mainstore and backstore and hence here we use "combined_resident_percent"
 		if residentPercent, ok := GetIndexStat(index, "combined_resident_percent", statsMap, true, clusterVersion); ok {
-			index.ActualResidentPercent = uint64(residentPercent.(float64))
+			index.ActualResidentPercent = residentPercent.(float64)
 		} else { // in mixed mode when combined_resident_percent is not available
 			if residentPercent, ok := GetIndexStat(index, "resident_percent", statsMap, true, clusterVersion); ok {
-				index.ActualResidentPercent = uint64(residentPercent.(float64))
+				index.ActualResidentPercent = residentPercent.(float64)
 			}
 		}
 
@@ -671,7 +671,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		} else {
 			// calibrate memory usage based on resident percent
 			// ActualMemUsage will be rewritten later
-			index.ActualMemUsage = index.ActualDataSize * index.ActualResidentPercent / 100
+			index.ActualMemUsage = uint64((float64(index.ActualDataSize) * index.ActualResidentPercent) / 100)
 			// factor in compression estimation (compression ratio defaulted to 3)
 			if index.StorageMode == common.PlasmaDB {
 				if config["indexer.plasma.useCompression"].Bool() {

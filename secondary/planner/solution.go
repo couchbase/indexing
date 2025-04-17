@@ -582,8 +582,8 @@ func (s *Solution) PrintLayout() {
 				index.GetCpuUsage(s.UseLiveData()),
 				index.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetDiskUsage(s.UseLiveData()))),
 				index.GetScanRate(s.UseLiveData()), index.GetDrainRate(s.UseLiveData()))
-			logging.Infof("\t\tIndex resident:%v%% build:%v%% estimated:%v equivCheck:%v pendingCreate:%v pendingDelete:%v",
-				uint64(index.GetResidentRatio(s.UseLiveData())),
+			logging.Infof("\t\tIndex resident:%.4f%% build:%v%% estimated:%v equivCheck:%v pendingCreate:%v pendingDelete:%v",
+				index.GetResidentRatio(s.UseLiveData()),
 				index.GetBuildPercent(s.UseLiveData()),
 				index.NeedsEstimation() && index.HasSizing(s.UseLiveData()),
 				!index.suppressEquivIdxCheck,
@@ -605,8 +605,8 @@ func (s *Solution) PrintLayout() {
 					subIndex.GetCpuUsage(s.UseLiveData()),
 					subIndex.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetDiskUsage(s.UseLiveData()))),
 					subIndex.GetScanRate(s.UseLiveData()), subIndex.GetDrainRate(s.UseLiveData()))
-				logging.Infof("\t\t\t Sub-Index resident:%v%% build:%v%% estimated:%v equivCheck:%v pendingCreate:%v pendingDelete:%v",
-					uint64(subIndex.GetResidentRatio(s.UseLiveData())),
+				logging.Infof("\t\t\t Sub-Index resident:%.4f%% build:%v%% estimated:%v equivCheck:%v pendingCreate:%v pendingDelete:%v",
+					subIndex.GetResidentRatio(s.UseLiveData()),
 					subIndex.GetBuildPercent(s.UseLiveData()),
 					subIndex.NeedsEstimation() && subIndex.HasSizing(s.UseLiveData()),
 					!subIndex.suppressEquivIdxCheck,
@@ -665,8 +665,8 @@ func (s *Solution) PrintCompactLayout() {
 				index.GetCpuUsage(s.UseLiveData()),
 				index.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetDiskUsage(s.UseLiveData()))),
 				index.GetScanRate(s.UseLiveData()), index.GetDrainRate(s.UseLiveData()))
-			logging.Infof("\t\tIndex resident:%v%% build:%v%% estimated:%v equivCheck:%v pendingCreate:%v pendingDelete:%v",
-				uint64(index.GetResidentRatio(s.UseLiveData())),
+			logging.Infof("\t\tIndex resident:%.4f%% build:%v%% estimated:%v equivCheck:%v pendingCreate:%v pendingDelete:%v",
+				index.GetResidentRatio(s.UseLiveData()),
 				index.GetBuildPercent(s.UseLiveData()),
 				index.NeedsEstimation() && index.HasSizing(s.UseLiveData()),
 				!index.suppressEquivIdxCheck,
