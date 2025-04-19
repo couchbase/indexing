@@ -17,6 +17,10 @@ func GetMandatoryQuota() (int64, int64) {
 	return 0, 0
 }
 
+func GetWorkingSetSize() int64 {
+	return 0
+}
+
 func (d *StubType) HandleHttp(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "not implemented")
 }

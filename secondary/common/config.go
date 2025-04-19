@@ -2505,6 +2505,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.bhive.quotaMaxShiftPercent": ConfigValue{
+		10,
+		"Maximum percent of storage quota that can shift in one quota adjustment between plasma and bhive",
+		10,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
 		uint64(500),

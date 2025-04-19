@@ -17,6 +17,10 @@ func GetMandatoryQuota() (int64, int64) {
 	return ee.GetMandatoryQuota()
 }
 
+func GetWorkingSetSize() int64 {
+	return ee.GetWorkingSetSize()
+}
+
 func SetLogReclaimBlockSize(sz int64) {
 	ee.SetLogReclaimBlockSize(sz)
 }

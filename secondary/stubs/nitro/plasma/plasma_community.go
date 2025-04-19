@@ -19,6 +19,10 @@ func GetMandatoryQuota() (int64, int64) {
 	return 0, 0
 }
 
+func GetWorkingSetSize() int64 {
+	return 0
+}
+
 func SetLogReclaimBlockSize(_ int64) {
 }
 
