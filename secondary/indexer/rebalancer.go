@@ -244,6 +244,9 @@ func RemoveDuplicateIndexes(
 		if err != nil {
 			logging.Errorf("%v::RemoveDuplicateIndexes couldn't set Metakv Delete token for DefnId %v after 3 retries. Last known error %v. Will skip droping index",
 				caller, defnId, err)
+		} else {
+			logging.Infof("%v::RemoveDuplicateIndexes successfully set Metakv Delete token for DefnId %v",
+				caller, defnId)
 		}
 	}
 
@@ -265,6 +268,8 @@ func RemoveDuplicateIndexes(
 				if uniqueDefns[index.DefnId] == nil {
 					break // break select move to next index
 				}
+				logging.Infof("%v::RemoveDuplicateIndexes dropping index defnId %v, from host %v",
+					caller, index.DefnId, host)
 				if err := makeDropIndexRequest(index, host, cancel, done, caller); err != nil {
 					// we will only record the error and proceeded, not failing rebalance just
 					// because we could not delete a index.
