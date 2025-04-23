@@ -1279,10 +1279,16 @@ func validateMultiScanResults(docScanResults tc.ScanResponse,
 // scanIndexReplicas scan's the index and validates if all the replicas of the index are retruning
 // valid results
 func scanIndexReplicas(index, bucket string, replicaIds []int, numScans, numDocs, numPartitions int, t *testing.T) {
+	scanIndexReplicas2(index, bucket, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, replicaIds, numScans, numDocs, numPartitions, t)
+}
+
+// scanIndexReplicas2 scan's the index and validates if all the replicas of the index are retruning
+// valid results
+func scanIndexReplicas2(index, bucket, scope, collection string, replicaIds []int, numScans, numDocs, numPartitions int, t *testing.T) {
 	// Scan the index num_scans times
 	for i := 0; i < numScans; i++ {
-		scanResults, err := secondaryindex.ScanAll(index, bucket, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
-		if len(scanResults) != numDocs {
+		scanResults, err := secondaryindex.ScanAll2(index, bucket, scope, collection, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+		if numDocs > 0 && len(scanResults) != numDocs {
 			errStr := fmt.Sprintf("Error in ScanAll. Expected len(scanResults): %v, actual: %v", numDocs, len(scanResults))
 			FailTestIfError(err, errStr, t)
 		}
