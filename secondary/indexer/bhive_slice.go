@@ -1300,12 +1300,18 @@ func (mdb *bhiveSlice) createVectorFuncCtx() *bhive.VectorFuncCtx {
 		return mdb.codebook.ComputeDistanceEncoded(q, n, codes, dist, nil, cid)
 	}
 
+	useDistEncoded := func() bool {
+		return mdb.idxDefn.VectorMeta.Quantizer.Type == common.SQ &&
+			mdb.codebook.MetricType() == codebook.METRIC_L2
+	}
+
 	ctx := &bhive.VectorFuncCtx{
 		Distance:        distance,
 		Decode:          decode,
 		CodeSize:        sz,
 		CoarseSize:      coarseSz,
 		DistanceEncoded: distEncoded,
+		UseDistEncoded:  useDistEncoded,
 	}
 
 	return ctx
