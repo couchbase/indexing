@@ -1979,12 +1979,16 @@ func (si *secondaryIndex6) NumberOfCentroids() int {
 
 // [VECTOR_TODO] stub function, needs to be updated
 func (si *secondaryIndex6) NumberOfPartitions() int {
-	return int(0)
+	return si.numPartition
 }
 
-// [VECTOR_TODO] stub function, needs to be updated
 func (si *secondaryIndex6) MaxHeapSize() int {
-	return int(8192) //keep this as index config
+	if si.IsVector() {
+		config := si.gsi.gsiClient.Settings()
+		return int(config.MaxHeapSize())
+	} else {
+		return -1
+	}
 }
 
 func (si *secondaryIndex6) AllowRerank() bool {

@@ -2228,8 +2228,18 @@ func (s *Solution) updateSlotMap() {
 	s.indexSlots = make(map[common.IndexDefnId]map[int]map[common.PartitionId]uint64)
 	s.slotMap = map[uint64]map[*IndexerNode]int{}
 
+	var updateShardDealer = func(_ *IndexUsage, _ *IndexerNode, _ bool) error {
+		return nil
+	}
+	if s.shardDealer != nil {
+		s.shardDealer.Reset()
+		updateShardDealer = s.shardDealer.RecordIndexUsage
+	}
+
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
+
+			updateShardDealer(index, indexer, false)
 
 			// Only consider indexes with valid alternate shardIds
 			if len(index.AlternateShardIds) > 0 {

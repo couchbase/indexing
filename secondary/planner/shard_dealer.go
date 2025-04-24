@@ -96,7 +96,7 @@ func (psc *pseudoShardContainer) addInstToShardContainer(index *IndexUsage) bool
 	}
 
 	for _, partn := range psc.insts[index.InstId] {
-		if partn.PartnId == index.PartnId {
+		if partn != nil && partn.PartnId == index.PartnId {
 			return false
 		}
 	}
@@ -107,6 +107,28 @@ func (psc *pseudoShardContainer) addInstToShardContainer(index *IndexUsage) bool
 	psc.diskUsage += index.ActualDiskSize
 	psc.dataSize += index.ActualDataSize
 	return true
+}
+
+func (psc *pseudoShardContainer) deleteInstFromShardContainer(index *IndexUsage) bool {
+	if index == nil {
+		return false
+	}
+	if psc.insts == nil {
+		return false
+	}
+
+	for i, partn := range psc.insts[index.InstId] {
+		if partn != nil && partn.PartnId == index.PartnId {
+			psc.insts[index.InstId][i] = nil
+			psc.totalPartitions--
+			psc.memUsage -= index.ActualMemUsage
+			psc.diskUsage -= index.ActualDiskSize
+			psc.dataSize -= index.ActualDataSize
+			return true
+		}
+	}
+
+	return false
 }
 
 func (psc *pseudoShardContainer) getMemUsage() uint64 {
@@ -135,8 +157,9 @@ type (
 	asSlotID    = c.AlternateShard_SlotId
 	asReplicaID = c.AlternateShard_ReplicaId
 	asGroupID   = c.AlternateShard_GroupId
+	nodeUUID    = string
 	moveFuncCb  = func(
-		srcNode, destNode string,
+		srcNode, destNode nodeUUID,
 		partn *IndexUsage,
 	) (map[*IndexerNode]*IndexUsage, error)
 )
@@ -146,13 +169,14 @@ type ShardDealer struct {
 	// slots per category
 	slotsPerCategory map[ShardCategory]map[asSlotID]bool
 	// cluster level picture
-	slotsMap map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer
+	slotsMap       map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer
+	slotsToNodeMap map[asSlotID]map[asReplicaID]nodeUUID
 	// <defnId, partnId> to slotID
 	partnSlots map[c.IndexDefnId]map[c.PartitionId]asSlotID
 
 	// per node pic of which shard pair belongs to which node
-	nodeToSlotMap       map[string]map[asSlotID]asReplicaID
-	nodeToShardCountMap map[string]uint64
+	nodeToSlotMap       map[nodeUUID]map[asSlotID]asReplicaID
+	nodeToShardCountMap map[nodeUUID]uint64
 
 	// config
 	alternateShardIDGenerator func() (*c.AlternateShardId, error)
@@ -200,11 +224,12 @@ func NewShardDealer(minShardsPerNode, minPartitionsPerShard, maxDiskUsagePerShar
 		shardCapacityPerNode:  shardCapacity,
 		maxDiskUsagePerShard:  maxDiskUsagePerShard,
 
-		slotsPerCategory: make(map[ShardCategory]map[asSlotID]bool),
-		slotsMap:         make(map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer),
-		// indexSlots:          make(map[c.IndexDefnId]asSlotID),
+		slotsPerCategory:    make(map[ShardCategory]map[asSlotID]bool),
+		slotsMap:            make(map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer),
+		slotsToNodeMap:      make(map[asSlotID]map[asReplicaID]nodeUUID),
 		partnSlots:          make(map[c.IndexDefnId]map[c.PartitionId]asSlotID),
-		nodeToShardCountMap: make(map[string]uint64),
+		nodeToShardCountMap: make(map[nodeUUID]uint64),
+		nodeToSlotMap:       make(map[nodeUUID]map[asSlotID]asReplicaID),
 
 		alternateShardIDGenerator: alternateShardIDGenerater,
 		moveInstance:              moveInstanceCb,
@@ -239,6 +264,12 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, is
 		return nil
 	}
 
+	var newSlotsPerCategory = make(map[ShardCategory]map[asSlotID]bool)
+	var newPartnSlots = make(map[c.IndexDefnId]map[c.PartitionId]asSlotID)
+	var newSlotsToNodeMap = make(map[asSlotID]map[asReplicaID]nodeUUID)
+	var newNodeToSlotMap = make(map[nodeUUID]map[asSlotID]asReplicaID)
+	var newNodeToShardCountMap = make(map[nodeUUID]uint64)
+
 	if isInit && len(index.InitialAlternateShardIds) == 0 {
 		return nil
 	} else if !isInit && len(index.AlternateShardIds) == 0 {
@@ -246,9 +277,12 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, is
 	}
 
 	if index.IsShardProxy {
-		// TODO: handle adding shard proxies recursively
-		// or we can also use the shard proxy in a separate call to also use the stats from shard
-		// proxy (reported by shard directly)
+		for _, subIndex := range index.GroupedIndexes {
+			if err := sd.RecordIndexUsage(subIndex, node, isInit); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	var category = getIndexCategory(index)
@@ -271,85 +305,262 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, is
 	var slotID = alternateShardID.GetSlotId()
 	var replicaID = alternateShardID.GetReplicaId()
 	var mainstoreGroupID = alternateShardID.GetGroupId()
+	var backstoreGroupID asGroupID
 
-	if sd.slotsPerCategory == nil {
-		sd.slotsPerCategory = make(map[ShardCategory]map[asSlotID]bool)
-	}
-	if sd.slotsPerCategory[category] == nil {
-		sd.slotsPerCategory[category] = make(map[asSlotID]bool)
-	}
-	sd.slotsPerCategory[category][slotID] = true
+	newSlotsPerCategory[category] = make(map[asSlotID]bool)
+	newSlotsPerCategory[category][slotID] = true
 
-	// record defnId in partnSlots map
-	if sd.partnSlots == nil {
-		sd.partnSlots = make(map[c.IndexDefnId]map[c.PartitionId]asSlotID)
+	var existingSlotID asSlotID
+	var exists bool
+	if sd.partnSlots != nil && sd.partnSlots[index.DefnId] != nil {
+		existingSlotID, exists = sd.partnSlots[index.DefnId][index.PartnId]
 	}
-	if sd.partnSlots[index.DefnId] == nil {
-		sd.partnSlots[index.DefnId] = make(map[c.PartitionId]asSlotID)
+
+	if exists && existingSlotID != slotID {
+		err := fmt.Errorf("partn %v already assigned to slot %v and cannot goto slot %v",
+			index.PartnId, existingSlotID, slotID)
+		logging.Errorf("ShardDealer::RecordIndexUsage: %v", err)
+		return err
 	}
-	sd.partnSlots[index.DefnId][index.PartnId] = slotID
+	newPartnSlots[index.DefnId] = make(map[c.PartitionId]asSlotID)
+	newPartnSlots[index.DefnId][index.PartnId] = slotID
 
 	// record index in slotsMap
-	if sd.slotsMap == nil {
-		sd.slotsMap = make(
-			map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer,
-		)
+	var existingNodeWithSlot nodeUUID
+	exists = false
+	if sd.slotsMap != nil && sd.slotsMap[slotID] != nil && sd.slotsMap[slotID][replicaID] != nil {
+		existingNodeWithSlot, exists = sd.slotsToNodeMap[slotID][replicaID]
 	}
-	if sd.slotsMap[slotID] == nil {
-		sd.slotsMap[slotID] = make(
-			map[asReplicaID]map[asGroupID]*pseudoShardContainer,
-		)
+	if exists && existingNodeWithSlot != node.NodeUUID {
+		err := fmt.Errorf("slot %v already assigned to node %v and cannot goto node %v",
+			slotID, existingNodeWithSlot, node.NodeUUID)
+		logging.Errorf("ShardDealer::RecordIndexUsage: %v", err)
+		return err
 	}
-	if sd.slotsMap[slotID][replicaID] == nil {
-		sd.slotsMap[slotID][replicaID] = make(map[asGroupID]*pseudoShardContainer)
-	}
+	newSlotsToNodeMap[slotID] = make(map[asReplicaID]nodeUUID)
+	newSlotsToNodeMap[slotID][replicaID] = node.NodeUUID
+
 	var newShardCount uint64
-	if sd.slotsMap[slotID][replicaID][mainstoreGroupID] == nil {
-		sd.slotsMap[slotID][replicaID][mainstoreGroupID] = newPseudoShardContainer()
+	var mainstoreContainer, backstoreContainer *pseudoShardContainer
+
+	if sd.slotsMap[slotID] != nil && sd.slotsMap[slotID][replicaID] != nil &&
+		sd.slotsMap[slotID][replicaID][mainstoreGroupID] != nil {
+		mainstoreContainer = sd.slotsMap[slotID][replicaID][mainstoreGroupID]
+	} else {
+		mainstoreContainer = newPseudoShardContainer()
 		newShardCount++
 	}
-	var isNewPartn = sd.slotsMap[slotID][replicaID][mainstoreGroupID].addInstToShardContainer(index)
+
+	var isNewPartn = mainstoreContainer.addInstToShardContainer(index)
 
 	if len(inputAlternateShardIDs) > 1 {
 		backstoreShardID, _ := c.ParseAlternateId(inputAlternateShardIDs[1])
-		var backstoreGroupID = backstoreShardID.GetGroupId()
-		if sd.slotsMap[slotID][replicaID][backstoreGroupID] == nil {
-			sd.slotsMap[slotID][replicaID][backstoreGroupID] = newPseudoShardContainer()
+		backstoreGroupID = backstoreShardID.GetGroupId()
+		if sd.slotsMap[slotID] != nil && sd.slotsMap[slotID][replicaID] != nil &&
+			sd.slotsMap[slotID][replicaID][backstoreGroupID] != nil {
+			backstoreContainer = sd.slotsMap[slotID][replicaID][backstoreGroupID]
+		} else {
+			backstoreContainer = newPseudoShardContainer()
 			newShardCount++
 		}
-		sd.slotsMap[slotID][replicaID][backstoreGroupID].addInstToShardContainer(index)
+		backstoreContainer.addInstToShardContainer(index)
 	}
 
 	// record what slot ids are present on which node
-	if sd.nodeToSlotMap == nil {
-		sd.nodeToSlotMap = make(map[string]map[asSlotID]asReplicaID)
+	var existingReplicaID asReplicaID
+	exists = false
+	if sd.nodeToSlotMap[node.NodeUUID] != nil {
+		existingReplicaID, exists = sd.nodeToSlotMap[node.NodeUUID][slotID]
 	}
-	if sd.nodeToSlotMap[node.NodeUUID] == nil {
-		sd.nodeToSlotMap[node.NodeUUID] = make(
-			map[asSlotID]asReplicaID,
-		)
+	if exists && existingReplicaID != replicaID {
+		err := fmt.Errorf("node %v already assigned slot %v with replica %v and cannot have replica %v",
+			node.NodeUUID, slotID, existingReplicaID, replicaID)
+		logging.Errorf("ShardDealer::RecordIndexUsage: %v", err)
+
+		// cleanup updates from mainstore and backstore container
+		if mainstoreContainer != nil {
+			mainstoreContainer.deleteInstFromShardContainer(index)
+		}
+		if backstoreContainer != nil {
+			backstoreContainer.deleteInstFromShardContainer(index)
+		}
+
+		return err
 	}
-	sd.nodeToSlotMap[node.NodeUUID][slotID] = alternateShardID.GetReplicaId()
+	newNodeToSlotMap[node.NodeUUID] = make(map[asSlotID]asReplicaID)
+	newNodeToSlotMap[node.NodeUUID][slotID] = replicaID
 
 	// record new partn in a shard count only if the partn is new to the shard container
 	if isNewPartn {
-		if sd.nodeToShardCountMap == nil {
-			sd.nodeToShardCountMap = make(map[string]uint64)
+		var prevShardCount uint64
+		if sd.nodeToShardCountMap != nil {
+			prevShardCount = sd.nodeToShardCountMap[node.NodeUUID]
 		}
-		if _, exists := sd.nodeToShardCountMap[node.NodeUUID]; !exists {
-			sd.nodeToShardCountMap[node.NodeUUID] = 0
+		newNodeToShardCountMap[node.NodeUUID] = prevShardCount + newShardCount
+	}
+
+	// apply all the updates here so that if we return with some error, then we don't mess up the
+	// shard dealer book keeping
+	for cat, slots := range newSlotsPerCategory {
+		for slot := range slots {
+			if sd.slotsPerCategory[cat] == nil {
+				sd.slotsPerCategory[cat] = make(map[asSlotID]bool)
+			}
+			sd.slotsPerCategory[cat][slot] = true
 		}
-		sd.nodeToShardCountMap[node.NodeUUID] += newShardCount
+	}
+	for defnID, partnMap := range newPartnSlots {
+		for partnID, slot := range partnMap {
+			if sd.partnSlots[defnID] == nil {
+				sd.partnSlots[defnID] = make(map[c.PartitionId]asSlotID)
+			}
+			sd.partnSlots[defnID][partnID] = slot
+		}
+	}
+	for slot, replicaMap := range newSlotsToNodeMap {
+		for replica, node := range replicaMap {
+			if sd.slotsToNodeMap[slot] == nil {
+				sd.slotsToNodeMap[slot] = make(map[asReplicaID]nodeUUID)
+			}
+			sd.slotsToNodeMap[slot][replica] = node
+		}
+	}
+	for nodeUUID, slotMap := range newNodeToSlotMap {
+		for slot, replica := range slotMap {
+			if sd.nodeToSlotMap[nodeUUID] == nil {
+				sd.nodeToSlotMap[nodeUUID] = make(map[asSlotID]asReplicaID)
+			}
+			sd.nodeToSlotMap[nodeUUID][slot] = replica
+		}
+	}
+	for nodeUUID, shardCount := range newNodeToShardCountMap {
+		sd.nodeToShardCountMap[nodeUUID] = shardCount
+	}
+
+	if newShardCount > 0 {
+		if sd.slotsMap[slotID] == nil {
+			sd.slotsMap[slotID] = make(
+				map[asReplicaID]map[asGroupID]*pseudoShardContainer,
+			)
+		}
+		if sd.slotsMap[slotID][replicaID] == nil {
+			sd.slotsMap[slotID][replicaID] = make(map[asGroupID]*pseudoShardContainer)
+		}
+		sd.slotsMap[slotID][replicaID][mainstoreGroupID] = mainstoreContainer
+		if backstoreContainer != nil {
+			sd.slotsMap[slotID][replicaID][backstoreGroupID] = backstoreContainer
+		}
 	}
 
 	return nil
+}
+
+// DeleteIndexUsage removes the shard dealer book keeping for a partn on a node
+func (sd *ShardDealer) DeleteIndexUsage(index *IndexUsage, node *IndexerNode, isInit bool) {
+	if index == nil {
+		return
+	}
+
+	if isInit && len(index.InitialAlternateShardIds) == 0 {
+		return
+	} else if !isInit && len(index.AlternateShardIds) == 0 {
+		return
+	}
+
+	if index.IsShardProxy {
+		// TODO: handle adding shard proxies recursively
+		// or we can also use the shard proxy in a separate call to also use the stats from shard
+		// proxy (reported by shard directly)
+	}
+
+	var category = getIndexCategory(index)
+	if category == InvalidShardCategory {
+		return
+	}
+
+	var inputAlternateShardIDs = index.AlternateShardIds
+	if isInit {
+		inputAlternateShardIDs = index.InitialAlternateShardIds
+	}
+
+	// calculate alternate shard id of main index
+	var alternateShardID, err = c.ParseAlternateId(inputAlternateShardIDs[0])
+	if err != nil {
+		return
+	}
+
+	var slotID = alternateShardID.GetSlotId()
+	var replicaID = alternateShardID.GetReplicaId()
+	var mainstoreGroupID = alternateShardID.GetGroupId()
+
+	// delete defnId in partnSlots map
+	if sd.partnSlots != nil || sd.partnSlots[index.DefnId] != nil {
+		delete(sd.partnSlots[index.DefnId], index.PartnId)
+		if len(sd.partnSlots[index.DefnId]) == 0 {
+			delete(sd.partnSlots, index.DefnId)
+		}
+	}
+
+	var emptyShards = 0
+
+	var shouldDeleteSlotAndReplica = false
+	// delete index in slotsMap
+	if sd.slotsMap != nil && sd.slotsMap[slotID] != nil && sd.slotsMap[slotID][replicaID] != nil {
+		if sd.slotsMap[slotID][replicaID][mainstoreGroupID] != nil {
+			sd.slotsMap[slotID][replicaID][mainstoreGroupID].deleteInstFromShardContainer(index)
+			if sd.slotsMap[slotID][replicaID][mainstoreGroupID].totalPartitions <= 0 {
+				shouldDeleteSlotAndReplica = true
+				emptyShards++
+			}
+		}
+
+		if len(inputAlternateShardIDs) > 1 {
+			backstoreShardID, _ := c.ParseAlternateId(inputAlternateShardIDs[1])
+			var backstoreGroupID = backstoreShardID.GetGroupId()
+			if sd.slotsMap[slotID][replicaID][backstoreGroupID] != nil {
+				sd.slotsMap[slotID][replicaID][backstoreGroupID].deleteInstFromShardContainer(index)
+
+				if sd.slotsMap[slotID][replicaID][backstoreGroupID].totalPartitions <= 0 {
+					emptyShards++
+				}
+			}
+		}
+	}
+
+	if sd.nodeToSlotMap != nil && sd.nodeToSlotMap[node.NodeUUID] != nil &&
+		sd.nodeToSlotMap[node.NodeUUID][slotID] == replicaID && shouldDeleteSlotAndReplica {
+		delete(sd.nodeToSlotMap[node.NodeUUID], slotID)
+	}
+
+	// do not check for shouldDeleteSlotAndReplica here as backstore shard could be empty and
+	// can be deleted. hence reduce the count if its empty
+	if emptyShards > 0 && sd.nodeToShardCountMap != nil && sd.nodeToShardCountMap[node.NodeUUID] > 0 {
+		sd.nodeToShardCountMap[node.NodeUUID] -= uint64(emptyShards)
+	}
+
+	if shouldDeleteSlotAndReplica {
+		delete(sd.slotsMap[slotID], replicaID)
+		delete(sd.slotsToNodeMap[slotID], replicaID)
+
+		if len(sd.slotsMap[slotID]) == 0 {
+			delete(sd.slotsMap, slotID)
+			delete(sd.slotsToNodeMap, slotID)
+			delete(sd.slotsPerCategory[category], slotID)
+		}
+
+		if len(sd.slotsPerCategory[category]) == 0 {
+			delete(sd.slotsPerCategory, category)
+		}
+	}
 }
 
 // GetSlot - returns an appropriate Slot to place the indexes of the defn `defnId` into
 // This could be a new slot or it could be an old slot being re-used
 // GetSlot is the implementation of the 3 pass shard distribution
 func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
-	replicaMap map[int]map[*IndexerNode]*IndexUsage) asSlotID {
+	replicaMap map[int]map[*IndexerNode]*IndexUsage,
+	tracker uint64,
+) asSlotID {
 
 	var mainstoreShard, backstoreShard *c.AlternateShardId
 	var successPass string
@@ -359,6 +570,7 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 	var defnDbgLog = fmt.Sprintf("(d: %v, p: %v)", defnID, partnID)
 
 	var indexShardCategory ShardCategory = InvalidShardCategory
+findCategory:
 	for _, nodes := range replicaMap {
 		for _, index := range nodes {
 			if index == nil {
@@ -368,19 +580,21 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 			logging.Debugf("ShardDealer::GetSlot shard category for inst %v is %v",
 				defnDbgLog, indexShardCategory)
 			if indexShardCategory != InvalidShardCategory {
-				break
+				break findCategory
 			}
 		}
 	}
-	defnDbgLog = fmt.Sprintf("(d: %v, p: %v, cat: %d)", defnID, partnID, indexShardCategory)
+	defnDbgLog = fmt.Sprintf("(d: %v, p: %v, cat: %d, t: %d)",
+		defnID, partnID, indexShardCategory, tracker)
 
-	var defnJSONLog = func(replicaID int, nodeUUID string) string {
-		return fmt.Sprintf("{defnID: %v, partnID: %v, repID: %v, node: %v, cat: %s}",
+	var defnJSONLog = func(replicaID int, nodeUUID nodeUUID) string {
+		return fmt.Sprintf("{defnID: %v, partnID: %v, repID: %v, node: %v, cat: %s, t: %v}",
 			defnID,
 			partnID,
 			replicaID,
 			nodeUUID,
 			indexShardCategory.String(),
+			tracker,
 		)
 	}
 
@@ -396,6 +610,8 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 	// GroupID initialised. This func will set the ReplicaID to the shards. It does *not* update
 	// internal book keeping of the Shard Dealer
 	var setStoreOnAllUsages = func() {
+		logging.Tracef("ShardDealer::GetSlot set slot ID on replicas for %v *********", defnDbgLog)
+		defer logging.Tracef("ShardDealer::GetSlot done setting slot ID for %v *********", defnDbgLog)
 		for replicaID, nodeMap := range replicaMap {
 			for idxrNode, indexUsage := range nodeMap {
 				if indexUsage == nil {
@@ -442,6 +658,7 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 	// updateShardDealerRecords is a util func which updates shard dealer book keeping. if there are
 	// no updates then this func is a no-op
 	var updateShardDealerRecords = func() []error {
+		logging.Tracef("ShardDealer::GetSlot updating book keeping for %v...", defnDbgLog)
 		var errSlice []error = nil
 		for replicaID, nodeMap := range replicaMap {
 			for idxrNode, indexUsage := range nodeMap {
@@ -454,12 +671,26 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 					)
 
 					indexUsage.AlternateShardIds = nil
-					// TODO: delete book keeping updates if any
 
 					errSlice = append(errSlice, err)
 				}
 			}
 		}
+		if len(errSlice) > 0 {
+			for replicaID, nodeMap := range replicaMap {
+				for node, indexUsage := range nodeMap {
+					if indexUsage.AlternateShardIds == nil {
+						continue
+					}
+					logging.Warnf("ShardDealer::GetSlot unset slot for index %v as other replicas have failed record update",
+						defnJSONLog(replicaID, node.NodeUUID))
+
+					sd.DeleteIndexUsage(indexUsage, node, false)
+					indexUsage.AlternateShardIds = nil
+				}
+			}
+		}
+
 		return errSlice
 	}
 
@@ -475,23 +706,12 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 
 	var ensureReplicaPosition = func() error {
 		if mainstoreShard == nil {
-			panic("ShardDealer ensureReplicaPosition called without setting shards")
+			return fmt.Errorf("shard dealer ensureReplicaPosition called without setting shards")
 		}
 		var slotID = mainstoreShard.GetSlotId()
-		var slotToGroupMap = sd.slotsMap[slotID]
-		if slotToGroupMap == nil {
-			return nil
-		}
 		var newReplicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
 
-		var replicaSlotToNodeMap = make(map[asReplicaID]string)
-		for nodeUUID, nodeSlotMap := range sd.nodeToSlotMap {
-			if nodeSlotMap != nil {
-				if slotReplicaID, exists := nodeSlotMap[slotID]; exists {
-					replicaSlotToNodeMap[slotReplicaID] = nodeUUID
-				}
-			}
-		}
+		var replicaSlotToNodeMap = sd.slotsToNodeMap[slotID]
 
 		for indexReplicaID, replicaLayout := range replicaMap {
 			for node, partn := range replicaLayout {
@@ -499,45 +719,46 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 					continue
 				}
 
-				if slotReplicaNode, exists := replicaSlotToNodeMap[uint8(indexReplicaID)]; exists {
-					if node.NodeUUID != slotReplicaNode {
-						logging.Infof("ShardDealer::GetSlot: moving %v to %v to maintain index-replica and slot-replica alignment for slot %v (pass %v)",
-							defnJSONLog(indexReplicaID, node.NodeUUID),
-							slotReplicaNode,
-							slotID,
-							passes[currPassItr],
-						)
-						updatedMap, err := sd.moveInstance(
-							node.NodeUUID /* srcNode */, slotReplicaNode, /* destNode */
-							partn, /* partn *Indexusage */
-						)
-						if err != nil {
-							logging.Tracef("ShardDealer::GetSlot replicaMap for defn - %v",
-								defnDbgLog)
-							for rID, nodeMap := range replicaMap {
-								for n, index := range nodeMap {
-									logging.Tracef("ShardDealer::GetSlot index %v node %v (%v) rID %v -",
-										index, n.NodeId, n.NodeUUID, rID)
-								}
+				if slotReplicaNode, exists := replicaSlotToNodeMap[uint8(indexReplicaID)]; exists &&
+					node.NodeUUID != slotReplicaNode {
+					logging.Infof("ShardDealer::GetSlot: moving %v to %v to maintain index-replica and slot-replica alignment for slot %v (pass %v)",
+						defnJSONLog(indexReplicaID, node.NodeUUID),
+						slotReplicaNode,
+						slotID,
+						passes[currPassItr],
+					)
+					updatedMap, err := sd.moveInstance(
+						node.NodeUUID /* srcNode */, slotReplicaNode, /* destNode */
+						partn, /* partn *Indexusage */
+					)
+					if err != nil {
+						logging.Tracef("ShardDealer::GetSlot replicaMap for defn - %v",
+							defnDbgLog)
+						for rID, nodeMap := range replicaMap {
+							for n, index := range nodeMap {
+								logging.Tracef("ShardDealer::GetSlot index %v node %v (%v) rID %v -",
+									index, n.NodeId, n.NodeUUID, rID)
 							}
-							logging.Fatalf("ShardDealer::GetSlot: cannot ensure replica placement. move failed with err %v",
-								err)
-							return err
 						}
-						newReplicaMap[indexReplicaID] = updatedMap
+						logging.Fatalf("ShardDealer::GetSlot: cannot ensure replica placement. move failed with err %v",
+							err)
+						return err
 					}
+					newReplicaMap[indexReplicaID] = updatedMap
 				} else if !exists {
+					// ***** this is only valid in case of create index *****
 					// in case of partial index-shard affinity in cluster, it can happen that some
 					// slots don't exist in the cluster. we should validate that the replicaID of
 					// partn is the same as replicaID of the slot. if not, we need to move index
+
 					var slotReplicaOnSrcNode uint8 = 0
 					var slotReplicaExists bool = false
 
 					if sd.nodeToSlotMap[node.NodeUUID] != nil {
 						slotReplicaOnSrcNode, slotReplicaExists = sd.nodeToSlotMap[node.NodeUUID][slotID]
-						if !slotReplicaExists {
-							continue
-						}
+					}
+					if !slotReplicaExists {
+						continue
 					}
 
 					if slotReplicaOnSrcNode != uint8(partn.Instance.ReplicaId) {
@@ -545,7 +766,7 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 						// may not have a slot at all yet
 
 						// find new dest node
-						var newDestNodeUUID string
+						var newDestNodeUUID nodeUUID
 						var swapPartn *IndexUsage
 
 						for replicaNode, replicaPartn := range replicaMap[int(slotReplicaOnSrcNode)] {
@@ -643,7 +864,7 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 		}
 	}
 
-	var nodesForShard = make(map[string]bool, 0)
+	var nodesForShard = make(map[nodeUUID]bool, 0)
 	for _, nodeMap := range replicaMap {
 		for idxrNode := range nodeMap {
 			nodesForShard[idxrNode.NodeUUID] = true
@@ -652,8 +873,8 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 
 	// Pass 0: are all the indexer nodes under minShardsPerNode?
 	currPassItr++
-	var nodesUnderMinShards = make([]string, 0, len(nodesForShard))
-	var nodesUnderShardCapacity = make([]string, 0, len(nodesForShard))
+	var nodesUnderMinShards = make([]nodeUUID, 0, len(nodesForShard))
+	var nodesUnderShardCapacity = make([]nodeUUID, 0, len(nodesForShard))
 	for nodeUUID := range nodesForShard {
 		if sd.nodeToShardCountMap[nodeUUID] < sd.minShardsPerNode {
 			nodesUnderMinShards = append(nodesUnderMinShards, nodeUUID)
@@ -712,7 +933,7 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 
 	// Pass 1: find nodes under soft_limit
 	currPassItr++
-	var nodesUnderSoftLimit = make(map[string]map[asSlotID]*pseudoShardContainer)
+	var nodesUnderSoftLimit = make(map[nodeUUID]map[asSlotID]*pseudoShardContainer)
 	for nodeUUID := range nodesForShard {
 		var slotsUnderSoftLimit = sd.findShardUnderSoftLimit(nodeUUID, indexShardCategory)
 
@@ -929,7 +1150,7 @@ func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 
 // findShardUnderSoftLimit returns a map of `SlotIDs` of `category` which are under
 // the soft limit on node `nodeUUID`
-func (sd *ShardDealer) findShardUnderSoftLimit(nodeUUID string,
+func (sd *ShardDealer) findShardUnderSoftLimit(nodeUUID nodeUUID,
 	category ShardCategory) map[asSlotID]*pseudoShardContainer {
 
 	var slotsOnNode = sd.nodeToSlotMap[nodeUUID]
@@ -979,7 +1200,7 @@ func (sd *ShardDealer) isSlotOfCategory(slotID asSlotID,
 }
 
 func (sd *ShardDealer) getSlotsOfCategory(
-	nodeUUID string, category ShardCategory,
+	nodeUUID nodeUUID, category ShardCategory,
 ) map[asSlotID]*pseudoShardContainer {
 	var slotsOnNode = sd.nodeToSlotMap[nodeUUID]
 	if slotsOnNode == nil {
@@ -1047,15 +1268,24 @@ func sortedSlotsByContainerUse(
 
 func (sd *ShardDealer) isSlotOnAllRequiredNodes(
 	slotID asSlotID,
-	nodes map[string]bool,
+	nodes map[nodeUUID]bool,
 	replicaMap map[int]map[*IndexerNode]*IndexUsage,
 ) bool {
-
-	// var replicaIDsOfSlots = make([]asReplicaID, 0, len(replicaMap))
 
 	// it should never be that the slotMap for `slotID` is nil as slotID exists on atleast
 	// one node from `nodes`
 	if sd.slotsMap[slotID] == nil {
+		return false
+	}
+
+	var canMoveReplica = func(indexReplicaID int, newDestNode nodeUUID) bool {
+		repMap := replicaMap[(indexReplicaID)]
+		if len(repMap) > 1 {
+			return false
+		}
+		for node, partn := range repMap {
+			return partn.initialNode == nil || node.NodeUUID == newDestNode
+		}
 		return false
 	}
 
@@ -1069,12 +1299,12 @@ func (sd *ShardDealer) isSlotOnAllRequiredNodes(
 
 			var found = false
 			for nodeUUID := range nodes {
-				var nodeSlots = sd.nodeToSlotMap[nodeUUID]
-				if nodeSlots == nil {
+				if sd.nodeToSlotMap[nodeUUID] == nil {
 					continue
 				}
 				if slotReplicaID, replicaSlotExists := sd.nodeToSlotMap[nodeUUID][slotID]; replicaSlotExists &&
-					int(slotReplicaID) == indexReplicaID {
+					int(slotReplicaID) == indexReplicaID &&
+					canMoveReplica(indexReplicaID, nodeUUID) {
 					found = true
 					break
 				}
@@ -1179,4 +1409,14 @@ func (sd *ShardDealer) UpdateStatsForShard(shardStats *c.ShardStats) {
 			}
 		}
 	}
+}
+
+// Reset the internal book keeping of the shard dealer. config does not change
+func (sd *ShardDealer) Reset() {
+	sd.slotsPerCategory = make(map[ShardCategory]map[asSlotID]bool)
+	sd.slotsMap = make(map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer)
+	sd.slotsToNodeMap = make(map[asSlotID]map[asReplicaID]nodeUUID)
+	sd.partnSlots = make(map[c.IndexDefnId]map[c.PartitionId]asSlotID)
+	sd.nodeToSlotMap = make(map[nodeUUID]map[asSlotID]asReplicaID)
+	sd.nodeToShardCountMap = make(map[nodeUUID]uint64)
 }

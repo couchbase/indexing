@@ -2456,6 +2456,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.bhive.quotaSplitPercent": ConfigValue{
+		-1,
+		"Percent of storage quota to give to bhive. Rest is given to plasma. If <0, then computed storage mandatory quotas are used to split the quota.",
+		-1,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
 		uint64(500),
@@ -3582,6 +3589,13 @@ var SystemConfig = Config{
 			"will be proportional to 'rerank_factor * limit' where limit comes with " +
 			"the scan request",
 		5,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.scan.vector.max_heap_size": ConfigValue{
+		8192,
+		"Maximum heap that indexer can have when limit is pushed down per scan request",
+		8192,
 		false, // mutable
 		false, // case-insensitive
 	},

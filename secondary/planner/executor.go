@@ -6222,6 +6222,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 		return targetNodes
 	}
 
+	var dealerTracker uint64
 	for defnId, partnDist := range indexesPartnDist {
 		for partnId, replicaMap := range partnDist {
 
@@ -6246,7 +6247,12 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			}
 
 			if useShardDealer {
-				slotAlloted := solution.shardDealer.GetSlot(defnId, partnId, replicaMap)
+				dealerTracker++
+				slotAlloted := solution.shardDealer.GetSlot(
+					defnId /*defnID c.IndexDefnID*/, partnId, /*partnID c.PartitionID*/
+					replicaMap,    /* replicaMap map[int]map[*IndexerNode]*IndexUsage */
+					dealerTracker, /* tracker uint64 */
+				)
 				if slotAlloted == 0 {
 					logging.Warnf("Planner::PopulateAlternateShardIds failed to get slot for {defnID: %v, partnID: %v}",
 						defnId, partnId)
@@ -6535,6 +6541,10 @@ func NeedsReplan(s *Solution) (bool, []*IndexUsage) {
 					updateSlotMap = false
 					s.updateSlotMapEntry(indexSlot, index.destNode, indexer, replicaId)
 					s.addToIndexSlots(index.DefnId, index.Instance.ReplicaId, index.PartnId, indexSlot)
+
+					if s.shardDealer != nil {
+						s.shardDealer.RecordIndexUsage(index, indexer, false)
+					}
 				} else {
 					// Index is moving to appropriate destination node
 					// No action needed
@@ -6545,6 +6555,10 @@ func NeedsReplan(s *Solution) (bool, []*IndexUsage) {
 		if updateSlotMap {
 			s.addToSlotMap(indexSlot, index.destNode, index.Instance.ReplicaId)
 			s.addToIndexSlots(index.DefnId, index.Instance.ReplicaId, index.PartnId, indexSlot)
+
+			if s.shardDealer != nil {
+				s.shardDealer.RecordIndexUsage(index, index.destNode, false)
+			}
 		}
 	}
 

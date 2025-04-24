@@ -22,6 +22,20 @@ var ErrInvalidVectorDimension = errors.New("Length of VECTOR in incoming documen
 var ErrHeterogenousVectorData = errors.New("All entries of a vector are expected to be floating point numbers. Found other data types")
 var ErrDataOutOfBounds = errors.New("Value of the vector exceeds float32 range")
 
+func getVectorStatStr(err error) string {
+	switch err {
+	case ErrInvalidVectorType:
+		return "invalid_vec_type"
+	case ErrInvalidVectorDimension:
+		return "invalid_vec_dim"
+	case ErrHeterogenousVectorData:
+		return "heterogenous_vec_data"
+	case ErrDataOutOfBounds:
+		return "data_out_of_bounds"
+	}
+	return err.Error()
+}
+
 // CompileN1QLExpression will take expressions defined in N1QL's DDL statement
 // and compile them for evaluation.
 func CompileN1QLExpression(expressions []string) ([]interface{}, error) {
