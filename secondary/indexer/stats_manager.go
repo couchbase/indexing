@@ -285,6 +285,9 @@ type IndexStats struct {
 	cacheHitPercent           stats.Int64Val
 	cacheHits                 stats.Int64Val
 	cacheMisses               stats.Int64Val
+	rCacheHitPercent          stats.Int64Val
+	rCacheHits                stats.Int64Val // mainstore's reader cache hits
+	rCacheMisses              stats.Int64Val // mainstore's reader cache misses
 	numRecsInMem              stats.Int64Val
 	numRecsOnDisk             stats.Int64Val
 	bsNumRecsInMem            stats.Int64Val
@@ -560,6 +563,9 @@ func (s *IndexStats) Init() {
 	s.cacheHitPercent.Init()
 	s.cacheHits.Init()
 	s.cacheMisses.Init()
+	s.rCacheHitPercent.Init()
+	s.rCacheHits.Init()
+	s.rCacheMisses.Init()
 	s.numRecsInMem.Init()
 	s.numRecsOnDisk.Init()
 	s.bsNumRecsInMem.Init()
@@ -1791,6 +1797,21 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 			return ss.cacheMisses.Value()
 		}))
 	// partition stats
+	addStat("scan_cache_hit_ratio",
+		s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
+			return ss.rCacheHitPercent.Value()
+		}))
+	// partition stats
+	addStat("scan_cache_hits",
+		s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.rCacheHits.Value()
+		}))
+	// partition stats
+	addStat("scan_cache_misses",
+		s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.rCacheMisses.Value()
+		}))
+	// partition stats
 	addStat("recs_in_mem",
 		s.partnInt64Stats(func(ss *IndexStats) int64 {
 			return ss.numRecsInMem.Value()
@@ -2171,6 +2192,18 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		},
 		&s.cacheMisses, s.partnInt64Stats)
 
+	statMap.AddAggrStatFiltered("scan_cache_hits",
+		func(ss *IndexStats) int64 {
+			return ss.rCacheHits.Value()
+		},
+		&s.rCacheHits, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("scan_cache_misses",
+		func(ss *IndexStats) int64 {
+			return ss.rCacheMisses.Value()
+		},
+		&s.rCacheMisses, s.partnInt64Stats)
+
 	statMap.AddAggrStatFiltered("recs_in_mem",
 		func(ss *IndexStats) int64 {
 			return ss.numRecsInMem.Value()
@@ -2331,6 +2364,12 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			return ss.cacheHitPercent.Value()
 		},
 		&s.cacheHitPercent, s.partnAvgInt64Stats)
+
+	statMap.AddAggrStatFiltered("scan_cache_hit_ratio",
+		func(ss *IndexStats) int64 {
+			return ss.rCacheHitPercent.Value()
+		},
+		&s.rCacheHitPercent, s.partnAvgInt64Stats)
 
 	statMap.AddAggrTimingStatFiltered("timings/dcp_getseqs",
 		func(ss *IndexStats) *stats.TimingStat {
@@ -2632,6 +2671,14 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 
 	cacheMisses := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.cacheMisses.Value() })
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "cache_misses", s.bucket, collectionLabels, s.dispName, cacheMisses)
+	st = append(st, []byte(str)...)
+
+	rCacheHits := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.rCacheHits.Value() })
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "scan_cache_hits", s.bucket, collectionLabels, s.dispName, rCacheHits)
+	st = append(st, []byte(str)...)
+
+	rCacheMisses := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.rCacheMisses.Value() })
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "scan_cache_misses", s.bucket, collectionLabels, s.dispName, rCacheMisses)
 	st = append(st, []byte(str)...)
 
 	dataSizeOnDisk := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.dataSizeOnDisk.Value() })

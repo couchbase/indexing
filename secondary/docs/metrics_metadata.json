@@ -38,7 +38,7 @@
     },
     "index_cache_hits": {
         "type": "counter",
-        "help": "Number of times the required index page is found in memory, for this index",
+        "help": "The number of times the required index page for both scan and mutations is found in memory, for this index",
         "labels": [
             "bucket",
             "scope",
@@ -49,7 +49,7 @@
     },
     "index_cache_misses": {
         "type": "counter",
-        "help": "Number of times the required index page is NOT found in memory, for this index",
+        "help": "The number of times the required index page for both scan and mutations is NOT found in memory, for this index",
         "labels": [
             "bucket",
             "scope",
@@ -364,6 +364,30 @@
             "partition"
         ],
         "notes": "Valid only for memory optimized, plasma indexes"
+    },
+    "index_scan_cache_hits": {
+        "type": "counter",
+        "help": "Number of times the required index page for serving scan request is found in memory, for this index",
+        "added": "8.0",
+        "labels": [
+            "bucket",
+            "scope",
+            "collection",
+            "index"
+        ],
+        "notes": "This metric is valid only for standard GSI indexes."
+    },
+    "index_scan_cache_misses": {
+        "type": "counter",
+        "help": "Number of times the required index page for serving scan request is NOT found in memory, for this index",
+        "added": "8.0",
+        "labels": [
+            "bucket",
+            "scope",
+            "collection",
+            "index"
+        ],
+        "notes": "This metric is valid only for standard GSI indexes."
     },
     "index_memory_used_total": {
         "type": "gauge",

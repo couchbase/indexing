@@ -270,8 +270,8 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	return w
 }
 
-//This function calculates the batch size which should be used for initializing temp buffers
-//based on the quantization and similarity metric.
+// This function calculates the batch size which should be used for initializing temp buffers
+// based on the quantization and similarity metric.
 func (w *ScanWorker) getBufferInitBatchSize() int {
 
 	batchSize := w.config["scan.vector.scanworker_batch_size"].Int()
@@ -630,7 +630,7 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 	//ComputeDistanceEncoded is only implemented for SQ currently. It can only
 	//be used if all vectors in a batch belong to the same centroid. If cid < 0,
 	//it implies that scan is spanning across centroids.
-	if !w.currJob.scan.MultiCentroid && metric == codebook.METRIC_L2 {
+	if !w.currJob.scan.MultiCentroid && metric == codebook.METRIC_L2 && !w.r.IndexInst.Defn.VectorMeta.Quantizer.FastScan {
 		// Make list of vectors to calculate distance
 		for i := 0; i < vecCount; i++ {
 			codei := w.currBatchRows[i].value

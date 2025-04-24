@@ -3149,7 +3149,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	var internalData []string
 	internalDataMap := make(map[string]interface{})
 
-	var numRecsMem, numRecsDisk, cacheHits, cacheMiss, docidCount, combinedMemSzIndex int64
+	var numRecsMem, numRecsDisk, cacheHits, cacheMiss, docidCount, combinedMemSzIndex, rCacheHits, rCacheMisses int64
 	var msCompressionRatio, bsCompressionRatio float64
 	pStats := mdb.mainstore.GetPreparedStats()
 
@@ -3158,6 +3158,8 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	numRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
 	cacheHits += pStats.CacheHits
 	cacheMiss += pStats.CacheMisses
+	rCacheHits += pStats.ReaderCacheHits
+	rCacheMisses += pStats.ReaderCacheMisses
 	sts.MemUsed = pStats.MemSz + pStats.MemSzIndex
 	combinedMemSzIndex += pStats.MemSzIndex
 	sts.InsertBytes = pStats.BytesWritten
@@ -3247,6 +3249,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	mdb.idxStats.docidCount.Set(docidCount)
 	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
 	mdb.idxStats.cacheHitPercent.Set(common.ComputePercent(cacheHits, cacheMiss))
+	mdb.idxStats.rCacheHitPercent.Set(common.ComputePercent(rCacheHits, rCacheMisses))
 	mdb.idxStats.combinedResidentPercent.Set(common.ComputePercentFloat((numRecsMem + bsNumRecsMem), (numRecsDisk + bsNumRecsDisk)))
 	mdb.idxStats.cacheHits.Set(cacheHits)
 	mdb.idxStats.cacheMisses.Set(cacheMiss)
