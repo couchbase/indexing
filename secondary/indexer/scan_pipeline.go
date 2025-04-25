@@ -42,6 +42,8 @@ type ScanPipeline struct {
 	rowsReturned  uint64
 	bytesRead     uint64
 	rowsScanned   uint64
+	rowsFiltered  uint64
+	rowsReranked  uint64
 	cacheHitRatio int
 	exprEvalDur   time.Duration
 	exprEvalNum   int64
@@ -71,6 +73,14 @@ func (p ScanPipeline) BytesRead() uint64 {
 
 func (p ScanPipeline) RowsScanned() uint64 {
 	return p.rowsScanned
+}
+
+func (p ScanPipeline) RowsFiltered() uint64 {
+	return p.rowsFiltered
+}
+
+func (p ScanPipeline) RowsReranked() uint64 {
+	return p.rowsReranked
 }
 
 func (p ScanPipeline) CacheHitRatio() int {

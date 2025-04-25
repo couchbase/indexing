@@ -1603,7 +1603,7 @@ func (mdb *bhiveSlice) IsPersistanceActive() bool {
 // //////////////////////////////////////////////////////////
 
 func (mdb *bhiveSlice) RecoveryDone() {
-
+	bhive.RecoveryDone()
 }
 
 func (mdb *bhiveSlice) BuildDone(idxInstId common.IndexInstId, callb BuildDoneCallback) {

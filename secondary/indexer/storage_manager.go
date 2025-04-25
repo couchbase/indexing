@@ -2109,6 +2109,7 @@ func (s *storageMgr) handleRecoveryDone() {
 
 	if common.GetStorageMode() == common.PLASMA {
 		RecoveryDone_Plasma()
+		RecoveryDone_Bhive()
 	}
 }
 

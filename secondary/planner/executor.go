@@ -6527,6 +6527,20 @@ func NeedsReplan(s *Solution) (bool, []*IndexUsage) {
 			if replicaId == index.Instance.ReplicaId {
 
 				if indexer.NodeId != index.destNode.NodeId {
+					offset := s.findIndexOffset(index.destNode, index)
+					if offset == -1 {
+						// NeedsReplan can be triggered when the same indexSlot can exist on multiple
+						// nodes. i.e. it does not mean that if we find the indexSlot on one Node,
+						// the index itself will be present on it
+						// For e.g.
+						//		Node1: slotA-r0 { idx1-r0, idx2-r0 }
+						// 		Node2: slotA-r0 { idx3-r0, idx4-r0 }
+						// if we are replanning for idx3-r0, the slotMap will have an entry for
+						// Node1 as well but idx3-r0 will not be present here.
+						// offset == -1 represents that.
+						continue
+					}
+
 					needsReplan = true
 					logging.Infof("NeedsReplan:: Index: (%v, %v, %v, %v) is "+
 						"expected to go to node: %v but its shard is going to node: %v. Relocating index",
@@ -6534,7 +6548,6 @@ func NeedsReplan(s *Solution) (bool, []*IndexUsage) {
 						index.destNode.NodeId)
 
 					// Remove the index from planned movement and trigger replan
-					offset := s.findIndexOffset(index.destNode, index)
 					s.removeIndex(index.destNode, offset)
 					s.addIndex(indexer, index, false)
 

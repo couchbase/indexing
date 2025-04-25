@@ -229,6 +229,8 @@ type IndexStats struct {
 	numRowsScannedAggr        stats.Int64Val
 	scanCacheHitAggr          stats.Int64Val
 	numRowsScanned            stats.Int64Val
+	numRowsFiltered           stats.Int64Val
+	numRowsReranked           stats.Int64Val
 	numStrictConsReqs         stats.Int64Val
 	diskSize                  stats.Int64Val
 	memUsed                   stats.Int64Val
@@ -507,6 +509,8 @@ func (s *IndexStats) Init() {
 	s.numRowsScannedAggr.Init()
 	s.scanCacheHitAggr.Init()
 	s.numRowsScanned.Init()
+	s.numRowsFiltered.Init()
+	s.numRowsReranked.Init()
 	s.numStrictConsReqs.Init()
 	s.diskSize.Init()
 	s.memUsed.Init()
@@ -928,6 +932,7 @@ type IndexerStats struct {
 	TotalRequests          stats.Int64Val
 	TotalRowsReturned      stats.Int64Val
 	TotalRowsScanned       stats.Int64Val
+	TotalRowsFiltered      stats.Int64Val
 	lastScanGatherTime     stats.Int64Val
 	netAvgScanRate         stats.Int64Val
 	totalPendingScans      stats.Int64Val
@@ -1015,6 +1020,7 @@ func (s *IndexerStats) Init() {
 	s.TotalRequests.Init()
 	s.TotalRowsReturned.Init()
 	s.TotalRowsScanned.Init()
+	s.TotalRowsFiltered.Init()
 
 	s.RebalanceTransferProgress = &MapHolder{}
 	s.RebalanceTransferProgress.Init()
@@ -1089,7 +1095,7 @@ func (s *IndexerStats) SetSummaryFilters() {
 	s.TotalRequests.AddFilter(stats.SummaryFilter)
 	s.TotalRowsReturned.AddFilter(stats.SummaryFilter)
 	s.TotalRowsScanned.AddFilter(stats.SummaryFilter)
-
+	s.TotalRowsFiltered.AddFilter(stats.SummaryFilter)
 }
 
 // Reset recreates empty IndexStats and KeyspaceStats for each one that existed
@@ -1401,6 +1407,7 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("total_requests", &is.TotalRequests)
 	statMap.AddStatValueFiltered("total_rows_returned", &is.TotalRowsReturned)
 	statMap.AddStatValueFiltered("total_rows_scanned", &is.TotalRowsScanned)
+	statMap.AddStatValueFiltered("total_rows_filtered", &is.TotalRowsFiltered)
 
 	if statMap.spec.consumerFilter == stats.IndexStatusFilter {
 		statMap.AddStat("rebalance_transfer_progress", is.RebalanceTransferProgress.Get())
@@ -2064,6 +2071,18 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		},
 		&s.numRowsScanned, s.partnInt64Stats)
 
+	statMap.AddAggrStatFiltered("num_rows_filtered",
+		func(ss *IndexStats) int64 {
+			return ss.numRowsFiltered.Value()
+		},
+		&s.numRowsFiltered, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("num_rows_reranked",
+		func(ss *IndexStats) int64 {
+			return ss.numRowsReranked.Value()
+		},
+		&s.numRowsReranked, s.partnInt64Stats)
+
 	statMap.AddAggrStatFiltered("disk_size",
 		func(ss *IndexStats) int64 {
 			return ss.diskSize.Value()
@@ -2621,6 +2640,14 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 
 	numRowsScanned := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRowsScanned.Value() })
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_rows_scanned", s.bucket, collectionLabels, s.dispName, numRowsScanned)
+	st = append(st, []byte(str)...)
+
+	numRowsFiltered := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRowsFiltered.Value() })
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_rows_filtered", s.bucket, collectionLabels, s.dispName, numRowsFiltered)
+	st = append(st, []byte(str)...)
+
+	numRowsReranked := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRowsReranked.Value() })
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_rows_reranked", s.bucket, collectionLabels, s.dispName, numRowsReranked)
 	st = append(st, []byte(str)...)
 
 	diskSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.diskSize.Value() })
@@ -3563,6 +3590,9 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_rows_scanned counter\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_rows_scanned %v\n", METRICS_PREFIX, is.TotalRowsScanned.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_rows_filtered counter\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_rows_filtered %v\n", METRICS_PREFIX, is.TotalRowsFiltered.Value()))...)
 
 	is.memoryRss.Set(getRSS())
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_rss gauge\n", METRICS_PREFIX))...)

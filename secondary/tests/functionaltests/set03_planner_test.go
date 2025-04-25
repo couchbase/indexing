@@ -3595,6 +3595,255 @@ func TestShardAssignmentUpgradeCases_CyclicDependencies(t *testing.T) {
 	}
 }
 
+func TestPartialShardAffinity_PerformSwapRebalanceWithPartialAffinity(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+	defer logging.SetLogLevel(logging.Error)
+	testcase := shardAssignmentTestCase{
+		"mixed_mode_swap_node_1_replica.json",
+		"\t In this test, the cluster has 3 existing indexer nodes and 1 node being swapped. All in 8.0 version.\n" +
+			"\t This tests shard rebalance when some indexes are shard assigned and their replicas are not \n" +
+			"\t Node n1 has slot1-r1{ i1 (replica 1), i2 (replica 1), i3 (replica 1).} \n" +
+			"\t Node n2 has i1 (replica 0). \n" +
+			"\t Node n3 has i2 (replica 10, i3 (replica 0). \n" +
+			"\t Node n2 is swapped with a new 8.0 node (n4) is rebalanced into the cluster. \n" +
+			"\t The indexes on n3 are non-eligible for movement and n3 has excludeNode=in set but the planner \n" +
+			"\t has to place the replica 0 indexes together regardless. The excludeNode is overridden only for these indexes",
+		"../testdata/planner/shard_assignment_rebalance/mixed_mode_swap_node_1_replica.json",
+	}
+
+	log.Printf("-------------------------------------------")
+	log.Printf(testcase.comment)
+
+	config := planner.DefaultRunConfig()
+	config.EnableShardAffinity = true
+	config.Resize = false
+	config.EjectOnly = true
+	config.Detail = true
+	config.DeleteNode = 1
+
+	s := planner.NewSimulator()
+
+	plan, err := planner.ReadPlan(testcase.topology)
+	FailTestIfError(err, "Fail to read plan", t)
+
+	p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil,
+		[]string{"127.0.0.1:9001", "127.0.0.1:9003", "127.0.0.1:9004"}, "")
+	FailTestIfError(err, "Error in planner test", t)
+
+	p.PrintLayout()
+	// Validation:
+	// a. There should be only 2 shards on node n1
+	// b. The other replicas now with alternateShardIds be present on node n3
+	// c. Node n4 would be empty even if it is swap rebalanced
+	//expectedIndexCount := map[string]int{"127.0.0.1:9001": 2}
+	//expectedShardCount := map[string]int{"127.0.0.1:9001": 4}
+	//actualIndexCount := make(map[string]int)
+	//actualShardCount := make(map[string]int)
+
+	expectedIndexCount := map[string]int{"127.0.0.1:9001": 3, "127.0.0.1:9003": 3, "127.0.0.1:9004": 0}
+	expectedShardCount := map[string]int{"127.0.0.1:9001": 2, "127.0.0.1:9003": 2, "127.0.0.1:9004": 0}
+	actualIndexCount := make(map[string]int)
+	actualShardCount := make(map[string]int)
+
+	planner.UngroupIndexes(p.GetResult())
+	for _, indexer := range p.GetResult().Placement {
+		actualIndexCount[indexer.NodeId] = len(indexer.Indexes)
+
+		numShards := make(map[string]int)
+		for _, index := range indexer.Indexes {
+			for _, altId := range index.AlternateShardIds {
+				numShards[altId] = 1
+			}
+		}
+
+		actualShardCount[indexer.NodeId] = len(numShards)
+	}
+
+	if compareMaps(expectedIndexCount, actualIndexCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedIndexCount, actualIndexCount)
+	}
+
+	if compareMaps(expectedShardCount, actualShardCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedShardCount, actualShardCount)
+	}
+}
+
+func TestPartialShardAffinity_PerformFailoverHeavyAddNodeWithPartialAffinity(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+	defer logging.SetLogLevel(logging.Error)
+	testcase := shardAssignmentTestCase{
+		"mixed_mode_add_failover_heavy_node_1_replica.json",
+		"\t In this test, the cluster has w existing indexer nodes and 1 node added. All in 8.0 version.\n" +
+			"\t This tests shard rebalance when some indexes are lost and others are shard assigned and " +
+			" their replicas are not. \n" +
+			"\t Node n1 has slot1-r1{ i1 (replica 1), i2 (replica 1), i3 (replica 1).} \n" +
+			"\t Node n2 has i1 (replica 0). <- FailedOver This is removed from the json plan to replicate it\n" +
+			"\t Node n3 has i2 (replica 10, i3 (replica 0). \n" +
+			"\t A new 8.0 node (n4) is rebalanced into the cluster. \n" +
+			"\t Due to replica repair only the repairs will be eligible for movement. Indexes on n3 are non-eligible " +
+			"\t but the planner has to place the replica 0 indexes together regardless only for these indexes",
+		"../testdata/planner/shard_assignment_rebalance/mixed_mode_add_failover_heavy_node_1_replica.json",
+	}
+
+	log.Printf("-------------------------------------------")
+	log.Printf(testcase.comment)
+
+	config := planner.DefaultRunConfig()
+	config.EnableShardAffinity = true
+	config.Resize = false
+	config.EjectOnly = true
+	config.Detail = true
+
+	s := planner.NewSimulator()
+
+	plan, err := planner.ReadPlan(testcase.topology)
+	FailTestIfError(err, "Fail to read plan", t)
+
+	p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil,
+		nil, "")
+	FailTestIfError(err, "Error in planner test", t)
+
+	p.PrintLayout()
+	// Validation:
+	// a. There should be only 2 shards on node n1
+	// b. The other replicas now with alternateShardIds be present on node n2
+	//expectedIndexCount := map[string]int{"127.0.0.1:9001": 2}
+	//expectedShardCount := map[string]int{"127.0.0.1:9001": 4}
+	//actualIndexCount := make(map[string]int)
+	//actualShardCount := make(map[string]int)
+
+	expectedIndexCount := map[string]int{"127.0.0.1:9001": 3, "127.0.0.1:9002": 3, "127.0.0.1:9004": 0}
+	expectedShardCount := map[string]int{"127.0.0.1:9001": 2, "127.0.0.1:9002": 2, "127.0.0.1:9004": 0}
+	actualIndexCount := make(map[string]int)
+	actualShardCount := make(map[string]int)
+
+	planner.UngroupIndexes(p.GetResult())
+	for _, indexer := range p.GetResult().Placement {
+		actualIndexCount[indexer.NodeId] = len(indexer.Indexes)
+
+		numShards := make(map[string]int)
+		for _, index := range indexer.Indexes {
+			for _, altId := range index.AlternateShardIds {
+				numShards[altId] = 1
+			}
+		}
+
+		actualShardCount[indexer.NodeId] = len(numShards)
+	}
+
+	if compareMaps(expectedIndexCount, actualIndexCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedIndexCount, actualIndexCount)
+	}
+
+	if compareMaps(expectedShardCount, actualShardCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedShardCount, actualShardCount)
+	}
+}
+
+func TestPartialShardAffinity_PerformFailoverLightAddNodeWithPartialAffinity(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+	defer logging.SetLogLevel(logging.Error)
+	testcase := shardAssignmentTestCase{
+		"mixed_mode_add_failover_light_node_1_replica.json",
+		"\t In this test, the cluster has w existing indexer nodes and 1 node added. All in 8.0 version.\n" +
+			"\t This tests shard rebalance when some indexes are lost and others are shard assigned and " +
+			" their replicas are not. \n" +
+			"\t Node n1 has slot1-r1{ i1 (replica 1), i2 (replica 1), i3 (replica 1).} \n" +
+			"\t Node n2 has i1 (replica 0). \n" +
+			"\t Node n3 has i2 (replica 10, i3 (replica 0). <- FailedOver. This is removed from the json plan\n" +
+			"\t A new 8.0 node (n4) is rebalanced into the cluster. \n" +
+			"\t Due to replica repair only the repairs will be eligible for movement. Indexes on n3 are non-eligible " +
+			"\t but the planner has to place the replica 0 indexes together regardless only for these indexes",
+		"../testdata/planner/shard_assignment_rebalance/mixed_mode_add_failover_light_node_1_replica.json",
+	}
+
+	log.Printf("-------------------------------------------")
+	log.Printf(testcase.comment)
+
+	config := planner.DefaultRunConfig()
+	config.EnableShardAffinity = true
+	config.Resize = false
+	config.EjectOnly = true
+	config.Detail = true
+
+	s := planner.NewSimulator()
+
+	plan, err := planner.ReadPlan(testcase.topology)
+	FailTestIfError(err, "Fail to read plan", t)
+
+	// Swap Rebalance, remove Node 127.0.0.1:9002
+	//for _, indexer := range plan.Placement {
+	//	if indexer.NodeId == "127.0.0.1:9002" {
+	//		indexer.MarkDeleted()
+	//		break
+	//	}
+	//}
+
+	p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil,
+		nil, "")
+	FailTestIfError(err, "Error in planner test", t)
+
+	p.PrintLayout()
+	// Validation:
+	// a. There should be only 2 shards on node n1
+	// b. The other replicas now with alternateShardIds be present on node n3
+	//expectedIndexCount := map[string]int{"127.0.0.1:9001": 2}
+	//expectedShardCount := map[string]int{"127.0.0.1:9001": 4}
+	//actualIndexCount := make(map[string]int)
+	//actualShardCount := make(map[string]int)
+
+	expectedIndexCount := map[string]int{"127.0.0.1:9001": 3, "127.0.0.1:9003": 3, "127.0.0.1:9004": 0}
+	expectedShardCount := map[string]int{"127.0.0.1:9001": 2, "127.0.0.1:9003": 2, "127.0.0.1:9004": 0}
+	actualIndexCount := make(map[string]int)
+	actualShardCount := make(map[string]int)
+
+	planner.UngroupIndexes(p.GetResult())
+	for _, indexer := range p.GetResult().Placement {
+		actualIndexCount[indexer.NodeId] = len(indexer.Indexes)
+
+		numShards := make(map[string]int)
+		for _, index := range indexer.Indexes {
+			for _, altId := range index.AlternateShardIds {
+				numShards[altId] = 1
+			}
+		}
+
+		actualShardCount[indexer.NodeId] = len(numShards)
+	}
+
+	if compareMaps(expectedIndexCount, actualIndexCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedIndexCount, actualIndexCount)
+	}
+
+	if compareMaps(expectedShardCount, actualShardCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedShardCount, actualShardCount)
+	}
+}
+
 func compareMaps(expected, actual map[string]int) bool {
 	if len(expected) != len(actual) {
 		return false
