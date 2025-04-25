@@ -311,6 +311,13 @@ func (w *ScanWorker) setSenderBatchSize() {
 		return
 	}
 
+	//use regular batch size for bhive, as it doesn't
+	//benefit from larger batch size
+	if w.r.isBhiveScan {
+		w.senderBatchSize = batchSize
+		return
+	}
+
 	similarity := w.r.IndexInst.Defn.VectorMeta.Similarity
 	metric, _ := codebook.ConvertSimilarityToMetric(similarity)
 	if metric != codebook.METRIC_L2 {
@@ -322,7 +329,10 @@ func (w *ScanWorker) setSenderBatchSize() {
 	//Such scans reuse the distance table and large batch size reduces the
 	//overheads associated with each batch processing as less number of
 	//such calls need to be made to the faiss library.
-	if !w.currJob.scan.MultiCentroid && qtype == c.PQ && metric == codebook.METRIC_L2 {
+	if !w.currJob.scan.MultiCentroid &&
+		qtype == c.PQ &&
+		metric == codebook.METRIC_L2 &&
+		!w.r.IndexInst.Defn.VectorMeta.Quantizer.FastScan {
 		w.senderBatchSize = largeBatchSize
 	} else {
 		w.senderBatchSize = batchSize
@@ -633,10 +643,23 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 
 	metric := w.currJob.codebook.MetricType()
 
+	useDistEncoded := func() bool {
+
+		if w.r.isBhiveScan {
+			//keep in sync with bhive_slice.go useDistEncoded
+			return w.r.IndexInst.Defn.VectorMeta.Quantizer.Type == common.SQ &&
+				metric == codebook.METRIC_L2
+		} else {
+			return !w.currJob.scan.MultiCentroid &&
+				metric == codebook.METRIC_L2 &&
+				!w.r.IndexInst.Defn.VectorMeta.Quantizer.FastScan
+		}
+	}()
+
 	//ComputeDistanceEncoded is only implemented for SQ currently. It can only
 	//be used if all vectors in a batch belong to the same centroid. If cid < 0,
 	//it implies that scan is spanning across centroids.
-	if !w.currJob.scan.MultiCentroid && metric == codebook.METRIC_L2 && !w.r.IndexInst.Defn.VectorMeta.Quantizer.FastScan {
+	if useDistEncoded {
 		// Make list of vectors to calculate distance
 		for i := 0; i < vecCount; i++ {
 			codei := w.currBatchRows[i].value
