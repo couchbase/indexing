@@ -2362,18 +2362,25 @@ func (mdb *bhiveSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 	}
 }
 
+func (mdb *bhiveSlice) resetReaders() {
+	for i := 0; i < cap(mdb.readers); i++ {
+		<-mdb.readers
+	}
+}
+
 func (slice *bhiveSlice) resetBuffers() {
 	slice.stopWriters(0)
 
 	slice.cmdCh = slice.cmdCh[:0]
 	slice.stopCh = slice.stopCh[:0]
+
+	slice.mainWriters = slice.mainWriters[:0]
+	slice.backWriters = slice.backWriters[:0]
 }
 
 func (mdb *bhiveSlice) resetStores(initBuild bool) error {
 	// Clear all readers
-	for i := 0; i < cap(mdb.readers); i++ {
-		<-mdb.readers
-	}
+	mdb.resetReaders()
 
 	numWriters := mdb.numWriters
 	mdb.freeAllWriters()
@@ -2704,6 +2711,8 @@ func (mdb *bhiveSlice) Close() {
 	} else {
 		mdb.isClosed = true
 		tryCloseBhiveSlice(mdb)
+		mdb.resetReaders()
+		mdb.resetBuffers()
 	}
 }
 
