@@ -4480,6 +4480,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.bhive.MagmaLSDFragmentationPercent": ConfigValue{
+		25,
+		"magma seqIndex fragmentation threshold for compaction. Do not set it below 10% else magma may loop",
+		25,
+		false,
+		false,
+	},
 	"indexer.bhive.enableAutoLSSCleaning": ConfigValue{
 		true,
 		"Use background log cleaner to contain fragmentation",

@@ -418,6 +418,9 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.EnableRollbackFilterMerge = slice.sysconf["bhive.EnableRollbackFilterMerge"].Bool()
 	cfg.EnableRollbackFilterTrim = slice.sysconf["bhive.EnableRollbackFilterTrim"].Bool()
 	cfg.EnableRollbackFilterPrune = slice.sysconf["bhive.EnableRollbackFilterPrune"].Bool()
+
+	cfg.LSDFragmentationRatio = slice.sysconf["bhive.MagmaLSDFragmentationPercent"].Float64() / 100.0
+
 	cfg.AutoLSSCleaning = slice.sysconf["bhive.enableAutoLSSCleaning"].Bool()
 	cfg.LSSCleanerInterval = time.Duration(slice.sysconf["bhive.LSSCleanerInterval"].Int()) * time.Millisecond
 	cfg.LSSCleanerThreshold = float32(slice.sysconf["bhive.LSSCleanerThreshold"].Float64())
@@ -447,6 +450,8 @@ func (slice *bhiveSlice) setupBackstoreConfig() bhive.Config {
 	cfg.KeyPrefixSize = uint64(cfg.CentroidIDSize)
 	cfg.NumKVStore = NumKVStore
 	cfg.MaxBatchSize = MaxBatchSize
+
+	cfg.LSDFragmentationRatio = slice.sysconf["bhive.MagmaLSDFragmentationPercent"].Float64() / 100.0
 
 	cfg.NumWriters = slice.maxNumWriters
 	return cfg
