@@ -403,6 +403,8 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.UseVanama = slice.sysconf["bhive.useVanama"].Bool()
 	cfg.UseDistEncoded = slice.sysconf["bhive.useResidual"].Bool()
 	cfg.NumFlushBuffer = slice.sysconf["bhive.numFlushBuffer"].Int()
+	cfg.MinNumFlushBuffer = slice.sysconf["bhive.minNumFlushBuffer"].Int()
+	cfg.MaxNumFlushBuffer = slice.sysconf["bhive.maxNumFlushBuffer"].Int()
 	cfg.NumEvictor = slice.sysconf["bhive.numEvictor"].Int()
 	cfg.NumInitBuilder = slice.sysconf["bhive.numInitBuilder"].Int()
 	cfg.NumBuilder = slice.sysconf["bhive.numBuilder"].Int()

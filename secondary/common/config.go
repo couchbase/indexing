@@ -4369,8 +4369,22 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.bhive.numFlushBuffer": ConfigValue{
-		256,
+		16,
 		"number of flush buffer per centroid",
+		16,
+		false,
+		false,
+	},
+	"indexer.bhive.minNumFlushBuffer": ConfigValue{
+		4,
+		"min number of flush buffer per centroid",
+		4,
+		false,
+		false,
+	},
+	"indexer.bhive.maxNumFlushBuffer": ConfigValue{
+		256,
+		"max number of flush buffer per centroid",
 		256,
 		false,
 		false,
