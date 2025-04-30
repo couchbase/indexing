@@ -335,7 +335,7 @@ func TestWithShardAffinity(t *testing.T) {
 	})
 
 	t.Run("TestSwapRebalance", func(subt *testing.T) {
-		TestSwapRebalance(t)
+		TestSwapRebalance(subt)
 
 		performClusterStateValidation(subt, true,
 			tc.MISSING_REPLICA_INVALID_CLUSTER_STATE)
