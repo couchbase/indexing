@@ -6576,7 +6576,7 @@ func (idx *indexer) getBucketInfoForIndexInst(indexInst common.IndexInst, respCh
 func (idx *indexer) handleCodebookRecoveryError(indexInst common.IndexInst, partnId common.PartitionId, bootstrapPhase bool, recoveryErr error) error {
 	// [VECTOR_TODO]: Handle shard rebalance cases
 	if !bootstrapPhase || recoveryErr == nil {
-		return nil
+		return recoveryErr
 	}
 
 	if recoveryErr == errCodebookPathNotFound {
@@ -6653,34 +6653,37 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 
 		if indexInst.Defn.IsVectorIndex {
 			err = idx.handleCodebookRecoveryError(indexInst, partnId, bootstrapPhase, err)
-			if err != nil {
-				failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
-				continue
-			}
 		}
 
 		if err != nil {
-			// Propagate the error back to caller for shard rebalance
-			if bootstrapPhase && err == errStorageCorrupted {
-				failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
-				if !shardRebalance {
-					errStr := fmt.Sprintf("storage corruption for indexInst %v partnDefn %v", indexInst, partnDefn)
-					logging.Errorf("Indexer:: initPartnInstance %v", errStr)
-					continue
+			if bootstrapPhase {
+				switch err {
+				case errStorageCorrupted, errCodebookCorrupted:
+					// if the index is corrupted, we want to backup the index so record the failed
+					// partition
+					failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
+					if !shardRebalance {
+						errStr := fmt.Sprintf("storage corruption for indexInst %v partnDefn %v", indexInst, partnDefn)
+						logging.Errorf("Indexer:: initPartnInstance %v", errStr)
+						continue
+					}
+				case errStoragePathNotFound, errCodebookPathNotFound:
+					// we don't want to crash the indexer if the path is not found as it can lead
+					// to crash loop but we can crash if path is not found in shard rebalance
+					if !shardRebalance {
+						failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
+						errStr := fmt.Sprintf("storage path not found for indexInst %v partnDefn %v", indexInst, partnDefn)
+						logging.Errorf("Indexer:: initPartnInstance %v", errStr)
+						continue
+					}
 				}
-			}
-
-			if (bootstrapPhase && err == errStoragePathNotFound) && !shardRebalance {
-				errStr := fmt.Sprintf("storage path not found for indexInst %v partnDefn %v", indexInst, partnDefn)
-				logging.Errorf("Indexer:: initPartnInstance %v", errStr)
-				failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
-				continue
 			}
 
 			errStr := fmt.Sprintf("Error creating slice %v", err)
 			logging.Errorf("Indexer::initPartnInstance %v. Abort.", errStr)
 			err1 := errors.New(errStr)
 
+			// Propagate the error back to caller for shard rebalance
 			if respCh != nil {
 				respCh <- &MsgError{
 					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
