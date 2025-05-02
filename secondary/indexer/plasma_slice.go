@@ -577,7 +577,10 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		mCfg.CompressBeforeEvictPercent = slice.sysconf["plasma.mainIndex.compressBeforeEvictPercent"].Int()
 		mCfg.CompressAfterSwapin = slice.sysconf["plasma.mainIndex.enableCompressAfterSwapin"].Bool()
 		mCfg.CompressMemoryThreshold = slice.sysconf["plasma.mainIndex.compressMemoryThresholdPercent"].Int()
+		mCfg.CompressMemoryLowThreshold = slice.sysconf["plasma.mainIndex.compressMemoryLowThresholdPercent"].Int()
+		mCfg.MinCPUsForInMemCompression = slice.sysconf["plasma.mainIndex.minCPUsForInMemCompression"].Int()
 		mCfg.CompressFullMarshal = slice.sysconf["plasma.mainIndex.enableCompressFullMarshal"].Bool()
+		mCfg.CompressInSwapper = slice.sysconf["plasma.mainIndex.enableCompressInSwapper"].Bool()
 
 		if common.IsServerlessDeployment() {
 			mCfg.MaxDeltaChainLen = slice.sysconf["plasma.serverless.mainIndex.maxNumPageDeltas"].Int()
@@ -617,7 +620,10 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		bCfg.CompressBeforeEvictPercent = slice.sysconf["plasma.backIndex.compressBeforeEvictPercent"].Int()
 		bCfg.CompressAfterSwapin = slice.sysconf["plasma.backIndex.enableCompressAfterSwapin"].Bool()
 		bCfg.CompressMemoryThreshold = slice.sysconf["plasma.backIndex.compressMemoryThresholdPercent"].Int()
+		bCfg.CompressMemoryLowThreshold = slice.sysconf["plasma.backIndex.compressMemoryLowThresholdPercent"].Int()
+		bCfg.MinCPUsForInMemCompression = slice.sysconf["plasma.backIndex.minCPUsForInMemCompression"].Int()
 		bCfg.CompressFullMarshal = slice.sysconf["plasma.backIndex.enableCompressFullMarshal"].Bool()
+		bCfg.CompressInSwapper = slice.sysconf["plasma.backIndex.enableCompressInSwapper"].Bool()
 
 		if common.IsServerlessDeployment() {
 			bCfg.MaxPageItems = slice.sysconf["plasma.serverless.backIndex.pageSplitThreshold"].Int()
@@ -3500,7 +3506,10 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.CompressBeforeEvictPercent = mdb.sysconf["plasma.mainIndex.compressBeforeEvictPercent"].Int()
 	mdb.mainstore.CompressAfterSwapin = mdb.sysconf["plasma.mainIndex.enableCompressAfterSwapin"].Bool()
 	mdb.mainstore.CompressMemoryThreshold = mdb.sysconf["plasma.mainIndex.compressMemoryThresholdPercent"].Int()
+	mdb.mainstore.CompressMemoryLowThreshold = mdb.sysconf["plasma.mainIndex.compressMemoryLowThresholdPercent"].Int()
+	mdb.mainstore.MinCPUsForInMemCompression = mdb.sysconf["plasma.mainIndex.minCPUsForInMemCompression"].Int()
 	mdb.mainstore.CompressFullMarshal = mdb.sysconf["plasma.mainIndex.enableCompressFullMarshal"].Bool()
+	mdb.mainstore.CompressInSwapper = mdb.sysconf["plasma.mainIndex.enableCompressInSwapper"].Bool()
 
 	mdb.mainstore.BufMemQuotaRatio = mdb.sysconf["plasma.BufMemQuotaRatio"].Float64()
 	mdb.mainstore.MaxSMRWorkerPerCore = mdb.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
@@ -3624,7 +3633,10 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.CompressBeforeEvictPercent = mdb.sysconf["plasma.backIndex.compressBeforeEvictPercent"].Int()
 		mdb.backstore.CompressAfterSwapin = mdb.sysconf["plasma.backIndex.enableCompressAfterSwapin"].Bool()
 		mdb.backstore.CompressMemoryThreshold = mdb.sysconf["plasma.backIndex.compressMemoryThresholdPercent"].Int()
+		mdb.backstore.CompressMemoryLowThreshold = mdb.sysconf["plasma.backIndex.compressMemoryLowThresholdPercent"].Int()
+		mdb.backstore.MinCPUsForInMemCompression = mdb.sysconf["plasma.backIndex.minCPUsForInMemCompression"].Int()
 		mdb.backstore.CompressFullMarshal = mdb.sysconf["plasma.backIndex.enableCompressFullMarshal"].Bool()
+		mdb.backstore.CompressInSwapper = mdb.sysconf["plasma.backIndex.enableCompressInSwapper"].Bool()
 
 		mdb.backstore.BufMemQuotaRatio = mdb.sysconf["plasma.BufMemQuotaRatio"].Float64()
 		mdb.backstore.MaxSMRWorkerPerCore = mdb.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()

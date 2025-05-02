@@ -403,6 +403,8 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.UseVanama = slice.sysconf["bhive.useVanama"].Bool()
 	cfg.UseDistEncoded = slice.sysconf["bhive.useResidual"].Bool()
 	cfg.NumFlushBuffer = slice.sysconf["bhive.numFlushBuffer"].Int()
+	cfg.MinNumFlushBuffer = slice.sysconf["bhive.minNumFlushBuffer"].Int()
+	cfg.MaxNumFlushBuffer = slice.sysconf["bhive.maxNumFlushBuffer"].Int()
 	cfg.NumEvictor = slice.sysconf["bhive.numEvictor"].Int()
 	cfg.NumInitBuilder = slice.sysconf["bhive.numInitBuilder"].Int()
 	cfg.NumBuilder = slice.sysconf["bhive.numBuilder"].Int()
@@ -2449,7 +2451,7 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	cacheHits += int64(mStats.CacheHits)
 	cacheMiss += int64(mStats.CacheMisses)
 
-	sts.MemUsed = int64(mStats.MemUsed)
+	sts.MemUsed = int64(mStats.MemUsed + mStats.BufMemUsed)
 	sts.InsertBytes = int64(mStats.NWriteBytes)
 	sts.GetBytes = int64(mStats.NReadBytes)
 	sts.DiskSize = int64(mStats.TotalDiskUsage)
@@ -2462,7 +2464,7 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	bsNumRecsMem += int64(float32(bStats.ItemCount) * bStats.ResidentRatio)
 	bsNumRecsDisk += int64(float32(bStats.ItemCount) * (1 - bStats.ResidentRatio))
 
-	sts.MemUsed += int64(bStats.MemUsed)
+	sts.MemUsed += int64(bStats.MemUsed + mStats.BufMemUsed)
 	sts.InsertBytes += int64(bStats.NWriteBytes)
 	sts.GetBytes += int64(bStats.NReadBytes)
 	sts.DiskSize += int64(bStats.TotalDiskUsage)

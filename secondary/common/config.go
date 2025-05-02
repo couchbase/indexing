@@ -1686,9 +1686,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.enableDecompressDuringSwapin": ConfigValue{
-		false,
+		true,
 		"Enable decompression of compressed items during swapin",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1708,14 +1708,35 @@ var SystemConfig = Config{
 	},
 	"indexer.plasma.mainIndex.compressMemoryThresholdPercent": ConfigValue{
 		95,
-		"Percent of quota that memory usage should be greater than to compress after swapin",
+		"Percent of quota that memory usage should be greater than to compress in-memory",
 		95,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.compressMemoryLowThresholdPercent": ConfigValue{
+		85,
+		"Percent of quota that memory usage should be lower than to decompress in-memory",
+		85,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.minCPUsForInMemCompression": ConfigValue{
+		8,
+		"minimum value of GOMAXPROCS above which, in-mem compression may occur",
+		8,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.enableCompressFullMarshal": ConfigValue{
 		false,
 		"Compress page after full marshal",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.enableCompressInSwapper": ConfigValue{
+		false,
+		"Compress pages marked as canCompress in swapper under memory pressure",
 		false,
 		false, // mutable
 		false, // case-insensitive
@@ -1868,9 +1889,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.enableDecompressDuringSwapin": ConfigValue{
-		false,
+		true,
 		"Enable decompression of compressed items during swapin",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1890,14 +1911,35 @@ var SystemConfig = Config{
 	},
 	"indexer.plasma.backIndex.compressMemoryThresholdPercent": ConfigValue{
 		95,
-		"Percent of quota that memory usage should be greater than to compress after swapin",
+		"Percent of quota that memory usage should be greater than to compress in-memory",
 		95,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.compressMemoryLowThresholdPercent": ConfigValue{
+		85,
+		"Percent of quota that memory usage should be lower than to decompress in-memory",
+		85,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.minCPUsForInMemCompression": ConfigValue{
+		8,
+		"minimum value of GOMAXPROCS above which, in-mem compression may occur",
+		8,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.enableCompressFullMarshal": ConfigValue{
 		false,
 		"Compress page after full marshal",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.enableCompressInSwapper": ConfigValue{
+		false,
+		"Compress pages marked as canCompress in swapper under memory pressure",
 		false,
 		false, // mutable
 		false, // case-insensitive
@@ -4369,8 +4411,22 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.bhive.numFlushBuffer": ConfigValue{
-		256,
+		16,
 		"number of flush buffer per centroid",
+		16,
+		false,
+		false,
+	},
+	"indexer.bhive.minNumFlushBuffer": ConfigValue{
+		4,
+		"min number of flush buffer per centroid",
+		4,
+		false,
+		false,
+	},
+	"indexer.bhive.maxNumFlushBuffer": ConfigValue{
+		256,
+		"max number of flush buffer per centroid",
 		256,
 		false,
 		false,
@@ -4425,9 +4481,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.bhive.LSSCleanerInterval": ConfigValue{
-		60000,
+		1000,
 		"Controls how frequently log cleaner will check the fragmentation. It is the duration between checks in ms.",
-		60000,
+		1000,
 		false,
 		false,
 	},
@@ -4439,9 +4495,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.bhive.LSSCleanerMinSize": ConfigValue{
-		16 * 1024 * 1024,
+		2 * 1024 * 1024,
 		"The minimum used space in bytes to start cleaning the log",
-		16 * 1024 * 1024,
+		2 * 1024 * 1024,
 		false,
 		false,
 	},
