@@ -418,6 +418,9 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.EnableRollbackFilterMerge = slice.sysconf["bhive.EnableRollbackFilterMerge"].Bool()
 	cfg.EnableRollbackFilterTrim = slice.sysconf["bhive.EnableRollbackFilterTrim"].Bool()
 	cfg.EnableRollbackFilterPrune = slice.sysconf["bhive.EnableRollbackFilterPrune"].Bool()
+
+	cfg.LSDFragmentationRatio = slice.sysconf["bhive.MagmaLSDFragmentationPercent"].Float64() / 100.0
+
 	cfg.AutoLSSCleaning = slice.sysconf["bhive.enableAutoLSSCleaning"].Bool()
 	cfg.LSSCleanerInterval = time.Duration(slice.sysconf["bhive.LSSCleanerInterval"].Int()) * time.Millisecond
 	cfg.LSSCleanerThreshold = float32(slice.sysconf["bhive.LSSCleanerThreshold"].Float64())
@@ -447,6 +450,8 @@ func (slice *bhiveSlice) setupBackstoreConfig() bhive.Config {
 	cfg.KeyPrefixSize = uint64(cfg.CentroidIDSize)
 	cfg.NumKVStore = NumKVStore
 	cfg.MaxBatchSize = MaxBatchSize
+
+	cfg.LSDFragmentationRatio = slice.sysconf["bhive.MagmaLSDFragmentationPercent"].Float64() / 100.0
 
 	cfg.NumWriters = slice.maxNumWriters
 	return cfg
@@ -2362,18 +2367,25 @@ func (mdb *bhiveSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 	}
 }
 
+func (mdb *bhiveSlice) resetReaders() {
+	for i := 0; i < cap(mdb.readers); i++ {
+		<-mdb.readers
+	}
+}
+
 func (slice *bhiveSlice) resetBuffers() {
 	slice.stopWriters(0)
 
 	slice.cmdCh = slice.cmdCh[:0]
 	slice.stopCh = slice.stopCh[:0]
+
+	slice.mainWriters = slice.mainWriters[:0]
+	slice.backWriters = slice.backWriters[:0]
 }
 
 func (mdb *bhiveSlice) resetStores(initBuild bool) error {
 	// Clear all readers
-	for i := 0; i < cap(mdb.readers); i++ {
-		<-mdb.readers
-	}
+	mdb.resetReaders()
 
 	numWriters := mdb.numWriters
 	mdb.freeAllWriters()
@@ -2704,6 +2716,8 @@ func (mdb *bhiveSlice) Close() {
 	} else {
 		mdb.isClosed = true
 		tryCloseBhiveSlice(mdb)
+		mdb.resetReaders()
+		mdb.resetBuffers()
 	}
 }
 

@@ -94,6 +94,13 @@ type storageMgr struct {
 	// - sending true in the channel will cause the go routine to stop
 	// - sending false in the channel will force a memory quota distribution
 	quotaDistCh chan bool
+
+	// for moving averages in quota distribution
+	oldBWSS, oldPWSS   int64
+	oldBMand, oldPMand int64
+
+	// for dampening large quota shifts
+	prevBSplit int64
 }
 
 type snapshotWaiter struct {
@@ -3115,7 +3122,53 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		return
 	}
 
-	// bhiveQuotaPercent is set to -1 by default, use mandatory quotas to split
+	// bhiveQuotaPercent is set to -1 by default, use mandatory quotas and working set size to split
+
+	splitByProportion := func(bProp, pProp, oldBProp, oldPProp, remQuota, prevBSplit int64) (int64, int64, int64, int64, int64) {
+
+		if oldBProp > 0 && oldPProp > 0 {
+			// moving avg to smooth out sudden changes and absorb noise
+			bProp = (oldBProp + bProp) / 2
+			pProp = (oldPProp + pProp) / 2
+		}
+
+		total := bProp + pProp
+		if total <= 0 || bProp <= 0 || pProp <= 0 {
+			return 0, remQuota, 0, 0, 0
+		}
+		bs := (remQuota * bProp) / total
+
+		minBSplit := int64(0)
+		maxBSplit := remQuota
+
+		// make sure the quota does not move too much at once
+		if prevBSplit > 0 {
+			maxShiftPercent := int64(s.config["bhive.quotaMaxShiftPercent"].Int())
+			maxShift := (maxShiftPercent * storageQuota) / 100
+
+			if ms := prevBSplit - maxShift; ms > minBSplit {
+				minBSplit = ms
+			}
+
+			if ms := prevBSplit + maxShift; ms < maxBSplit {
+				maxBSplit = ms
+			}
+		}
+
+		if bs < minBSplit {
+			bs = minBSplit
+		}
+
+		if bs > maxBSplit {
+			bs = maxBSplit
+		}
+
+		remQuota -= bs
+		ps := remQuota
+		remQuota = 0
+
+		return bs, ps, bProp, pProp, remQuota
+	}
 
 	pMandQuota, pMinQuota := plasma.GetMandatoryQuota()
 	if pMandQuota < 0 {
@@ -3126,25 +3179,60 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		bMandQuota = 0
 	}
 
+	pWSS := plasma.GetWorkingSetSize()
+	if pWSS < 0 {
+		pWSS = 0
+	}
+	bWSS := bhive.GetWorkingSetSize()
+	if bWSS < 0 {
+		bWSS = 0
+	}
+
+	var pSplit, bSplit int64
+
 	remainingQuota := storageQuota
 
-	tryAssignQuotas := func(pq, bq int64) bool {
+	tryAssignQuotas := func(pq, bq int64, doSplitByMand bool) bool {
 		if (pq + bq) > remainingQuota {
 			// there is not enough quota to satisfy the request
 			return false
 		}
 
-		// there is enough to satisfy both, give plasma the requested and bhive the requested+what ever is left
+		// there is enough to satisfy both, give both the requested amount
+
 		plasmaQuota = pq
 		remainingQuota -= pq
 
-		// at this point, remainingQuota >= bq
-		bhiveQuota = remainingQuota
-		remainingQuota = 0
+		bhiveQuota = bq
+		remainingQuota -= bq
+
+		if remainingQuota > 0 {
+
+			if doSplitByMand {
+				// split proportional to mandatory quotas
+				bSplit, pSplit, s.oldBMand, s.oldPMand, remainingQuota = splitByProportion(bMandQuota, pMandQuota,
+					s.oldBMand, s.oldPMand, remainingQuota, s.prevBSplit)
+
+				s.oldBWSS = 0
+				s.oldPWSS = 0
+			} else {
+				// split proportional to working set
+				bSplit, pSplit, s.oldBWSS, s.oldPWSS, remainingQuota = splitByProportion(bWSS, pWSS,
+					s.oldBWSS, s.oldPWSS, remainingQuota, s.prevBSplit)
+
+				s.oldPMand = 0
+				s.oldBMand = 0
+			}
+
+			s.prevBSplit = bSplit
+			bhiveQuota += bSplit
+			plasmaQuota += pSplit
+		}
 
 		logging.Infof("storageMgr:redistributeMemoryQuota: bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] "+
-			"pMandQuota[%d] bMandQuota[%d] pMinQuota[%d] bMinQuota[%d]",
-			bhiveQuota, plasmaQuota, storageQuota, pMandQuota, bMandQuota, pMinQuota, bMinQuota)
+			"pMandQuota[%d] bMandQuota[%d] pMinQuota[%d] bMinQuota[%d] pWSS[%d] bWSS[%d] bSplit[%d]",
+			bhiveQuota, plasmaQuota, storageQuota,
+			pMandQuota, bMandQuota, pMinQuota, bMinQuota, pWSS, bWSS, bSplit)
 
 		if bhiveQuota > 0 {
 			bhive.SetMemoryQuota(bhiveQuota)
@@ -3157,25 +3245,20 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		return true
 	}
 
-	// First try to give both mandatory
-	if tryAssignQuotas(pMandQuota, bMandQuota) {
+	// First try to give both mandatory, split remaining by working set
+	if tryAssignQuotas(pMandQuota, bMandQuota, false) {
 		return
 	}
 
-	// Couldn't give both mandatory, try to give plasma min
-	if tryAssignQuotas(pMinQuota, bMandQuota) {
-		return
-	}
-
-	// Couldn't give only plasma min, try to give both min
-	if tryAssignQuotas(pMinQuota, bMinQuota) {
+	// Couldn't give both mandatory, try to give both min and split remaining by mandatory
+	if tryAssignQuotas(pMinQuota, bMinQuota, true) {
 		return
 	}
 
 	// Couldn't give both min, quota is probably undersized or min is over reported
 	// plasma recovery may fail if minimum is not given, try to give plasma the minimum
 	if pMinQuota < remainingQuota {
-		if !tryAssignQuotas(pMinQuota, remainingQuota-pMinQuota) {
+		if !tryAssignQuotas(pMinQuota, remainingQuota-pMinQuota, true) {
 			// Should surely have returned true, log error just in case
 			logging.Errorf("storageMgr:redistributeMemoryQuota: Failed to give plasma min: "+
 				"bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] pMandQuota[%d] bMandQuota[%d] pMinQuota[%d] "+
@@ -3186,7 +3269,7 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 
 	// Couldn't even give plasma the minimum, give both 50-50
 	half := remainingQuota / 2
-	if !tryAssignQuotas(half, remainingQuota-half) {
+	if !tryAssignQuotas(half, remainingQuota-half, true) {
 		// Should surely have returned true, log error just in case
 		logging.Errorf("storageMgr:redistributeMemoryQuota: Failed to give plasma min: "+
 			"bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] pMandQuota[%d] bMandQuota[%d] pMinQuota[%d] "+

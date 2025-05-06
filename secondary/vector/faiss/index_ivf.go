@@ -288,6 +288,12 @@ func (idx *IndexImpl) DecodeVectors(nx int, codes []byte, x []float32) (err erro
 		return fmt.Errorf("index is not of ivf type")
 	}
 
+	if len(x) < nx*idx.D() {
+		panic(fmt.Errorf("undersized output buffer %v. reqd %v. "+
+			"len(codes) %v. dim %v. nx %v", len(x), nx*idx.D(), len(codes),
+			idx.D(), nx))
+	}
+
 	if C.faiss_Index_sa_decode(
 		ivfPtr,
 		C.faiss_idx_t(nx),

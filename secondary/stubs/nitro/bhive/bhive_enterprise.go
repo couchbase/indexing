@@ -16,3 +16,7 @@ func SetMemoryQuota(sz int64) {
 func GetMandatoryQuota() (int64, int64) {
 	return ee.GetMandatoryQuota()
 }
+
+func GetWorkingSetSize() int64 {
+	return ee.GetWorkingSetSize()
+}
