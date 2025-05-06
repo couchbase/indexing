@@ -252,10 +252,10 @@ func (cb *codebookIVFSQ) ComputeDistance(qvec []float32, fvecs []float32, dist [
 			// while cosine distance ranges from 0 (exactly the same) to 2 (exactly opposite).
 			if err == nil {
 				for i := range dist {
-					// Done to prevent floating-point precision errors from producing values
-					// slightly outside the valid [-1, 1] range.
-					dist[i] = clip(dist[i], -1, 1)
+					// Cliping is done to prevent floating-point precision errors from
+					// producing values outside the valid [0, 2] range.
 					dist[i] = 1 - dist[i]
+					dist[i] = clip(dist[i], 0, 2)
 				}
 			}
 			return err
