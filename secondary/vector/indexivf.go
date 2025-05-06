@@ -41,6 +41,9 @@ func NewIndexIVFSQ(dim, nlist, metric int, sqRange common.ScalarQuantizerRange) 
 }
 
 func NewIndexIVFSQ_HNSW(dim, nlist, metric int, sqRange common.ScalarQuantizerRange) (*faiss.IndexImpl, error) {
+	if sqRange == common.SQ_FP16 {
+		sqRange = "SQfp16"
+	}
 
 	description := fmt.Sprintf("IVF%v_HNSW,%v", nlist, sqRange)
 	return faiss.IndexFactory(dim, description, metric)
