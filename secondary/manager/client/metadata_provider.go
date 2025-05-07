@@ -1407,23 +1407,6 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		}
 	}
 
-	/*if idxDefn.IsBhive() {
-		cinfo, err := c.FetchNewClusterInfoCache2(o.clusterUrl, c.DEFAULT_POOL, "recoverableCreateIndex")
-		if err != nil {
-			return errors.New("Fail to create index, unable to verify developer preview status. Err:" + err.Error())
-		}
-
-		// ClusterInfoCache.Connect() will update ClusterInfoCache.client.IsDeveloperPreview status.
-		err = cinfo.ConnectWithRetry()
-		if err != nil {
-			return errors.New("Fail to create index, unable to verify developer preview status. Err: " + err.Error())
-		}
-
-		if !cinfo.IsDeveloperPreview() {
-			return c.ErrBhiveInDeveloperPreview
-		}
-	}*/
-
 	useNodes := ([]string)(nil)
 	if o.settings.AllowPartialQuorum() {
 		if len(idxDefn.Nodes) != 0 {
