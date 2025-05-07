@@ -119,4 +119,7 @@ type Codebook interface {
 	NumCentroids() int
 
 	MetricType() MetricType
+
+	//Dimension for the vector stored in codebook
+	Dimension() int
 }

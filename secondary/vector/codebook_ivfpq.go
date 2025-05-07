@@ -396,6 +396,10 @@ func (cb *codebookIVFPQ) MetricType() c.MetricType {
 	return cb.metric
 }
 
+func (cb *codebookIVFPQ) Dimension() int {
+	return cb.dim
+}
+
 func recoverCodebookIVFPQ(data []byte) (c.Codebook, error) {
 
 	cbio := new(codebookIVFPQ_IO)
