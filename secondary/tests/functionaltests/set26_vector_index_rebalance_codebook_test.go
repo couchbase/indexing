@@ -4,7 +4,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,6 +22,7 @@ import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
+	"github.com/couchbase/plasma"
 )
 
 var VECTOR_INDEX_INDEXER_QUOTA = "512"
@@ -29,6 +34,10 @@ var idxDedicatedReplica = "idxCVI_dedicated_replica"
 var idxSharedReplica = "idxCVI_dedicated_replica"
 
 var limit int64 = 5
+
+func Test_SaveMProf2(t *testing.T) {
+	Test_SaveMProf(t)
+}
 
 func TestVectorIndexDCPRebalance(t *testing.T) {
 	skipIfNotPlasma(t)
@@ -194,8 +203,70 @@ func TestVectorIndexDCPRebalance(t *testing.T) {
 	})
 }
 
+func Test_SaveMProf(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	runtime.GC()
+
+	var m runtime.MemStats
+
+	runtime.ReadMemStats(&m)
+
+	stats, err := plasma.GetProcessRSS()
+	tc.HandleError(err, "Failed to get process stats")
+	log.Printf("Memstats - InUse: %v, Alloc: %v, Sys: %v, Idle: %v, Released: %v, GCSys: %v;\n\tRSS: %v",
+		m.HeapInuse, m.HeapAlloc, m.Sys, m.HeapIdle, m.HeapReleased, m.GCSys, stats.ProcMemRSS)
+
+	workspace := os.Getenv("WORKSPACE")
+	str := strings.ReplaceAll(t.Name(), "/", "_")
+	dir := filepath.Join(workspace, "ns_server", "logs", "n_1")
+	os.MkdirAll(dir, 0755)
+	fileName := filepath.Join(dir, str+"_functionaltests_mprof.log")
+
+	f, err := os.Create(fileName)
+	tc.HandleError(err, "Failed to create mprof file")
+
+	err = pprof.WriteHeapProfile(f)
+	tc.HandleError(err, "Failed to write mprof file")
+
+	log.Printf("mprof file written to %v", fileName)
+	f.Close()
+
+	if stats.ProcMemRSS > 4*1024*1024*1024 {
+		fileName = filepath.Join(dir, str+"_heap_dump.log")
+		f, err = os.Create(fileName)
+		tc.HandleError(err, "Failed to create heap dump file")
+
+		// costly af - will write all heap info to file
+		debug.WriteHeapDump(f.Fd())
+
+		log.Printf("heap dump file written to %v", fileName)
+		f.Close()
+	}
+}
+
 func TestVectorIndexShardRebalance(t *testing.T) {
 	skipIfNotPlasma(t)
+
+	closeCh := make(chan struct{})
+
+	// Setup signal handler for graceful shutdown
+	var signalCh = make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM, syscall.SIGABRT, syscall.SIGKILL)
+
+	defer close(closeCh)
+
+	go func() {
+		select {
+		case sig := <-signalCh:
+			log.Printf("Received signal: %v. Initiating graceful shutdown...", sig)
+			Test_SaveMProf(t)
+
+			os.Exit(0)
+		case <-closeCh:
+			log.Printf("Received close signal. Initiating graceful shutdown...")
+		}
+	}()
 
 	t.Run("RebalanceSetupCluster", func(subt *testing.T) {
 		TestRebalanceSetupCluster(subt)
