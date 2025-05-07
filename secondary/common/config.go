@@ -4543,6 +4543,20 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.bhive.RecoveryFullDataReplay": ConfigValue{
+		true,
+		"Enables or disables the lssVIndex full data replay on recovery log error",
+		true,
+		false,
+		false,
+	},
+	"indexer.bhive.RecoveryDump": ConfigValue{
+		false,
+		"trace lssVIndex recovery (only for debugging)",
+		false,
+		false,
+		false,
+	},
 	"projector.log_dir": ConfigValue{
 		"",
 		"Projector log directory",
