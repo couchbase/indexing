@@ -431,6 +431,9 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 
 	cfg.PersistFullVector = slice.sysconf["bhive.persistFullVector"].Bool() && slice.idxDefn.VectorMeta.PersistFullVector
 
+	cfg.RecoveryFullDataReplay = slice.sysconf["bhive.RecoveryFullDataReplay"].Bool()
+	cfg.RecoveryDump = slice.sysconf["bhive.RecoveryDump"].Bool()
+
 	logging.Infof("bhiveSlice:setupConfig efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v PersistFullVector: %v",
 		cfg.EfNumNeighbors, cfg.EfConstruction, cfg.VanamaBuildQuota, cfg.NumCompactor, slice.topNScan, cfg.PersistFullVector)
 
