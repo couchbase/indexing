@@ -1315,6 +1315,10 @@ func (mdb *bhiveSlice) createVectorFuncCtx() *bhive.VectorFuncCtx {
 			mdb.codebook.MetricType() == codebook.METRIC_L2
 	}
 
+	dimension := func() int {
+		return mdb.codebook.Dimension()
+	}
+
 	ctx := &bhive.VectorFuncCtx{
 		Distance:        distance,
 		Decode:          decode,
@@ -1322,6 +1326,7 @@ func (mdb *bhiveSlice) createVectorFuncCtx() *bhive.VectorFuncCtx {
 		CoarseSize:      coarseSz,
 		DistanceEncoded: distEncoded,
 		UseDistEncoded:  useDistEncoded,
+		Dimension:       dimension,
 	}
 
 	return ctx
