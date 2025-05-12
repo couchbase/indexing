@@ -66,7 +66,7 @@ func SetBinaryValuesWithXattrs(keyValues tc.KeyValues, bucketName string, passwo
 		Username: serverUsername,
 		Password: serverPassword,
 	})
-
+	defer cluster.Close()
 	bucket, err := cluster.OpenBucket(bucketName, "")
 
 	for key, value := range keyValues {

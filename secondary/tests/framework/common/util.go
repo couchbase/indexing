@@ -245,6 +245,7 @@ func ExecuteN1QLStatement(clusterAddr, username, password, bucketName,
 	if err != nil {
 		return nil, err
 	}
+	defer cluster.Close()
 	err = cluster.Authenticate(gocb.PasswordAuthenticator{
 		Username: username,
 		Password: password,
