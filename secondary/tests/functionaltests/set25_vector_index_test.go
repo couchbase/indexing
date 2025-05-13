@@ -885,12 +885,12 @@ func TestNullAndMissingForVectorIndex(t *testing.T) {
 }
 
 // This test covers case where we need to increase sample size nearer to items_count
-// because number of docs with vector field(300) is close to number of centroids(256)
+// because number of docs with vector field(16) is close to number of centroids(16)
 func TestVectorIndexRetry(t *testing.T) {
 	skipIfNotPlasma(t)
 
-	numVectorFieldDocs := 256
-	totalDocs := 100000
+	numVectorFieldDocs := 16
+	totalDocs := 40000
 
 	vectorSetup2(t, numVectorFieldDocs)
 
@@ -903,7 +903,7 @@ func TestVectorIndexRetry(t *testing.T) {
 	// Create Index
 	stmt := "CREATE INDEX idx_sif10k " +
 		" ON default(gender, sift VECTOR, docnum)" +
-		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+		" WITH { \"dimension\":128, \"description\": \"IVF16,PQ32x4\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
 
 	if _, err := execN1QL(bucket, stmt); err != nil {
 		log.Printf("Error while creating index : %v", err)
@@ -919,13 +919,13 @@ func TestVectorIndexRetry(t *testing.T) {
 	vectorSetup(t, bucket, "", "", 40000)
 }
 
-// This test creates vector index after loading bucket with num qualifying docs(248) < centroids (256)
-// When index is in error state, total 256 qualifying docs are loaded and build is issued.
+// This test creates vector index after loading bucket with num qualifying docs(12) < centroids (16)
+// When index is in error state, total 16 qualifying docs are loaded and build is issued.
 func TestVectorIndexRetry2(t *testing.T) {
 	skipIfNotPlasma(t)
 
-	numVectorFieldDocs := 248
-	totalDocs := 100000
+	numVectorFieldDocs := 12
+	totalDocs := 40000
 
 	vectorSetup2(t, numVectorFieldDocs)
 
@@ -938,14 +938,14 @@ func TestVectorIndexRetry2(t *testing.T) {
 	// Create Index
 	stmt := "CREATE INDEX idx_sif10k " +
 		" ON default(gender, sift VECTOR, docnum)" +
-		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\"};"
+		" WITH { \"dimension\":128, \"description\": \"IVF16,PQ32x4\", \"similarity\":\"L2_SQUARED\"};"
 
 	if _, err := execN1QL(bucket, stmt); err != nil {
 		log.Printf("Error while creating index : %v", err)
 	}
 	log.Printf("Now increasing qualifying docs before issuing build index")
 
-	e := loadVectorData(t, bucket, "", "", 256)
+	e := loadVectorData(t, bucket, "", "", 16)
 	FailTestIfError(e, "Error in loading vector data", t)
 
 	err := secondaryindex.BuildIndexes([]string{"idx_sif10k"}, bucket, indexManagementAddress, vectorIndexActiveTimeout)
@@ -1426,8 +1426,8 @@ func TestVectorIndexDynamicCentroidPQ(t *testing.T) {
 	TestRebalanceSetupCluster(t)
 	vectorsLoaded = false
 
-	numVectorFieldDocs := 64
-	totalDocs := 100000
+	numVectorFieldDocs := 17
+	totalDocs := 40000
 
 	vectorSetup2(t, numVectorFieldDocs)
 
@@ -1508,7 +1508,7 @@ func TestVectorIndexDynamicCentroidSQ(t *testing.T) {
 	vectorsLoaded = false
 
 	numVectorFieldDocs := 8
-	totalDocs := 100000
+	totalDocs := 40000
 
 	vectorSetup2(t, numVectorFieldDocs)
 
