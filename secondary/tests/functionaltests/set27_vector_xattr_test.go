@@ -76,7 +76,9 @@ func TestVectorIndexXATTR(t *testing.T) {
 	})
 	if err != nil {
 		log.Fatal(err)
+		tc.HandleError(err, "Failed to connect to cluster")
 	}
+	defer cluster.Close(nil)
 
 	kvutility.DeleteBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
@@ -230,7 +232,9 @@ func TestVectorIndexXATTRMultiple(t *testing.T) {
 	})
 	if err != nil {
 		log.Fatal(err)
+		tc.HandleError(err, "Failed to connect to cluster")
 	}
+	defer cluster.Close(nil)
 
 	kvutility.DeleteBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")

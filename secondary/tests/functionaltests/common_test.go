@@ -14,6 +14,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,6 +78,9 @@ var reqscanscount = map[string]interface{}{
 func TestMain(m *testing.M) {
 	log.Printf("In TestMain()")
 	logging.SetLogLevel(logging.Error)
+
+	debug.SetMemoryLimit(5 * 1024 * 1024 * 1024)
+	debug.SetGCPercent(50)
 
 	var configpath string
 	flag.StringVar(&configpath, "cbconfig", "../config/clusterrun_conf.json", "Path of the configuration file with data about Couchbase Cluster")

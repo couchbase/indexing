@@ -1419,9 +1419,7 @@ func computeServerVersion(v, minorv uint32) (int, error) {
 		}
 	}
 	if v == 7 {
-		if minorv >= 7 {
-			return INDEXER_77_VERSION, nil
-		} else if minorv == 6 {
+		if minorv >= 6 {
 			return INDEXER_76_VERSION, nil
 		} else if minorv == 5 {
 			return INDEXER_75_VERSION, nil

@@ -698,11 +698,20 @@ func (mdb *bhiveSlice) UpdateConfig(cfg common.Config) {
 	mdb.sysconf = cfg
 
 	logLevel := cfg["settings.log_level"].String()
-	bc.SetLogLevel(bc.Level(logLevel))
-	logging.Infof("Set bhive log level to %v", logLevel)
+	if bc.GetLogLevel() != bc.Level(logLevel) {
+		bc.SetLogLevel(bc.Level(logLevel))
+		logging.Verbosef("Set bhive log level to %v", logLevel)
+	}
 
 	mdb.maxRollbacks = cfg["settings.plasma.recovery.max_rollbacks"].Int()
 	mdb.maxDiskSnaps = cfg["recovery.max_disksnaps"].Int()
+	mdb.topNScan = cfg["bhive.topNScan"].Int()
+
+	mCfg := mdb.setupMainstoreConfig()
+	bCfg := mdb.setupBackstoreConfig()
+
+	mdb.mainstore.UpdateConfig(&mCfg)
+	mdb.backstore.UpdateConfig(&bCfg)
 }
 
 ////////////////////////////////////////////////
@@ -1315,6 +1324,10 @@ func (mdb *bhiveSlice) createVectorFuncCtx() *bhive.VectorFuncCtx {
 			mdb.codebook.MetricType() == codebook.METRIC_L2
 	}
 
+	dimension := func() int {
+		return mdb.codebook.Dimension()
+	}
+
 	ctx := &bhive.VectorFuncCtx{
 		Distance:        distance,
 		Decode:          decode,
@@ -1322,6 +1335,7 @@ func (mdb *bhiveSlice) createVectorFuncCtx() *bhive.VectorFuncCtx {
 		CoarseSize:      coarseSz,
 		DistanceEncoded: distEncoded,
 		UseDistEncoded:  useDistEncoded,
+		Dimension:       dimension,
 	}
 
 	return ctx
