@@ -72,6 +72,7 @@ type ClientSettings struct {
 	// Vector settings
 	rerankFactor int32
 	maxHeapSize  int32
+	maxVectorDimension int32
 }
 
 func NewClientSettings(needRefresh bool, toolsConfig common.Config) *ClientSettings {
@@ -437,6 +438,13 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: invalid setting value for maxHeapSize=%v", maxHeapSize)
 	}
 
+	maxVectorDimension := int32(config["indexer.vector.max_dimension"].Int())
+	if maxVectorDimension > 0 {
+		atomic.StoreInt32(&s.maxVectorDimension, maxVectorDimension)
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for maxDimension=%v", maxVectorDimension)
+	}
+
 	setShardDealerConfig(s, config)
 }
 
@@ -570,6 +578,10 @@ func (s *ClientSettings) RerankFactor() int32 {
 
 func (s *ClientSettings) MaxHeapSize() int32 {
 	return atomic.LoadInt32(&s.maxHeapSize)
+}
+
+func (s *ClientSettings) MaxVectorDimension() int32 {
+	return atomic.LoadInt32(&s.maxVectorDimension)
 }
 
 func setShardDealerConfig(s *ClientSettings, config common.Config) {

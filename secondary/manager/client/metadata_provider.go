@@ -77,6 +77,8 @@ type Settings interface {
 	UseShardDealer() bool
 	MinShardsPerNode() uint64
 	MinPartitionsPerShard() map[uint64]uint64
+
+	MaxVectorDimension() int32
 }
 
 ///////////////////////////////////////////////////////
@@ -3716,10 +3718,20 @@ func (o *MetadataProvider) getVectorDimension(plan map[string]interface{}, isVec
 		if dimension_int == 0 {
 			return 0, fmt.Errorf("Fail to create vector index. `%v` parameter should be greater than 0", keyword)
 		}
+
+		maxDimension := int(o.settings.MaxVectorDimension())
+		if dimension_int > maxDimension {
+			return 0, fmt.Errorf("Fail to create vector index. `%v` parameter cannot be greater than %v.", keyword, maxDimension)
+		}
 		return dimension_int, nil
 	}
 	if int(dimension_float64) == 0 {
 		return 0, fmt.Errorf("Fail to create vector index. `%v` parameter should be greater than 0", keyword)
+	}
+
+	maxDimension := int(o.settings.MaxVectorDimension())
+	if int(dimension_float64) > maxDimension {
+		return 0, fmt.Errorf("Fail to create vector index. `%v` parameter cannot be greater than %v.", keyword, maxDimension)
 	}
 	return int(dimension_float64), nil
 }

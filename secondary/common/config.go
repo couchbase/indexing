@@ -4621,6 +4621,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.vector.max_dimension": ConfigValue{
+		4096,
+		"Maximum supported vector dimension.",
+		4096,
+		false,
+		false,
+	},
 }
 
 // NewConfig from another
