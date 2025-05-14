@@ -3134,7 +3134,8 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 
 		total := bProp + pProp
 		if total <= 0 || bProp <= 0 || pProp <= 0 {
-			return 0, remQuota, 0, 0, 0
+			half := remQuota / 2
+			return half, remQuota - half, 0, 0, 0
 		}
 		bs := (remQuota * bProp) / total
 
@@ -3207,6 +3208,10 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		remainingQuota -= bq
 
 		if remainingQuota > 0 {
+
+			if !doSplitByMand && (bWSS <= 0 && pWSS <= 0) {
+				doSplitByMand = true
+			}
 
 			if doSplitByMand {
 				// split proportional to mandatory quotas
