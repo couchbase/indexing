@@ -465,8 +465,7 @@ func backupCorruptedSlice_Bhive(
 	rename func(string) (string, error),
 	clean func(string),
 ) error {
-	// TODO: implement post bhive backup API is ready
-	return fmt.Errorf("Not implemented")
+	return bhive.BackupCorruptedInstance(storageDir, prefix, rename, clean)
 }
 
 func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) error {
