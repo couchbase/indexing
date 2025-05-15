@@ -43,6 +43,7 @@ type StreamKeyspaceIdInstsPerWorker map[common.StreamId]KeyspaceIdInstsPerWorker
 //indexer metadata in a config database
 
 const INST_MAP_KEY_NAME = "IndexInstMap"
+const MIN_QUOTA_THRESH_PERCENT = int64(10)
 
 type StorageManager interface {
 }
@@ -101,6 +102,9 @@ type storageMgr struct {
 
 	// for dampening large quota shifts
 	prevBSplit int64
+
+	// used to phase out the minQuotaThreshold over time
+	plasmaLastCreateTime, bhiveLastCreateTime time.Time
 }
 
 type snapshotWaiter struct {
@@ -1522,6 +1526,8 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	// notify inst state change to ACTIVE
 	s.notifyBuildDone(oldIndexInstMap)
 
+	s.notifyIndexCreate(oldIndexInstMap)
+
 	//if manager is not enable, store the updated InstMap in
 	//meta file
 	if s.config["enableManager"].Bool() == false {
@@ -1553,6 +1559,45 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	}
 
 	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *storageMgr) notifyIndexCreate(oldIndexInstMap common.IndexInstMap) {
+
+	findNewInsts := func() ([]common.IndexInst, int) {
+		var numBhives int
+		var result []common.IndexInst
+
+		for id, newInst := range s.indexInstMap.Get() {
+			oldInst, ok := oldIndexInstMap[id]
+			if (!ok && newInst.State != common.INDEX_STATE_DELETED) ||
+				(ok && oldInst.State == common.INDEX_STATE_INITIAL) {
+				result = append(result, newInst)
+			}
+
+			if newInst.Defn.VectorMeta != nil && newInst.Defn.VectorMeta.IsBhive {
+				numBhives++
+			}
+		}
+
+		return result, numBhives
+	}
+
+	newInsts, numBhives := findNewInsts()
+	if numBhives > 0 && len(newInsts) > 0 {
+		// track create time and trigger quota redistribution
+		// only if there are bhive indexes
+
+		for _, inst := range newInsts {
+			if inst.Defn.VectorMeta != nil && inst.Defn.VectorMeta.IsBhive {
+				s.bhiveLastCreateTime = time.Now()
+			} else {
+				s.plasmaLastCreateTime = time.Now()
+			}
+		}
+
+		s.quotaDistCh <- false
+		<-s.quotaDistCh
+	}
 }
 
 func (s *storageMgr) notifyBuildDone(oldIndexInstMap common.IndexInstMap) {
@@ -3124,6 +3169,24 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 
 	// bhiveQuotaPercent is set to -1 by default, use mandatory quotas and working set size to split
 
+	minThresh := int64(s.config["bhive.minQuotaThreshold"].Int())
+	minThresh = min(minThresh, storageQuota*MIN_QUOTA_THRESH_PERCENT/100)
+
+	decayDuration := time.Duration(s.config["bhive.minQuotaDecayDur"].Int()) * time.Second
+	applyTimeDecay := func(mt int64, createTime time.Time) int64 {
+		sinceCreation := time.Since(createTime)
+		if sinceCreation > decayDuration {
+			sinceCreation = decayDuration
+		}
+
+		timeLeft := decayDuration - sinceCreation
+		return mt * int64(timeLeft) / int64(decayDuration)
+	}
+
+	// we don't want this minThresh to stick around when not needed, so it has to be decayed.
+	pMinThresh := applyTimeDecay(minThresh, s.plasmaLastCreateTime)
+	bMinThresh := applyTimeDecay(minThresh, s.bhiveLastCreateTime)
+
 	splitByProportion := func(bProp, pProp, oldBProp, oldPProp, remQuota, prevBSplit int64) (int64, int64, int64, int64, int64) {
 
 		if oldBProp > 0 && oldPProp > 0 {
@@ -3171,14 +3234,27 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		return bs, ps, bProp, pProp, remQuota
 	}
 
+	ensureMinThreshold := func(mandQ, minQ, threshold int64) (int64, int64) {
+		if threshold < 0 {
+			threshold = 0
+		}
+
+		if minQ < threshold {
+			minQ = threshold
+		}
+
+		if mandQ < minQ {
+			mandQ = minQ
+		}
+
+		return mandQ, minQ
+	}
+
 	pMandQuota, pMinQuota := plasma.GetMandatoryQuota()
-	if pMandQuota < 0 {
-		pMandQuota = 0
-	}
+	pMandQuota, pMinQuota = ensureMinThreshold(pMandQuota, pMinQuota, pMinThresh)
+
 	bMandQuota, bMinQuota := bhive.GetMandatoryQuota()
-	if bMandQuota < 0 {
-		bMandQuota = 0
-	}
+	bMandQuota, bMinQuota = ensureMinThreshold(bMandQuota, bMinQuota, bMinThresh)
 
 	pWSS := plasma.GetWorkingSetSize()
 	if pWSS < 0 {
@@ -3235,9 +3311,11 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		}
 
 		logging.Infof("storageMgr:redistributeMemoryQuota: bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] "+
-			"pMandQuota[%d] bMandQuota[%d] pMinQuota[%d] bMinQuota[%d] pWSS[%d] bWSS[%d] bSplit[%d]",
+			"pMandQuota[%d] bMandQuota[%d] pMinQuota[%d] bMinQuota[%d] pWSS[%d] bWSS[%d] bSplit[%d] "+
+			"pMinThresh[%d] bMinThresh[%d]",
 			bhiveQuota, plasmaQuota, storageQuota,
-			pMandQuota, bMandQuota, pMinQuota, bMinQuota, pWSS, bWSS, bSplit)
+			pMandQuota, bMandQuota, pMinQuota, bMinQuota, pWSS, bWSS, bSplit,
+			pMinThresh, bMinThresh)
 
 		if bhiveQuota > 0 {
 			bhive.SetMemoryQuota(bhiveQuota)

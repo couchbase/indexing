@@ -2512,6 +2512,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.bhive.minQuotaThreshold": ConfigValue{
+		128 * 1024 * 1024,
+		"Minimum value of quota to pass down to plasma/bhive when new indexes are created",
+		128 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.bhive.minQuotaDecayDur": ConfigValue{
+		60,
+		"Duration in seconds after index create over which minimum quota threshold is brought down to 0",
+		60,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
 		uint64(500),
