@@ -3129,9 +3129,11 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 	storageQuota := int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC)
 
 	var numBhives int64
-	for _, inst := range s.indexInstMap.Get() {
+	bhiveInstIds := make(map[common.IndexInstId]bool)
+	for instId, inst := range s.indexInstMap.Get() {
 		if inst.Defn.VectorMeta != nil && inst.Defn.VectorMeta.IsBhive {
 			numBhives++
+			bhiveInstIds[instId] = true
 		}
 	}
 
@@ -3183,9 +3185,30 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		return mt * int64(timeLeft) / int64(decayDuration)
 	}
 
+	pLowestBP := int64(100)
+	bLowestBP := int64(100)
+	for instId, iSts := range s.stats.Get().indexes {
+		bp := iSts.buildProgress.Value()
+		if _, ok := bhiveInstIds[instId]; ok {
+			bLowestBP = min(bLowestBP, bp)
+		} else {
+			pLowestBP = min(pLowestBP, bp)
+		}
+	}
+	if pLowestBP < 0 {
+		pLowestBP = 0
+	}
+	if bLowestBP < 0 {
+		bLowestBP = 0
+	}
+
+	applyBuildProgDecay := func(mt, bp int64) int64 {
+		return mt * (100 - bp) / 100
+	}
+
 	// we don't want this minThresh to stick around when not needed, so it has to be decayed.
-	pMinThresh := applyTimeDecay(minThresh, s.plasmaLastCreateTime)
-	bMinThresh := applyTimeDecay(minThresh, s.bhiveLastCreateTime)
+	pMinThresh := max(applyTimeDecay(minThresh, s.plasmaLastCreateTime), applyBuildProgDecay(minThresh, pLowestBP))
+	bMinThresh := max(applyTimeDecay(minThresh, s.bhiveLastCreateTime), applyBuildProgDecay(minThresh, bLowestBP))
 
 	splitByProportion := func(bProp, pProp, oldBProp, oldPProp, remQuota, prevBSplit int64) (int64, int64, int64, int64, int64) {
 
