@@ -1042,6 +1042,10 @@ func TestShardRebalanceSetupCluster(t *testing.T) {
 	tc.HandleError(secondaryindex.ChangeIndexerSettings("indexer.settings.enable_shard_affinity", false, clusterconfig.Username, clusterconfig.Password, kvaddress), "Failed to reset shard affinity")
 }
 
+func Test_SaveMProf3(t *testing.T) {
+	Test_SaveMProf(t)
+}
+
 func swapRebalance(t *testing.T, nidIn, nidOut int) {
 	addNode(clusterconfig.Nodes[nidIn], "index", t)
 	removeNode(clusterconfig.Nodes[nidOut], t)

@@ -84,6 +84,7 @@ func SetValuesWithXattrs(keyValues tc.KeyValues, bucketName string, password str
 		Username: serverUsername,
 		Password: serverPassword,
 	})
+	defer cluster.Close()
 
 	bucket, err := cluster.OpenBucket(bucketName, "")
 	tc.HandleError(err, "Error while opening bucket")
