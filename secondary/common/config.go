@@ -4487,6 +4487,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.bhive.MagmaMaxOpenFiles": ConfigValue{
+		0,
+		"limit number of open files across all magma instances. Default is 0 as magma selects internally based on OS (64K for linux and 6400 for windows)",
+		0,
+		false,
+		false,
+	},
 	"indexer.bhive.enableAutoLSSCleaning": ConfigValue{
 		true,
 		"Use background log cleaner to contain fragmentation",

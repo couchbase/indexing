@@ -420,6 +420,7 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.EnableRollbackFilterPrune = slice.sysconf["bhive.EnableRollbackFilterPrune"].Bool()
 
 	cfg.LSDFragmentationRatio = slice.sysconf["bhive.MagmaLSDFragmentationPercent"].Float64() / 100.0
+	cfg.MaxOpenFiles = uint64(slice.sysconf["bhive.MagmaMaxOpenFiles"].Int())
 
 	cfg.AutoLSSCleaning = slice.sysconf["bhive.enableAutoLSSCleaning"].Bool()
 	cfg.LSSCleanerInterval = time.Duration(slice.sysconf["bhive.LSSCleanerInterval"].Int()) * time.Millisecond
