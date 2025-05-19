@@ -4720,6 +4720,7 @@ func (s *statsManager) runStatsDumpLogger() {
 const last_known_scan_time = "lqt" //last_query_time
 const avg_scan_rate = "asr"
 const num_rows_scanned = "nrs"
+const num_requests = "nrq"
 const last_num_rows_scanned = "lrs"
 const num_rollbacks = "nrb"
 const num_rollbacks_to_zero = "nrbz"
@@ -4773,6 +4774,7 @@ func getStatsToBePersistedMap(indexerStats *IndexerStats) (statsMap map[string]i
 			instdId := strconv.FormatUint(uint64(k), 10)
 			statsMap[instdId+":"+last_known_scan_time] = indexStats.lastScanTime.Value()
 			statsMap[instdId+":"+codebook_train_duration] = indexStats.cbTrainDuration.Value()
+			statsMap[instdId+":"+num_requests] = indexStats.numRequests.Value()
 
 			for pk, partnStats := range indexStats.partitions {
 				partnId := strconv.FormatUint(uint64(pk), 10)
@@ -4874,6 +4876,12 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 				val, ok := getInt64Val(value, statName)
 				if ok {
 					indexerStats.indexes[instdId].cbTrainDuration.Set(val)
+				}
+			case num_requests:
+				val, ok := getInt64Val(value, statName)
+				if ok {
+					indexerStats.indexes[instdId].numRequests.Set(val)
+					indexerStats.TotalRequests.Add(val)
 				}
 			}
 		}
