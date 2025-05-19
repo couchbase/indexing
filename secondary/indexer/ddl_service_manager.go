@@ -95,6 +95,8 @@ type ddlSettings struct {
 	useShardDealer        atomic.Bool
 	minShardsPerNode      uint64
 	minPartitionsPerShard atomic.Pointer[map[uint64]uint64]
+
+	maxVectorDimension int32
 }
 
 //////////////////////////////////////////////////////////////
@@ -2138,6 +2140,10 @@ func (s *ddlSettings) ShouldHonourNodesClause() bool {
 	return atomic.LoadUint32(&s.allowNodesClause) == 1
 }
 
+func (s *ddlSettings) MaxVectorDimension() int32 {
+	return atomic.LoadInt32(&s.maxVectorDimension)
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
@@ -2265,6 +2271,13 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 	}
 
 	setShardDealerConfig(s, config)
+
+	maxVectorDimension := int32(config["vector.max_dimension"].Int())
+    if maxVectorDimension > 0 {
+        atomic.StoreInt32(&s.maxVectorDimension, maxVectorDimension)
+    } else {
+        logging.Errorf("DDLServiceMgr: invalid setting value for maxDimension=%v", maxVectorDimension)
+    }
 }
 
 func (s *ddlSettings) UseShardDealer() bool {

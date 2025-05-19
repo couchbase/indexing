@@ -23,7 +23,7 @@ const (
 	SQ_4BIT                              = "SQ4"
 	SQ_8BIT_UNIFORM                      = "SQ_8BIT_UNIFORM"
 	SQ_4BIT_UNIFORM                      = "SQ_4BIT_UNIFORM"
-	SQ_FP16                              = "SQfp16"
+	SQ_FP16                              = "SQFP16"
 	SQ_8BIT_DIRECT                       = "SQ_8BIT_DIRECT"
 	SQ_6BIT                              = "SQ6"
 )
@@ -144,9 +144,11 @@ func (vq *VectorQuantizer) String() string {
 // In all other cases, indexer should return error
 func ParseVectorDesciption(inp string) (*VectorQuantizer, error) {
 	inp = strings.TrimSpace(inp)
+	inp = strings.ToUpper(inp)
+
 	quantizer := &VectorQuantizer{}
 
-	re := regexp.MustCompile(`(IVF)(\d*),( *)(PQ(\d+)x(\d+)(FS)?$|SQfp16$|SQ4$|SQ6$|SQ8$|SQ_4BIT_UNIFORM$|SQ_8BIT_UNIFORM$|SQ_8BIT_DIRECT$)`)
+	re := regexp.MustCompile(`(IVF)(\d*),( *)(PQ(\d+)X(\d+)(FS)?$|SQFP16$|SQ4$|SQ6$|SQ8$|SQ_4BIT_UNIFORM$|SQ_8BIT_UNIFORM$|SQ_8BIT_DIRECT$)`)
 	matches := re.FindStringSubmatch(inp)
 
 	// On a successful match, there will be 8 substrings in matches

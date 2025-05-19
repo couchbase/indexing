@@ -2512,6 +2512,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.bhive.minQuotaThreshold": ConfigValue{
+		128 * 1024 * 1024,
+		"Minimum value of quota to pass down to plasma/bhive when new indexes are created",
+		128 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.bhive.minQuotaDecayDur": ConfigValue{
+		60,
+		"Duration in seconds after index create over which minimum quota threshold is brought down to 0",
+		60,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
 		uint64(500),
@@ -4487,6 +4501,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.bhive.MagmaMaxOpenFiles": ConfigValue{
+		0,
+		"limit number of open files across all magma instances. Default is 0 as magma selects internally based on OS (64K for linux and 6400 for windows)",
+		0,
+		false,
+		false,
+	},
 	"indexer.bhive.enableAutoLSSCleaning": ConfigValue{
 		true,
 		"Use background log cleaner to contain fragmentation",
@@ -4611,6 +4632,13 @@ var SystemConfig = Config{
 		5,
 		"Maximum number of retries taken for increasing sample size to items_count when sampling during training of vector indexes .",
 		5,
+		false,
+		false,
+	},
+	"indexer.vector.max_dimension": ConfigValue{
+		4096,
+		"Maximum supported vector dimension.",
+		4096,
 		false,
 		false,
 	},

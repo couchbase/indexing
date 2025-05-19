@@ -366,7 +366,7 @@ func createBhiveSliceDir(storageDir string, path string, isNew bool) error {
 		}
 	} else if isNew {
 		// if we expect a new instance but there is residual file, destroy old data.
-		err = bhive.DestroyInstance(storageDir, path)
+		err = DestroySlice_Bhive(storageDir, path)
 	}
 
 	return err
@@ -420,6 +420,7 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.EnableRollbackFilterPrune = slice.sysconf["bhive.EnableRollbackFilterPrune"].Bool()
 
 	cfg.LSDFragmentationRatio = slice.sysconf["bhive.MagmaLSDFragmentationPercent"].Float64() / 100.0
+	cfg.MaxOpenFiles = uint64(slice.sysconf["bhive.MagmaMaxOpenFiles"].Int())
 
 	cfg.AutoLSSCleaning = slice.sysconf["bhive.enableAutoLSSCleaning"].Bool()
 	cfg.LSSCleanerInterval = time.Duration(slice.sysconf["bhive.LSSCleanerInterval"].Int()) * time.Millisecond
@@ -465,8 +466,11 @@ func backupCorruptedSlice_Bhive(
 	rename func(string) (string, error),
 	clean func(string),
 ) error {
-	// TODO: implement post bhive backup API is ready
-	return fmt.Errorf("Not implemented")
+	err := bhive.BackupCorruptedInstance(storageDir, prefix, rename, clean)
+	if err != nil {
+		return err
+	}
+	return destroySlice_Bhive(storageDir, prefix)
 }
 
 func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) error {
@@ -2411,6 +2415,8 @@ func (mdb *bhiveSlice) resetStores(initBuild bool) error {
 	mdb.mainstore.Close()
 	mdb.backstore.Close()
 
+	// codebook is not destroyed on rollback to zero for faster to serve scans.
+	// on data drift user is expected to drop and rebuild.
 	if err := bhive.DestroyInstance(mdb.storageDir, mdb.path); err != nil {
 		return err
 	}
