@@ -4578,6 +4578,20 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.bhive.backupCorruptedDiskLimit": ConfigValue{
+		10,
+		"avail disk space in percent to allow backup of corrupted instance or shard (on enable_corrupt_index_backup)",
+		10,
+		false,
+		false,
+	},
+	"indexer.bhive.backupCorruptedShard": ConfigValue{
+		false,
+		"back up magma shard on corruption",
+		false,
+		false,
+		false,
+	},
 	"projector.log_dir": ConfigValue{
 		"",
 		"Projector log directory",

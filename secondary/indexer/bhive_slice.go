@@ -435,6 +435,9 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.RecoveryFullDataReplay = slice.sysconf["bhive.RecoveryFullDataReplay"].Bool()
 	cfg.RecoveryDump = slice.sysconf["bhive.RecoveryDump"].Bool()
 
+	cfg.AutoBackupDiskLimit = float32(slice.sysconf["bhive.backupCorruptedDiskLimit"].Int()) / 100
+	cfg.AutoBackupShard = slice.sysconf["bhive.backupCorruptedShard"].Bool()
+
 	logging.Infof("bhiveSlice:setupConfig efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v PersistFullVector: %v",
 		cfg.EfNumNeighbors, cfg.EfConstruction, cfg.VanamaBuildQuota, cfg.NumCompactor, slice.topNScan, cfg.PersistFullVector)
 
@@ -455,7 +458,11 @@ func (slice *bhiveSlice) setupBackstoreConfig() bhive.Config {
 	cfg.NumKVStore = NumKVStore
 	cfg.MaxBatchSize = MaxBatchSize
 
-	cfg.LSDFragmentationRatio = slice.sysconf["bhive.MagmaLSDFragmentationPercent"].Float64() / 100.0
+	cfg.LSDFragmentationRatio = slice.sysconf["bhive.MagmaLSDFragmentationPercent"].Float64() / 100
+	cfg.MaxOpenFiles = uint64(slice.sysconf["bhive.MagmaMaxOpenFiles"].Int())
+
+	cfg.AutoBackupDiskLimit = float32(slice.sysconf["bhive.backupCorruptedDiskLimit"].Int()) / 100
+	cfg.AutoBackupShard = slice.sysconf["bhive.backupCorruptedShard"].Bool()
 
 	cfg.NumWriters = slice.maxNumWriters
 	return cfg
