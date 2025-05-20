@@ -160,6 +160,7 @@ func performClusterStateValidation(t *testing.T, negTests bool, validations ...t
 retry:
 	shardGrouping, statuses, err := getShardGroupingFromLiveCluster()
 	tc.HandleError(err, "Err in getting Index Status from live cluster")
+	statusStr, _ := json.MarshalIndent(statuses, "", "  ")
 
 	errMap := tc.ValidateClusterState(shardGrouping, len(validations) != 0)
 	errStr := strings.Builder{}
@@ -175,15 +176,20 @@ retry:
 		}
 	}
 	if errStr.Len() > 0 && !negTests {
-		t.Fatalf("%v:performClusterStateValidation validations failed - \n%v", t.Name(), errStr.String())
+		if retryCount < 5 {
+			retryCount++
+			time.Sleep(time.Duration(100*retryCount) * time.Millisecond)
+			goto retry
+		}
+		t.Fatalf("%v:performClusterStateValidation validations failed - \n%v\nLive cluster state - \n%v",
+			t.Name(), errStr.String(), string(statusStr))
 	} else if errStr.Len() == 0 && negTests {
 		if len(validations) == 0 {
-			if retryCount < 10 {
+			if retryCount < 5 {
 				retryCount++
 				time.Sleep(time.Duration(100*retryCount) * time.Millisecond)
 				goto retry
 			}
-			statusStr, _ := json.MarshalIndent(statuses, "", "  ")
 			t.Fatalf("%v:performClusterStateValidation expected atleast one validation to fail but none failed. Live cluster state - \n%v",
 				t.Name(), string(statusStr))
 		} else {
@@ -202,13 +208,13 @@ retry:
 					}
 					return res
 				}()
-				if retryCount < 10 {
+				if retryCount < 5 {
 					retryCount++
 					time.Sleep(time.Duration(100*retryCount) * time.Millisecond)
 					goto retry
 				}
 				statusStr, _ := json.MarshalIndent(statuses, "", "  ")
-				t.Fatalf("%v:performClusterState\n* expected validations(%v) to fail but did not fail\n* expetecd validations (%v) to pass but failed\n* live cluster state - \n%v",
+				t.Fatalf("%v:performClusterState\n* expected validations(%v) to fail but did not fail\n* expetecd validations (%v) to pass but failed\nLive cluster state - \n%v",
 					t.Name(), unfaildValidations, failedValidations, string(statusStr))
 			}
 		}
