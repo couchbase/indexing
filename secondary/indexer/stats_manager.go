@@ -940,6 +940,8 @@ type IndexerStats struct {
 	totalRawDataSize       stats.Int64Val
 	totalMutationQueueSize stats.Int64Val
 
+	totalCodebookMemUsage stats.Int64Val
+
 	// Plasma shard version
 	ShardCompatVersion stats.Int64Val
 
@@ -1008,6 +1010,7 @@ func (s *IndexerStats) Init() {
 	s.totalPendingScans.Init()
 	s.totalRawDataSize.Init()
 	s.totalMutationQueueSize.Init()
+	s.totalCodebookMemUsage.Init()
 
 	s.SetPlannerFilters()
 	s.SetSmartBatchingFilters()
@@ -1426,6 +1429,8 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 
 	statMap.AddStatValueFiltered("num_diverging_replica_indexes", &is.numDivergingReplicaIndexes)
 	is.PopulateCorruptedIndexes(statMap)
+
+	statMap.AddStatValueFiltered("total_codebook_mem_usage", &is.totalCodebookMemUsage)
 }
 
 func (is *IndexerStats) PopulateCorruptedIndexes(statMap *StatsMap) {
@@ -3615,6 +3620,9 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_diverging_replica_indexes gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_diverging_replica_indexes %v\n", METRICS_PREFIX, is.numDivergingReplicaIndexes.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_codebook_memory_usage gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_codebook_memory_usage %v\n", METRICS_PREFIX, is.totalCodebookMemUsage.Value()))...)
 
 	// aggregated plasma stats
 	out = populateAggregatedStorageMetrics(out)
