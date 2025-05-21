@@ -32,7 +32,7 @@ type MutationQueue interface {
 	//dequeue a vbucket's mutation upto seqno(wait if not available)
 	DequeueUptoSeqno(vbucket Vbucket, seqno uint64) (<-chan *MutationKeys, chan bool, error)
 	//dequeue single element for a vbucket and return
-	DequeueSingleElement(vbucket Vbucket) *MutationKeys
+	DequeueSingleElement(vbucket Vbucket) (*MutationKeys, bool)
 	//dequeue N elements for a vbucket and return
 	DequeueN(vbucket Vbucket, count uint64) (<-chan *MutationKeys, chan bool, error)
 
@@ -290,19 +290,20 @@ func (q *atomicMutationQueue) dequeue(vbucket Vbucket, datach chan *MutationKeys
 
 	//keep dequeuing till list is empty
 	for {
-		m := q.DequeueSingleElement(vbucket)
-		if m == nil {
+		m, queueEmpty := q.DequeueSingleElement(vbucket)
+		if queueEmpty {
 			return
 		}
-		//send mutation to caller
-		datach <- m
+		if m != nil {
+			datach <- m //send mutation to caller
+		}
 	}
 
 }
 
 // DequeueSingleElement dequeues a single element and returns.
 // Returns nil in case of empty queue.
-func (q *atomicMutationQueue) DequeueSingleElement(vbucket Vbucket) *MutationKeys {
+func (q *atomicMutationQueue) DequeueSingleElement(vbucket Vbucket) (*MutationKeys, bool) {
 
 	if atomic.LoadPointer(&q.head[vbucket]) !=
 		atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
@@ -315,10 +316,12 @@ func (q *atomicMutationQueue) DequeueSingleElement(vbucket Vbucket) *MutationKey
 		//move head to next
 		atomic.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
 		atomic.AddInt64(&q.size[vbucket], -1)
-		atomic.AddInt64(q.memUsed, -m.Size())
-		return m
+		if m != nil {
+			atomic.AddInt64(q.memUsed, -m.Size())
+		}
+		return m, false
 	}
-	return nil
+	return nil, true
 }
 
 // DequeueN returns a channel on which it will return mutation reference

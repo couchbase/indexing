@@ -28,7 +28,7 @@ func TestBasicsA(t *testing.T) {
 	q.Enqueue(m, 0, nil)
 	checkSizeA(t, q, 0, 1)
 
-	m1 := q.DequeueSingleElement(0)
+	m1, _ := q.DequeueSingleElement(0)
 	checkItemA(t, m, m1)
 	checkSizeA(t, q, 0, 0)
 
@@ -39,11 +39,11 @@ func TestBasicsA(t *testing.T) {
 	q.Enqueue(m2, 0, nil)
 	checkSizeA(t, q, 0, 2)
 
-	m1 = q.DequeueSingleElement(0)
+	m1, _ = q.DequeueSingleElement(0)
 	checkSizeA(t, q, 0, 1)
 	checkItemA(t, m, m1)
 
-	m1 = q.DequeueSingleElement(0)
+	m1, _ = q.DequeueSingleElement(0)
 	checkSizeA(t, q, 0, 0)
 	checkItemA(t, m2, m1)
 
@@ -79,7 +79,7 @@ func TestSizeA(t *testing.T) {
 	checkSizeA(t, q, 0, 10000)
 
 	for i := 0; i < 10000; i++ {
-		p := q.DequeueSingleElement(0)
+		p, _ := q.DequeueSingleElement(0)
 		checkItemA(t, p, m[i])
 	}
 	checkSizeA(t, q, 0, 0)
@@ -101,7 +101,7 @@ func TestSizeWithFreelistA(t *testing.T) {
 		if (i+1)%100 == 0 {
 			checkSizeA(t, q, 0, 100)
 			for j := 0; j < 100; j++ {
-				p := q.DequeueSingleElement(0)
+				p, _ := q.DequeueSingleElement(0)
 				checkItemA(t, p, m[(i-99)+j])
 			}
 			checkSizeA(t, q, 0, 0)
@@ -245,11 +245,11 @@ func TestMultipleVbucketsA(t *testing.T) {
 
 	var p *MutationKeys
 	for i := 0; i < 5; i++ {
-		p = q.DequeueSingleElement(0)
+		p, _ = q.DequeueSingleElement(0)
 		checkItemA(t, p, mut[i])
-		p = q.DequeueSingleElement(1)
+		p, _ = q.DequeueSingleElement(1)
 		checkItemA(t, p, mut[i+5])
-		p = q.DequeueSingleElement(2)
+		p, _ = q.DequeueSingleElement(2)
 		checkItemA(t, p, mut[i+10])
 	}
 
