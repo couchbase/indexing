@@ -265,6 +265,8 @@ type fdbSlice struct {
 
 	keySzConf        keySizeConfig
 	keySzConfChanged int32 //0 or 1: indicates if key size config has changeed or not
+
+	readersReserve
 }
 
 func (fdb *fdbSlice) IncrRef() {

@@ -91,6 +91,7 @@ type bhiveSlice struct {
 
 	// main store readers
 	readers chan *bhive.Reader
+	readersReserve
 
 	//
 	// back store
@@ -254,6 +255,9 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 
 	numReaders := sysconf["bhive.numReaders"].Int()
 	slice.readers = make(chan *bhive.Reader, numReaders)
+
+	// if slice.idxDefn.IsVectorIndex {
+	slice.InitReadersReserve(numReaders)
 
 	// stats
 	slice.idxStats = idxStats
@@ -2300,7 +2304,11 @@ func (mdb *bhiveSlice) Rollback(s SnapshotInfo) error {
 		common.CrashOnError(fmt.Errorf("Slice Invariant Violation - rollback with pending mutations"))
 	}
 
-	// Block all scan requests
+	// Block all scan requests if mdb.idxDefn.IsVectorIndex
+	numReaders := cap(mdb.readers)
+	mdb.ReserveReaders(numReaders, nil)
+	defer mdb.ReleaseReaders(numReaders)
+
 	var readers []*bhive.Reader
 	for i := 0; i < cap(mdb.readers); i++ {
 		readers = append(readers, <-mdb.readers)
@@ -2430,7 +2438,10 @@ func (slice *bhiveSlice) resetBuffers() {
 }
 
 func (mdb *bhiveSlice) resetStores(initBuild bool) error {
-	// Clear all readers
+	// Clear all readers if mdb.idxDefn.IsVectorIndex
+	mdb.ReserveReaders(cap(mdb.readers), nil)
+	defer mdb.ReleaseReaders(cap(mdb.readers))
+
 	mdb.resetReaders()
 
 	numWriters := mdb.numWriters
