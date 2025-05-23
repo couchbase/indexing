@@ -940,6 +940,8 @@ type IndexerStats struct {
 	totalRawDataSize       stats.Int64Val
 	totalMutationQueueSize stats.Int64Val
 
+	totalCodebookMemUsage stats.Int64Val
+
 	// Plasma shard version
 	ShardCompatVersion stats.Int64Val
 
@@ -1008,6 +1010,7 @@ func (s *IndexerStats) Init() {
 	s.totalPendingScans.Init()
 	s.totalRawDataSize.Init()
 	s.totalMutationQueueSize.Init()
+	s.totalCodebookMemUsage.Init()
 
 	s.SetPlannerFilters()
 	s.SetSmartBatchingFilters()
@@ -1426,6 +1429,8 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 
 	statMap.AddStatValueFiltered("num_diverging_replica_indexes", &is.numDivergingReplicaIndexes)
 	is.PopulateCorruptedIndexes(statMap)
+
+	statMap.AddStatValueFiltered("total_codebook_mem_usage", &is.totalCodebookMemUsage)
 }
 
 func (is *IndexerStats) PopulateCorruptedIndexes(statMap *StatsMap) {
@@ -3616,6 +3621,9 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_diverging_replica_indexes gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_diverging_replica_indexes %v\n", METRICS_PREFIX, is.numDivergingReplicaIndexes.Value()))...)
 
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_codebook_memory_usage gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_codebook_memory_usage %v\n", METRICS_PREFIX, is.totalCodebookMemUsage.Value()))...)
+
 	// aggregated plasma stats
 	out = populateAggregatedStorageMetrics(out)
 
@@ -4720,6 +4728,7 @@ func (s *statsManager) runStatsDumpLogger() {
 const last_known_scan_time = "lqt" //last_query_time
 const avg_scan_rate = "asr"
 const num_rows_scanned = "nrs"
+const num_requests = "nrq"
 const last_num_rows_scanned = "lrs"
 const num_rollbacks = "nrb"
 const num_rollbacks_to_zero = "nrbz"
@@ -4773,6 +4782,7 @@ func getStatsToBePersistedMap(indexerStats *IndexerStats) (statsMap map[string]i
 			instdId := strconv.FormatUint(uint64(k), 10)
 			statsMap[instdId+":"+last_known_scan_time] = indexStats.lastScanTime.Value()
 			statsMap[instdId+":"+codebook_train_duration] = indexStats.cbTrainDuration.Value()
+			statsMap[instdId+":"+num_requests] = indexStats.numRequests.Value()
 
 			for pk, partnStats := range indexStats.partitions {
 				partnId := strconv.FormatUint(uint64(pk), 10)
@@ -4874,6 +4884,12 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 				val, ok := getInt64Val(value, statName)
 				if ok {
 					indexerStats.indexes[instdId].cbTrainDuration.Set(val)
+				}
+			case num_requests:
+				val, ok := getInt64Val(value, statName)
+				if ok {
+					indexerStats.indexes[instdId].numRequests.Set(val)
+					indexerStats.TotalRequests.Add(val)
 				}
 			}
 		}

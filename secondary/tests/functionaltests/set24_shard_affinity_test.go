@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	json "github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/manager"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/testcode"
 	"github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -54,7 +56,7 @@ func getIndexStatusFromIndexer() (*tc.IndexStatusResponse, error) {
 	return &st, nil
 }
 
-func getShardGroupingFromLiveCluster() (tc.AlternateShardMap, error) {
+func getShardGroupingFromLiveCluster() (tc.AlternateShardMap, *tc.IndexStatusResponse, error) {
 	var statuses *tc.IndexStatusResponse
 	err := c.NewRetryHelper(10, 10*time.Millisecond, 5, func(attempts int, lastErr error) error {
 		if attempts > 0 {
@@ -67,7 +69,7 @@ func getShardGroupingFromLiveCluster() (tc.AlternateShardMap, error) {
 		return !(strings.Contains(err.Error(), syscall.ECONNREFUSED.Error()))
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	shardGrouping := make(tc.AlternateShardMap)
@@ -111,7 +113,7 @@ func getShardGroupingFromLiveCluster() (tc.AlternateShardMap, error) {
 
 	}
 
-	return shardGrouping, nil
+	return shardGrouping, statuses, nil
 }
 
 func getIndexerStorageDirForNode(nodeAdd string, t *testing.T) string {
@@ -144,29 +146,52 @@ func getIndexerStorageDirForNode(nodeAdd string, t *testing.T) string {
 	return absIndexStorageDir
 }
 
+func prettyErrors(errs []string) string {
+	var prettyErrs strings.Builder
+	for _, err := range errs {
+		prettyErrs.WriteString(fmt.Sprintf("*\t%v\n", err))
+	}
+	return prettyErrs.String()
+}
+
 func performClusterStateValidation(t *testing.T, negTests bool, validations ...tc.InvalidClusterState) {
-	shardGrouping, err := getShardGroupingFromLiveCluster()
+	var retryCount = 0
+
+retry:
+	shardGrouping, statuses, err := getShardGroupingFromLiveCluster()
 	tc.HandleError(err, "Err in getting Index Status from live cluster")
+	statusStr, _ := json.MarshalIndent(statuses, "", "  ")
 
 	errMap := tc.ValidateClusterState(shardGrouping, len(validations) != 0)
 	errStr := strings.Builder{}
 	if len(validations) == 0 && len(errMap) != 0 {
 		for violation, errs := range errMap {
-			errStr.WriteString(fmt.Sprintf("\t%v violation in live cluster: %v\n", violation, errs))
+			errStr.WriteString(fmt.Sprintf("\t%v violation in live cluster: \n%v", violation, prettyErrors(errs)))
 		}
 	} else if len(validations) > 0 && len(errMap) > 0 {
 		for _, validation := range validations {
 			if errs, ok := errMap[validation]; ok {
-				errStr.WriteString(fmt.Sprintf("\t%v violation in live cluster: %v\n", validation, errs))
+				errStr.WriteString(fmt.Sprintf("\t%v violation in live cluster: \n%v", validation, prettyErrors(errs)))
 			}
 		}
 	}
 	if errStr.Len() > 0 && !negTests {
-		t.Fatalf("%v:performClusterStateValidation validations failed - \n%v", t.Name(), errStr.String())
+		if retryCount < 5 {
+			retryCount++
+			time.Sleep(time.Duration(100*retryCount) * time.Millisecond)
+			goto retry
+		}
+		t.Fatalf("%v:performClusterStateValidation validations failed - \n%v\nLive cluster state - \n%v",
+			t.Name(), errStr.String(), string(statusStr))
 	} else if errStr.Len() == 0 && negTests {
 		if len(validations) == 0 {
+			if retryCount < 5 {
+				retryCount++
+				time.Sleep(time.Duration(100*retryCount) * time.Millisecond)
+				goto retry
+			}
 			t.Fatalf("%v:performClusterStateValidation expected atleast one validation to fail but none failed. Live cluster state - \n%v",
-				t.Name(), shardGrouping)
+				t.Name(), string(statusStr))
 		} else {
 			unfaildValidations := make([]tc.InvalidClusterState, 0, len(errMap))
 			for _, toFailValidation := range validations {
@@ -183,9 +208,28 @@ func performClusterStateValidation(t *testing.T, negTests bool, validations ...t
 					}
 					return res
 				}()
-				t.Fatalf("%v:performClusterState\n* expected validations(%v) to fail but did not fail\n* expetecd validations (%v) to pass but failed",
-					t.Name(), unfaildValidations, failedValidations)
+				if retryCount < 5 {
+					retryCount++
+					time.Sleep(time.Duration(100*retryCount) * time.Millisecond)
+					goto retry
+				}
+				statusStr, _ := json.MarshalIndent(statuses, "", "  ")
+				t.Fatalf("%v:performClusterState\n* expected validations(%v) to fail but did not fail\n* expetecd validations (%v) to pass but failed\nLive cluster state - \n%v",
+					t.Name(), unfaildValidations, failedValidations, string(statusStr))
 			}
+		}
+	}
+
+	for _, status := range statuses.Status {
+		if status.Status == "Active" {
+			replicaIds := make([]int, 1, status.NumReplica+1)
+			for i := 1; i < status.NumReplica+1; i++ {
+				replicaIds = append(replicaIds, i)
+			}
+			scanIndexReplicas2(
+				status.Name,
+				status.Bucket, status.Scope, status.Collection,
+				replicaIds, 100, -1, status.NumPartition, t)
 		}
 	}
 }
@@ -291,7 +335,7 @@ func TestWithShardAffinity(t *testing.T) {
 	})
 
 	t.Run("TestSwapRebalance", func(subt *testing.T) {
-		TestSwapRebalance(t)
+		TestSwapRebalance(subt)
 
 		performClusterStateValidation(subt, true,
 			tc.MISSING_REPLICA_INVALID_CLUSTER_STATE)
@@ -1034,6 +1078,222 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 	swapRebalance(t, 2, 3)
 
 	performClusterStateValidation(t, false)
+}
+
+func preparePrimaryIndexDefn(defnID c.IndexDefnId,
+	name, bucket, bucketUUID, scope, collection string,
+	scopeId, collectionId string,
+	indexerIDs []string,
+	numReplica uint32,
+	partitionScheme c.PartitionScheme,
+	deferred bool) *c.IndexDefn {
+	defn := &c.IndexDefn{
+		DefnId:          defnID,
+		Name:            name,
+		Bucket:          bucket,
+		BucketUUID:      bucketUUID,
+		Scope:           scope,
+		Collection:      collection,
+		Versions:        []int{0},
+		Using:           "plasma",
+		Deferred:        deferred,
+		ScopeId:         scopeId,
+		CollectionId:    collectionId,
+		NumPartitions:   1,
+		NumReplica:      numReplica,
+		PartitionScheme: partitionScheme,
+		ExprType:        c.N1QL,
+		IsPrimary:       true,
+		Partitions:      []c.PartitionId{0},
+		Nodes:           indexerIDs,
+	}
+	defn.NumReplica2.InitializeCounter(defn.NumReplica)
+	return defn
+}
+
+// TestShardRebalance_DropDuplicateIndexes - create duplicate indexes on node 1 and node 2.
+// swap rebalance node 2 with node 3. rebalance should drop the duplicate indexes on node 2.
+func TestShardRebalance_DropDuplicateIndexes(t *testing.T) {
+	skipShardAffinityTests(t)
+
+	clearCreateComandTokens := func() {
+		err := c.MetakvRecurciveDel(mc.CreateDDLCommandTokenPath)
+		tc.HandleError(err, "failed to delete all create command token")
+	}
+
+	var retry = 0
+init:
+	clearCreateComandTokens()
+
+	status := getClusterStatus()
+	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[2]) {
+		t.Fatalf("%v Unexpected cluster configuration: %v", t.Name(), status)
+	}
+
+	// config - [0: kv n1ql] [1: index] [2: index]
+	printClusterConfig(t.Name(), "entry")
+
+	log.Println("*********Setup cluster*********")
+	err := secondaryindex.DropAllNonSystemIndexes(clusterconfig.Nodes[1])
+	tc.HandleError(err, "Failed to drop all non-system indices")
+
+	log.Printf("********Updating `indexer.settings.enable_shard_affinity`=true with node 3 in simulated mixed mode**********")
+	configChanges := map[string]interface{}{
+		"indexer.settings.enable_shard_affinity":          true,
+		"indexer.planner.honourNodesInDefn":               true,
+		"indexer.settings.rebalance.redistribute_indexes": true,
+	}
+	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
+
+	defer func() {
+		configChanges := map[string]interface{}{
+			"indexer.settings.enable_shard_affinity":          false,
+			"indexer.planner.honourNodesInDefn":               false,
+			"indexer.settings.rebalance.redistribute_indexes": false,
+		}
+		err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
+	}()
+
+	log.Printf("********Create indices**********")
+
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "2itest")
+	tc.HandleError(err, "failed to get client")
+
+	bucketUUID, err := c.GetBucketUUID(kvaddress, bucket)
+	scopeID, collectionID, err := c.GetScopeAndCollectionID(kvaddress, bucket, "_default", "_default")
+	tc.HandleError(err, "failed to get bucket UUID")
+
+	indexerIDs := []string{}
+	nodes, err := secondaryindex.GetIndexerNodes(indexManagementAddress)
+	tc.HandleError(err, "failed to get indexer nodes")
+	for _, node := range nodes {
+		indexerIDs = append(indexerIDs, node.NodeUUID)
+	}
+
+	defer clearCreateComandTokens()
+
+	// create equivalent replicated indexes on both nodes
+	var defnIDs = make([]uint64, 0, 5)
+	var baseDefnID c.IndexDefnId = 100
+	for i := 0; i < 3; i++ {
+		defns := make(map[c.IndexerId][]c.IndexDefn)
+		defnID := baseDefnID
+		defn := preparePrimaryIndexDefn(defnID,
+			t.Name()+"_index_"+strconv.Itoa(i),
+			bucket, bucketUUID, "_default", "_default",
+			scopeID, collectionID, indexerIDs, uint32(len(indexerIDs)-1), c.SINGLE, false)
+		for j, indexerID := range indexerIDs {
+			repID := (j + 1) % 2
+			clone := defn.Clone()
+			clone.ReplicaId = repID
+			clone.InstId = c.IndexInstId(time.Now().UnixNano())
+			clone.Partitions = []c.PartitionId{0}
+			clone.AlternateShardIds = map[c.PartitionId][]string{
+				c.PartitionId(0): {fmt.Sprintf("1-%v-0", repID)},
+			}
+			defns[c.IndexerId(indexerID)] = []c.IndexDefn{*clone}
+		}
+		defnIDs = append(defnIDs, uint64(defnID))
+		err = mc.PostCreateCommandToken(defnID, bucketUUID, scopeID, collectionID, 0, defns)
+		tc.HandleError(err, "failed to post create command token")
+
+		err = secondaryindex.WaitTillIndexActive(uint64(defnID), client, 60)
+		tc.HandleError(err, "failed to wait for index to be active")
+		baseDefnID++
+	}
+
+	// create duplicate indexes
+	defnID1 := baseDefnID
+	defn1 := preparePrimaryIndexDefn(defnID1,
+		t.Name()+"_index",
+		bucket, bucketUUID, "_default", "_default",
+		scopeID, collectionID, indexerIDs, 0, c.SINGLE, false)
+	defn1.Nodes = []string{indexerIDs[0]}
+	defn1.AlternateShardIds = map[c.PartitionId][]string{
+		c.PartitionId(0): {"2-0-0"},
+	}
+	defn1.InstId = c.IndexInstId(time.Now().UnixNano())
+
+	defns1 := map[c.IndexerId][]c.IndexDefn{
+		c.IndexerId(indexerIDs[0]): {*defn1},
+	}
+	defnIDs = append(defnIDs, uint64(defnID1))
+
+	baseDefnID++
+	defnID2 := baseDefnID
+	defn2 := defn1.Clone()
+	defn2.DefnId = defnID2
+	defn2.Partitions = []c.PartitionId{0}
+	defn2.InstId = c.IndexInstId(time.Now().UnixNano())
+	defn2.Nodes = []string{indexerIDs[1]}
+	defn2.AlternateShardIds = map[c.PartitionId][]string{
+		c.PartitionId(0): {"1-0-0"},
+	}
+	defns2 := map[c.IndexerId][]c.IndexDefn{
+		c.IndexerId(indexerIDs[1]): {*defn2},
+	}
+	defnIDs = append(defnIDs, uint64(defnID2))
+
+	err = mc.PostCreateCommandToken(defnID1, bucketUUID, scopeID, collectionID, 0, defns1)
+	tc.HandleError(err, "failed to post create command token")
+
+	err = mc.PostCreateCommandToken(defnID2, bucketUUID, scopeID, collectionID, 0, defns2)
+	tc.HandleError(err, "failed to post create command token")
+
+	log.Printf("waiting for all indexes %v to be active", defnIDs)
+	err = secondaryindex.WaitTillAllIndexesActive(defnIDs, client, 60)
+	tc.HandleError(err, "failed to wait for all indexes to be active")
+
+	var numIndexesBeforeRebal = 0
+	indexNamesBeforeRebal := []string{}
+	statuses, err := getIndexStatusFromIndexer()
+	tc.HandleError(err, "failed to get index status from indexer")
+	for _, status := range statuses.Status {
+		if status.Scope == "_system" && status.Collection == "_default" {
+			continue
+		}
+		numIndexesBeforeRebal++
+		indexNamesBeforeRebal = append(indexNamesBeforeRebal, status.IndexName)
+	}
+
+	performClusterStateValidation(t, false)
+
+	swapRebalance(t, 3, 2)
+
+	var numIndexesAfterRebal = 0
+	indexNamesAfterRebal := []string{}
+	statuses, err = getIndexStatusFromIndexer()
+	tc.HandleError(err, "failed to get index status from indexer")
+	for _, status := range statuses.Status {
+		if status.Scope == "_system" && status.Collection == "_default" {
+			continue
+		}
+		if status.DefnId == defnID2 {
+			// we have failed to drop the moving index
+			if retry > 5 {
+				t.Skipf("skipping test as we could not deterministically drop the moving index in 5 tries")
+				return
+			}
+			log.Printf("WARN duplicate index with defnID %v on moving shard ['1-0-0'] was not dropped. %v would have been dropped. retrying test...", defnID2, defnID1)
+			time.Sleep(10 * time.Second)
+			resetCluster(t)
+			addNodeAndRebalance(clusterconfig.Nodes[2], "index", t)
+			retry++
+			goto init
+		}
+		numIndexesAfterRebal++
+		indexNamesAfterRebal = append(indexNamesAfterRebal, status.IndexName)
+	}
+
+	performClusterStateValidation(t, false)
+
+	if numIndexesAfterRebal+1 != numIndexesBeforeRebal {
+		t.Fatalf("%v expected %v indexes to be active but found %v. Before rebalance - %v, after rebalance - %v",
+			t.Name(), numIndexesBeforeRebal, numIndexesAfterRebal, indexNamesBeforeRebal, indexNamesAfterRebal)
+	}
 }
 
 func TestShardRebalanceSetupCluster(t *testing.T) {

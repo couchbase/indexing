@@ -419,6 +419,17 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.EnableRollbackFilterTrim = slice.sysconf["bhive.EnableRollbackFilterTrim"].Bool()
 	cfg.EnableRollbackFilterPrune = slice.sysconf["bhive.EnableRollbackFilterPrune"].Bool()
 
+	cfg.EnableCompactFullMarshal = slice.sysconf["bhive.enableCompactFullMarshal"].Bool()
+	cfg.PurgeThresholdMax = float32(slice.sysconf["bhive.purgeThresholdMax"].Float64())
+	cfg.PurgeThresholdMin = float32(slice.sysconf["bhive.purgeThresholdMin"].Float64())
+	cfg.PurgeThresholdReader = float32(slice.sysconf["bhive.purgeThresholdReader"].Float64())
+	cfg.PurgeThresholdRecords = uint32(slice.sysconf["bhive.purgeThresholdRecords"].Int())
+	cfg.AutoMVCCCompaction = slice.sysconf["bhive.compactor.enable"].Bool()
+	cfg.AutoCompactionDiskLimit = float32(slice.sysconf["bhive.compactor.diskLimit"].Int()) / 100
+	cfg.AutoCompactionInterval = time.Duration(slice.sysconf["bhive.compactor.interval"].Int()) * time.Minute
+	cfg.AutoCompactionRateLimit = slice.sysconf["bhive.compactor.rateLimit"].Int()
+	cfg.AutoCompactionBatchLimit = slice.sysconf["bhive.compactor.batchLimit"].Int()
+
 	cfg.LSDFragmentationRatio = slice.sysconf["bhive.MagmaLSDFragmentationPercent"].Float64() / 100.0
 	cfg.MaxOpenFiles = uint64(slice.sysconf["bhive.MagmaMaxOpenFiles"].Int())
 
@@ -434,6 +445,9 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 
 	cfg.RecoveryFullDataReplay = slice.sysconf["bhive.RecoveryFullDataReplay"].Bool()
 	cfg.RecoveryDump = slice.sysconf["bhive.RecoveryDump"].Bool()
+
+	cfg.AutoBackupDiskLimit = float32(slice.sysconf["bhive.backupCorruptedDiskLimit"].Int()) / 100
+	cfg.AutoBackupShard = slice.sysconf["bhive.backupCorruptedShard"].Bool()
 
 	logging.Infof("bhiveSlice:setupConfig efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v PersistFullVector: %v",
 		cfg.EfNumNeighbors, cfg.EfConstruction, cfg.VanamaBuildQuota, cfg.NumCompactor, slice.topNScan, cfg.PersistFullVector)
@@ -455,7 +469,11 @@ func (slice *bhiveSlice) setupBackstoreConfig() bhive.Config {
 	cfg.NumKVStore = NumKVStore
 	cfg.MaxBatchSize = MaxBatchSize
 
-	cfg.LSDFragmentationRatio = slice.sysconf["bhive.MagmaLSDFragmentationPercent"].Float64() / 100.0
+	cfg.LSDFragmentationRatio = slice.sysconf["bhive.MagmaLSDFragmentationPercent"].Float64() / 100
+	cfg.MaxOpenFiles = uint64(slice.sysconf["bhive.MagmaMaxOpenFiles"].Int())
+
+	cfg.AutoBackupDiskLimit = float32(slice.sysconf["bhive.backupCorruptedDiskLimit"].Int()) / 100
+	cfg.AutoBackupShard = slice.sysconf["bhive.backupCorruptedShard"].Bool()
 
 	cfg.NumWriters = slice.maxNumWriters
 	return cfg

@@ -1773,7 +1773,8 @@ func (s *storageMgr) handleStats(cmd Message) {
 
 		//node level stats
 		var numStorageInstances int64
-		var totalDataSize, totalDiskSize, totalRecsInMem, totalRecsOnDisk, totalrawDataSize int64
+		var totalDataSize, totalDiskSize, totalRecsInMem, totalRecsOnDisk,
+			totalrawDataSize, totalCodebookMemUsage int64
 		var avgMutationRate, avgDrainRate, avgDiskBps, unitsUsage int64
 
 		stats := s.stats.Get()
@@ -1844,6 +1845,9 @@ func (s *storageMgr) handleStats(cmd Message) {
 				avgDiskBps += idxStats.avgDiskBps.Value()
 				unitsUsage += idxStats.avgUnitsUsage.Value()
 				totalrawDataSize += idxStats.rawDataSize.Value()
+				if idxStats.isVectorIndex {
+					totalCodebookMemUsage += idxStats.codebookSize.Value()
+				}
 			}
 		}
 
@@ -1855,6 +1859,8 @@ func (s *storageMgr) handleStats(cmd Message) {
 		stats.avgDiskBps.Set(avgDiskBps)
 		stats.unitsUsedActual.Set(unitsUsage)
 		stats.totalRawDataSize.Set(totalrawDataSize)
+		stats.totalCodebookMemUsage.Set(totalCodebookMemUsage)
+
 		if numStorageInstances > 0 {
 
 			stats.avgResidentPercent.Set(common.ComputePercent(totalRecsInMem, totalRecsOnDisk))
@@ -3097,6 +3103,9 @@ func (s *storageMgr) runMemoryQuotaDistributor() {
 	defer ticker.Stop()
 
 	var newMemQuota int64
+	var lastKnownQuota int64
+
+	lastLogTime := uint64(time.Now().UnixNano())
 
 	for {
 		select {
@@ -3104,7 +3113,47 @@ func (s *storageMgr) runMemoryQuotaDistributor() {
 		case <-ticker.C:
 			newMemQuota = int64(s.config.GetIndexerMemoryQuota())
 
-			s.redistributeMemoryQuota(newMemQuota, false)
+			//subtract the codebook memory usage from the total quota
+			//as codebook is fully memory resident and that memory cannot
+			//be allocated to storage.
+			stats := s.stats.Get()
+			if stats != nil {
+				codebookMemUsage := stats.totalCodebookMemUsage.Value()
+				if codebookMemUsage >= newMemQuota/2 {
+					//if codebook mem usage is more than 50% of quota,
+					//log a warning.
+					now := uint64(time.Now().UnixNano())
+					sinceLastLog := now - lastLogTime
+					if sinceLastLog > uint64(300*time.Second) {
+						logging.Warnf("StorageMgr:runMemoryQuotaDistributor: High Codebook Memory "+
+							"Usage Found %d. Quota %d.", codebookMemUsage, newMemQuota)
+						lastLogTime = uint64(time.Now().UnixNano())
+					}
+				}
+
+				if codebookMemUsage >= newMemQuota {
+					//If codebook memory usage is more than quota,
+					//set quota as 0. This action is not done for developer
+					//use cases with lower quota allocation(512MB or lower).
+					if newMemQuota >= 512*1024*1024 {
+						newMemQuota = 0
+					}
+				} else {
+					newMemQuota = newMemQuota - codebookMemUsage
+				}
+			}
+
+			forceUpdate := false
+			//Codebook memusage can keep changing due to index creation/
+			//deletion. If memQuota is different than the lastKnownQuota,
+			//force quota update for storage.
+			if newMemQuota != lastKnownQuota {
+				forceUpdate = true
+			}
+
+			lastKnownQuota = newMemQuota
+
+			s.redistributeMemoryQuota(newMemQuota, forceUpdate)
 
 		case stop := <-s.quotaDistCh:
 

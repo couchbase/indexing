@@ -51,7 +51,7 @@ func TestBhiveIndexDCPRebalance(t *testing.T) {
 		kvutility.WaitForCollectionCreation(BUCKET, scope, coll, clusterconfig.Username, clusterconfig.Password, []string{kvaddress}, manifest)
 
 		e := loadVectorData(subt, BUCKET, scope, coll, 10000)
-		FailTestIfError(e, "Error in loading vector data", t)
+		FailTestIfError(e, "Error in loading vector data", subt)
 	})
 
 	t.Run("CreateBhiveVectorIndexesBeforeRebalance", func(subt *testing.T) {
@@ -62,7 +62,7 @@ func TestBhiveIndexDCPRebalance(t *testing.T) {
 			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_partition\":3, \"defer_build\":true};",
 			idxBhiveDedicated, BUCKET)
 		err := createWithDeferAndBuild(idxBhiveDedicated, BUCKET, "", "", stmt, bhiveIndexActiveTimeout)
-		FailTestIfError(err, "Error in creating "+idxBhiveDedicated, t)
+		FailTestIfError(err, "Error in creating "+idxBhiveDedicated, subt)
 
 		// Any index created on non-default scope and coll will be a shared instance
 		log.Printf("********Create Bhive indices on scope and collection**********")
@@ -73,7 +73,7 @@ func TestBhiveIndexDCPRebalance(t *testing.T) {
 			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_partition\":3, \"defer_build\":true};",
 			idxBhiveShared, BUCKET, scope, coll)
 		err = createWithDeferAndBuild(idxBhiveShared, BUCKET, scope, coll, stmt, bhiveIndexActiveTimeout)
-		FailTestIfError(err, "Error in creating "+idxBhiveShared, t)
+		FailTestIfError(err, "Error in creating "+idxBhiveShared, subt)
 	})
 
 	defer t.Run("RebalanceResetCluster", func(subt *testing.T) {
@@ -90,7 +90,7 @@ func TestBhiveIndexDCPRebalance(t *testing.T) {
 	// entry cluster config - [0: kv n1ql] [1: index]
 	// exit cluster config - [0: kv n1ql] [1: index] [2: index] [3: index]
 	t.Run("TestAddTwoNodesAndRebalanceIn", func(subt *testing.T) {
-		addTwoNodesAndRebalance("AddTwoNodesAndRebalanceIn", t)
+		addTwoNodesAndRebalance("AddTwoNodesAndRebalanceIn", subt)
 		waitForRebalanceCleanup()
 
 		report, err := getLastRebalanceReport(kvaddress, clusterconfig.Username,
@@ -125,7 +125,7 @@ func TestBhiveIndexDCPRebalance(t *testing.T) {
 	})
 
 	t.Run("TestSwapRebalance", func(subt *testing.T) {
-		TestSwapRebalance(t)
+		TestSwapRebalance(subt)
 
 		indexStatusResp := performCodebookTransferValidation(subt, []string{idxBhiveDedicated, idxBhiveShared})
 		validateBhiveScan(subt, indexStatusResp)
@@ -133,7 +133,7 @@ func TestBhiveIndexDCPRebalance(t *testing.T) {
 
 	t.Run("TestFailedTraining", func(subt *testing.T) {
 		log.Println("*********Setup cluster*********")
-		setupCluster(t)
+		setupCluster(subt)
 		var err error
 
 		err = clusterutility.SetDataAndIndexQuota(clusterconfig.Nodes[0], clusterconfig.Username, clusterconfig.Password, "1500", BHIVE_INDEX_INDEXER_QUOTA)
@@ -153,7 +153,7 @@ func TestBhiveIndexDCPRebalance(t *testing.T) {
 		kvutility.WaitForCollectionCreation(BUCKET, scope, coll, clusterconfig.Username, clusterconfig.Password, []string{kvaddress}, manifest)
 
 		e := loadVectorData(subt, BUCKET, scope, coll, 10000)
-		FailTestIfError(e, "Error in loading vector data", t)
+		FailTestIfError(e, "Error in loading vector data", subt)
 
 		log.Printf("********Create bhive indices on scope and collection**********")
 
@@ -163,7 +163,7 @@ func TestBhiveIndexDCPRebalance(t *testing.T) {
 			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_partition\":3, \"defer_build\":true};",
 			idxBhiveShared, BUCKET, scope, coll)
 		err = createWithDeferAndBuild(idxBhiveShared, BUCKET, scope, coll, stmt, bhiveIndexActiveTimeout)
-		FailTestIfError(err, "Error in creating "+idxBhiveShared, t)
+		FailTestIfError(err, "Error in creating "+idxBhiveShared, subt)
 
 		err = secondaryindex.ChangeMultipleIndexerSettings(map[string]interface{}{"indexer.shardRebalance.execTestAction": true},
 			clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
@@ -223,7 +223,7 @@ func TestBhiveIndexShardRebalance(t *testing.T) {
 		kvutility.WaitForCollectionCreation(BUCKET, scope, coll, clusterconfig.Username, clusterconfig.Password, []string{kvaddress}, manifest)
 
 		e := loadVectorData(subt, BUCKET, scope, coll, 10000)
-		FailTestIfError(e, "Error in loading vector data", t)
+		FailTestIfError(e, "Error in loading vector data", subt)
 	})
 
 	t.Run("CreateBhiveVectorIndexesBeforeRebalance", func(subt *testing.T) {
@@ -234,7 +234,7 @@ func TestBhiveIndexShardRebalance(t *testing.T) {
 			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_partition\":3, \"defer_build\":true};",
 			idxBhiveDedicated, BUCKET)
 		err := createWithDeferAndBuild(idxBhiveDedicated, BUCKET, "", "", stmt, bhiveIndexActiveTimeout)
-		FailTestIfError(err, "Error in creating "+idxBhiveDedicated, t)
+		FailTestIfError(err, "Error in creating "+idxBhiveDedicated, subt)
 
 		// Any index created on non-default scope and coll will be a shared instance
 		log.Printf("********Create bhive indices on scope and collection**********")
@@ -245,7 +245,7 @@ func TestBhiveIndexShardRebalance(t *testing.T) {
 			" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_partition\":3, \"defer_build\":true};",
 			idxBhiveShared, BUCKET, scope, coll)
 		err = createWithDeferAndBuild(idxBhiveShared, BUCKET, scope, coll, stmt, bhiveIndexActiveTimeout)
-		FailTestIfError(err, "Error in creating "+idxBhiveShared, t)
+		FailTestIfError(err, "Error in creating "+idxBhiveShared, subt)
 	})
 
 	defer t.Run("RebalanceResetCluster", func(subt *testing.T) {
@@ -263,7 +263,7 @@ func TestBhiveIndexShardRebalance(t *testing.T) {
 	// entry cluster config - [0: kv n1ql] [1: index]
 	// exit cluster config - [0: kv n1ql] [1: index] [2: index] [3: index]
 	t.Run("TestAddTwoNodesAndRebalanceIn", func(subt *testing.T) {
-		addTwoNodesAndRebalance("AddTwoNodesAndRebalanceIn", t)
+		addTwoNodesAndRebalance("AddTwoNodesAndRebalanceIn", subt)
 		waitForRebalanceCleanup()
 
 		report, err := getLastRebalanceReport(kvaddress, clusterconfig.Username,
@@ -300,7 +300,7 @@ func TestBhiveIndexShardRebalance(t *testing.T) {
 	})
 
 	t.Run("TestSwapRebalance", func(subt *testing.T) {
-		TestSwapRebalance(t)
+		TestSwapRebalance(subt)
 
 		indexStatusResp := performCodebookTransferValidation(subt, []string{idxBhiveDedicated, idxBhiveShared})
 		performStagingCleanupValidation(subt)
@@ -311,7 +311,7 @@ func TestBhiveIndexShardRebalance(t *testing.T) {
 	t.Run("TestRebalanceReplicaRepair", func(subt *testing.T) {
 		log.Print("In TestRebalanceReplicaRepair")
 		// Due to previous cluster config, node[3] is still part of the cluster
-		swapRebalance(t, 2, 3)
+		swapRebalance(subt, 2, 3)
 
 		status := getClusterStatus()
 		if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
@@ -343,13 +343,13 @@ func TestBhiveIndexShardRebalance(t *testing.T) {
 
 		// Failover Node 2 - Replica is lost
 		log.Printf("%v: Failing over index node %v", subt.Name(), clusterconfig.Nodes[2])
-		failoverNode(clusterconfig.Nodes[2], t)
+		failoverNode(clusterconfig.Nodes[2], subt)
 		log.Printf("%v: Rebalancing", subt.Name())
-		rebalance(t)
+		rebalance(subt)
 
 		// Add Node 2 and Rebalance - Replica is repaired
 		log.Printf("%v: Add Node %v to the cluster for replica repair", subt.Name(), clusterconfig.Nodes[2])
-		addNodeAndRebalance(clusterconfig.Nodes[2], "index", t)
+		addNodeAndRebalance(clusterconfig.Nodes[2], "index", subt)
 
 		waitForRebalanceCleanup()
 

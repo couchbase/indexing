@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -380,7 +381,17 @@ func doRetriedSettingChangeWithValidation(configs map[string]interface{}, req *h
 			metaV, ok := metakvConfig[k]
 			if !ok {
 				return fmt.Errorf("config %v value does not match; expected %v actual N/A", k, v)
-			} else if metaV.Value != v {
+			}
+			if isAnyNumberType(v) && isAnyNumberType(metaV.Value) && toFloat64(v) == toFloat64(metaV.Value) {
+				continue
+			}
+			if reflect.TypeOf(v) == reflect.TypeOf(map[string]interface{}{}) {
+				strV, _ := json.Marshal(v)
+				strMetaV, _ := json.Marshal(metaV.Value)
+				if string(strV) != string(strMetaV) {
+					return fmt.Errorf("config %v value does not match; expected %v (%T) actual %v (%T)", k, v, v, metaV.Value, metaV.Value)
+				}
+			} else if !reflect.DeepEqual(v, metaV.Value) {
 				return fmt.Errorf("config %v value does not match; expected %v (%T) actual %v (%T)", k, v, v, metaV.Value, metaV.Value)
 			}
 		}
@@ -391,6 +402,48 @@ func doRetriedSettingChangeWithValidation(configs map[string]interface{}, req *h
 
 		return nil
 	}).Run()
+}
+
+func isAnyNumberType(v interface{}) bool {
+	switch v.(type) {
+	case uint64, int, float64, uint32, uint16, uint8, int32, int16, int8, int64, float32:
+		return true
+	}
+	return false
+}
+
+func toFloat64(v interface{}) float64 {
+	switch v := v.(type) {
+	case uint64:
+		return float64(v)
+	case int:
+		return float64(v)
+	case float64:
+		return v
+	case uint32:
+		return float64(v)
+	case uint16:
+		return float64(v)
+	case uint8:
+		return float64(v)
+	case int32:
+		return float64(v)
+	case int16:
+		return float64(v)
+	case int8:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case float32:
+		return float64(v)
+	case string:
+		i, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0
+		}
+		return i
+	}
+	return 0
 }
 
 func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserName, serverPassword, hostaddress string) error {

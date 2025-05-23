@@ -140,7 +140,7 @@ func TestVectorIndexDCPRebalance(t *testing.T) {
 	})
 
 	t.Run("TestSwapRebalance", func(subt *testing.T) {
-		TestSwapRebalance(t)
+		TestSwapRebalance(subt)
 
 		indexStatusResp := performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
 		validateVectorScan(subt, indexStatusResp)
@@ -148,7 +148,7 @@ func TestVectorIndexDCPRebalance(t *testing.T) {
 
 	t.Run("TestFailedTraining", func(subt *testing.T) {
 		log.Println("*********Setup cluster*********")
-		setupCluster(t)
+		setupCluster(subt)
 		var err error
 
 		err = clusterutility.SetDataAndIndexQuota(clusterconfig.Nodes[0], clusterconfig.Username, clusterconfig.Password, "1500", VECTOR_INDEX_INDEXER_QUOTA)
@@ -377,7 +377,7 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 	})
 
 	t.Run("TestSwapRebalance", func(subt *testing.T) {
-		TestSwapRebalance(t)
+		TestSwapRebalance(subt)
 
 		indexStatusResp := performCodebookTransferValidation(subt, []string{idxDedicated, idxShared})
 		performStagingCleanupValidation(subt)
@@ -388,7 +388,7 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 	t.Run("TestRebalanceReplicaRepair", func(subt *testing.T) {
 		log.Print("In TestRebalanceReplicaRepair")
 		// Due to previous cluster config, node[3] is still part of the cluster
-		swapRebalance(t, 2, 3)
+		swapRebalance(subt, 2, 3)
 
 		status := getClusterStatus()
 		if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
@@ -420,13 +420,13 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 
 		// Failover Node 2 - Replica is lost
 		log.Printf("%v: Failing over index node %v", subt.Name(), clusterconfig.Nodes[2])
-		failoverNode(clusterconfig.Nodes[2], t)
+		failoverNode(clusterconfig.Nodes[2], subt)
 		log.Printf("%v: Rebalancing", subt.Name())
-		rebalance(t)
+		rebalance(subt)
 
 		// Add Node 2 and Rebalance - Replica is repaired
 		log.Printf("%v: Add Node %v to the cluster for replica repair", subt.Name(), clusterconfig.Nodes[2])
-		addNodeAndRebalance(clusterconfig.Nodes[2], "index", t)
+		addNodeAndRebalance(clusterconfig.Nodes[2], "index", subt)
 
 		waitForRebalanceCleanup()
 

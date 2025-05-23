@@ -3119,7 +3119,7 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 				logging.Warnf("MergePartition: Target Index Instance %v is in DELETED state.  Remove target index instance %v.",
 					target.InstId, source.InstId)
 				idx.cleanupIndexMetadata(source)
-				idx.cleanupIndex(source, nil)
+				idx.cleanupIndex(source, nil, nil)
 				if respch != nil {
 					respch <- error(nil)
 				}
@@ -3271,7 +3271,7 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 			// have been dropped explicitly.  In this case, skip the merge.
 			logging.Warnf("MergePartition.  Target instance %v not found. Remove source %v.", source.RealInstId, source.InstId)
 			idx.cleanupIndexMetadata(source)
-			idx.cleanupIndex(source, nil)
+			idx.cleanupIndex(source, nil, nil)
 
 			if respch != nil {
 				respch <- error(nil)
@@ -3610,7 +3610,7 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 				for _, slice := range partnInst.Sc.GetAllSlices() {
 					partnId := slice.IndexPartnId()
 
-					if idx.shouldSkipSliceClose(inst.Defn.Bucket, inst.InstId, partnId) {
+					if idx.shouldSkipSliceClose(inst.Defn.Bucket, inst.InstId, partnId, nil) {
 						logging.Infof("PrunePartition: skipping slice closure as rebalance transfer is in progress for bucket: %v, instId: %v, partnId: %v",
 							inst.Defn.Bucket, inst.InstId, partnInst.Defn.GetPartitionId())
 						if _, ok := idx.slicePendingClosure[inst.InstId]; !ok {
@@ -4290,6 +4290,8 @@ func (idx *indexer) handleResumeRecoveredIndexes(msg Message) {
 func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	indexInstId := msg.(*MsgDropIndex).GetIndexInstId()
 	clientCh := msg.(*MsgDropIndex).GetResponseChannel()
+	reqCtx := msg.(*MsgDropIndex).GetRequestCtx()
+
 	logging.Infof("Indexer::handleDropIndex - IndexInstId %v", indexInstId)
 
 	//actual error is not required for admin msg handler
@@ -4384,7 +4386,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 		indexInst.State == common.INDEX_STATE_READY ||
 		indexInst.State == common.INDEX_STATE_RECOVERED {
 
-		idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh)
+		idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh, reqCtx)
 		logging.Infof("Indexer::handleDropIndex Cleanup Successful for "+
 			"Index Data %v", indexInst)
 		resp = &MsgSuccess{}
@@ -4436,9 +4438,9 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	if ok, _ := idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId]; storage != common.PLASMA && ok {
 		notifyCh := make(MsgChannel)
 		idx.streamKeyspaceIdObserveFlushDone[streamId][keyspaceId] = notifyCh
-		go idx.processDropAfterFlushDone(indexInst, notifyCh, clientCh)
+		go idx.processDropAfterFlushDone(indexInst, notifyCh, clientCh, reqCtx)
 	} else {
-		idx.cleanupIndex(indexInst, clientCh)
+		idx.cleanupIndex(indexInst, clientCh, reqCtx)
 	}
 
 	resp = &MsgSuccessDrop{
@@ -5543,7 +5545,7 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 	// be cleaned-up once flush is done
 	if val, ok := idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId]; !ok || val == false {
 		idx.stopKeyspaceIdStream(streamId, keyspaceId, true)
-		idx.cleanupIndexData(deletedInsts, nil)
+		idx.cleanupIndexData(deletedInsts, nil, nil)
 		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 
 		logging.Infof("Indexer::handleKeyspaceNotFound %v %v %v",
@@ -5670,7 +5672,7 @@ func (idx *indexer) cleanupIndexDataForCollectionDrop(streamId common.StreamId,
 
 	bucketUUID := idx.indexInstMap[deletedInstIds[0]].Defn.BucketUUID // to-be-deleted info needed below
 	deletedInsts := idx.getInsts(deletedInstIds)
-	idx.cleanupIndexData(deletedInsts, nil)
+	idx.cleanupIndexData(deletedInsts, nil, nil)
 
 	// Skip instances with NIL_STREAM
 	indexesWithStream := make([]common.IndexInst, 0)
@@ -5695,8 +5697,10 @@ func (idx *indexer) newKeyspaceStatsMsg() *MsgUpdateKeyspaceStatsMap {
 
 // cleanupIndexData updates and distributes index metadata to workers reflecting
 // the deletion of a set of instances and deletes the associated slices.
+// requestCtx is non-nil only for drop of duplicate index during rebalance
 func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
-	clientCh MsgChannel) {
+	clientCh MsgChannel,
+	requestCtx *c.MetadataRequestContext) {
 
 	storage := common.GetStorageMode()
 	if storage == common.PLASMA {
@@ -5762,7 +5766,7 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 				//close all the slices
 				for _, slice := range sc.GetAllSlices() {
 					partnId := slice.IndexPartnId()
-					if idx.shouldSkipSliceClose(indexInst.Defn.Bucket, indexInst.InstId, partnId) {
+					if idx.shouldSkipSliceClose(indexInst.Defn.Bucket, indexInst.InstId, partnId, requestCtx) {
 						logging.Infof("Indexer::cleanupIndexData skipping slice closure as rebalance transfer is in progress for bucket: %v instId: %v, partnId: %v",
 							indexInst.Defn.Bucket, indexInst.InstId, pid)
 						if _, ok := idx.slicePendingClosure[indexInst.InstId]; !ok {
@@ -5857,9 +5861,10 @@ func (idx *indexer) updateBucketNameNumVBucketsMap(deletedInstBucketNames []stri
 }
 
 func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
-	clientCh MsgChannel) {
+	clientCh MsgChannel,
+	requestCtx *c.MetadataRequestContext) {
 
-	idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh)
+	idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh, requestCtx)
 
 	//send Stream update to workers
 	if ok := idx.sendStreamUpdateForDropIndex(indexInst, clientCh); !ok {
@@ -7934,7 +7939,7 @@ func (idx *indexer) cleanupMaintStream(keyspaceId string) {
 
 	for _, cleanupInst := range cleanupInstList {
 		logging.Infof("Indexer::cleanupMaintStream Cleaning up instance: %v", cleanupInst.InstId)
-		idx.cleanupIndex(cleanupInst, nil)
+		idx.cleanupIndex(cleanupInst, nil, nil)
 	}
 }
 
@@ -8671,11 +8676,11 @@ func (idx *indexer) notifyFlushObserver(msg Message) common.IndexInstId {
 }
 
 func (idx *indexer) processDropAfterFlushDone(indexInst common.IndexInst,
-	notifyCh MsgChannel, clientCh MsgChannel) {
+	notifyCh MsgChannel, clientCh MsgChannel, reqCtx *c.MetadataRequestContext) {
 
 	select {
 	case <-notifyCh:
-		idx.cleanupIndex(indexInst, clientCh)
+		idx.cleanupIndex(indexInst, clientCh, reqCtx)
 	}
 
 	streamId := indexInst.Stream
@@ -12946,10 +12951,13 @@ func (idx *indexer) clearRebalancePhase(newRebal bool) {
 	idx.slicePendingClosure = nil
 }
 
-func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstId, partnId c.PartitionId) bool {
+func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstId,
+	partnId c.PartitionId, requestCtx *c.MetadataRequestContext) bool {
 
-	if idx.globalRebalPhase == common.RebalanceInitated {
-		logging.Warnf("Indexer::shouldSkipSliceClose Skipping slice closure as rebalance is still in plan phase, inst: %v", instId)
+	if idx.globalRebalPhase == common.RebalanceInitated &&
+		(requestCtx == nil || requestCtx.ReqSource == c.DDLRequestSourceUser) {
+		logging.Warnf("Indexer::shouldSkipSliceClose Skipping slice closure as rebalance is still in plan phase, inst: %v, reqCtx: %v",
+			instId, requestCtx)
 		return true
 	}
 
@@ -14238,7 +14246,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	for instId, clientCh := range dropMap {
 		indexInst, exists := idx.indexInstMap[instId]
 		if exists {
-			idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh)
+			idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh, nil)
 			logging.Infof("Indexer::handleIndexTrainingDone Cleanup Successful for "+
 				"Index that is dropped during training phase %v", indexInst)
 		} else {

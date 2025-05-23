@@ -467,6 +467,13 @@ func ValidateClusterState(asm AlternateShardMap, logFails bool) map[InvalidClust
 			continue
 		}
 
+		if len(defnStruct.ReplicaMap) == 0 {
+			err := fmt.Errorf("'no replicas found for index: %v'", idx)
+			logger("ValidateClusterState: %v", err)
+			res[MISSING_REPLICA_INVALID_CLUSTER_STATE] = append(res[MISSING_REPLICA_INVALID_CLUSTER_STATE], err.Error())
+			continue
+		}
+
 		if len(defnStruct.ReplicaMap) != defnStruct.NumReplica+1 {
 			err := fmt.Errorf("'less replicas %v than definition %v for index: %v'", len(defnStruct.ReplicaMap), defnStruct.NumReplica+1, idx)
 			logger("ValidateClusterState: %v", err)
@@ -479,6 +486,13 @@ func ValidateClusterState(asm AlternateShardMap, logFails bool) map[InvalidClust
 				err := fmt.Errorf("'less partitions %v than definition %v for index: %v'", len(partnMap), defnStruct.NumPartition, idx)
 				logger("ValidateClusterState: %v", err)
 				res[MISSING_PARTITION_INVALID_CLUSTER_STATE] = append(res[MISSING_PARTITION_INVALID_CLUSTER_STATE], err.Error())
+			}
+
+			if len(partnMap) == 0 {
+				err := fmt.Errorf("'no partitions found for index: %v'", idx)
+				logger("ValidateClusterState: %v", err)
+				res[ALTERNATE_SHARD_AFFINITY_INVALID_CLUSTER_STATE] = append(res[ALTERNATE_SHARD_AFFINITY_INVALID_CLUSTER_STATE], err.Error())
+				continue
 			}
 
 			for _, asis := range partnMap {
