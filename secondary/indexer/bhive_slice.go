@@ -2512,6 +2512,8 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	sts.LogSpace = int64(mStats.TotalDiskUsage)
 	sts.DataSize = int64(float32(mStats.TotalDataSize) * mStats.CompressionRatio)
 
+	sts.GraphBuildProgress = mStats.GraphBuildProgress
+
 	bStats := mdb.backstore.GetStats()
 	docidCount = int64(bStats.ItemCount)
 	bsNumRecsMem += int64(float32(bStats.ItemCount) * bStats.ResidentRatio)
