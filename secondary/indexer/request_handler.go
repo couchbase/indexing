@@ -1380,6 +1380,13 @@ func getStateStr(instance *manager.IndexInstDistribution, state common.IndexStat
 				stateStr = "Scheduled for build"
 			}
 		}
+		if instance.TrainingPhase == common.TRAINING_COMPLETED{
+			if defn.IsVectorIndex {
+				stateStr = "Training complete, scheduled for build"
+			} else {
+				stateStr = "Scheduled for build"
+			}
+		}
 	}
 
 	if indexerState, ok := stats.ToMap()["indexer_state"]; ok {
