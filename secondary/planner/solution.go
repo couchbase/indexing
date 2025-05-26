@@ -2261,12 +2261,12 @@ func (s *Solution) updateSlotMap() {
 // All replicas of an index share the same slotId and they only differ by
 // replica number of the slot. Get the slot ID for the missing replica from slotMap
 func (s *Solution) findIndexerForReplica(indexDefnId common.IndexDefnId,
-	indexReplicaId int, indexPartnId common.PartitionId, indexers []*IndexerNode) (uint64, *IndexerNode, []*IndexerNode, bool) {
+	indexReplicaId int, indexPartnId common.PartitionId, indexers []*IndexerNode) (uint64, *IndexerNode, []*IndexerNode) {
 
 	// If no slots exists for this index in the cluster,
 	// return the first node from the list of eligible indexer nodes
 	if _, ok := s.indexSlots[indexDefnId]; !ok {
-		return 0, indexers[0], indexers[1:], true
+		return 0, indexers[0], indexers[1:]
 	}
 
 	// Atleast one replica of the index exists.
@@ -2294,7 +2294,7 @@ func (s *Solution) findIndexerForReplica(indexDefnId common.IndexDefnId,
 	// No partition that is a replica of the current partition is found in the cluster
 	// Return the first node from the list of eligible indexer nodes
 	if !found {
-		return 0, indexers[0], indexers[1:], true
+		return 0, indexers[0], indexers[1:]
 	}
 
 	// If there is any indexer node that hosts this slot with same replicaId,
@@ -2304,7 +2304,7 @@ func (s *Solution) findIndexerForReplica(indexDefnId common.IndexDefnId,
 		if replicaId == indexReplicaId {
 			for i, indexer := range indexers {
 				if target == indexer {
-					return indexSlotId, indexer, append(indexers[:i], indexers[i+1:]...), false
+					return indexSlotId, indexer, append(indexers[:i], indexers[i+1:]...)
 				}
 			}
 
@@ -2313,7 +2313,7 @@ func (s *Solution) findIndexerForReplica(indexDefnId common.IndexDefnId,
 			// any new indexes). In such a case, map the index to the indexer node on which
 			// the slot with required replica exists as rebalance will move the slot to a
 			// different node
-			return indexSlotId, target, indexers, false
+			return indexSlotId, target, indexers
 		}
 	}
 
@@ -2324,7 +2324,7 @@ func (s *Solution) findIndexerForReplica(indexDefnId common.IndexDefnId,
 	// E.g., if replica:2 is being repaired but only replica:0 and replica:1 is a part
 	// of the cluster, then we still create index on slot "indexSlotId" on a different
 	// node in the cluster
-	return indexSlotId, indexers[0], indexers[1:], true
+	return indexSlotId, indexers[0], indexers[1:]
 }
 
 func (s *Solution) getShardLimits() (int, int) {

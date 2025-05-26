@@ -1297,8 +1297,7 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 					if instId, ok := missing[replicaId]; ok && len(indexers) != 0 {
 
 						var indexSlot uint64
-						var isEligible bool
-						indexSlot, indexer, indexers, isEligible = s.findIndexerForReplica(index.DefnId, replicaId, index.PartnId, indexers)
+						indexSlot, indexer, indexers = s.findIndexerForReplica(index.DefnId, replicaId, index.PartnId, indexers)
 
 						if index.Instance != nil {
 
@@ -1342,29 +1341,14 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 								s.addToSlotMap(indexSlot, indexer, replicaId)
 							}
 
-							// Add to clonedCandidates only if the index is eligible for movement
-							// The clonedCandidates will later be added to required/optional indexes
-							// The required/optional indexes are the indexes that will be eligible
-							// for movements across different node.
-							//
-							// If the slotId of an indexer is finalised, then the index can not be moved
-							// in isolation. As it has to be moved along with the shard, do not consider
-							// the index to be eligible for movement. In case of rebalance, all indexes
-							// will be eligible by default. Therefore, the index will be moved with the
-							// proxy.
-							//
-							// For replica repair, move only those indexes for which the shard placement
-							// is not finalized
-							if isEligible {
-								clonedCandidates = append(clonedCandidates, cloned)
-							}
+							clonedCandidates = append(clonedCandidates, cloned)
 							numReplica++
 
 							if len(cloned.AlternateShardIds) > 0 {
 								logging.Infof("Rebuilding lost replica for (%v,%v,%v,%v,%v,%v), inst: %v with alternate shardIds: %v "+
-									"with initial placement on node: %v, eligible: %v",
+									"with initial placement on node: %v",
 									index.Bucket, index.Scope, index.Collection, index.Name, replicaId, index.PartnId,
-									index.InstId, cloned.AlternateShardIds, indexer.NodeId, isEligible)
+									index.InstId, cloned.AlternateShardIds, indexer.NodeId)
 							} else {
 								logging.Infof("Rebuilding lost replica for (%v,%v,%v,%v,%v,%v), inst: %v with initial placement on node: %v",
 									index.Bucket, index.Scope, index.Collection, index.Name, replicaId, index.PartnId,
