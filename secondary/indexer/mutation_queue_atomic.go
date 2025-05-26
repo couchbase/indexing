@@ -365,6 +365,12 @@ func (q *atomicMutationQueue) dequeueN(vbucket Vbucket, count uint64,
 			head := (*node)(atomic.LoadPointer(&q.head[vbucket]))
 			//copy the mutation pointer
 			m := head.next.mutation
+			if m == nil { // Early exit if mutation queue is destroyed while DequeueN is in progress
+				atomic.AddInt64(q.memUsed, -memReleased)
+				close(datach)
+				return
+			}
+
 			if currCount < count {
 				//free mutation pointer
 				head.next.mutation = nil
