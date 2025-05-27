@@ -490,6 +490,15 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	streamKeyspaceIdInstList := s.streamKeyspaceIdInstList.Get()
 	instIdList := streamKeyspaceIdInstList[streamId][keyspaceId]
 
+	if len(instIdList) == 0 {
+		logging.Infof("storageMgr::handleCreateSnapshot Skipping snapshot creation as instIdList "+
+			"is zero for streamId: %v, keyspaceId: %v", streamId, keyspaceId)
+		if snapType == common.FORCE_COMMIT_MERGE {
+			s.supvCmdch <- &MsgSuccess{} // send response as storage manager is not going to create snapshot
+		}
+		return
+	}
+
 	streamKeyspaceIdInstsPerWorker := s.streamKeyspaceIdInstsPerWorker.Get()
 	instsPerWorker := streamKeyspaceIdInstsPerWorker[streamId][keyspaceId]
 	// The num_snapshot_workers config has changed. Re-adjust the

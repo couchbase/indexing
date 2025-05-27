@@ -18,8 +18,8 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
-//MutationQueue interface specifies methods which a mutation queue for indexer
-//needs to implement
+// MutationQueue interface specifies methods which a mutation queue for indexer
+// needs to implement
 type MutationQueue interface {
 
 	//enqueue a mutation reference based on vbucket. This is a blocking call which
@@ -32,7 +32,7 @@ type MutationQueue interface {
 	//dequeue a vbucket's mutation upto seqno(wait if not available)
 	DequeueUptoSeqno(vbucket Vbucket, seqno uint64) (<-chan *MutationKeys, chan bool, error)
 	//dequeue single element for a vbucket and return
-	DequeueSingleElement(vbucket Vbucket) *MutationKeys
+	DequeueSingleElement(vbucket Vbucket) (*MutationKeys, bool)
 	//dequeue N elements for a vbucket and return
 	DequeueN(vbucket Vbucket, count uint64) (<-chan *MutationKeys, chan bool, error)
 
@@ -83,12 +83,12 @@ type atomicMutationQueue struct {
 	free        []*node //free pointer per vbucket queue
 	stopch      []StopChannel
 	numVbuckets uint16 //num vbuckets for the queue
-	isDestroyed bool
+	isDestroyed atomic.Bool
 
 	keyspaceId string
 }
 
-//NewAtomicMutationQueue allocates a new Atomic Mutation Queue and initializes it
+// NewAtomicMutationQueue allocates a new Atomic Mutation Queue and initializes it
 func NewAtomicMutationQueue(keyspaceId string, numVbuckets uint16, maxMemory *int64,
 	memUsed *int64, config common.Config) *atomicMutationQueue {
 
@@ -121,17 +121,17 @@ func NewAtomicMutationQueue(keyspaceId string, numVbuckets uint16, maxMemory *in
 
 }
 
-//Node represents a single element in the queue
+// Node represents a single element in the queue
 type node struct {
 	mutation *MutationKeys
 	next     *node
 }
 
-//Enqueue will enqueue the mutation reference for given vbucket.
-//Caller should not free the mutation till it is dequeued.
-//Mutation will not be copied internally by the queue.
-//caller can call appch to force this call to return. Otherwise
-//this is a blocking call till there is a slot available for enqueue.
+// Enqueue will enqueue the mutation reference for given vbucket.
+// Caller should not free the mutation till it is dequeued.
+// Mutation will not be copied internally by the queue.
+// caller can call appch to force this call to return. Otherwise
+// this is a blocking call till there is a slot available for enqueue.
 func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys,
 	vbucket Vbucket, appch StopChannel) error {
 
@@ -141,7 +141,7 @@ func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys,
 
 	//no more requests are taken once queue
 	//is marked as destroyed
-	if q.isDestroyed {
+	if q.isDestroyed.Load() {
 		return nil
 	}
 
@@ -168,13 +168,13 @@ func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys,
 
 }
 
-//DequeueUptoSeqno returns a channel on which it will return mutation reference
-//for specified vbucket upto the sequence number specified.
-//This function will keep polling till mutations upto seqno are available
-//to be sent. It terminates when it finds a mutation with seqno higher than
-//the one specified as argument. This allow for multiple mutations with same
-//seqno (e.g. in case of multiple indexes)
-//It closes the mutation channel to indicate its done.
+// DequeueUptoSeqno returns a channel on which it will return mutation reference
+// for specified vbucket upto the sequence number specified.
+// This function will keep polling till mutations upto seqno are available
+// to be sent. It terminates when it finds a mutation with seqno higher than
+// the one specified as argument. This allow for multiple mutations with same
+// seqno (e.g. in case of multiple indexes)
+// It closes the mutation channel to indicate its done.
 func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno uint64) (
 	<-chan *MutationKeys, chan bool, error) {
 
@@ -209,7 +209,7 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno uint64,
 			head := (*node)(atomic.LoadPointer(&q.head[vbucket]))
 			//copy the mutation pointer
 			m := head.next.mutation
-			if seqno >= m.meta.seqno {
+			if m != nil && seqno >= m.meta.seqno {
 				//free mutation pointer
 				head.next.mutation = nil
 				//move head to next
@@ -220,9 +220,26 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno uint64,
 				dequeueSeq = m.meta.seqno
 				datach <- m
 			} else {
-				logging.Warnf("Indexer::MutationQueue Dequeue Aborted For "+
-					"Seqno %v KeyspaceId %v Vbucket %v. Last Dequeue %v Head Seqno %v.", seqno,
-					q.keyspaceId, vbucket, dequeueSeq, m.meta.seqno)
+
+				if m == nil {
+					if q.isDestroyed.Load() {
+						logging.Infof("Indexer::MutationQueue Dequeue Aborted as "+
+							"mutation is nil and queue is destroyed for keyspaceId: %v. "+
+							"Last Dequeue %v Head Seqno %v.", seqno,
+							q.keyspaceId, vbucket, dequeueSeq)
+						atomic.AddInt64(q.memUsed, -memReleased)
+						close(datach) // close datach and return as if normal flush is done
+						return
+					} else {
+						logging.Warnf("Indexer::MutationQueue Dequeue Aborted as "+
+							"mutation is nil. Seqno: %v, KeyspaceId: %v, vbucket: %v, Last Dequeue %v",
+							seqno, q.keyspaceId, vbucket, dequeueSeq)
+					}
+				} else {
+					logging.Warnf("Indexer::MutationQueue Dequeue Aborted For "+
+						"Seqno %v KeyspaceId %v Vbucket %v. Last Dequeue %v Head Seqno %v.", seqno,
+						q.keyspaceId, vbucket, dequeueSeq, m.meta.seqno)
+				}
 				atomic.AddInt64(q.memUsed, -memReleased)
 				close(errch)
 				return
@@ -240,9 +257,9 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno uint64,
 	}
 }
 
-//Dequeue returns a channel on which it will return mutation reference for specified vbucket.
-//This function will keep polling and send mutations as those become available.
-//It returns a stop channel on which caller can signal it to stop.
+// Dequeue returns a channel on which it will return mutation reference for specified vbucket.
+// This function will keep polling and send mutations as those become available.
+// It returns a stop channel on which caller can signal it to stop.
 func (q *atomicMutationQueue) Dequeue(vbucket Vbucket) (<-chan *MutationKeys,
 	chan<- bool, error) {
 
@@ -273,19 +290,20 @@ func (q *atomicMutationQueue) dequeue(vbucket Vbucket, datach chan *MutationKeys
 
 	//keep dequeuing till list is empty
 	for {
-		m := q.DequeueSingleElement(vbucket)
-		if m == nil {
+		m, queueEmpty := q.DequeueSingleElement(vbucket)
+		if queueEmpty {
 			return
 		}
-		//send mutation to caller
-		datach <- m
+		if m != nil {
+			datach <- m //send mutation to caller
+		}
 	}
 
 }
 
-//DequeueSingleElement dequeues a single element and returns.
-//Returns nil in case of empty queue.
-func (q *atomicMutationQueue) DequeueSingleElement(vbucket Vbucket) *MutationKeys {
+// DequeueSingleElement dequeues a single element and returns.
+// Returns nil in case of empty queue.
+func (q *atomicMutationQueue) DequeueSingleElement(vbucket Vbucket) (*MutationKeys, bool) {
 
 	if atomic.LoadPointer(&q.head[vbucket]) !=
 		atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
@@ -298,18 +316,20 @@ func (q *atomicMutationQueue) DequeueSingleElement(vbucket Vbucket) *MutationKey
 		//move head to next
 		atomic.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
 		atomic.AddInt64(&q.size[vbucket], -1)
-		atomic.AddInt64(q.memUsed, -m.Size())
-		return m
+		if m != nil {
+			atomic.AddInt64(q.memUsed, -m.Size())
+		}
+		return m, false
 	}
-	return nil
+	return nil, true
 }
 
-//DequeueN returns a channel on which it will return mutation reference
-//for specified vbucket upto the count of mutations specified.
-//This function will keep polling till mutations upto count are available
-//to be sent. It terminates when it has sent the number of mutations
-//specified as argument.
-//It closes the mutation channel to indicate its done.
+// DequeueN returns a channel on which it will return mutation reference
+// for specified vbucket upto the count of mutations specified.
+// This function will keep polling till mutations upto count are available
+// to be sent. It terminates when it has sent the number of mutations
+// specified as argument.
+// It closes the mutation channel to indicate its done.
 func (q *atomicMutationQueue) DequeueN(vbucket Vbucket, count uint64) (
 	<-chan *MutationKeys, chan bool, error) {
 
@@ -345,6 +365,12 @@ func (q *atomicMutationQueue) dequeueN(vbucket Vbucket, count uint64,
 			head := (*node)(atomic.LoadPointer(&q.head[vbucket]))
 			//copy the mutation pointer
 			m := head.next.mutation
+			if m == nil { // Early exit if mutation queue is destroyed while DequeueN is in progress
+				atomic.AddInt64(q.memUsed, -memReleased)
+				close(datach)
+				return
+			}
+
 			if currCount < count {
 				//free mutation pointer
 				head.next.mutation = nil
@@ -370,7 +396,7 @@ func (q *atomicMutationQueue) dequeueN(vbucket Vbucket, count uint64,
 	}
 }
 
-//PeekTail returns reference to a vbucket's mutation at tail of queue without dequeue
+// PeekTail returns reference to a vbucket's mutation at tail of queue without dequeue
 func (q *atomicMutationQueue) PeekTail(vbucket Vbucket) *MutationKeys {
 	if atomic.LoadPointer(&q.head[vbucket]) !=
 		atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
@@ -380,7 +406,7 @@ func (q *atomicMutationQueue) PeekTail(vbucket Vbucket) *MutationKeys {
 	return nil
 }
 
-//PeekHead returns reference to a vbucket's mutation at head of queue without dequeue
+// PeekHead returns reference to a vbucket's mutation at head of queue without dequeue
 func (q *atomicMutationQueue) PeekHead(vbucket Vbucket) *MutationKeys {
 	if atomic.LoadPointer(&q.head[vbucket]) !=
 		atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
@@ -390,17 +416,17 @@ func (q *atomicMutationQueue) PeekHead(vbucket Vbucket) *MutationKeys {
 	return nil
 }
 
-//GetSize returns the size of the vbucket queue
+// GetSize returns the size of the vbucket queue
 func (q *atomicMutationQueue) GetSize(vbucket Vbucket) int64 {
 	return atomic.LoadInt64(&q.size[vbucket])
 }
 
-//GetNumVbuckets returns the numbers of vbuckets for the queue
+// GetNumVbuckets returns the numbers of vbuckets for the queue
 func (q *atomicMutationQueue) GetNumVbuckets() uint16 {
 	return q.numVbuckets
 }
 
-//allocNode tries to get node from freelist, otherwise allocates a new node and returns
+// allocNode tries to get node from freelist, otherwise allocates a new node and returns
 func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *node {
 
 	n := q.checkMemAndAlloc(vbucket)
@@ -469,8 +495,8 @@ func (q *atomicMutationQueue) checkMemAndAlloc(vbucket Vbucket) *node {
 
 }
 
-//popFreeList removes a node from freelist and returns to caller.
-//if freelist is empty, it returns nil.
+// popFreeList removes a node from freelist and returns to caller.
+// if freelist is empty, it returns nil.
 func (q *atomicMutationQueue) popFreeList(vbucket Vbucket) *node {
 
 	if q.free[vbucket] != (*node)(atomic.LoadPointer(&q.head[vbucket])) {
@@ -485,15 +511,15 @@ func (q *atomicMutationQueue) popFreeList(vbucket Vbucket) *node {
 
 }
 
-//Destroy will free up all resources of the queue.
-//Importantly it will free up pending mutations as well.
-//Once destroy have been called, further enqueue operations
-//will be no-op.
+// Destroy will free up all resources of the queue.
+// Importantly it will free up pending mutations as well.
+// Once destroy have been called, further enqueue operations
+// will be no-op.
 func (q *atomicMutationQueue) Destroy() {
 
 	//set the flag so no more Enqueue requests
 	//are taken on this queue
-	q.isDestroyed = true
+	q.isDestroyed.Store(true)
 
 	//ensure all pending allocs get stopped
 	var i uint16
