@@ -2683,6 +2683,7 @@ func (mdb *bhiveSlice) ShardStatistics(partnId common.PartitionId) *common.Shard
 	ss.ShardId = getShardId(msAlternateShardId)
 
 	ss.MemSz = val.MemSz
+	ss.MemSzIndex = val.MemSzIndex
 	ss.LSSDataSize = val.LSSDataSize
 	ss.ItemsCount = val.ItemsCount
 	ss.LSSDiskSize = val.LSSDiskSize
@@ -2703,6 +2704,7 @@ func (mdb *bhiveSlice) ShardStatistics(partnId common.PartitionId) *common.Shard
 			return nil
 		}
 		ss.MemSz += val.MemSz
+		ss.MemSzIndex += val.MemSzIndex
 		ss.LSSDataSize += val.LSSDataSize
 		ss.ItemsCount += val.ItemsCount
 		ss.LSSDiskSize += val.LSSDiskSize
