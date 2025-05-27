@@ -677,5 +677,101 @@
         "help": "Number of index partitions with diverging replica item counts.",
         "added": "8.0.0",
         "notes": "Valid only for memory optimised, plasma storage modes."
+    },
+    "index_storage_bhive_memory_used": {
+        "type": "gauge",
+        "help": "Total memory used by Bhive indexes",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_buf_memused": {
+        "type": "gauge",
+        "help": "Total Memory used by various reusable buffers",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_num_reads": {
+        "type": "gauge",
+        "help": "Total number of times a disk block is read into memory",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_blk_read_bs": {
+        "type": "gauge",
+        "help": "Total number of bytes that were read from disk into memory",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_num_reads_get": {
+        "type": "gauge",
+        "help": "Total number of times a disk block was read into memory due to index scans",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_blk_reads_bs_get": {
+        "type": "gauge",
+        "help": "Total number of bytes that were read from disk into memory for index scans",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_num_reads_lookup": {
+        "type": "gauge",
+        "help": "Total number of times a disk block was read into memory due to lookups",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_blk_reads_bs_lookup": {
+        "type": "gauge",
+        "help": "Total number of bytes that were read from disk into memory for lookups",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_bytes_written": {
+        "type": "gauge",
+        "help": "Total number of bytes that were written to disk",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_bytes_incoming": {
+        "type": "gauge",
+        "help": "Total number of bytes that were added to the stores and intended to be written to disk",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_total_used_size": {
+        "type": "gauge",
+        "help": "Total number of disk bytes used. This size is eligible for cleanups in subsequent compactions.",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_total_disk_size": {
+        "type": "gauge",
+        "help": "Total disk usage in bytes",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_fragmentation": {
+        "type": "gauge",
+        "help": "The fraction of garbage data present on disk",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_resident_ratio": {
+        "type": "gauge",
+        "help": "Ratio of cache mem used and cacheable size",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_compacts": {
+        "type": "gauge",
+        "help": "Total count of compaction operations performed",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
+    },
+    "index_storage_bhive_compression_ratio_avg": {
+        "type": "gauge",
+        "help": "Ratio of data bytes to be compressed and data bytes after compression",
+        "added": "8.0.0",
+        "notes": "Valid only for Bhive standard GSI indexes."
     }
 }
