@@ -1696,13 +1696,25 @@ func (m *CommandListener) handleNewDropInstanceCommandToken(path string, value [
 		return
 	}
 
-	token, err := UnmarshallDropInstanceCommandToken(value)
+	// If DropInstanceTokens is BigValue act only on the first chunk
+	// i.e. <DropInstanceDDLCommandTokenPath>/<defnId>/<instId>/0
+	chunkIndexStr := path[strings.LastIndex(path, "/")+1:]
+	chunkIndex, err := strconv.Atoi(chunkIndexStr)
 	if err != nil {
-		logging.Warnf("CommandListener: Failed to process drop index instance token.  Skp %v.  Internal Error = %v.", path, err)
+		logging.Errorf("CommandListener::handleNewDropInstanceCommandToken: Fail to convert last part %v to int: %v", chunkIndexStr, err)
+		return
+	}
+	if chunkIndex != 0 {
 		return
 	}
 
-	m.AddNewDropInstanceToken(path, token)
+	dropInstToken, err := GetDropInstanceTokenFromPath(path)
+	if err != nil {
+		logging.Errorf("CommandListener::handleNewDropInstanceCommandToken: Fail to retrieve drop instance token for path %v got err: %v", path, err)
+		return
+	}
+
+	m.AddNewDropInstanceToken(path, dropInstToken)
 }
 
 func (m *CommandListener) handleNewScheduleCreateToken(path string, value []byte) {
