@@ -449,6 +449,10 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.AutoBackupDiskLimit = float32(slice.sysconf["bhive.backupCorruptedDiskLimit"].Int()) / 100
 	cfg.AutoBackupShard = slice.sysconf["bhive.backupCorruptedShard"].Bool()
 
+	cfg.EnableBreakPad = slice.sysconf["bhive.enableBreakPad"].Bool()
+	// cbcollect collects only from crash directory inside crash (ns_server:indexer_breakpad_minidump_dir)
+	cfg.MiniDumpDir = common.SystemConfig["indexer.diagnostics_dir"].String()
+
 	logging.Infof("bhiveSlice:setupConfig efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v PersistFullVector: %v",
 		cfg.EfNumNeighbors, cfg.EfConstruction, cfg.VanamaBuildQuota, cfg.NumCompactor, slice.topNScan, cfg.PersistFullVector)
 
@@ -474,6 +478,9 @@ func (slice *bhiveSlice) setupBackstoreConfig() bhive.Config {
 
 	cfg.AutoBackupDiskLimit = float32(slice.sysconf["bhive.backupCorruptedDiskLimit"].Int()) / 100
 	cfg.AutoBackupShard = slice.sysconf["bhive.backupCorruptedShard"].Bool()
+
+	cfg.EnableBreakPad = slice.sysconf["bhive.enableBreakPad"].Bool()
+	cfg.MiniDumpDir = common.SystemConfig["indexer.diagnostics_dir"].String()
 
 	cfg.NumWriters = slice.maxNumWriters
 	return cfg
