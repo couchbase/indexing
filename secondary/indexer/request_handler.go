@@ -1495,6 +1495,15 @@ func (m *requestHandlerContext) consolidateIndexStatus(statuses []IndexStatus) [
 			}
 			s2.Stale = s2.Stale || status.Stale
 
+			if s2.LastScanTime == "NA" {
+				s2.LastScanTime = status.LastScanTime
+			} else if status.LastScanTime != "NA" {
+				t1, err1 := time.Parse(time.UnixDate, status.LastScanTime)
+				t2, err2 := time.Parse(time.UnixDate, s2.LastScanTime)
+				if err1 != nil && err2 != nil && t1.Compare(t2) > 0 {
+					s2.LastScanTime = status.LastScanTime
+				}
+			}
 			statusMap[status.InstId] = s2
 		}
 	}

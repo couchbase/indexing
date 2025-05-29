@@ -3001,6 +3001,8 @@ func (st *StatsMap) AddStat(k string, v interface{}) {
 			}
 		} else if n, ok := v.(int64); ok && n != 0 {
 			st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":%v,", st.prefix, k, v))...)
+		} else if n, ok := v.(uint64); ok && n != 0 {
+			st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":%v,", st.prefix, k, v))...)
 		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
 			st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":\"%v\",", st.prefix, k, v))...)
 		} else if mapVal, ok := v.(map[string]interface{}); ok && len(mapVal) != 0 {
@@ -3010,6 +3012,8 @@ func (st *StatsMap) AddStat(k string, v interface{}) {
 		if !st.spec.skipEmpty {
 			st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
 		} else if n, ok := v.(int64); ok && n != 0 {
+			st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
+		} else if n, ok := v.(uint64); ok && n != 0 {
 			st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
 		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
 			st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v

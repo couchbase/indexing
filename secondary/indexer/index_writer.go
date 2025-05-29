@@ -43,6 +43,8 @@ type StorageStatistics struct {
 
 	NeedUpgrade bool
 
+	GraphBuildProgress float32
+
 	InternalData    []string
 	InternalDataMap map[string]interface{}
 
