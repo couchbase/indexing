@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,8 @@ var ErrShardTypeUnset = errors.New("Shard type not set")
 
 // TODO add the Prefix in Indexer settings
 const CODEBOOK_COPY_PREFIX = "codebook_v1"
+
+var maxParallelRegExp = regexp.MustCompile(`Build Already In Progress for (\d+) collections`)
 
 // ShardRebalancer embeds Rebalancer struct to reduce code
 // duplication across common functions
@@ -2174,7 +2177,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				retry := true
 				lastlog := time.Now()
 				for retry {
-					skipDefns, retryInsts, err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt)
+					skipDefns, retryInsts, _, err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt)
 					if err != nil {
 						setErrInTransferToken(err)
 						return
@@ -2468,15 +2471,15 @@ func (sr *ShardRebalancer) postRecoverIndexReq(indexDefn common.IndexDefn, ttid 
 	return false, nil
 }
 
-func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, ttid string, tt *c.TransferToken) (map[common.IndexDefnId]bool, map[common.IndexInstId]bool, error) {
+func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, ttid string, tt *c.TransferToken) (map[common.IndexDefnId]bool, map[common.IndexInstId]bool, bool, error) {
 	select {
 	case <-sr.cancel:
 		l.Infof("ShardRebalancer::postBuildIndexesReq rebalance cancel received")
-		return nil, nil, ErrRebalanceCancel // return for now. Cleanup will take care of dropping the index instances
+		return nil, nil, false, ErrRebalanceCancel // return for now. Cleanup will take care of dropping the index instances
 
 	case <-sr.done:
 		l.Infof("ShardRebalancer::postBuildIndexesReq rebalance done received")
-		return nil, nil, ErrRebalanceDone // return for now. Cleanup will take care of dropping the index instances
+		return nil, nil, false, ErrRebalanceDone // return for now. Cleanup will take care of dropping the index instances
 
 	default:
 		url := "/buildRecoveredIndexesRebalance"
@@ -2485,53 +2488,56 @@ func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, tt
 		if err != nil {
 			logging.Errorf("ShardRebalancer::postBuildIndexesReq Error observed when posting build indexes request, "+
 				"defnIdList: %v, err: %v", defnIdList.DefnIds, err)
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 
 		response := new(IndexResponse)
 		if err := convertResponse(resp, response); err != nil {
 			l.Errorf("ShardRebalancer::postBuildIndexesReq Error unmarshal response for defnIdList: %v, "+
 				"url: %v, err: %v", defnIdList.DefnIds, sr.localaddr+url, err)
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 
 		if response.Error != "" {
-			skipDefns, retryInsts, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
+			skipDefns, retryInsts, isMaxParallelBuildsErr, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
 			if err != nil { // Error while unmarshalling - Return the error to caller and fail rebalance
 				l.Errorf("ShardRebalancer::postBuildIndexesReq Error received for defnIdList: %v, err: %v",
 					defnIdList.DefnIds, response.Error)
-				return nil, nil, errors.New(response.Error)
+				return nil, nil, false, errors.New(response.Error)
 			} else {
-				return skipDefns, retryInsts, nil
+				return skipDefns, retryInsts, isMaxParallelBuildsErr, nil
 			}
 		}
 	}
-	return nil, nil, nil
+	return nil, nil, false, nil
 }
 
-func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (map[common.IndexDefnId]bool, map[common.IndexInstId]bool, error) {
+func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (map[common.IndexDefnId]bool, map[common.IndexInstId]bool, bool, error) {
 	errMap := make(map[common.IndexDefnId]string)
 
 	err := json.Unmarshal([]byte(errStr), &errMap)
 	if err != nil {
 		logging.Errorf("ShardRebalancer::postBuildIndexesReq Unmarshal of errStr failed. "+
 			"defnIdList: %v, err: %v, errStr: %v", defnIdList, err, errStr)
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 
 	skipDefns := make(map[common.IndexDefnId]bool)
 	retryInsts := make(map[common.IndexInstId]bool)
+	isMaxParallelCollectionBuildsErr := false
 
 	for instOrDefnId, buildErr := range errMap {
 		if isIndexDeletedDuringRebal(buildErr) || isIndexNotFoundRebal(buildErr) {
 			skipDefns[instOrDefnId] = true
 		}
 
+		isMaxParallelCollectionBuildsErr = isMaxParallelCollectionBuildsErr || maxParallelRegExp.MatchString(buildErr)
+
 		if isBuildAlreadyInProgress(buildErr) {
 			retryInsts[c.IndexInstId(instOrDefnId)] = true
 		}
 	}
-	return skipDefns, retryInsts, nil
+	return skipDefns, retryInsts, isMaxParallelCollectionBuildsErr, nil
 }
 
 func (sr *ShardRebalancer) postCreateIndexReq(indexDefn common.IndexDefn, ttid string, tt *common.TransferToken) (bool, error) {
@@ -4947,7 +4953,7 @@ func (sr *ShardRebalancer) processBatchBuildReqs() {
 
 				logging.Infof("ShardRebalancer::processBatchBuildReqs processing indexDefns: %v", defnIdList.DefnIds)
 
-				skipDefns, retryInsts, err := sr.postBuildIndexesReq(defnIdList, "", nil)
+				skipDefns, retryInsts, isMaxParallelBuildsErr, err := sr.postBuildIndexesReq(defnIdList, "", nil)
 				if err != nil {
 					// Set error in transfer token and return
 					logging.Errorf("ShardRebalancer::processBatchBuildReqs Error observed while posting build reqs for defnIds: %v, err: %v", defnIdList.DefnIds, err)
@@ -4995,6 +5001,10 @@ func (sr *ShardRebalancer) processBatchBuildReqs() {
 					}
 
 					pendingBulidReqs[keyspace] = queueReqs
+				}
+
+				if isMaxParallelBuildsErr {
+					break //break the inner loop so that index buid will be retried 3 seconds later
 				}
 			}
 		}
