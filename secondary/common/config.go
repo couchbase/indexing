@@ -2042,13 +2042,6 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
-	"indexer.plasma.memtuner.goMemPercent": ConfigValue{
-		50,
-		"Percent of golang memory to consider for plasma when colocated with bhive",
-		50,
-		false,
-		false,
-	},
 	"indexer.plasma.memtuner.minFreeRatio": ConfigValue{
 		float64(0.10),
 		"Minimum free memory ratio",
