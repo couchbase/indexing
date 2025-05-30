@@ -6760,6 +6760,9 @@ type ShardLoad struct {
 	// Disk size of the shard with "slotId" across all nodes in
 	// the cluster
 	totalDiskSize uint64
+
+	// ShardCategory is used to determine the type of shard
+	shardCategory ShardCategory
 }
 
 func (s *ShardLoad) String() string {
@@ -6793,10 +6796,23 @@ func getShardDist(nodes map[*IndexerNode]bool) map[uint64]*ShardLoad {
 			shardDist[slotId].replicas = append(shardDist[slotId].replicas, &ReplicaLoad{replicaId, indexer, index})
 			shardDist[slotId].totalDiskSize += index.ActualDiskSize
 			shardDist[slotId].maxInstances = max(shardDist[slotId].maxInstances, index.NumInstances)
+			shardDist[slotId].shardCategory = getIndexCategory(index)
 		}
 	}
 
 	return shardDist
+}
+
+// Returns the shard category of the index for replica map
+func getShardCategoryFromReplicaMap(replicaMap ReplicaDistMap) ShardCategory {
+
+	for _, indexerMap := range replicaMap {
+		for _, indexUsage := range indexerMap {
+			return getIndexCategory(indexUsage)
+		}
+	}
+
+	return InvalidShardCategory
 }
 
 func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
@@ -6806,6 +6822,21 @@ func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
 
 	//allShardDist := getShardDist(allIndexerNodes)
 	shardDistOnFullCapNodes := getShardDist(fullCapNodes)
+	requiredShardCategory := getShardCategoryFromReplicaMap(replicaMap)
+
+	// Step 0: Check if the same shard category is present on the full capacity
+	// nodes or not
+	for slotId, shardLoad := range shardDistOnFullCapNodes {
+		if shardLoad.shardCategory != requiredShardCategory {
+			logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as shard category is not relevant. "+
+				"Needed: %v, shardLoad: %v", slotId, requiredShardCategory.String(), shardLoad.String())
+			delete(shardDistOnFullCapNodes, slotId)
+		}
+	}
+
+	if len(shardDistOnFullCapNodes) == 0 {
+		return nil, true // re-plan
+	}
 
 	// Step-1: Prune all the shards that do not exist on all full capacity nodes
 	// Even if the shard does not exist on one full capacity node, indexer may have
