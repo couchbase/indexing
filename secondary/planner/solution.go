@@ -2261,7 +2261,13 @@ func (s *Solution) updateSlotMap() {
 // All replicas of an index share the same slotId and they only differ by
 // replica number of the slot. Get the slot ID for the missing replica from slotMap
 func (s *Solution) findIndexerForReplica(indexDefnId common.IndexDefnId,
-	indexReplicaId int, indexPartnId common.PartitionId, indexers []*IndexerNode) (uint64, *IndexerNode, []*IndexerNode) {
+	indexReplicaId int, indexPartnId common.PartitionId,
+	indexers []*IndexerNode, shardAffinity bool) (uint64, *IndexerNode, []*IndexerNode) {
+
+	// Return the first indexer from the list if shard affinity is disabled
+	if !shardAffinity {
+		return 0, indexers[0], indexers[1:]
+	}
 
 	// If no slots exists for this index in the cluster,
 	// return the first node from the list of eligible indexer nodes

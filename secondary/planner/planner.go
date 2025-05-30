@@ -1297,7 +1297,7 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 					if instId, ok := missing[replicaId]; ok && len(indexers) != 0 {
 
 						var indexSlot uint64
-						indexSlot, indexer, indexers = s.findIndexerForReplica(index.DefnId, replicaId, index.PartnId, indexers)
+						indexSlot, indexer, indexers = s.findIndexerForReplica(index.DefnId, replicaId, index.PartnId, indexers, p.shardAffinity)
 
 						if index.Instance != nil {
 
