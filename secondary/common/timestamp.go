@@ -190,6 +190,10 @@ func (ts *TsVbuuid) Free() {
 // GetVbnos will return the list of all vbnos.
 func (ts *TsVbuuid) GetVbnos() []uint16 {
 	var vbnos []uint16
+	if ts == nil {
+		return vbnos
+	}
+
 	for i := 0; i < len(ts.Vbuuids); i++ {
 		if ts.Vbuuids[i] != 0 { //if vbuuid is valid
 			vbnos = append(vbnos, uint16(i))
@@ -553,6 +557,10 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 
 // Convert into a human readable format
 func (ts *TsVbuuid) String() string {
+	if ts == nil {
+		return ""
+	}
+
 	var buf bytes.Buffer
 	vbnos := ts.GetVbnos()
 	fmsg := "bucket: %v, scopeId: %v, collectionId: %v, vbuckets: %v Crc64: %v snapType %v OpenOSOSnap %v -\n"
