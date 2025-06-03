@@ -2596,7 +2596,7 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 func (mdb *bhiveSlice) handleN1QLStorageStatistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 
-	mstats := mdb.mainstore.GetStats()
+	mstats := mdb.mainstore.GetPreparedStats()
 	internalData := fmt.Sprintf("{\n\"MainStore\":\n"+
 		"{\n"+
 		"\"items_count\":%d,\n"+
