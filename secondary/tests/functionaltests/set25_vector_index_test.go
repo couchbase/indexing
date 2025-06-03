@@ -5,12 +5,13 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/queryport/client"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -681,16 +682,16 @@ func TestVectorPartnIndexMultipleNodes(t *testing.T) {
 }
 
 func TestVectorPartnIndexWithAllSIFTQueries(t *testing.T) {
-	testVectorPartnIndexWithAllSIFTQueries(t, 0, 4, "COSINE")
-	testVectorPartnIndexWithAllSIFTQueries(t, 0, 4, "L2_SQUARED")
+	testVectorPartnIndexWithAllSIFTQueries(t, 0, 4, "COSINE", 1)
+	testVectorPartnIndexWithAllSIFTQueries(t, 0, 4, "L2_SQUARED", 1)
 }
 
 func TestVectorReplcatedPartnIndexWithAllSIFTQueries(t *testing.T) {
-	testVectorPartnIndexWithAllSIFTQueries(t, 1, 16, "COSINE")
-	testVectorPartnIndexWithAllSIFTQueries(t, 1, 16, "L2_SQUARED")
+	testVectorPartnIndexWithAllSIFTQueries(t, 1, 16, "COSINE", 1)
+	testVectorPartnIndexWithAllSIFTQueries(t, 1, 16, "L2_SQUARED", 1)
 }
 
-func testVectorPartnIndexWithAllSIFTQueries(t *testing.T, numReplica, numPartition int, similarity string) {
+func testVectorPartnIndexWithAllSIFTQueries(t *testing.T, numReplica, numPartition int, similarity string, numIterations int) {
 	skipIfNotPlasma(t)
 
 	printClusterConfig(t.Name(), "entry")
@@ -726,76 +727,84 @@ func testVectorPartnIndexWithAllSIFTQueries(t *testing.T, numReplica, numPartiti
 	err := createWithDeferAndBuild(idx_sif10k, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
 	FailTestIfError(err, "Error in creating idx_sift10k", t)
 
-	queryFVecs := "../../tools/randdocs/siftsmall/siftsmall_query.fvecs"
-	truthIVecs := "../../tools/randdocs/siftsmall/siftsmall_groundtruth.ivecs"
-	sd, err := randdocs.OpenSiftQueryAndGroundTruth(queryFVecs, truthIVecs)
-	FailTestIfError(err, "Error while opening query and ground truth files", t)
+	var wg sync.WaitGroup
+	var relCount int64
+	var numQueries int64
 
-	overallRecallSum := float64(0)
-	numQueries := float64(0)
-	var query []float32
-	var truth []uint32
-	for query, truth, err = sd.GetQueryAndTruth(); err == nil; query, truth, err = sd.GetQueryAndTruth() {
-		var sb strings.Builder
-		for i, val := range query {
-			sb.WriteString(fmt.Sprintf("%v", val))
-			if i < len(query)-1 {
-				sb.WriteString(", ")
-			}
+	for i := 0; i < numIterations; i++ {
+		queryFVecs := "../../tools/randdocs/siftsmall/siftsmall_query.fvecs"
+		truthIVecs := "../../tools/randdocs/siftsmall/siftsmall_groundtruth.ivecs"
+		sd, err := randdocs.OpenSiftQueryAndGroundTruth(queryFVecs, truthIVecs)
+		FailTestIfError(err, "Error while opening query and ground truth files", t)
+
+		for query, truth, err := sd.GetQueryAndTruth(); err == nil; query, truth, err = sd.GetQueryAndTruth() {
+			go func(_query []float32, _truth []uint32) {
+				wg.Add(1)
+				defer wg.Done()
+
+				var sb strings.Builder
+				for i, val := range _query {
+					sb.WriteString(fmt.Sprintf("%v", val))
+					if i < len(_query)-1 {
+						sb.WriteString(", ")
+					}
+				}
+				queryStr := sb.String()
+
+				queryStmtFmt := "SELECT vectornum FROM default " +
+					"WHERE `type`=\"Casual\" AND category=\"Shoes\" AND country=\"USA\" AND brand=\"Nike\" AND color=\"Green\" AND size=5 " +
+					"ORDER BY APPROX_VECTOR_DISTANCE(sift, [%v], \"" + similarity + "\", 50) " +
+					"LIMIT 10"
+
+				queryStmt := fmt.Sprintf(queryStmtFmt, queryStr)
+
+				explainQueryStmt := fmt.Sprintf("EXPLAIN %v", queryStmt)
+
+				explainRes, err := execN1QL(BUCKET, explainQueryStmt)
+				if err != nil {
+					FailTestIfError(err, "Error in running query", t)
+				}
+
+				explainResText := fmt.Sprintf("%v", explainRes)
+				contains := strings.Contains(explainResText, idx_sif10k)
+				if !contains {
+					log.Fatalf("Query: %v is not using index", explainResText)
+				}
+
+				// logging.Infof("Running Query: %s", queryStmt)
+
+				scanResults, err := execN1QL(BUCKET, queryStmt)
+				if err != nil {
+					FailTestIfError(err, "Error in running query", t)
+				}
+
+				scanResultsExtracted := make([]uint32, len(scanResults))
+				for i, res := range scanResults {
+					resDict, ok := res.(map[string]interface{})
+					if !ok {
+						log.Fatal("Invalid output 1 ", res, scanResults)
+					}
+
+					resFloat, ok := resDict["vectornum"].(float64)
+					if !ok {
+						log.Fatal("Invalid output 2 ", resDict, scanResults)
+					}
+
+					scanResultsExtracted[i] = uint32(resFloat)
+				}
+
+				recall := recallAtR(_truth[0:10], scanResultsExtracted, 10)
+				atomic.AddInt64(&relCount, relevantCount(_truth[0:10], scanResultsExtracted, 10))
+				atomic.AddInt64(&numQueries, 1)
+				log.Printf("Recall: %v query: %v \n Truth: %v \n Results: %v", recall, queryStmt, truth[0:10], scanResultsExtracted)
+			}(query, truth)
 		}
-		queryStr := sb.String()
-
-		queryStmtFmt := "SELECT vectornum FROM default " +
-			"WHERE `type`=\"Casual\" AND category=\"Shoes\" AND country=\"USA\" AND brand=\"Nike\" AND color=\"Green\" AND size=5 " +
-			"ORDER BY APPROX_VECTOR_DISTANCE(sift, [%v], \"" + similarity + "\", 50) " +
-			"LIMIT 10"
-
-		queryStmt := fmt.Sprintf(queryStmtFmt, queryStr)
-
-		explainQueryStmt := fmt.Sprintf("EXPLAIN %v", queryStmt)
-
-		explainRes, err := execN1QL(BUCKET, explainQueryStmt)
-		if err != nil {
-			FailTestIfError(err, "Error in running query", t)
-		}
-
-		explainResText := fmt.Sprintf("%v", explainRes)
-		contains := strings.Contains(explainResText, idx_sif10k)
-		if !contains {
-			log.Fatalf("Query: %v is not using index", explainResText)
-		}
-
-		logging.Infof("Running Query: %s", queryStmt)
-
-		scanResults, err := execN1QL(BUCKET, queryStmt)
-		if err != nil {
-			FailTestIfError(err, "Error in running query", t)
-		}
-
-		scanResultsExtracted := make([]uint32, len(scanResults))
-		for i, res := range scanResults {
-			resDict, ok := res.(map[string]interface{})
-			if !ok {
-				log.Fatal("Invalid output 1 ", res, scanResults)
-			}
-
-			resFloat, ok := resDict["vectornum"].(float64)
-			if !ok {
-				log.Fatal("Invalid output 2 ", resDict, scanResults)
-			}
-
-			scanResultsExtracted[i] = uint32(resFloat)
-		}
-
-		recall := recallAtR(truth[0:10], scanResultsExtracted, 10)
-		overallRecallSum += recall
-		numQueries += 1
-		log.Printf("Recall: %v query: %v \n Truth: %v \n Results: %v", recall, queryStmt, truth[0:10], scanResultsExtracted)
 	}
-	overallRecall := 100 * (overallRecallSum / numQueries)
+	wg.Wait()
+	overallRecall := 100 * (float64(atomic.LoadInt64(&relCount)) / (10 * float64(atomic.LoadInt64(&numQueries))))
 	log.Printf("Overall Recall for SIFT10K dataset with %v Queries is %v", numQueries, overallRecall)
 	if overallRecall < 90 {
-		log.Fatal("Test failed as overall recall is less than 90%")
+		log.Fatalf("Test failed as overall recall is less than 90%% relCount: %v numQueries: %v", atomic.LoadInt64(&relCount), atomic.LoadInt64(&numQueries))
 	}
 }
 
@@ -1015,6 +1024,26 @@ func skipIfNotPlasma(t *testing.T) {
 		t.Skipf("Test %s is only valid with plasma storage", t.Name())
 		return
 	}
+}
+
+func relevantCount(relevantItems, retrievedItems []uint32, R int) int64 {
+	if R > len(retrievedItems) {
+		R = len(retrievedItems)
+	}
+
+	relevantSet := make(map[uint32]struct{})
+	for _, item := range relevantItems {
+		relevantSet[item] = struct{}{}
+	}
+
+	relevantCount := int64(0)
+	for i := 0; i < R; i++ {
+		if _, found := relevantSet[retrievedItems[i]]; found {
+			relevantCount++
+		}
+	}
+
+	return relevantCount
 }
 
 // recallAtR calculates the recall@R given the relevant items and the retrieved items
