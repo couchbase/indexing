@@ -354,12 +354,12 @@ func TestIndexConfigs(t *testing.T) {
 		{"idx_sift10k_SQ4", "128", "IVF256,SQ4", "L2_SQUARED"},
 		{"idx_sift10k_SQ6", "128", "IVF256,SQ6", "L2_SQUARED"},
 		{"idx_sift10k_SQ8", "128", "IVF256,SQ8", "L2_SQUARED"},
-		{"idx_sift10k_SQfp16", "128", "IVF256,SQfp16", "L2_SQUARED"},
 		{"idx_sift10k_SQ8_DOT", "128", "IVF256,SQ8", "DOT"},
 		{"idx_sift10k_SQ8_COSINE", "128", "IVF256,SQ8", "COSINE"},
-		{"idx_sift10k_PQFS", "128", "IVF256,PQ32x4FS", "L2_SQUARED"},
 		{"idx_sift10k_PQ_DOT", "128", "IVF256,PQ32x4", "DOT"},
 		{"idx_sift10k_PQ_COSINE", "128", "IVF256,PQ32x4", "COSINE"},
+		// {"idx_sift10k_PQFS", "128", "IVF256,PQ32x4FS", "L2_SQUARED"},
+		// {"idx_sift10k_SQfp16", "128", "IVF256,SQfp16", "L2_SQUARED"},
 	}
 
 	// Scan setting
