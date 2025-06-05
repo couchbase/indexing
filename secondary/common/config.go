@@ -4738,6 +4738,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.vector.max_cpu": ConfigValue{
+		float64(0.9),
+		"Max CPU usage by vector library",
+		float64(0.9),
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another

@@ -2,6 +2,8 @@ package codebook
 
 import (
 	"errors"
+	"os"
+	"strconv"
 
 	"github.com/couchbase/indexing/secondary/common"
 )
@@ -122,4 +124,10 @@ type Codebook interface {
 
 	//Dimension for the vector stored in codebook
 	Dimension() int
+}
+
+//SetMaxCPU sets the max number of cores that can be used by the
+//underlying library
+func SetMaxCPU(n int) {
+	os.Setenv("OMP_THREAD_LIMIT", strconv.Itoa(n))
 }
