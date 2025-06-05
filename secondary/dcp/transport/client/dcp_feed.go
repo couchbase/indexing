@@ -283,6 +283,9 @@ func (feed *DcpFeed) DequeueMutations(rcvch chan []interface{}, abortCh chan boo
 
 	defer func() {
 		close(rcvch)
+
+		feed.mutationQueue.Drain()
+
 		close(feed.dequeueDoneCh)
 
 		if feed.useAtomicMutationQueue && feed.controlDataPathSeparation {
@@ -291,6 +294,8 @@ func (feed *DcpFeed) DequeueMutations(rcvch chan []interface{}, abortCh chan boo
 				close(syncRespCh)
 			}
 		}
+
+		logging.Infof("%v ##%x dequeue stopped", feed.logPrefix, feed.opaque)
 	}()
 
 	for {
@@ -314,7 +319,15 @@ func (feed *DcpFeed) DequeueMutations(rcvch chan []interface{}, abortCh chan boo
 					return
 				}
 			} else {
-				rcvch <- []interface{}{pkt, bytes}
+				// if dequeue is closed, there is a chance we may still send packets to rcvch if
+				// the its not at capacity - both cases of select are true and one of them will be
+				// selected at random. eventuall if all selects choose rcvch, eventually it will be
+				// full and then we will abort
+				select {
+				case rcvch <- []interface{}{pkt, bytes}:
+				case <-abortCh:
+					return
+				}
 			}
 
 			sendAck := false

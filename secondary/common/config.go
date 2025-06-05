@@ -4655,6 +4655,17 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.bhive.enableBreakPad": ConfigValue{
+		false,
+		"enables magma breakpad handler. It can be enabled/disabled at runtime." +
+			"dmp file will be in indexer.diagnostics_dir and file name logged in indexer.log." +
+			"A signal causing a panic even if followed by recover is also caught and generates a dmp file." +
+			"Internally handler clones the indexer process to write the minidump" +
+			"We can enable it on a need basis",
+		false,
+		false,
+		false,
+	},
 	"projector.log_dir": ConfigValue{
 		"",
 		"Projector log directory",

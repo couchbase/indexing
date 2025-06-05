@@ -190,6 +190,8 @@ type memdbSlice struct {
 
 	// Used to request copy of item from storage instead of actual item
 	exposeItemCopy bool
+
+	readersReserve
 }
 
 // NewMemDBSlice is the constructor for memdbSlice.

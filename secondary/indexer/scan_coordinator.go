@@ -487,6 +487,33 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 			}
 		}()
 
+		if req.IsVectorIndex() {
+			reserveErr := s.reserveReaders(req, donech)
+			defer s.releaseReaders(req)
+
+			cont := func() bool {
+				mutex.Lock()
+				defer mutex.Unlock()
+
+				// Scan timed out or client cancelled
+				if s.tryRespondWithError(w, req, err, reserveErr) {
+					return false
+				}
+
+				// Not my index or partition
+				if s.tryRespondWithError(w, req, reserveErr) {
+					close(donech)
+					return false
+				}
+
+				return true
+			}()
+
+			if !cont {
+				return
+			}
+		}
+
 		numCtxs := 0
 		for _, ctx := range req.Ctxs {
 			if !ctx.Init(donech) {
@@ -1175,17 +1202,17 @@ func (s *scanCoordinator) handleError(prefix string, err error) {
 	}
 }
 
-func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanRequest, err error) bool {
+func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanRequest, err error, errList ...error) bool {
 	if err != nil {
 		if err == common.ErrIndexNotFound {
 			stats := s.stats.Get()
 			stats.notFoundError.Add(1)
 		} else if err == common.ErrIndexerInBootstrap {
 			logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
-			logging.Verbosef("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
+			logging.Verbosef("%s RESPONSE status:(error = %s), requestId: %v %v", req.LogPrefix, err, req.RequestId, errList)
 		} else {
 			logging.Infof("%s REQUEST %s", req.LogPrefix, req)
-			logging.Infof("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
+			logging.Infof("%s RESPONSE status:(error = %s), requestId: %v %v", req.LogPrefix, err, req.RequestId, errList)
 		}
 		s.updateErrStats(req, err)
 		s.handleError(req.LogPrefix, w.Error(err))
@@ -1618,6 +1645,55 @@ func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 	}
 
 	return cb
+}
+
+func (s *scanCoordinator) reserveReaders(r *ScanRequest, doneCh chan bool) error {
+
+	pmap, ok := s.indexPartnMap[r.IndexInst.InstId]
+	if !ok {
+		return fmt.Errorf("instanceid: %v err: %v", r.IndexInst.InstId, ErrNotMyIndex)
+	}
+
+	for _, partnId := range r.PartitionIds {
+		if _, ok := pmap[partnId]; !ok {
+			return fmt.Errorf("partitionid: %v err: %v", partnId, ErrNotMyPartition)
+		}
+	}
+
+	r.releaseReaderList = make([]Slice, len(r.PartitionIds))
+	var sb strings.Builder
+	// Reserve readers for each partition should be done sequentially else it can happen that
+	// two scan requests can reserve readers of a partition and wait for readers of another
+	// partition acquired by other scan request causing deadlock
+	for _, partnId := range r.PartitionIds {
+		if partition, ok := pmap[partnId]; ok {
+			slice := partition.Sc.GetSliceById(0)
+			e := slice.ReserveReaders(r.readersPerPartition, doneCh)
+			if e == nil {
+				r.releaseReaderList = append(r.releaseReaderList, slice)
+			} else {
+				sb.WriteString(fmt.Sprintf("partitionid: %v err: %v ", partnId, e))
+			}
+		}
+	}
+
+	if sb.Len() > 0 {
+		return fmt.Errorf(sb.String())
+	}
+
+	return nil
+}
+
+func (s *scanCoordinator) releaseReaders(r *ScanRequest) {
+	if r.releaseReaderList == nil {
+		return
+	}
+
+	for _, slice := range r.releaseReaderList {
+		if slice != nil {
+			slice.ReleaseReaders(r.readersPerPartition)
+		}
+	}
 }
 
 // fillCodebookMap fill the codebookmao in the ScanRequest

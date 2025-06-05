@@ -9,8 +9,12 @@
 package indexer
 
 import (
+	"context"
+
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
+	"golang.org/x/sync/semaphore"
 )
 
 type SliceId uint64
@@ -66,6 +70,9 @@ type Slice interface {
 	GetCodebook() (codebook.Codebook, error)
 	IsTrained() bool
 	SerializeCodebook() ([]byte, error)
+
+	ReserveReaders(int, chan bool) error
+	ReleaseReaders(int)
 }
 
 // cursorCtx implements IndexReaderContext and is used
@@ -103,4 +110,45 @@ func (ctx *cursorCtx) User() string {
 
 func (ctx *cursorCtx) SkipReadMetering() bool {
 	return true // Not used
+}
+
+type readersReserve struct {
+	readerSem *semaphore.Weighted
+}
+
+func (rr *readersReserve) InitReadersReserve(numReaders int) {
+	rr.readerSem = semaphore.NewWeighted(int64(numReaders))
+}
+
+func (rr *readersReserve) ReserveReaders(numReaders int, donech chan bool) error {
+	if rr.readerSem == nil {
+		return nil
+	}
+
+	// Create a context with cancellation
+	ctxWithCancel, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure the context is canceled when we're done
+
+	// Set up a goroutine to listen on donech and cancel the context if needed
+	go func() {
+		select {
+		case <-donech:
+			cancel() // Cancel the context when something is received on donech
+		case <-ctxWithCancel.Done():
+			// Context is already done, nothing to do
+		}
+	}()
+
+	// Use the cancellable context for semaphore acquisition
+	err := rr.readerSem.Acquire(ctxWithCancel, int64(numReaders))
+	logging.Tracef("Accqured %d readers", numReaders)
+	return err
+}
+
+func (rr *readersReserve) ReleaseReaders(numReaders int) {
+	if rr.readerSem == nil {
+		return
+	}
+	logging.Tracef("Releasing %d readers", numReaders)
+	rr.readerSem.Release(int64(numReaders))
 }

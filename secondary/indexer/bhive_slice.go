@@ -91,6 +91,7 @@ type bhiveSlice struct {
 
 	// main store readers
 	readers chan *bhive.Reader
+	readersReserve
 
 	//
 	// back store
@@ -254,6 +255,9 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 
 	numReaders := sysconf["bhive.numReaders"].Int()
 	slice.readers = make(chan *bhive.Reader, numReaders)
+
+	// if slice.idxDefn.IsVectorIndex {
+	slice.InitReadersReserve(numReaders)
 
 	// stats
 	slice.idxStats = idxStats
@@ -449,6 +453,10 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.AutoBackupDiskLimit = float32(slice.sysconf["bhive.backupCorruptedDiskLimit"].Int()) / 100
 	cfg.AutoBackupShard = slice.sysconf["bhive.backupCorruptedShard"].Bool()
 
+	cfg.EnableBreakPad = slice.sysconf["bhive.enableBreakPad"].Bool()
+	// cbcollect collects only from crash directory inside crash (ns_server:indexer_breakpad_minidump_dir)
+	cfg.MiniDumpDir = common.SystemConfig["indexer.diagnostics_dir"].String()
+
 	logging.Infof("bhiveSlice:setupConfig efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v PersistFullVector: %v",
 		cfg.EfNumNeighbors, cfg.EfConstruction, cfg.VanamaBuildQuota, cfg.NumCompactor, slice.topNScan, cfg.PersistFullVector)
 
@@ -474,6 +482,9 @@ func (slice *bhiveSlice) setupBackstoreConfig() bhive.Config {
 
 	cfg.AutoBackupDiskLimit = float32(slice.sysconf["bhive.backupCorruptedDiskLimit"].Int()) / 100
 	cfg.AutoBackupShard = slice.sysconf["bhive.backupCorruptedShard"].Bool()
+
+	cfg.EnableBreakPad = slice.sysconf["bhive.enableBreakPad"].Bool()
+	cfg.MiniDumpDir = common.SystemConfig["indexer.diagnostics_dir"].String()
 
 	cfg.NumWriters = slice.maxNumWriters
 	return cfg
@@ -2293,7 +2304,11 @@ func (mdb *bhiveSlice) Rollback(s SnapshotInfo) error {
 		common.CrashOnError(fmt.Errorf("Slice Invariant Violation - rollback with pending mutations"))
 	}
 
-	// Block all scan requests
+	// Block all scan requests if mdb.idxDefn.IsVectorIndex
+	numReaders := cap(mdb.readers)
+	mdb.ReserveReaders(numReaders, nil)
+	defer mdb.ReleaseReaders(numReaders)
+
 	var readers []*bhive.Reader
 	for i := 0; i < cap(mdb.readers); i++ {
 		readers = append(readers, <-mdb.readers)
@@ -2423,7 +2438,10 @@ func (slice *bhiveSlice) resetBuffers() {
 }
 
 func (mdb *bhiveSlice) resetStores(initBuild bool) error {
-	// Clear all readers
+	// Clear all readers if mdb.idxDefn.IsVectorIndex
+	mdb.ReserveReaders(cap(mdb.readers), nil)
+	defer mdb.ReleaseReaders(cap(mdb.readers))
+
 	mdb.resetReaders()
 
 	numWriters := mdb.numWriters
@@ -2589,7 +2607,7 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 func (mdb *bhiveSlice) handleN1QLStorageStatistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 
-	mstats := mdb.mainstore.GetStats()
+	mstats := mdb.mainstore.GetPreparedStats()
 	internalData := fmt.Sprintf("{\n\"MainStore\":\n"+
 		"{\n"+
 		"\"items_count\":%d,\n"+

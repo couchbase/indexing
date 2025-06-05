@@ -91,6 +91,7 @@ type plasmaSlice struct {
 	back []*plasma.Writer
 
 	readers chan *plasma.Reader
+	readersReserve
 
 	idxDefn    common.IndexDefn
 	idxDefnId  common.IndexDefnId
@@ -279,6 +280,10 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 
 	numReaders := sysconf["plasma.numReaders"].Int()
 	slice.readers = make(chan *plasma.Reader, numReaders)
+
+	if slice.idxDefn.IsVectorIndex {
+		slice.InitReadersReserve(numReaders)
+	}
 
 	slice.isPrimary = isPrimary
 	slice.numPartitions = numPartitions
@@ -2634,6 +2639,13 @@ func (mdb *plasmaSlice) GetCommittedCount() uint64 {
 }
 
 func (mdb *plasmaSlice) resetStores(initBuild bool) error {
+
+	if mdb.idxDefn.IsVectorIndex {
+		numReaders := cap(mdb.readers)
+		mdb.ReserveReaders(numReaders, nil)
+		defer mdb.ReleaseReaders(numReaders)
+	}
+
 	// Clear all readers
 	for i := 0; i < cap(mdb.readers); i++ {
 		<-mdb.readers
@@ -2696,6 +2708,12 @@ func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
 	qc := atomic.LoadInt64(&mdb.qCount)
 	if qc > 0 {
 		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
+	}
+
+	if mdb.idxDefn.IsVectorIndex {
+		numReaders := cap(mdb.readers)
+		mdb.ReserveReaders(numReaders, nil)
+		defer mdb.ReleaseReaders(numReaders)
 	}
 
 	// Block all scan requests

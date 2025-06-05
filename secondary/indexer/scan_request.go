@@ -161,6 +161,8 @@ type ScanRequest struct {
 	inlineFilter         string
 	inlineFilterExpr     expression.Expression
 	includeColumnFilters []Filter
+
+	releaseReaderList []Slice
 }
 
 type IndexKeyOrder struct {
@@ -2783,6 +2785,10 @@ func (r *ScanRequest) ScanRangeSequencing() bool {
 	}
 
 	return true
+}
+
+func (r *ScanRequest) IsVectorIndex() bool {
+	return r.IndexInst.Defn.IsVectorIndex
 }
 
 /////////////////////////////////////////////////////////////////////////
