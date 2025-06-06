@@ -1817,6 +1817,8 @@ func (s *storageMgr) handleStats(cmd Message) {
 				idxStats.insertBytes.Set(st.Stats.InsertBytes)
 				idxStats.deleteBytes.Set(st.Stats.DeleteBytes)
 
+				idxStats.graphBuildProgress.Set(float64(st.Stats.GraphBuildProgress))
+
 				// compute mutation rate
 				now := time.Now().UnixNano()
 				elapsed := float64(now-idxStats.lastMutateGatherTime.Value()) / float64(time.Second)
@@ -2015,6 +2017,7 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 			var hasStats = false
 			var loggingDisabled = true
 			var lastResetTime int64
+			var graphBuildProgress float32
 
 			slices := partnInst.Sc.GetAllSlices()
 			nslices += int64(len(slices))
@@ -2057,6 +2060,8 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 				loggingDisabled = loggingDisabled && sts.LoggingDisabled
 				needUpgrade = needUpgrade || sts.NeedUpgrade
 
+				graphBuildProgress = max(graphBuildProgress, sts.GraphBuildProgress)
+
 				hasStats = true
 			}
 
@@ -2070,19 +2075,20 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 					Collection:    inst.Defn.Collection,
 					LastResetTime: lastResetTime,
 					Stats: StorageStatistics{
-						DataSize:          dataSz,
-						DataSizeOnDisk:    dataSzOnDisk,
-						LogSpace:          logSpace,
-						DiskSize:          diskSz,
-						MemUsed:           memUsed,
-						GetBytes:          getBytes,
-						InsertBytes:       insertBytes,
-						DeleteBytes:       deleteBytes,
-						ExtraSnapDataSize: extraSnapDataSize,
-						NeedUpgrade:       needUpgrade,
-						InternalData:      internalData,
-						InternalDataMap:   internalDataMap,
-						LoggingDisabled:   loggingDisabled,
+						DataSize:           dataSz,
+						DataSizeOnDisk:     dataSzOnDisk,
+						LogSpace:           logSpace,
+						DiskSize:           diskSz,
+						MemUsed:            memUsed,
+						GetBytes:           getBytes,
+						InsertBytes:        insertBytes,
+						DeleteBytes:        deleteBytes,
+						ExtraSnapDataSize:  extraSnapDataSize,
+						NeedUpgrade:        needUpgrade,
+						InternalData:       internalData,
+						InternalDataMap:    internalDataMap,
+						LoggingDisabled:    loggingDisabled,
+						GraphBuildProgress: graphBuildProgress,
 					},
 				}
 

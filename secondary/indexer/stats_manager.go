@@ -348,6 +348,8 @@ type IndexStats struct {
 	//vector stats
 	codebookSize    stats.Int64Val
 	cbTrainDuration stats.Int64Val
+
+	graphBuildProgress stats.Int64Val
 }
 
 type IndexerStatsHolder struct {
@@ -627,6 +629,7 @@ func (s *IndexStats) Init() {
 
 	s.codebookSize.Init()
 	s.cbTrainDuration.Init()
+	s.graphBuildProgress.Init()
 
 	// Set filters
 	// Note that the filters will be set on both: instance level stats and
@@ -671,6 +674,7 @@ func (s *IndexStats) SetIndexStatusFilters() {
 	s.buildProgress.AddFilter(stats.IndexStatusFilter)
 	s.completionProgress.AddFilter(stats.IndexStatusFilter)
 	s.lastScanTime.AddFilter(stats.IndexStatusFilter)
+	s.graphBuildProgress.AddFilter(stats.IndexStatusFilter)
 }
 
 func (s *IndexStats) SetGSIClientFilters() {
@@ -2272,6 +2276,12 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 				return ss.codebookSize.Value()
 			},
 			&s.codebookSize, s.partnInt64Stats)
+
+		statMap.AddAggrStatFiltered("graph_build_progress",
+			func(ss *IndexStats) int64 {
+				return ss.graphBuildProgress.Value()
+			},
+			&s.graphBuildProgress, s.partnAvgInt64Stats)
 	}
 
 	// -------------------------------
