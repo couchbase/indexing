@@ -140,7 +140,7 @@ func TestValidAndInvalidVectors(t *testing.T) {
 
 	for _, vector := range validVectors {
 		fmt.Printf("Validating vector: %v, dimension: %v\n", vector, dimension)
-		_, err := validateVector(vector, dimension)
+		_, err := validateVector(vector, dimension, false)
 
 		if err != nil {
 			t.Fatalf("Error observed while validating vector: %v, err: %v", vector, err)
@@ -159,7 +159,7 @@ func TestValidAndInvalidVectors(t *testing.T) {
 
 	for _, vector := range invalidVectors {
 		fmt.Printf("Validating vector: %v, dimension: %v\n", vector, dimension)
-		_, err := validateVector(vector, dimension)
+		_, err := validateVector(vector, dimension, false)
 
 		if err == nil {
 			t.Fatalf("Error was not observed while validating vector: %v. Expected non-nil error", vector)

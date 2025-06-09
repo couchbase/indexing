@@ -21,6 +21,7 @@ var ErrInvalidVectorType = errors.New("The value of a VECTOR expression is expec
 var ErrInvalidVectorDimension = errors.New("Length of VECTOR in incoming document is different from the expected dimension")
 var ErrHeterogenousVectorData = errors.New("All entries of a vector are expected to be floating point numbers. Found other data types")
 var ErrDataOutOfBounds = errors.New("Value of the vector exceeds float32 range")
+var ErrZeroVectorForCosine = errors.New("Zero vector for cosine distance")
 
 func getVectorStatStr(err error) string {
 	switch err {
@@ -32,6 +33,8 @@ func getVectorStatStr(err error) string {
 		return "heterogenous_vec_data"
 	case ErrDataOutOfBounds:
 		return "data_out_of_bounds"
+	case ErrZeroVectorForCosine:
+		return "zero_vector_for_cosine"
 	}
 	return err.Error()
 }
@@ -247,7 +250,7 @@ func N1QLTransformForVectorIndex(
 				// d. If the VECTOR entry is invalid and it is non-leading key,
 				//    the VECTOR entry will be indexed as NULL
 				if keyPos == ie.vectorPos {
-					vector, err = validateVector(key, ie.dimension)
+					vector, err = validateVector(key, ie.dimension, ie.isCosine)
 
 					if err != nil { // invalid vector entry
 						ie.stats.updateErrCount(err)
@@ -289,7 +292,7 @@ func N1QLTransformForVectorIndex(
 						return nil, nil, nil, nil, nil
 					}
 				} else if keyPos == ie.vectorPos { // array of vectors
-					vectors, array = getValidVectorsFromArray(array, ie.dimension)
+					vectors, array = getValidVectorsFromArray(array, ie.dimension, ie.isCosine)
 					if len(array) == 0 {
 						return nil, nil, nil, nil, nil
 					}
@@ -314,7 +317,7 @@ func N1QLTransformForVectorIndex(
 							return nil, nil, nil, nil, nil
 						}
 
-						vectors, array = getValidVectorsFromArray(array, ie.dimension)
+						vectors, array = getValidVectorsFromArray(array, ie.dimension, ie.isCosine)
 						if len(array) == 0 {
 							return nil, nil, nil, nil, nil
 						}
@@ -480,7 +483,7 @@ func isArrayNull(array qvalue.Values) bool {
 	return (len(array) == 1 && array[0].Type() == qvalue.NULL)
 }
 
-func validateVector(vector qvalue.Value, dimension int) ([]float32, error) {
+func validateVector(vector qvalue.Value, dimension int, isCosine bool) ([]float32, error) {
 	if vector.Type() != qvalue.ARRAY {
 		return nil, ErrInvalidVectorType
 	}
@@ -489,10 +492,14 @@ func validateVector(vector qvalue.Value, dimension int) ([]float32, error) {
 	// object or a local buffer of []float32 to prevent the re-allocation everytime
 	res := make([]float32, dimension)
 
+	nonZeroCount := 0
 	for i := 0; ; i++ {
 		v, ok := vector.Index(i)
 		if !ok || i >= dimension {
 			if !ok && i == dimension {
+				if isCosine && nonZeroCount == 0 {
+					return nil, ErrZeroVectorForCosine
+				}
 				return res, nil
 			} else {
 				return nil, ErrInvalidVectorDimension
@@ -505,16 +512,20 @@ func validateVector(vector qvalue.Value, dimension int) ([]float32, error) {
 			if vf < -math.MaxFloat32 || vf > math.MaxFloat32 {
 				return nil, ErrDataOutOfBounds
 			}
+			if vf != 0 {
+				nonZeroCount++
+			}
 			res[i] = (float32)(vf)
 		}
 	}
+	return res, nil
 }
 
-func getValidVectorsFromArray(vectors qvalue.Values, dimension int) ([][]float32, []qvalue.Value) {
+func getValidVectorsFromArray(vectors qvalue.Values, dimension int, isCosine bool) ([][]float32, []qvalue.Value) {
 	var outVec [][]float32
 	var outVal []qvalue.Value
 	for i := range vectors {
-		vec, err := validateVector(vectors[i], dimension)
+		vec, err := validateVector(vectors[i], dimension, isCosine)
 		if err != nil {
 			// If vector is missing/null, then skip indexing the document
 			continue

@@ -90,7 +90,7 @@ func ConvertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 
 	if indexDefn.IsVectorIndex && indexDefn.VectorMeta != nil {
 		defn.Dimension = proto.Uint64(uint64(indexDefn.VectorMeta.Dimension))
-
+		defn.IsCosine = proto.Bool(indexDefn.VectorMeta.Similarity == c.COSINE)
 		if indexDefn.VectorMeta.IsBhive {
 			// [VECTOR_TODO]: Decouple include columns from vector index check
 			defn.Include = indexDefn.Include

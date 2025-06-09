@@ -102,4 +102,5 @@ message IndexDefn {
     repeated bool   hasVectorAttr = 19; // Specifies if any expression in "secExprs" has VECTOR attribute enabled
     optional uint64 dimension     = 20; // Expected dimension of the vector in the mutations
     repeated string include       = 21; // List of secondary expressions to be used in include columns
+    optional bool   isCosine      = 22; // If distance metric is cosine dont index zero vectors
 }

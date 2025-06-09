@@ -156,6 +156,9 @@ type IndexEvaluator struct {
 
 	// The expresses to be evaluated for include columns
 	includeExprs []interface{}
+
+	// coineSimilarity
+	isCosine bool
 }
 
 // NewIndexEvaluator returns a reference to a new instance
@@ -262,6 +265,7 @@ func NewIndexEvaluator(
 
 		// Expected dimension of vectors in incoming document
 		ie.dimension = int(defn.GetDimension())
+		ie.isCosine = defn.GetIsCosine()
 
 		// Secondary fields or expressions for include columns
 		include := defn.GetInclude()
@@ -782,6 +786,7 @@ type IndexEvaluatorStats struct {
 	ErrHeterogenousVectorData stats.Int64Val
 	ErrDataOutOfBounds        stats.Int64Val
 	ErrInvalidVectorType      stats.Int64Val
+	ErrZeroVectorForCosine    stats.Int64Val
 
 	InstId     common.IndexInstId
 	Topic      string
@@ -801,6 +806,7 @@ func (ie *IndexEvaluatorStats) Init() {
 	ie.ErrDataOutOfBounds.Init()
 	ie.ErrInvalidVectorDimension.Init()
 	ie.ErrHeterogenousVectorData.Init()
+	ie.ErrZeroVectorForCosine.Init()
 }
 
 func (ies *IndexEvaluatorStats) add(duration time.Duration) {
@@ -857,6 +863,10 @@ func (ies *IndexEvaluatorStats) GetVectorErrs() map[string]int64 {
 		out[getVectorStatStr(ErrInvalidVectorType)] = ies.ErrInvalidVectorType.Value()
 	}
 
+	if ies.ErrZeroVectorForCosine.Value() > 0 {
+		out[getVectorStatStr(ErrZeroVectorForCosine)] = ies.ErrZeroVectorForCosine.Value()
+	}
+
 	return out
 
 }
@@ -874,6 +884,9 @@ func (ies *IndexEvaluatorStats) updateErrCount(err error) {
 		return
 	case ErrHeterogenousVectorData:
 		ies.ErrHeterogenousVectorData.Add(1)
+		return
+	case ErrZeroVectorForCosine:
+		ies.ErrZeroVectorForCosine.Add(1)
 		return
 	}
 }
