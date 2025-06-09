@@ -6226,8 +6226,9 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 	for defnId, partnDist := range indexesPartnDist {
 		for partnId, replicaMap := range partnDist {
 
-			shardLimitPerTenant, currShardCount := solution.getShardLimits()
+			shardLimitPerTenant, currShardCount, minShardOfCategoryCreated := solution.getShardLimits()
 			targetNodes := getTargetNodes(defnId, partnId)
+			shardCategory := getShardCategoryFromReplicaMap(replicaMap)
 
 			logging.LazyVerbose(func() string {
 				return fmt.Sprintf("Planner::PopulateAlternateShardIds Target nodes for partnId: %v is: %v", partnId, getTargetDist(targetNodes))
@@ -6263,7 +6264,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 				// If a new shard can be created for this partition across all indexer nodes,
 				// then generate new shardIds and populate the IndexUsage structure. A new shard
 				// can be created if the current shard count is less than the shard limit per tenant
-				if currShardCount <= shardLimitPerTenant && canCreateNewShards(replicaMap) {
+				if !minShardOfCategoryCreated[shardCategory] || (currShardCount <= shardLimitPerTenant && canCreateNewShards(replicaMap)) {
 					logging.LazyVerbose(func() string {
 						return fmt.Sprintf("Planner::PopulateAlternateShardIds Generating new shards for index: %v "+
 							"as there is room for new shards", getIndexesFromReplicaMap(replicaMap))
@@ -6760,6 +6761,9 @@ type ShardLoad struct {
 	// Disk size of the shard with "slotId" across all nodes in
 	// the cluster
 	totalDiskSize uint64
+
+	// ShardCategory is used to determine the type of shard
+	shardCategory ShardCategory
 }
 
 func (s *ShardLoad) String() string {
@@ -6793,10 +6797,23 @@ func getShardDist(nodes map[*IndexerNode]bool) map[uint64]*ShardLoad {
 			shardDist[slotId].replicas = append(shardDist[slotId].replicas, &ReplicaLoad{replicaId, indexer, index})
 			shardDist[slotId].totalDiskSize += index.ActualDiskSize
 			shardDist[slotId].maxInstances = max(shardDist[slotId].maxInstances, index.NumInstances)
+			shardDist[slotId].shardCategory = getIndexCategory(index)
 		}
 	}
 
 	return shardDist
+}
+
+// Returns the shard category of the index for replica map
+func getShardCategoryFromReplicaMap(replicaMap ReplicaDistMap) ShardCategory {
+
+	for _, indexerMap := range replicaMap {
+		for _, indexUsage := range indexerMap {
+			return getIndexCategory(indexUsage)
+		}
+	}
+
+	return InvalidShardCategory
 }
 
 func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
@@ -6806,6 +6823,21 @@ func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
 
 	//allShardDist := getShardDist(allIndexerNodes)
 	shardDistOnFullCapNodes := getShardDist(fullCapNodes)
+	requiredShardCategory := getShardCategoryFromReplicaMap(replicaMap)
+
+	// Step 0: Check if the same shard category is present on the full capacity
+	// nodes or not
+	for slotId, shardLoad := range shardDistOnFullCapNodes {
+		if shardLoad.shardCategory != requiredShardCategory {
+			logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as shard category is not relevant. "+
+				"Needed: %v, shardLoad: %v", slotId, requiredShardCategory.String(), shardLoad.String())
+			delete(shardDistOnFullCapNodes, slotId)
+		}
+	}
+
+	if len(shardDistOnFullCapNodes) == 0 {
+		return nil, true // re-plan
+	}
 
 	// Step-1: Prune all the shards that do not exist on all full capacity nodes
 	// Even if the shard does not exist on one full capacity node, indexer may have

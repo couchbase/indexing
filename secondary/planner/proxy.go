@@ -547,6 +547,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 	indexer.ShardLimitPerTenant = config["indexer.plasma.shardLimitPerTenant"].Int()
 	indexer.ShardTenantMultiplier = config["indexer.plasma.shardTenantMultiplier"].Int()
 	indexer.UseShardStats = config["indexer.planner.useShardStats"].Bool()
+	indexer.MinShardOfEachCategory = config["indexer.planner.minShardOfEachCategory"].Int()
 
 	var actualStorageMem uint64
 	// memory_used_storage contains the total storage consumption,
