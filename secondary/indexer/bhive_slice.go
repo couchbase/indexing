@@ -2511,16 +2511,19 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 
 	var docidCount int64
 	var numRecsMem, numRecsDisk int64
-	var cacheHits, cacheMiss int64
-	var bsNumRecsMem, bsNumRecsDisk int64
+	var cacheHits, cacheMiss, rcacheHits, rcacheMiss int64
+	var combinedIndexSz int64
 
 	mStats := mdb.mainstore.GetStats()
-	numRecsMem += int64(float32(mStats.ItemCount) * mStats.ResidentRatio)
-	numRecsDisk += int64(float32(mStats.ItemCount) * (1 - mStats.ResidentRatio))
+	numRecsMem += int64(mStats.RecInMem)
+	numRecsDisk += int64(mStats.RecOnDisk)
 	cacheHits += int64(mStats.CacheHits)
 	cacheMiss += int64(mStats.CacheMisses)
+	rcacheHits += int64(mStats.RCacheHits)
+	rcacheMiss += int64(mStats.RCacheMisses)
+	combinedIndexSz += int64(mStats.MemUsedIndex)
 
-	sts.MemUsed = int64(mStats.MemUsed + mStats.MemUsedIndex)
+	sts.MemUsed = int64(mStats.MemUsed) // MemUsed include buffer usage
 	sts.InsertBytes = int64(mStats.NWriteBytes)
 	sts.GetBytes = int64(mStats.NReadBytes)
 	sts.DiskSize = int64(mStats.TotalDiskUsage)
@@ -2532,10 +2535,9 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 
 	bStats := mdb.backstore.GetStats()
 	docidCount = int64(bStats.ItemCount)
-	bsNumRecsMem += int64(float32(bStats.ItemCount) * bStats.ResidentRatio)
-	bsNumRecsDisk += int64(float32(bStats.ItemCount) * (1 - bStats.ResidentRatio))
+	combinedIndexSz += int64(bStats.MemUsedIndex)
 
-	sts.MemUsed += int64(bStats.MemUsed + bStats.MemUsedIndex)
+	sts.MemUsed += int64(bStats.MemUsed) // MemUsed include buffer usage
 	sts.InsertBytes += int64(bStats.NWriteBytes)
 	sts.GetBytes += int64(bStats.NReadBytes)
 	sts.DiskSize += int64(bStats.TotalDiskUsage)
@@ -2591,13 +2593,20 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	mdb.idxStats.docidCount.Set(docidCount)
 	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
 	mdb.idxStats.cacheHitPercent.Set(common.ComputePercent(cacheHits, cacheMiss))
-	mdb.idxStats.combinedResidentPercent.Set(common.ComputePercentFloat((numRecsMem + bsNumRecsMem), (numRecsDisk + bsNumRecsDisk)))
+	mdb.idxStats.rCacheHitPercent.Set(common.ComputePercent(rcacheHits, rcacheMiss))
 	mdb.idxStats.cacheHits.Set(cacheHits)
 	mdb.idxStats.cacheMisses.Set(cacheMiss)
 	mdb.idxStats.numRecsInMem.Set(numRecsMem)
 	mdb.idxStats.numRecsOnDisk.Set(numRecsDisk)
-	mdb.idxStats.bsNumRecsInMem.Set(bsNumRecsMem)
-	mdb.idxStats.bsNumRecsOnDisk.Set(bsNumRecsDisk)
+	mdb.idxStats.bsNumRecsInMem.Set(0)  // back index does not contribute to resident ratio
+	mdb.idxStats.bsNumRecsOnDisk.Set(0) // back index does not contribute to resident ratio
+	mdb.idxStats.combinedMemSzIndex.Set(combinedIndexSz)
+
+	if numRecsDisk > 0 {
+		mdb.idxStats.combinedResidentPercent.Set(float64(numRecsMem) / float64(numRecsDisk) * 100)
+	} else {
+		mdb.idxStats.combinedResidentPercent.Set(0)
+	}
 
 	return sts, nil
 }
