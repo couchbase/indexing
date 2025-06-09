@@ -6253,6 +6253,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 					defnId /*defnID c.IndexDefnID*/, partnId, /*partnID c.PartitionID*/
 					replicaMap,    /* replicaMap map[int]map[*IndexerNode]*IndexUsage */
 					dealerTracker, /* tracker uint64 */
+					override,      /* has specific target nodes bool */
 				)
 				if slotAlloted == 0 {
 					logging.Warnf("Planner::PopulateAlternateShardIds failed to get slot for {defnID: %v, partnID: %v}",
