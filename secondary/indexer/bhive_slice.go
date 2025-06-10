@@ -2520,7 +2520,7 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	cacheHits += int64(mStats.CacheHits)
 	cacheMiss += int64(mStats.CacheMisses)
 
-	sts.MemUsed = int64(mStats.MemUsed + mStats.BufMemUsed)
+	sts.MemUsed = int64(mStats.MemUsed + mStats.MemUsedIndex)
 	sts.InsertBytes = int64(mStats.NWriteBytes)
 	sts.GetBytes = int64(mStats.NReadBytes)
 	sts.DiskSize = int64(mStats.TotalDiskUsage)
@@ -2535,7 +2535,7 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	bsNumRecsMem += int64(float32(bStats.ItemCount) * bStats.ResidentRatio)
 	bsNumRecsDisk += int64(float32(bStats.ItemCount) * (1 - bStats.ResidentRatio))
 
-	sts.MemUsed += int64(bStats.MemUsed + mStats.BufMemUsed)
+	sts.MemUsed += int64(bStats.MemUsed + bStats.MemUsedIndex)
 	sts.InsertBytes += int64(bStats.NWriteBytes)
 	sts.GetBytes += int64(bStats.NReadBytes)
 	sts.DiskSize += int64(bStats.TotalDiskUsage)
