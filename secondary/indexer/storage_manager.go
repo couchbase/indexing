@@ -1817,7 +1817,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 				idxStats.insertBytes.Set(st.Stats.InsertBytes)
 				idxStats.deleteBytes.Set(st.Stats.DeleteBytes)
 
-				idxStats.graphBuildProgress.Set(float64(st.Stats.GraphBuildProgress))
+				idxStats.graphBuildProgress.Set(int64(st.Stats.GraphBuildProgress))
 
 				// compute mutation rate
 				now := time.Now().UnixNano()
