@@ -262,13 +262,31 @@ const (
 // If there are no mutations in the queue, then Dequeue would block
 // until mutations arrive
 func (feed *DcpFeed) DequeueMutations(rcvch chan []interface{}, abortCh chan bool) {
-	defer close(rcvch)
-	defer close(feed.dequeueDoneCh)
+	defer func() {
+		close(rcvch)
+
+		feed.mutationQueue.Drain()
+
+		close(feed.dequeueDoneCh)
+
+		logging.Infof("%v ##%x dequeue stopped", feed.logPrefix, feed.opaque)
+	}()
 
 	for {
 		pkt, bytes := feed.mutationQueue.Dequeue(abortCh, feed.closeMutQueue)
 		if pkt != nil {
-			rcvch <- []interface{}{pkt, bytes}
+
+			// process the packet (handled by genServer rcvch)
+			// if dequeue is closed, there is a chance we may still send packets to rcvch if
+			// the its not at capacity - both cases of select are true and one of them will be
+			// selected at random. eventuall if all selects choose rcvch, eventually it will be
+			// full and then we will abort
+			select {
+			case rcvch <- []interface{}{pkt, bytes}:
+			case <-abortCh:
+				return
+			}
+
 			sendAck := false
 			switch pkt.Opcode {
 			case transport.DCP_MUTATION,
