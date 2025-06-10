@@ -96,6 +96,21 @@ func (q *AtomicMutationQueue) Dequeue(abortCh chan bool, closeCh chan bool) (*tr
 
 }
 
+// Drain empties the mutation queue by forcing all the packets to nil
+func (q *AtomicMutationQueue) Drain() {
+	var headPtr = atomic.LoadPointer(&q.head)
+
+	for headPtr != atomic.LoadPointer(&q.tail) {
+		head := (*node)(headPtr)
+		head.next.pkt = nil
+
+		next := head.next
+
+		headPtr = unsafe.Pointer(next)
+		atomic.StorePointer(&q.head, headPtr)
+	}
+}
+
 func (q *AtomicMutationQueue) GetSize() int64 {
 	return atomic.LoadInt64(&q.size)
 }
