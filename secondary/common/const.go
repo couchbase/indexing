@@ -139,7 +139,12 @@ const INDEXER_75_VERSION = 8
 const INDEXER_76_VERSION = 9
 const INDEXER_CUR_VERSION = INDEXER_76_VERSION
 
-const INDEXER_PRIORITY = ServerPriority("7.6.4")
+const DEFAULT_PRODUCT_VERSION = "0.0.0-0000"
+
+var (
+	INDEXER_PRIORITY = ServerPriority("8.0.0")
+	PRODUCT_VERSION  = DEFAULT_PRODUCT_VERSION
+)
 
 // ##### IMPORTANT ##### When updating the above, also update util.go func GetVersion.
 
@@ -178,6 +183,13 @@ var HTTP_STATUS_FORBIDDEN []byte
 func init() {
 	HTTP_STATUS_UNAUTHORIZED = []byte("401 Unauthorized\n")
 	HTTP_STATUS_FORBIDDEN = []byte("403 Forbidden\n")
+	if PRODUCT_VERSION != DEFAULT_PRODUCT_VERSION {
+		var priority = ServerPriority(PRODUCT_VERSION)
+		var version = priority.GetVersion()
+		if version > INDEXER_PRIORITY.GetVersion() {
+			INDEXER_PRIORITY = ServerPriority(PRODUCT_VERSION)
+		}
+	}
 }
 
 // Audit event IDs

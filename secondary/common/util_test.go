@@ -302,6 +302,8 @@ func TestServerVersion(t *testing.T) {
 		{v: 0, s: ServerPriority("")},
 		{v: 0, s: ServerPriority("7.0.0-mp")},
 		{v: 0, s: ServerPriority("7.0.")},
+		{v: 7000000, s: ServerPriority("7.0.0-0000")},
+		{v: 7000060, s: ServerPriority("7.0.0-6000")},
 	} {
 		if tcase.v != int(tcase.s.GetVersion()) {
 			t.Fatalf(verMismatchStr, tcase.v, tcase.s.GetVersion())

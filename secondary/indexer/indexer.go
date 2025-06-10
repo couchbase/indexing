@@ -537,7 +537,12 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	// indexer is now ready to take security change
 	close(idx.enableSecurityChange)
 
-	logging.Infof("Indexer::indexer version %v with priority %v", common.INDEXER_CUR_VERSION, common.INDEXER_PRIORITY)
+	logging.Infof("Indexer::indexer version %v with priority %v (%v) PRODUCT_VERSION - %v",
+		common.INDEXER_CUR_VERSION,
+		common.INDEXER_PRIORITY,
+		common.INDEXER_PRIORITY.GetVersion(),
+		common.PRODUCT_VERSION,
+	)
 	idx.genIndexerId()
 
 	// we need to initialize metering manager after the genIndexerId as we need to get indexerId.

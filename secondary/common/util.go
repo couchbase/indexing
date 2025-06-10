@@ -1747,7 +1747,8 @@ func GetVersion(version, minorVersion uint32) uint64 {
 
 // ServerPriority - priority of the server to be elected as master when rebalance runs
 // string should be in the format:
-// MAJOR_VERSION.MINOR_VERSION.PATCH_VERSION-MPXX
+// MAJOR_VERSION.MINOR_VERSION.PATCH_VERSION-MPXX or
+// MAJOR_VERSION.MINOR_VERSION.PATCH_VERSION-XXXX
 // version can only range from [0,100)
 type ServerPriority string
 
@@ -1757,15 +1758,24 @@ func (sv ServerPriority) GetVersion() uint64 {
 	}
 	var ver uint64 = 0
 	vs := strings.ToUpper(string(sv))
-	if strings.Contains(vs, "-MP") {
+	if strings.Contains(vs, "-") {
 		var mp string
 		var ok bool
 
-		vs, mp, ok = strings.Cut(vs, "-MP")
+		vs, mp, ok = strings.Cut(vs, "-")
 		if !ok {
 			return 0
 		}
-		mpv, err := strconv.Atoi(mp)
+		var mpv int
+		var err error
+		mp, ok = strings.CutPrefix(mp, "MP")
+		if ok {
+			mpv, err = strconv.Atoi(mp)
+		} else {
+			// version is in the format: MAJOR_VERSION.MINOR_VERSION.PATCH_VERSION-XXXX
+			// eg: 7.6.7-8090. we will use the first 2 digits as the MP version aka only 80
+			mpv, err = strconv.Atoi(mp[:2])
+		}
 		if err != nil {
 			return 0
 		}
