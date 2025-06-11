@@ -3277,7 +3277,7 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		}
 
 		total := bProp + pProp
-		if total <= 0 || bProp <= 0 || pProp <= 0 {
+		if total <= 0 || bProp < 0 || pProp < 0 {
 			half := remQuota / 2
 			return half, remQuota - half, 0, 0, 0
 		}
