@@ -917,14 +917,14 @@ func (r *ScanRequest) Done() {
 	}
 }
 
-func (r *ScanRequest) isNil(k []byte) bool {
-	if k == nil || (!r.isPrimary && string(k) == "[]") {
+func (r *ScanRequest) isNil(k []byte, emptyArrAsNil bool) bool {
+	if k == nil || (!r.isPrimary && emptyArrAsNil && string(k) == "[]") {
 		return true
 	}
 	return false
 }
 
-func (r *ScanRequest) newKey(k []byte) (IndexKey, error) {
+func (r *ScanRequest) newKey(k []byte, emptyArrAsNil bool) (IndexKey, error) {
 	if k == nil {
 		return nil, fmt.Errorf("Key is null")
 	}
@@ -932,24 +932,24 @@ func (r *ScanRequest) newKey(k []byte) (IndexKey, error) {
 	if r.isPrimary {
 		return NewPrimaryKey(k)
 	} else {
-		return NewSecondaryKey(k, r.getKeyBuffer(3*len(k)), r.keySzCfg.allowLargeKeys, r.keySzCfg.maxSecKeyLen)
+		return NewSecondaryKey(k, r.getKeyBuffer(3*len(k)), r.keySzCfg.allowLargeKeys, r.keySzCfg.maxSecKeyLen, emptyArrAsNil)
 	}
 }
 
-func (r *ScanRequest) newLowKey(k []byte) (IndexKey, error) {
-	if r.isNil(k) {
+func (r *ScanRequest) newLowKey(k []byte, emptyArrAsNil bool) (IndexKey, error) {
+	if r.isNil(k, emptyArrAsNil) {
 		return MinIndexKey, nil
 	}
 
-	return r.newKey(k)
+	return r.newKey(k, emptyArrAsNil)
 }
 
-func (r *ScanRequest) newHighKey(k []byte) (IndexKey, error) {
-	if r.isNil(k) {
+func (r *ScanRequest) newHighKey(k []byte, emptyArrAsNil bool) (IndexKey, error) {
+	if r.isNil(k, emptyArrAsNil) {
 		return MaxIndexKey, nil
 	}
 
-	return r.newKey(k)
+	return r.newKey(k, emptyArrAsNil)
 }
 
 func (r *ScanRequest) fillRanges(low, high []byte, keys [][]byte) (localErr error) {
@@ -959,12 +959,12 @@ func (r *ScanRequest) fillRanges(low, high []byte, keys [][]byte) (localErr erro
 	r.LowBytes = low
 	r.HighBytes = high
 
-	if r.Low, localErr = r.newLowKey(low); localErr != nil {
+	if r.Low, localErr = r.newLowKey(low, true); localErr != nil {
 		localErr = fmt.Errorf("Invalid low key %s (%s)", string(low), localErr)
 		return
 	}
 
-	if r.High, localErr = r.newHighKey(high); localErr != nil {
+	if r.High, localErr = r.newHighKey(high, true); localErr != nil {
 		localErr = fmt.Errorf("Invalid high key %s (%s)", string(high), localErr)
 		return
 	}
@@ -972,7 +972,7 @@ func (r *ScanRequest) fillRanges(low, high []byte, keys [][]byte) (localErr erro
 	// point query for keys
 	for _, k := range keys {
 		r.KeysBytes = append(r.KeysBytes, k)
-		if key, localErr = r.newKey(k); localErr != nil {
+		if key, localErr = r.newKey(k, true); localErr != nil {
 			localErr = fmt.Errorf("Invalid equal key %s (%s)", string(k), localErr)
 			return
 		}
@@ -995,7 +995,7 @@ func (r *ScanRequest) joinKeys(keys [][]byte) ([]byte, error) {
 func (r *ScanRequest) areFiltersNil(protoScan *protobuf.Scan) bool {
 	areFiltersNil := true
 	for _, filter := range protoScan.Filters {
-		if !r.isNil(filter.Low) || !r.isNil(filter.High) {
+		if !r.isNil(filter.Low, false) || !r.isNil(filter.High, false) {
 			areFiltersNil = false
 			break
 		}
@@ -1004,7 +1004,7 @@ func (r *ScanRequest) areFiltersNil(protoScan *protobuf.Scan) bool {
 }
 
 func (r *ScanRequest) getEmptyScan() Scan {
-	key, _ := r.newKey([]byte(""))
+	key, _ := r.newKey([]byte(""), false)
 	return Scan{Low: key, High: key, Incl: Neither, ScanType: RangeReq}
 }
 
@@ -1180,7 +1180,7 @@ func (r *ScanRequest) fillFilterEquals(protoScan *protobuf.Scan, filter *Filter)
 	var equals [][]byte
 	for _, k := range protoScan.Equals {
 		var key IndexKey
-		if key, e = r.newKey(k); e != nil {
+		if key, e = r.newKey(k, true); e != nil {
 			e = fmt.Errorf("Invalid equal key %s (%s)", string(k), e)
 			return e
 		}
@@ -1421,7 +1421,7 @@ func (r *ScanRequest) makeScans(protoScans []*protobuf.Scan) (s []Scan, localErr
 			if len(protoScan.Equals) != 0 {
 				var filter Filter
 				var key IndexKey
-				if key, localErr = r.newKey(protoScan.Equals[0]); localErr != nil {
+				if key, localErr = r.newKey(protoScan.Equals[0], false); localErr != nil {
 					localErr = fmt.Errorf("Invalid equal key %s (%s)", string(protoScan.Equals[0]), localErr)
 					return nil, localErr
 				}
@@ -1451,12 +1451,12 @@ func (r *ScanRequest) makeScans(protoScans []*protobuf.Scan) (s []Scan, localErr
 			}
 
 			fl := protoScan.Filters[0]
-			if l, localErr = r.newLowKey(fl.Low); localErr != nil {
+			if l, localErr = r.newLowKey(fl.Low, false); localErr != nil {
 				localErr = fmt.Errorf("Invalid low key %s (%s)", logging.TagStrUD(fl.Low), localErr)
 				return nil, localErr
 			}
 
-			if h, localErr = r.newHighKey(fl.High); localErr != nil {
+			if h, localErr = r.newHighKey(fl.High, false); localErr != nil {
 				localErr = fmt.Errorf("Invalid high key %s (%s)", logging.TagStrUD(fl.High), localErr)
 				return nil, localErr
 			}
@@ -1527,12 +1527,12 @@ func (r *ScanRequest) makeScans(protoScans []*protobuf.Scan) (s []Scan, localErr
 			var compFilters []CompositeElementFilter
 			// Encode Filters
 			for _, fl := range protoScan.Filters {
-				if l, localErr = r.newLowKey(fl.Low); localErr != nil {
+				if l, localErr = r.newLowKey(fl.Low, false); localErr != nil {
 					localErr = fmt.Errorf("Invalid low key %s (%s)", logging.TagStrUD(fl.Low), localErr)
 					return nil, localErr
 				}
 
-				if h, localErr = r.newHighKey(fl.High); localErr != nil {
+				if h, localErr = r.newHighKey(fl.High, false); localErr != nil {
 					localErr = fmt.Errorf("Invalid high key %s (%s)", logging.TagStrUD(fl.High), localErr)
 					return nil, localErr
 				}
@@ -1635,12 +1635,12 @@ func (r *ScanRequest) makeIncludeColumnFilters(protoScans []*protobuf.Scan) (s [
 		skipScan := false
 		// Encode Filters
 		for _, fl := range protoScan.Filters {
-			if l, localErr = r.newLowKey(fl.Low); localErr != nil {
+			if l, localErr = r.newLowKey(fl.Low, false); localErr != nil {
 				localErr = fmt.Errorf("Invalid low key %s (%s)", logging.TagStrUD(fl.Low), localErr)
 				return nil, localErr
 			}
 
-			if h, localErr = r.newHighKey(fl.High); localErr != nil {
+			if h, localErr = r.newHighKey(fl.High, false); localErr != nil {
 				localErr = fmt.Errorf("Invalid high key %s (%s)", logging.TagStrUD(fl.High), localErr)
 				return nil, localErr
 			}
