@@ -2015,6 +2015,8 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 	binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
 	meta = append(timeHdr, meta...)
 
+	var mErr, bErr error
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -2024,14 +2026,11 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 		plasmaPersistenceMutex.Lock()
 		defer plasmaPersistenceMutex.Unlock()
 
-		mErr := mdb.mainstore.CreateRecoveryPoint2(s.MainSnap, meta, s.chkpointCb)
+		mErr = mdb.mainstore.CreateRecoveryPoint2(s.MainSnap, meta, s.chkpointCb)
 		if mErr != nil {
-			logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v: "+
+			logging.Errorf("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v: "+
 				"Failed to create mainstore recovery point: %v",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, mErr)
-			// panic to let recovery to kick in to keep checkpoint consistent
-			// TODO: remove panic after making recovery more resilient
-			panic(mErr.Error())
 		}
 	}()
 
@@ -2043,14 +2042,11 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 		plasmaPersistenceMutex.Lock()
 		defer plasmaPersistenceMutex.Unlock()
 
-		bErr := mdb.backstore.CreateRecoveryPoint2(s.BackSnap, meta, s.chkpointCb)
+		bErr = mdb.backstore.CreateRecoveryPoint2(s.BackSnap, meta, s.chkpointCb)
 		if bErr != nil {
-			logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v: "+
+			logging.Errorf("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v: "+
 				"Failed to create backstore recovery point: %v",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, bErr)
-			// panic to let recovery to kick in to keep checkpoint consistent
-			// TODO: remove panic after making recovery more resilient
-			panic(bErr.Error())
 		}
 	}()
 
@@ -2058,8 +2054,10 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 	close(s.chkpointCh)
 
 	dur := time.Since(t0)
-	logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v "+
-		"Created recovery point (took %v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, dur)
+	if mErr == nil && bErr == nil {
+		logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v "+
+			"Created recovery point (took %v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, dur)
+	}
 
 	mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
 
@@ -2181,9 +2179,9 @@ func (mdb *bhiveSlice) cleanupOldRecoveryPoints(sinfo *bhiveSnapshotInfo) {
 					"Cleanup mainstore recovery point %v. num RPs %v.", mdb.id, mdb.idxInstId,
 					mdb.idxPartnId, snapInfo, len(mRPs)-i)
 				if err := mdb.mainstore.RemoveRecoveryPoint(mRPs[i]); err != nil {
-					// panic to let recovery to kick in to keep checkpoint consistent
-					// TODO: remove panic after making recovery more resilient
-					panic(err.Error())
+					logging.Errorf("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+						"Cleanup mainstore recovery point %v. error %v.", mdb.id, mdb.idxInstId,
+						mdb.idxPartnId, snapInfo, err)
 				}
 				numDiskSnapshots--
 			} else {
@@ -2216,9 +2214,9 @@ func (mdb *bhiveSlice) cleanupOldRecoveryPoints(sinfo *bhiveSnapshotInfo) {
 					"Cleanup backstore recovery point %v. num RPs %v.", mdb.id, mdb.idxInstId,
 					mdb.idxPartnId, snapInfo, len(bRPs)-i)
 				if err := mdb.backstore.RemoveRecoveryPoint(bRPs[i]); err != nil {
-					// panic to let recovery to kick in to keep checkpoint consistent
-					// TODO: remove panic after making recovery more resilient
-					panic(err.Error())
+					logging.Errorf("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+						"Cleanup backstore recovery point %v. err %v", mdb.id, mdb.idxInstId,
+						mdb.idxPartnId, snapInfo, err)
 				}
 			} else {
 				logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
@@ -2522,7 +2520,7 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	cacheHits += int64(mStats.CacheHits)
 	cacheMiss += int64(mStats.CacheMisses)
 
-	sts.MemUsed = int64(mStats.MemUsed + mStats.BufMemUsed)
+	sts.MemUsed = int64(mStats.MemUsed + mStats.MemUsedIndex)
 	sts.InsertBytes = int64(mStats.NWriteBytes)
 	sts.GetBytes = int64(mStats.NReadBytes)
 	sts.DiskSize = int64(mStats.TotalDiskUsage)
@@ -2537,7 +2535,7 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	bsNumRecsMem += int64(float32(bStats.ItemCount) * bStats.ResidentRatio)
 	bsNumRecsDisk += int64(float32(bStats.ItemCount) * (1 - bStats.ResidentRatio))
 
-	sts.MemUsed += int64(bStats.MemUsed + mStats.BufMemUsed)
+	sts.MemUsed += int64(bStats.MemUsed + bStats.MemUsedIndex)
 	sts.InsertBytes += int64(bStats.NWriteBytes)
 	sts.GetBytes += int64(bStats.NReadBytes)
 	sts.DiskSize += int64(bStats.TotalDiskUsage)
