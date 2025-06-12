@@ -16,11 +16,25 @@ import (
 )
 
 const (
-	minPartitionsPerShard uint64 = 16
-	minShardsPerNode      uint64 = 6
-	shardCapacity         uint64 = 1000
-	maxDiskUsagePerShard  uint64 = 256 * 1024 * 1024
+	minPartitionsPerShard   uint64  = 16
+	minShardsPerNode        uint64  = 6
+	shardCapacity           uint64  = 1000
+	maxDiskUsagePerShard    uint64  = 256 * 1024 * 1024
+	diskUsageThresholdRatio float64 = 0.5
+	maxPartitionsPerSlot    uint64  = 102
 )
+
+func getTestShardDealer(minShardsPerNode, minPartitionsPerShard, maxDiskUsage, shardCapacity uint64,
+	alternateShardIDGenerator func() (*c.AlternateShardId, error), moveCallback moveFuncCb) *ShardDealer {
+	return NewShardDealer(
+		minShardsPerNode,
+		minPartitionsPerShard,
+		maxDiskUsage,
+		maxPartitionsPerSlot,
+		shardCapacity,
+		diskUsageThresholdRatio,
+		alternateShardIDGenerator, moveCallback)
+}
 
 // func createDummyIndexUsage(id uint64, isPrimary, isVector, isBhive, isMoi bool) *IndexUsage {
 func createDummyIndexUsage(params createIdxParam) *IndexUsage {
@@ -126,7 +140,7 @@ func TestMain(m *testing.M) {
 func TestBasicSlotAssignment(t *testing.T) {
 	t.Parallel()
 
-	var dealer = NewShardDealer(
+	var dealer = getTestShardDealer(
 		minShardsPerNode,
 		minPartitionsPerShard,
 		maxDiskUsagePerShard,
@@ -341,7 +355,7 @@ func TestSingleNode_Pass0(t *testing.T) {
 	t.Run("Basic-AllPrimary", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -438,7 +452,7 @@ func TestSingleNode_Pass0(t *testing.T) {
 		// PRIMARY: minShardsPerNode - 1
 		// 2i: 1
 		{
-			var dealer = NewShardDealer(
+			var dealer = getTestShardDealer(
 				minShardsPerNode,
 				minPartitionsPerShard,
 				maxDiskUsagePerShard,
@@ -505,7 +519,7 @@ func TestSingleNode_Pass0(t *testing.T) {
 		// 2i: 2
 		// prim: 2
 		{
-			var dealer = NewShardDealer(
+			var dealer = getTestShardDealer(
 				minShardsPerNode,
 				minPartitionsPerShard,
 				maxDiskUsagePerShard,
@@ -579,7 +593,7 @@ func TestSingleNode_Pass0(t *testing.T) {
 		// PRIMARY: numPartns = minShards - 1
 		// 2i: 1
 		{
-			var dealer = NewShardDealer(
+			var dealer = getTestShardDealer(
 				minShardsPerNode,
 				minPartitionsPerShard,
 				maxDiskUsagePerShard,
@@ -659,7 +673,7 @@ func TestSingleNode_Pass0(t *testing.T) {
 		// 2i: numPartns = 2
 		// prim: numPartns = 2
 		{
-			var dealer = NewShardDealer(
+			var dealer = getTestShardDealer(
 				minShardsPerNode,
 				minPartitionsPerShard,
 				maxDiskUsagePerShard,
@@ -731,7 +745,7 @@ func TestSingleNode_Pass1(t *testing.T) {
 	t.Run("Basic-AllPrimary", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -803,7 +817,7 @@ func TestSingleNode_Pass1(t *testing.T) {
 	t.Run("PrimaryAndSecondary", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -897,7 +911,7 @@ func TestSingleNode_Pass1(t *testing.T) {
 		// PRIMARY: numPartns = minPartitionsPerShard, count = minShardsPerNode - 1
 		// 2i: count = 1, numPartns = minPartitionsPerShard
 		{
-			var dealer = NewShardDealer(
+			var dealer = getTestShardDealer(
 				minShardsPerNode,
 				minPartitionsPerShard,
 				maxDiskUsagePerShard,
@@ -976,7 +990,7 @@ func TestSingleNode_Pass1(t *testing.T) {
 		// 2i: count = 2, numPartns = minPartitionsPerShard
 		// prim: count = 1 numPartns = minPartitionsPerShard
 		{
-			var dealer = NewShardDealer(
+			var dealer = getTestShardDealer(
 				minShardsPerNode,
 				minPartitionsPerShard,
 				maxDiskUsagePerShard,
@@ -1043,7 +1057,7 @@ func TestSingleNode_Pass1(t *testing.T) {
 	t.Run("MixCategoryIndexes", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -1120,7 +1134,6 @@ func TestSingleNode_Pass1(t *testing.T) {
 				minShardsPerNode*2,
 			)
 		}
-
 		if len(dealer.slotsPerCategory[VectorShardCategory]) != 1 {
 			t0.Fatalf(
 				"%v shard dealer book keeping mismatch - slots for %v are %v but expected only %v",
@@ -1164,7 +1177,7 @@ func TestSingleNode_Pass2(t *testing.T) {
 	t.Run("Basic-AllPrimary", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			1,
 			maxDiskUsagePerShard,
@@ -1234,7 +1247,7 @@ func TestSingleNode_Pass2(t *testing.T) {
 		t0.Parallel()
 
 		var testShardCapacity uint64 = 10
-		var dealer = NewShardDealer(minShardsPerNode,
+		var dealer = getTestShardDealer(minShardsPerNode,
 			1,
 			maxDiskUsagePerShard,
 			testShardCapacity,
@@ -1342,7 +1355,7 @@ func TestSingleNode_Pass2(t *testing.T) {
 	t.Run("MixCategoryIndexes", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -1461,7 +1474,7 @@ func TestSingleNode_Pass2(t *testing.T) {
 	t.Run("PartitionedIndexes", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -1539,7 +1552,7 @@ func TestSingleNode_Pass3(t *testing.T) {
 
 	// maximise re-use case
 	{
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			1,
 			maxDiskUsagePerShard,
@@ -1649,7 +1662,7 @@ func TestSingleNode_Pass3(t *testing.T) {
 
 	// test upgrade aka overflow case
 	{
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			1,
 			maxDiskUsagePerShard,
@@ -1823,9 +1836,10 @@ func TestGetShardCategory(t *testing.T) {
 func TestRecordIndexUsage(t *testing.T) {
 	t.Parallel()
 
-	var dealer = NewShardDealer(
+	var dealer = getTestShardDealer(
 		minPartitionsPerShard, minPartitionsPerShard, maxDiskUsagePerShard,
-		shardCapacity, createNewAlternateShardIDGenerator(),
+		shardCapacity,
+		createNewAlternateShardIDGenerator(),
 		nil)
 
 	var err = dealer.RecordIndexUsage(nil, nil, true)
@@ -1964,6 +1978,80 @@ func TestRecordIndexUsage(t *testing.T) {
 	}
 
 	var shardCategory = getIndexCategory(plasmaIndex)
+	if len(dealer.slotsPerCategory[shardCategory]) == 0 ||
+		!dealer.slotsPerCategory[shardCategory][mainAlternateID.GetSlotId()] {
+		t.Fatalf(
+			"book keeping mismatch. expected dealer to have slot in category %v but it has (slotsMap) %v",
+			shardCategory,
+			dealer.slotsPerCategory,
+		)
+	}
+
+	if dealer.nodeToShardCountMap[indexer.NodeUUID] != uint64(
+		len(plasmaIndex.InitialAlternateShardIds),
+	) {
+		t.Fatalf("book keeping mismatch. expected dealer to have %v shards but has %v",
+			len(plasmaIndex.AlternateShardIds), dealer.nodeToShardCountMap[indexer.NodeUUID])
+	}
+
+	if len(dealer.nodeToSlotMap[indexer.NodeUUID]) == 0 ||
+		dealer.nodeToSlotMap[indexer.NodeUUID][mainAlternateID.GetSlotId()] != mainAlternateID.GetReplicaId() {
+		t.Fatalf(
+			"book keeping mismatch. expected nodeToSlotMap to have %v replicaID but it has (slotMap for node) %v",
+			mainAlternateID.GetReplicaId(),
+			dealer.nodeToSlotMap[indexer.NodeUUID],
+		)
+	}
+
+	// duplicate insert of same index. should not lead to any changes in dealer internal records
+	err = dealer.RecordIndexUsage(plasmaIndex, indexer, true)
+	if err != nil {
+		t.Fatalf("expected index to be recorded but it failed with err %v", err)
+	}
+
+	if len(dealer.slotsMap[mainAlternateID.GetSlotId()]) == 0 ||
+		len(dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()]) == 0 ||
+		dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][mainAlternateID.GetGroupId()] == nil ||
+		dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][backAlternateID.GetGroupId()] == nil {
+		t.Fatalf(
+			"book keeping mismatch in shard dealer. slots map is not correct - %v",
+			dealer.slotsMap[mainAlternateID.GetSlotId()],
+		)
+	}
+	shardContainer = dealer.slotsMap[mainAlternateID.GetSlotId()][mainAlternateID.GetReplicaId()][mainAlternateID.GetGroupId()]
+	if len(shardContainer.insts) != 1 {
+		t.Fatalf(
+			"book keeping mismatch in shard container. expected only 1 inst but there are - %v",
+			shardContainer.insts,
+		)
+	}
+	if len(shardContainer.insts[plasmaIndex.InstId]) > 1 {
+		t.Fatalf(
+			"book keeping mismatch in shard container. expected only 1 index usage but there are - %v",
+			shardContainer.insts[plasmaIndex.InstId],
+		)
+	}
+	if shardContainer.insts[plasmaIndex.InstId][0] != plasmaIndex {
+		t.Fatalf("book keeping mismatch in shard container. expected index to be %p but it is %p",
+			shardContainer.insts[plasmaIndex.InstId][0], plasmaIndex)
+	}
+	if shardContainer.totalPartitions != uint64(plasmaIndex.Instance.Defn.NumPartitions)+1 {
+		t.Fatalf(
+			"book keeping mismatch is shard container. expected %v partitions but there are %v",
+			plasmaIndex.Instance.Defn.NumPartitions,
+			shardContainer.totalPartitions,
+		)
+	}
+	if len(dealer.partnSlots[plasmaIndex.DefnId]) == 0 ||
+		dealer.partnSlots[plasmaIndex.DefnId][plasmaIndex.PartnId] != mainAlternateID.GetSlotId() {
+		t.Fatalf(
+			"book keeping mismatch. expected slotID to be %v but it is (partnSlot map for defn) %v",
+			mainAlternateID.GetSlotId(),
+			dealer.partnSlots[plasmaIndex.DefnId],
+		)
+	}
+
+	shardCategory = getIndexCategory(plasmaIndex)
 	if len(dealer.slotsPerCategory[shardCategory]) == 0 ||
 		!dealer.slotsPerCategory[shardCategory][mainAlternateID.GetSlotId()] {
 		t.Fatalf(
@@ -2532,7 +2620,7 @@ func (psc1 *pseudoShardContainer) String() string {
 func TestMultNode_NoReplicas(t *testing.T) {
 	t.Parallel()
 
-	var dealer = NewShardDealer(
+	var dealer = getTestShardDealer(
 		minShardsPerNode,
 		minPartitionsPerShard,
 		maxDiskUsagePerShard,
@@ -2575,7 +2663,7 @@ func TestMultNode_NoReplicas(t *testing.T) {
 func TestMultiNode_NegTestSameIndexOnAllNodes(t *testing.T) {
 	t.Parallel()
 
-	var dealer = NewShardDealer(minShardsPerNode,
+	var dealer = getTestShardDealer(minShardsPerNode,
 		minPartitionsPerShard,
 		maxDiskUsagePerShard,
 		shardCapacity,
@@ -2605,7 +2693,7 @@ func TestMultiNode_NegTestSameIndexOnAllNodes(t *testing.T) {
 func TestMultiNode_NegTestSameDefnMultiReplicaSameNode(t *testing.T) {
 	t.Parallel()
 
-	var dealer = NewShardDealer(
+	var dealer = getTestShardDealer(
 		minShardsPerNode,
 		minPartitionsPerShard,
 		maxDiskUsagePerShard,
@@ -2642,7 +2730,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 	t.Run("BasicAllPrimary", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -2729,7 +2817,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 	t.Run("PrimaryAndSecondary", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -2823,7 +2911,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 	t.Run("PartitionedIndexes", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -2958,7 +3046,7 @@ func TestMultiNode_Pass1(t *testing.T) {
 
 		var cluster = createDummyIndexerNodes(0, cips...)
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -3037,7 +3125,7 @@ func TestMultiNode_Pass1(t *testing.T) {
 
 		var cluster = createDummyIndexerNodes(0, cips...)
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -3102,7 +3190,7 @@ func TestMultiNode_Pass1(t *testing.T) {
 
 		var cluster = createDummyIndexerNodes(0, cips...)
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -3165,7 +3253,7 @@ func TestMultiNode_Pass2(t *testing.T) {
 			{count: minPartitionsPerShard*minShardsPerNode + 1, isPrimary: true, numReplicas: rand.Intn(6)},
 		}
 		var cluster = createDummyIndexerNodes(0, cips...)
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -3216,7 +3304,7 @@ func TestMultiNode_Pass2(t *testing.T) {
 		}
 
 		var cluster = createDummyIndexerNodes(0, ciplist...)
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			minShardsPerNode,
 			minPartitionsPerShard,
 			maxDiskUsagePerShard,
@@ -3283,7 +3371,7 @@ func TestMultiNode_Pass3(t *testing.T) {
 
 	var cluster = createDummyIndexerNodes(0, ciplist...)
 
-	var dealer = NewShardDealer(
+	var dealer = getTestShardDealer(
 		minShardsPerNode,
 		minPartitionsPerShard,
 		maxDiskUsagePerShard,
@@ -3395,7 +3483,7 @@ func TestMultiNode_RandomLayoutTests(t *testing.T) {
 
 	var cluster = createDummyIndexerNodes(numReps, ciplist...)
 
-	var dealer = NewShardDealer(
+	var dealer = getTestShardDealer(
 		minShardsPerNode,
 		minPartitionsPerShard,
 		maxDiskUsagePerShard,
@@ -3451,7 +3539,7 @@ func TestMultiNode_HighReuseTests(t *testing.T) {
 
 	var cluster = createDummyIndexerNodes(3, ciplist...)
 
-	var dealer = NewShardDealer(
+	var dealer = getTestShardDealer(
 		minShardsPerNode,
 		1,
 		maxDiskUsagePerShard,
@@ -3528,7 +3616,7 @@ func TestMultiNode_UnevenDistribution(t *testing.T) {
 
 		var cluster = createDummyIndexerNodes(0, ciplist...)
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			testMinShardsPerNode,
 			testMinPartitionsPerShard,
 			testMaxDiskUsagePerShard,
@@ -3621,7 +3709,7 @@ func TestMultiNode_UnevenDistribution(t *testing.T) {
 
 		var cluster = []*IndexerNode{node0, node1, node2}
 
-		var dealer = NewShardDealer(
+		var dealer = getTestShardDealer(
 			testMinShardsPerNode,
 			testMinPartitionsPerShard,
 			testMaxDiskUsagePerShard,
@@ -3701,7 +3789,7 @@ func TestMultiNode_MixedModeRebalance(t *testing.T) {
 
 	var cluster = createDummyIndexerNodes(0, ciplist...)
 
-	var dealer = NewShardDealer(
+	var dealer = getTestShardDealer(
 		testMinShardsPerNode,
 		testMinPartitionsPerShard,
 		testMaxDiskUsagePerShard,
