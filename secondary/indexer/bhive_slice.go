@@ -1652,7 +1652,7 @@ func (mdb *bhiveSlice) ClearRebalRunning() {
 }
 
 func (mdb *bhiveSlice) IsPersistanceActive() bool {
-	return true
+	return mdb.isPersistorRunning()
 }
 
 // //////////////////////////////////////////////////////////
