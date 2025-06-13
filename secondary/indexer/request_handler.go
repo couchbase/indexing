@@ -1501,13 +1501,7 @@ func (m *requestHandlerContext) consolidateIndexStatus(statuses []IndexStatus) [
 			s2.Hosts = append(s2.Hosts, status.Hosts...)
 			s2.Completion = (s2.Completion + status.Completion) / 2
 			s2.Progress = (s2.Progress + status.Progress) / 2.0
-
-			//if overall status is "Graph Building", overwrite the Completion
-			//with graph build progress. Completion is used in the UI to display
-			//progress during index build.
-			if s2.Status == "Graph Building" {
-				s2.Completion = (s2.GraphProgress + status.GraphProgress) / 2
-			}
+			s2.GraphProgress = (s2.GraphProgress + status.GraphProgress) / 2
 
 			s2.NumPartition += status.NumPartition
 			s2.NodeUUID = ""
@@ -1538,6 +1532,12 @@ func (m *requestHandlerContext) consolidateIndexStatus(statuses []IndexStatus) [
 
 	result := make([]IndexStatus, 0, len(statuses))
 	for _, status := range statusMap {
+		//if status is "Graph Building", overwrite the Completion
+		//with graph build progress. Completion is used in the UI to display
+		//progress during index build.
+		if status.Status == "Graph Building" {
+			status.Completion = status.GraphProgress
+		}
 		result = append(result, status)
 	}
 
