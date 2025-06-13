@@ -1652,7 +1652,7 @@ func (mdb *bhiveSlice) ClearRebalRunning() {
 }
 
 func (mdb *bhiveSlice) IsPersistanceActive() bool {
-	return true
+	return mdb.isPersistorRunning()
 }
 
 // //////////////////////////////////////////////////////////
@@ -2594,6 +2594,7 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
 	mdb.idxStats.cacheHitPercent.Set(common.ComputePercent(cacheHits, cacheMiss))
 	mdb.idxStats.rCacheHitPercent.Set(common.ComputePercent(rcacheHits, rcacheMiss))
+	mdb.idxStats.combinedResidentPercent.Set(common.ComputePercentFloat(numRecsMem, numRecsDisk))
 	mdb.idxStats.cacheHits.Set(cacheHits)
 	mdb.idxStats.cacheMisses.Set(cacheMiss)
 	mdb.idxStats.numRecsInMem.Set(numRecsMem)
@@ -2601,12 +2602,6 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	mdb.idxStats.bsNumRecsInMem.Set(0)  // back index does not contribute to resident ratio
 	mdb.idxStats.bsNumRecsOnDisk.Set(0) // back index does not contribute to resident ratio
 	mdb.idxStats.combinedMemSzIndex.Set(combinedIndexSz)
-
-	if numRecsDisk > 0 {
-		mdb.idxStats.combinedResidentPercent.Set(float64(numRecsMem) / float64(numRecsDisk) * 100)
-	} else {
-		mdb.idxStats.combinedResidentPercent.Set(0)
-	}
 
 	return sts, nil
 }

@@ -160,6 +160,9 @@ type IndexStatus struct {
 	LastScanTime string `json:"lastScanTime,omitempty"`
 
 	AlternateShardIds map[string]map[int][]string `json:"alternateShardIds"`
+
+	//bhive graph build progress
+	GraphProgress int `json:"graphProgress"`
 }
 
 // NodeUUIDsResponse is used to return a list of Index Service NodeUUIDs from the
@@ -1035,7 +1038,18 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 				instances := topology.GetIndexInstancesByDefn(defn.DefnId)
 				for _, instance := range instances {
 					state, errStr := topology.GetStatusByInst(defn.DefnId, common.IndexInstId(instance.InstId))
-					if state != common.INDEX_STATE_ACTIVE {
+
+					//BHIVE instance with pending graph build is also considered non ACTIVE
+					graphBuildPending := false
+					if defn.IsBhive() {
+						for _, partn := range instance.Partitions {
+							if !partn.BhiveGraphReady {
+								graphBuildPending = true
+							}
+						}
+					}
+
+					if state != common.INDEX_STATE_ACTIVE || graphBuildPending {
 						localMeta.AllIndexesActive = false
 					}
 					if state != common.INDEX_STATE_CREATED &&
@@ -1052,6 +1066,12 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 						key := common.GetIndexStatKey(prefix, "build_progress")
 						if progress, ok := stats.ToMap()[key]; ok {
 							completion = int(progress.(float64))
+						}
+
+						graphProgress := 0
+						key = common.GetIndexStatKey(prefix, "graph_build_progress")
+						if progress, ok := stats.ToMap()[key]; ok {
+							graphProgress = int(progress.(float64))
 						}
 
 						progress := float64(0)
@@ -1123,6 +1143,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 							Stale:             stale,
 							LastScanTime:      lastScanTime,
 							AlternateShardIds: asiMap,
+							GraphProgress:     graphProgress,
 						}
 
 						indexStatuses = append(indexStatuses, status)
@@ -1343,7 +1364,7 @@ func getStateStr(instance *manager.IndexInstDistribution, state common.IndexStat
 			}
 			//if graph build is pending, report state as "Building"
 			if graphPending {
-				stateStr = "Building"
+				stateStr = "Graph Building"
 			} else {
 				stateStr = "Ready"
 			}
@@ -1380,7 +1401,7 @@ func getStateStr(instance *manager.IndexInstDistribution, state common.IndexStat
 				stateStr = "Scheduled for build"
 			}
 		}
-		if instance.TrainingPhase == common.TRAINING_COMPLETED{
+		if instance.TrainingPhase == common.TRAINING_COMPLETED {
 			if defn.IsVectorIndex {
 				stateStr = "Training complete, scheduled for build"
 			} else {
@@ -1481,6 +1502,13 @@ func (m *requestHandlerContext) consolidateIndexStatus(statuses []IndexStatus) [
 			s2.Completion = (s2.Completion + status.Completion) / 2
 			s2.Progress = (s2.Progress + status.Progress) / 2.0
 
+			//if overall status is "Graph Building", overwrite the Completion
+			//with graph build progress. Completion is used in the UI to display
+			//progress during index build.
+			if s2.Status == "Graph Building" {
+				s2.Completion = (s2.GraphProgress + status.GraphProgress) / 2
+			}
+
 			s2.NumPartition += status.NumPartition
 			s2.NodeUUID = ""
 			if len(status.Error) != 0 {
@@ -1538,6 +1566,10 @@ func (m *requestHandlerContext) consolideStateStr(str1 string, str2 string) stri
 			return str1
 		}
 		return "Building"
+	}
+
+	if strings.HasPrefix(str1, "Graph") || strings.HasPrefix(str2, "Graph") {
+		return "Graph Building"
 	}
 
 	if strings.HasPrefix(str1, "Training") || strings.HasPrefix(str2, "Training") {
