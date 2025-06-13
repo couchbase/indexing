@@ -173,13 +173,14 @@ func ParseVectorDesciption(inp string) (*VectorQuantizer, error) {
 		quantizer.Type = PQ
 
 		if len(matches[7]) > 0 { // Fast scan specified
-			quantizer.FastScan = true
+			return nil, fmt.Errorf("Currently FastScan is not supported")
 
-			if blockSize, err := strconv.ParseInt(matches[5], 10, 32); err != nil {
-				return nil, fmt.Errorf("Error observed while parsing number of subquantizers, err: %v", err)
-			} else {
-				quantizer.BlockSize = int(blockSize)
-			}
+			// quantizer.FastScan = true
+			// if blockSize, err := strconv.ParseInt(matches[5], 10, 32); err != nil {
+			// 	return nil, fmt.Errorf("Error observed while parsing number of subquantizers, err: %v", err)
+			// } else {
+			// 	quantizer.BlockSize = int(blockSize)
+			// }
 		} else { // Normal product quantization
 			if subQuantizers, err := strconv.ParseInt(matches[5], 10, 32); err != nil {
 				return nil, fmt.Errorf("Error observed while parsing number of subquantizers, err: %v", err)
@@ -198,10 +199,10 @@ func ParseVectorDesciption(inp string) (*VectorQuantizer, error) {
 		quantizer.Type = SQ
 
 		switch ScalarQuantizerRange(matches[4]) {
-		case SQ_8BIT, SQ_6BIT, SQ_4BIT, SQ_FP16:
+		case SQ_8BIT, SQ_6BIT, SQ_4BIT:
 			quantizer.SQRange = ScalarQuantizerRange(matches[4])
-		case SQ_8BIT_DIRECT, SQ_8BIT_UNIFORM, SQ_4BIT_UNIFORM:
-			return nil, fmt.Errorf("Currently only `SQ4`,`SQ6`,`SQ8`,`SQfp16` are supported for scalar quantization.")
+		case SQ_8BIT_DIRECT, SQ_8BIT_UNIFORM, SQ_4BIT_UNIFORM, SQ_FP16:
+			return nil, fmt.Errorf("Currently only `SQ4`,`SQ6`,`SQ8` are supported for scalar quantization.")
 		default:
 			return nil, fmt.Errorf("Invalid format for scalar quantization. Expected one of `SQ4`,`SQ6`,`SQ8`,`SQfp16`,`SQ_8bit_DIRECT`,`SQ_8bit_UNIFORM`,`SQ_4bit_UNIFORM`. Observed different format")
 		}
