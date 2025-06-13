@@ -3901,6 +3901,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.debug.delayTrainingDuration": ConfigValue{
+		0, //0s
+		"This is an internal-use-only flag to set duration of delay between sampling & training of vector indexes.",
+		0, //0s
+		false,
+		false,
+	},
 	"indexer.allow_ddl_during_scaleup": ConfigValue{
 		false,
 		"When set to true, this flag ignores excludeNode params, as well as " +
