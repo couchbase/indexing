@@ -51,6 +51,7 @@ import (
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 	"github.com/couchbase/indexing/secondary/testcode"
 	vectorutil "github.com/couchbase/indexing/secondary/vector/util"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 )
 
 type Indexer interface {
@@ -860,6 +861,15 @@ func (idx *indexer) initFromConfig() {
 		common.SetDcpMemcachedTimeout(uint32(mcdTimeout.Int()))
 		logging.Infof("memcachedTimeout set to %v\n", uint32(mcdTimeout.Int()))
 	}
+
+	maxVectorCPU := idx.config["vector.max_cpu"].Float64()
+	numCores := runtime.GOMAXPROCS(-1)
+	allocatedVectorCores := int(maxVectorCPU * float64(numCores))
+	if allocatedVectorCores == 0 {
+		allocatedVectorCores = 1
+	}
+	codebook.SetMaxCPU(allocatedVectorCores)
+	logging.Infof("Indexer: Vector MaxCPU set to %v\n", allocatedVectorCores)
 }
 
 func GetHTTPMux() *http.ServeMux {
@@ -1930,6 +1940,15 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		throttleVal = newConfig["serverless.cpu.throttle.target"].Float64()
 	}
 	idx.cpuThrottle.SetCpuTarget(throttleVal)
+
+	maxVectorCPU := newConfig["vector.max_cpu"].Float64()
+	numCores := runtime.GOMAXPROCS(-1)
+	allocatedVectorCores := int(maxVectorCPU * float64(numCores))
+	if allocatedVectorCores == 0 {
+		allocatedVectorCores = 1
+	}
+	codebook.SetMaxCPU(allocatedVectorCores)
+	logging.Infof("Indexer: Vector MaxCPU set to %v\n", allocatedVectorCores)
 
 	idx.config = newConfig
 
