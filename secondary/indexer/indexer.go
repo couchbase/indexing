@@ -967,11 +967,8 @@ func muxWithReqLogger(next http.Handler) http.Handler {
 		if logging.IsEnabled(logging.Debug) {
 			neww = &proxyDebugRespWriter{w: w}
 			defer func(start time.Time) {
-				var auth = req.Header.Get("Authorization")
-				auth = string(auth[:min(100, len(auth))]) + "..."
-				logging.Debugf("indexer::mWRL: m=%v u=%v r=%v ua=%v a=%v bl=%v s=%v t=%v",
-					req.Method, req.URL.Path, req.RemoteAddr, req.UserAgent(),
-					logging.TagStrUD(auth), neww.(*proxyDebugRespWriter).resplen,
+				logging.Debugf("indexer::mWRL: m=%v u=%v r=%v ua=%v bl=%v s=%v t=%v",
+					req.Method, req.URL.Path, req.RemoteAddr, req.UserAgent(), neww.(*proxyDebugRespWriter).resplen,
 					neww.(*proxyDebugRespWriter).statuscode, time.Since(start).String())
 
 			}(time.Now())
