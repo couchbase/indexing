@@ -2333,10 +2333,8 @@ func (s *Solution) findIndexerForReplica(indexDefnId common.IndexDefnId,
 	return indexSlotId, indexers[0], indexers[1:]
 }
 
-func (s *Solution) getShardLimits() (int, int, map[ShardCategory]bool) {
+func (s *Solution) getShardLimits() (int, int) {
 	shardLimitPerTenant := 0
-	shardOfEachCategory := make(map[ShardCategory]map[string]bool)
-	minShardOfEachCategory := 0
 
 	shardMap := make(map[string]bool)
 	for _, indexer := range s.Placement {
@@ -2345,32 +2343,14 @@ func (s *Solution) getShardLimits() (int, int, map[ShardCategory]bool) {
 			shardLimitPerTenant = indexer.ShardLimitPerTenant
 		}
 
-		if minShardOfEachCategory < indexer.MinShardOfEachCategory {
-			minShardOfEachCategory = indexer.MinShardOfEachCategory
-		}
-
 		for _, index := range indexer.Indexes {
-			shardCategory := getIndexCategory(index)
 			for _, alternateShardId := range index.AlternateShardIds {
 				shardMap[alternateShardId] = true
-
-				if _, ok := shardOfEachCategory[shardCategory]; !ok {
-					shardOfEachCategory[shardCategory] = make(map[string]bool)
-				}
-				shardOfEachCategory[shardCategory][alternateShardId] = true
 			}
 		}
 	}
 
-	minShardOfCategoryCreated := make(map[ShardCategory]bool)
-	for category, shards := range shardOfEachCategory {
-		// if the current number of shards is greater than minimum shard of that category
-		// populate the map. If a shard category is absent in the map means no shards of
-		// this category is present, planner should create a new shard
-		minShardOfCategoryCreated[category] = len(shards) >= minShardOfEachCategory
-	}
-
-	return shardLimitPerTenant, len(shardMap), minShardOfCategoryCreated
+	return shardLimitPerTenant, len(shardMap)
 }
 
 func (s *Solution) PrePopulateAlternateShardIds(command CommandType) error {

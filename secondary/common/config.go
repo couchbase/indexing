@@ -3747,14 +3747,6 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
-	"indexer.planner.minShardOfEachCategory": ConfigValue{
-		10,
-		"Minimum number of shard planner will create of each shard category before planner starts reusing " +
-			"the exisiting shards",
-		10,
-		false,
-		false,
-	},
 	"indexer.planner.use_shard_dealer": ConfigValue{
 		true,
 		"Enable planner to use the shard dealer for assigning shards to indexes. The shard dealer uses " +
