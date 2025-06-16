@@ -3277,6 +3277,8 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	mdb.idxStats.combinedResidentPercent.Set(common.ComputePercentFloat((numRecsMem + bsNumRecsMem), (numRecsDisk + bsNumRecsDisk)))
 	mdb.idxStats.cacheHits.Set(cacheHits)
 	mdb.idxStats.cacheMisses.Set(cacheMiss)
+	mdb.idxStats.rCacheHits.Set(rCacheHits)
+	mdb.idxStats.rCacheMisses.Set(rCacheMisses)
 	mdb.idxStats.numRecsInMem.Set(numRecsMem)
 	mdb.idxStats.numRecsOnDisk.Set(numRecsDisk)
 	mdb.idxStats.bsNumRecsInMem.Set(bsNumRecsMem)
