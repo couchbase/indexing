@@ -146,7 +146,7 @@ func TestBasicSlotAssignment(t *testing.T) {
 		replicaMap[inst.Instance.ReplicaId][indexerNode] = inst
 
 		tracker++
-		slotID := dealer.GetSlot(inst.DefnId, inst.PartnId, replicaMap, tracker)
+		slotID := dealer.GetSlot(inst.DefnId, inst.PartnId, replicaMap, tracker, false)
 
 		if slotID == 0 {
 			t.Fatalf("%v failed to get slot id for index %v in 0th pass",
@@ -359,7 +359,7 @@ func TestSingleNode_Pass0(t *testing.T) {
 		for defnID, repMaps := range replicaMaps {
 			for partnID, repmap := range repMaps {
 				tracker++
-				slotID := dealer.GetSlot(defnID, partnID, repmap, tracker)
+				slotID := dealer.GetSlot(defnID, partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -413,7 +413,7 @@ func TestSingleNode_Pass0(t *testing.T) {
 		replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
 		replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
 		tracker++
-		slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap, tracker)
+		slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap, tracker, false)
 		if _, exists := slotIDs[slotID]; slotID != 0 && !exists {
 			t0.Fatalf(
 				"%v extra slot created when it was not expected. New slot %v. All Slots %v",
@@ -459,7 +459,7 @@ func TestSingleNode_Pass0(t *testing.T) {
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 					tracker++
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot id for replica map %v in 0th pass",
@@ -526,7 +526,7 @@ func TestSingleNode_Pass0(t *testing.T) {
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 					tracker++
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot id for replica map %v in 0th pass",
@@ -600,7 +600,7 @@ func TestSingleNode_Pass0(t *testing.T) {
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 					tracker++
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot id for replica map %v in 0th pass",
@@ -681,7 +681,7 @@ func TestSingleNode_Pass0(t *testing.T) {
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 					tracker++
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot id for replica map %v in 0th pass",
@@ -750,7 +750,7 @@ func TestSingleNode_Pass1(t *testing.T) {
 		for defnID, repMaps := range replicaMaps {
 			for partnID, repmap := range repMaps {
 				tracker++
-				slotID := dealer.GetSlot(defnID, partnID, repmap, tracker)
+				slotID := dealer.GetSlot(defnID, partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -824,7 +824,7 @@ func TestSingleNode_Pass1(t *testing.T) {
 		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 				tracker++
-				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v expected to get a valid slot for replica map %v but got 0",
@@ -918,7 +918,7 @@ func TestSingleNode_Pass1(t *testing.T) {
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 					tracker++
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot id for replica map %v in 0th pass",
@@ -997,7 +997,7 @@ func TestSingleNode_Pass1(t *testing.T) {
 			for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 				for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 					tracker++
-					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+					slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 					if slotID == 0 {
 						t0.Fatalf("%v failed to get slot id for replica map %v in 0th pass",
@@ -1065,7 +1065,7 @@ func TestSingleNode_Pass1(t *testing.T) {
 		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 				tracker++
-				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot for replica map %v",
@@ -1182,7 +1182,7 @@ func TestSingleNode_Pass2(t *testing.T) {
 		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 				tracker++
-				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -1251,7 +1251,7 @@ func TestSingleNode_Pass2(t *testing.T) {
 		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 				tracker++
-				var slotID = dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+				var slotID = dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot for replica map %v",
@@ -1325,7 +1325,7 @@ func TestSingleNode_Pass2(t *testing.T) {
 		replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
 		replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
 		tracker++
-		slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap, tracker)
+		slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap, tracker, false)
 		if _, exists := slotIDs[slotID]; slotID != 0 && !exists {
 			t0.Fatalf(
 				"%v extra slot created when it was not expected. New slot %v. All Slots %v",
@@ -1364,7 +1364,7 @@ func TestSingleNode_Pass2(t *testing.T) {
 		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 				tracker++
-				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot for replica map %v",
@@ -1482,7 +1482,7 @@ func TestSingleNode_Pass2(t *testing.T) {
 		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 				tracker++
-				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot for replica map %v",
@@ -1554,7 +1554,7 @@ func TestSingleNode_Pass3(t *testing.T) {
 		for defnID := len(indexerNode.Indexes); defnID >= 0; defnID-- {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 				tracker++
-				var slotID = dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+				var slotID = dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t.Fatalf("%v failed to get slot for replica map %v",
@@ -1629,7 +1629,7 @@ func TestSingleNode_Pass3(t *testing.T) {
 		replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
 		replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
 		tracker++
-		slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap, tracker)
+		slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap, tracker, false)
 		if slotID == 0 {
 			t.Fatalf("%v failed to get slot id for replicaMap %v",
 				t.Name(), replicaMap)
@@ -1665,7 +1665,7 @@ func TestSingleNode_Pass3(t *testing.T) {
 		for defnID := 0; defnID < len(indexerNode.Indexes); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID)] {
 				tracker++
-				var slotID = dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker)
+				var slotID = dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t.Fatalf("%v failed to get slot for replica map %v",
@@ -1742,7 +1742,7 @@ func TestSingleNode_Pass3(t *testing.T) {
 		replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
 		replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
 		tracker++
-		slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap, tracker)
+		slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap, tracker, false)
 		if slotID == 0 {
 			t.Fatalf("%v failed to get slot id for replicaMap %v",
 				t.Name(), replicaMap)
@@ -2557,7 +2557,7 @@ func TestMultNode_NoReplicas(t *testing.T) {
 	var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
 	for defnID, repMaps := range replicaMaps {
 		for partnID, repmap := range repMaps {
-			slotID := dealer.GetSlot(defnID, partnID, repmap, 0)
+			slotID := dealer.GetSlot(defnID, partnID, repmap, 0, false)
 
 			if slotID == 0 {
 				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -2592,7 +2592,7 @@ func TestMultiNode_NegTestSameIndexOnAllNodes(t *testing.T) {
 	var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
 	for defnID, repMaps := range replicaMaps {
 		for partnID, repmap := range repMaps {
-			slotID := dealer.GetSlot(defnID, partnID, repmap, 0)
+			slotID := dealer.GetSlot(defnID, partnID, repmap, 0, false)
 			assert.Zero(
 				t,
 				slotID,
@@ -2624,7 +2624,7 @@ func TestMultiNode_NegTestSameDefnMultiReplicaSameNode(t *testing.T) {
 	var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
 	for defnID, repMaps := range replicaMaps {
 		for partnID, repmap := range repMaps {
-			slotID := dealer.GetSlot(defnID, partnID, repmap, 0)
+			slotID := dealer.GetSlot(defnID, partnID, repmap, 0, false)
 			assert.Zero(
 				t,
 				slotID,
@@ -2664,7 +2664,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 		for defnID, repMaps := range replicaMaps {
 			for partnID, repmap := range repMaps {
 				tracker++
-				slotID := dealer.GetSlot(defnID, partnID, repmap, tracker)
+				slotID := dealer.GetSlot(defnID, partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -2761,7 +2761,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 		for defnID, repMaps := range replicaMaps {
 			for partnID, repmap := range repMaps {
 				tracker++
-				slotID := dealer.GetSlot(defnID, partnID, repmap, tracker)
+				slotID := dealer.GetSlot(defnID, partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -2854,7 +2854,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 		for defnID, repMaps := range replicaMaps {
 			for partnID, repmap := range repMaps {
 				tracker++
-				slotID := dealer.GetSlot(defnID, partnID, repmap, tracker)
+				slotID := dealer.GetSlot(defnID, partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -2974,7 +2974,7 @@ func TestMultiNode_Pass1(t *testing.T) {
 		for defnID, repMaps := range replicaMaps {
 			for partnID, repmap := range repMaps {
 				tracker++
-				slotID := dealer.GetSlot(defnID, partnID, repmap, tracker)
+				slotID := dealer.GetSlot(defnID, partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -3052,7 +3052,7 @@ func TestMultiNode_Pass1(t *testing.T) {
 		for defnID := 0; defnID < len(replicaMaps); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
 				tracker++
-				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker)
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -3117,7 +3117,7 @@ func TestMultiNode_Pass1(t *testing.T) {
 		for defnID := 0; defnID < len(replicaMaps); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
 				tracker++
-				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker)
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -3180,7 +3180,7 @@ func TestMultiNode_Pass2(t *testing.T) {
 		for defnID := 0; defnID < len(replicaMaps); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
 				tracker++
-				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker)
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -3231,7 +3231,7 @@ func TestMultiNode_Pass2(t *testing.T) {
 		for defnID := 0; defnID < len(replicaMaps); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
 				tracker++
-				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker)
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t0.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -3299,7 +3299,7 @@ func TestMultiNode_Pass3(t *testing.T) {
 	for defnID := 0; defnID < len(replicaMaps); defnID++ {
 		for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
 			tracker++
-			slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker)
+			slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker, false)
 
 			if slotID == 0 {
 				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -3409,7 +3409,7 @@ func TestMultiNode_RandomLayoutTests(t *testing.T) {
 	var replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
 	for defnID := 0; defnID < len(replicaMaps); defnID++ {
 		for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
-			slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, 0)
+			slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, 0, false)
 
 			if slotID == 0 {
 				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -3467,7 +3467,7 @@ func TestMultiNode_HighReuseTests(t *testing.T) {
 	for defnID := 0; defnID < len(replicaMaps); defnID++ {
 		for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
 			tracker++
-			slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker)
+			slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker, false)
 
 			if slotID == 0 {
 				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -3544,7 +3544,7 @@ func TestMultiNode_UnevenDistribution(t *testing.T) {
 		for defnID := 0; defnID < len(replicaMaps); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
 				tracker++
-				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker)
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -3565,7 +3565,7 @@ func TestMultiNode_UnevenDistribution(t *testing.T) {
 		replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
 
 		for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
-			slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, 0)
+			slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, 0, false)
 			if slotID == 0 {
 				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
 					t.Name(), repmap)
@@ -3637,7 +3637,7 @@ func TestMultiNode_UnevenDistribution(t *testing.T) {
 		for defnID := 0; defnID < len(replicaMaps); defnID++ {
 			for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
 				tracker++
-				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker)
+				slotID := dealer.GetSlot(c.IndexDefnId(defnID+1), partnID, repmap, tracker, false)
 
 				if slotID == 0 {
 					t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
@@ -3662,7 +3662,7 @@ func TestMultiNode_UnevenDistribution(t *testing.T) {
 		replicaMaps = getReplicaMapsForIndexerNodes(cluster...)
 
 		for partnID, repmap := range replicaMaps[c.IndexDefnId(defnID+1)] {
-			slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, 0)
+			slotID := dealer.GetSlot(c.IndexDefnId(defnID), partnID, repmap, 0, false)
 			if slotID == 0 {
 				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
 					t.Name(), repmap)
@@ -3722,7 +3722,7 @@ func TestMultiNode_MixedModeRebalance(t *testing.T) {
 
 	for defnID, repMap := range node0ReplicaMap {
 		for partnID, repmap := range repMap {
-			slotID := dealer.GetSlot(defnID, partnID, repmap, 0)
+			slotID := dealer.GetSlot(defnID, partnID, repmap, 0, false)
 			if slotID == 0 {
 				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass", t.Name(), repmap)
 			}
@@ -3739,7 +3739,7 @@ func TestMultiNode_MixedModeRebalance(t *testing.T) {
 
 	for defnID, repMap := range replicaMaps {
 		for partnID, repmap := range repMap {
-			slotID := dealer.GetSlot(defnID, partnID, repmap, 0)
+			slotID := dealer.GetSlot(defnID, partnID, repmap, 0, false)
 			if slotID == 0 {
 				t.Fatalf("%v failed to get slot id for replicaMap %v", t.Name(), repmap)
 			}

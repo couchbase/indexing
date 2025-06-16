@@ -559,7 +559,7 @@ func (sd *ShardDealer) DeleteIndexUsage(index *IndexUsage, node *IndexerNode, is
 // GetSlot is the implementation of the 3 pass shard distribution
 func (sd *ShardDealer) GetSlot(defnID c.IndexDefnId, partnID c.PartitionId,
 	replicaMap map[int]map[*IndexerNode]*IndexUsage,
-	tracker uint64,
+	tracker uint64, isPartialCluster bool,
 ) asSlotID {
 
 	var mainstoreShard, backstoreShard *c.AlternateShardId
@@ -967,7 +967,7 @@ findCategory:
 		// target slot is the min slot which is present on all nodes
 		var minSlot asSlotID
 		for _, slotID := range sortedSlots {
-			if sd.isSlotOnAllRequiredNodes(slotID, nodesForShard, replicaMap) {
+			if sd.isSlotOnAllRequiredNodes(slotID, nodesForShard, replicaMap, isPartialCluster) {
 				minSlot = slotID
 				break
 			}
@@ -1071,7 +1071,7 @@ findCategory:
 		// target slot is the min slot which is present on all nodes
 		var minSlot asSlotID
 		for _, slotID := range sortedSlots {
-			if sd.isSlotOnAllRequiredNodes(slotID, nodesForShard, replicaMap) {
+			if sd.isSlotOnAllRequiredNodes(slotID, nodesForShard, replicaMap, isPartialCluster) {
 				minSlot = slotID
 				break
 			}
@@ -1270,6 +1270,7 @@ func (sd *ShardDealer) isSlotOnAllRequiredNodes(
 	slotID asSlotID,
 	nodes map[nodeUUID]bool,
 	replicaMap map[int]map[*IndexerNode]*IndexUsage,
+	isPartialCluster bool,
 ) bool {
 
 	// it should never be that the slotMap for `slotID` is nil as slotID exists on atleast
@@ -1313,6 +1314,14 @@ func (sd *ShardDealer) isSlotOnAllRequiredNodes(
 				return false
 			}
 		} else if !exists {
+			// If this is a create index with Nodes clause, never try to extend any slot.
+			// In this case only the target nodes' metadata is passed to Shard dealer, and that
+			// metadata is considered as the cluster metadata.
+			// If no shard was found for the index on the target nodes, force creation of a new slot
+			if isPartialCluster {
+				return false
+			}
+
 			// slot with replicaID =`indexReplicaID`` does not exist in the cluster. ensure that the
 			// node this index is getting placed on does not already have this slot with different
 			// replicaID else we cannot re-use this slot
