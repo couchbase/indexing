@@ -1033,6 +1033,12 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 				fullSet = false
 				continue
 			}
+			// Determine indexType - currently defn.Using gives plasma even for bhive, so we need to set indexType
+			// to bhive explicitly
+			indexType := string(defn.Using)
+			if defn.IsBhive() {
+				indexType = "bhive"
+			}
 			mergeCounter(defn.DefnId, defn.NumReplica2, numReplicas)
 			if topology, ok := topoMap[defn.Bucket][defn.Scope][defn.Collection]; ok && topology != nil {
 				instances := topology.GetIndexInstancesByDefn(defn.DefnId)
@@ -1126,7 +1132,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 							IsPrimary:         defn.IsPrimary,
 							SecExprs:          secExprs,
 							WhereExpr:         defn.WhereExpr,
-							IndexType:         string(defn.Using),
+							IndexType:         indexType,
 							Status:            stateStr,
 							Error:             errStr,
 							Hosts:             []string{mgmtAddr},
