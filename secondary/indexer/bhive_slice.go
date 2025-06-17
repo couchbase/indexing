@@ -2946,7 +2946,7 @@ func (s *bhiveSnapshot) StatCountTotal() (uint64, error) {
 	return c, nil
 }
 
-func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, queryKey IndexKey,
+func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, queryKey IndexKey, limit int64,
 	callb EntryCallback, fincb FinishCallback, inlineFilterCb InlineFilterCallback) error {
 
 	defer func() {
@@ -2991,7 +2991,7 @@ func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, que
 
 	if queryKey != nil {
 		q := ([]float32)(bhive.BytesToVec(queryKey.Bytes()))
-		err = iter.FindNearest(s.MainSnap, bhive.CentroidID(centroidId.Bytes()), q, s.slice.topNScan)
+		err = iter.FindNearest2(s.MainSnap, bhive.CentroidID(centroidId.Bytes()), q, s.slice.topNScan, int(limit))
 		if err != nil {
 			return err
 		}
@@ -3028,13 +3028,13 @@ func (s *bhiveSnapshot) Range(ctx IndexReaderContext, low IndexKey, high IndexKe
 	//if low.CompareIndexKey(high) != 0 || incl != Both {
 	//	panic(fmt.Errorf("bhiveSnapshot::Range low: %v and high: %v should be same for Range on bhive snapshot with inclusion: %v being Both", low, high, incl))
 	//}
-	return s.Iterate(ctx, low, high, callb, fincb, nil)
+	return s.Iterate(ctx, low, high, 0, callb, fincb, nil)
 }
 
 func (s *bhiveSnapshot) Range2(ctx IndexReaderContext, low, high IndexKey,
-	inclusion Inclusion, callb EntryCallback, fincb FinishCallback,
+	inclusion Inclusion, limit int64, callb EntryCallback, fincb FinishCallback,
 	inlineFilterCb InlineFilterCallback) error { // Supported only for BHIVE storage engine
-	return s.Iterate(ctx, low, high, callb, fincb, inlineFilterCb)
+	return s.Iterate(ctx, low, high, limit, callb, fincb, inlineFilterCb)
 }
 
 func (s *bhiveSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion, stopch StopChannel) (uint64, error) {
@@ -3057,7 +3057,7 @@ func (s *bhiveSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, i
 
 func (s *bhiveSnapshot) Lookup(ctx IndexReaderContext, centroidId IndexKey,
 	callb EntryCallback, fincb FinishCallback) error {
-	return s.Iterate(ctx, centroidId, nil, callb, fincb, nil)
+	return s.Iterate(ctx, centroidId, nil, 0, callb, fincb, nil)
 }
 
 func (s *bhiveSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, stopch StopChannel) (uint64, error) {

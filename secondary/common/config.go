@@ -4369,9 +4369,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.bhive.topNScan": ConfigValue{
-		40,
+		0,
 		"return top N results from each centroid ",
-		40,
+		0,
 		false,
 		false,
 	},
