@@ -53,7 +53,6 @@ type IndexInstDistribution struct {
 	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
 	RealInstId     uint64                  `json:"realInstId,omitempty"`
 	TrainingPhase  c.TrainingPhase         `json:"trainingPhase,omitempty"`
-	NumCentroids   int                     `json:"numCentroids,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -64,6 +63,7 @@ type IndexPartDistribution struct {
 	ShardIds          []c.ShardId                 `json:"shardIds,omitempty"`
 	AlternateShardIds []string                    `json:"alternateShardIds,omitempty"`
 	BhiveGraphReady   bool                        `json:"bhiveGraphReady,omitempty"`
+	NumCentroids      int                         `json:"numCentroids,omitempty"`
 }
 
 type IndexSinglePartDistribution struct {

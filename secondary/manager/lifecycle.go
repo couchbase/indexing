@@ -147,10 +147,9 @@ type topologyChange struct {
 
 	ShardIdMap common.PartnShardIdMap `json:"partnShardIdMap,omitempty"`
 
-	TrainingPhase common.TrainingPhase `json:"trainingPhase,omitempty"`
-	NumCentroids  int                  `json:"numCentroids,omitempty"`
-
-	BhiveGraphStatusMap map[common.PartitionId]bool `json:"BhiveGraphStatusMap,omitempty"`
+	TrainingPhase        common.TrainingPhase        `json:"trainingPhase,omitempty"`
+	NumCentroidsPerPartn map[common.PartitionId]int  `json:"numCentroidsPerPartn,omitempty"`
+	BhiveGraphStatusMap  map[common.PartitionId]bool `json:"BhiveGraphStatusMap,omitempty"`
 }
 
 type dropInstance struct {
@@ -2452,7 +2451,7 @@ func (m *LifecycleMgr) setScheduleFlagAndUpdateErr(defn *common.IndexDefn, inst 
 
 	if updateErr {
 		err := m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
-			common.NIL_STREAM, errStr, nil, inst.RState, nil, nil, -1, nil, inst.TrainingPhase, inst.NumCentroids, nil)
+			common.NIL_STREAM, errStr, nil, inst.RState, nil, nil, -1, nil, inst.TrainingPhase, nil, nil)
 		if err != nil {
 			logging.Infof("LifecycleMgr::handleBuildIndexes: Failed to persist error in index instance (%v, %v, %v, %v, %v).",
 				defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
@@ -2663,8 +2662,8 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 		common.IndexDefnId(change.DefnId), common.IndexInstId(change.InstId),
 		common.IndexState(change.State), common.StreamId(change.StreamId), change.Error,
 		change.BuildTime, change.RState, change.Partitions, change.Versions,
-		change.InstVersion, change.ShardIdMap, change.TrainingPhase, change.NumCentroids,
-		change.BhiveGraphStatusMap); err != nil {
+		change.InstVersion, change.ShardIdMap, change.TrainingPhase,
+		change.NumCentroidsPerPartn, change.BhiveGraphStatusMap); err != nil {
 		return err
 	}
 
@@ -4179,7 +4178,7 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket, scope, collection string,
 	defnId common.IndexDefnId, instId common.IndexInstId, state common.IndexState,
 	streamId common.StreamId, errStr string, buildTime []uint64, rState uint32,
 	partitions []uint64, versions []int, version int, partnShardIdMap common.PartnShardIdMap,
-	trainingPhase common.TrainingPhase, numCentroids int,
+	trainingPhase common.TrainingPhase, numCentroidsPerPartn map[common.PartitionId]int,
 	bhiveGraphStatusMap map[common.PartitionId]bool) error {
 
 	topology, err := m.repo.CloneTopologyByCollection(bucket, scope, collection)
@@ -4246,7 +4245,7 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket, scope, collection string,
 		changed = topology.UpdateShardIdsForIndexPartn(defnId, instId, partnShardIdMap) || changed
 	}
 
-	changed = topology.UpdateTrainingPhaseForIndex(defnId, instId, trainingPhase, numCentroids) || changed
+	changed = topology.UpdateTrainingPhaseForIndex(defnId, instId, trainingPhase, numCentroidsPerPartn) || changed
 
 	//update bhive graph status
 	if defn.IsBhive() && len(bhiveGraphStatusMap) != 0 {

@@ -163,6 +163,9 @@ type IndexStatus struct {
 
 	//bhive graph build progress
 	GraphProgress int `json:"graphProgress"`
+
+	NumCentroids         int         `json:"numCentroids,omitempty"`
+	NumCentroidsPerPartn map[int]int `json:"numCentroidsPerPartn,omitempty"`
 }
 
 // NodeUUIDsResponse is used to return a list of Index Service NodeUUIDs from the
@@ -926,6 +929,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 
 	keepKeys := make([]string, 0, len(nids))                 // memory cache keys of current indexer nodes
 	rebalanceTransferProgress = make(map[string]interface{}) // nodeId -> transfer progress map
+
+	instNumCentroids := make(map[common.IndexInstId]map[int]int) // instanceId -> partitionId -> numCentroids
 	for _, nid := range nids {
 		nodeMetaFromLocalCache := true  // is localMeta for current node from local cache?
 		nodeStatsFromLocalCache := true // is stats for current node from local cache?
@@ -1108,6 +1113,13 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 									nodeAsiMap[int(partnDef.PartId)] = partnDef.AlternateShardIds
 								}
 							}
+
+							if partnDef.NumCentroids > 0 {
+								if _, ok := instNumCentroids[common.IndexInstId(instance.InstId)]; !ok {
+									instNumCentroids[common.IndexInstId(instance.InstId)] = make(map[int]int)
+								}
+								instNumCentroids[common.IndexInstId(instance.InstId)][int(partnDef.PartId)] = partnDef.NumCentroids
+							}
 						}
 
 						addHost(defn.DefnId, mgmtAddr, defnToHostMap)
@@ -1184,13 +1196,24 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 	// Delete cache entries of former Index nodes that are no longer in the cluster
 	m.rhc.DeleteObsoleteCacheEntries(keepKeys)
 
-	//Fix replica count
+	//Fix replica count and set appropriate numCentroids
 	for i, index := range indexStatuses {
 		if counter, ok := numReplicas[index.DefnId]; ok {
 			numReplica, exist := counter.Value()
 			if exist {
 				indexStatuses[i].NumReplica = int(numReplica)
 			}
+		}
+
+		if numCentroids, ok := instNumCentroids[index.InstId]; ok {
+			indexStatuses[i].NumCentroidsPerPartn = numCentroids
+			maxNumCentroids := 0
+			for _, nc := range numCentroids {
+				if nc > maxNumCentroids {
+					maxNumCentroids = nc
+				}
+			}
+			indexStatuses[i].NumCentroids = maxNumCentroids
 		}
 	}
 
