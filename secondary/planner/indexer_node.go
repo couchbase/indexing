@@ -103,8 +103,6 @@ type IndexerNode struct {
 	ShardLimitPerTenant   int `json:"shardLimitPerTenant,omitempty"`
 	ShardTenantMultiplier int `json:"shardTenantMultiplier,omitempty"`
 
-	MinShardOfEachCategory int `json:"minShardOfEachCategory,omitempty"`
-
 	ShardStats map[string]*common.ShardStats
 
 	// Set to true so that planner will use the shard stats for planning
@@ -224,7 +222,6 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.DiskUsageThreshold = o.DiskUsageThreshold
 	r.ShardLimitPerTenant = o.ShardLimitPerTenant
 	r.ShardTenantMultiplier = o.ShardTenantMultiplier
-	r.MinShardOfEachCategory = o.MinShardOfEachCategory
 	r.UseShardStats = o.UseShardStats
 	r.ActualCodebookMemUsage = o.ActualCodebookMemUsage
 
@@ -714,12 +711,5 @@ func (o *IndexerNode) ComputeMinShardCapacity(config common.Config) {
 		if o.ShardTenantMultiplier*o.MinShardCapacity < o.ShardLimitPerTenant {
 			o.ShardLimitPerTenant = o.ShardTenantMultiplier * o.MinShardCapacity
 		}
-	}
-
-	if o.MinShardOfEachCategory > o.MinShardCapacity {
-		logging.Warnf("IndexerNode::ComputeMinShardCapacity The number of shards of each category is more than mininum number of shards: %v. "+
-			"Expanding the minShardCapacity from: %v to %v, indexer node: %v", o.MinShardOfEachCategory,
-			o.MinShardOfEachCategory, o.MinShardCapacity, o.NodeId)
-		o.MinShardOfEachCategory = o.MinShardCapacity
 	}
 }
