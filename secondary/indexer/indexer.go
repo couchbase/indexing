@@ -13728,6 +13728,12 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		return
 	}
 
+	delayTraining := idx.config["debug.delayTrainingDuration"].Int()
+
+	if delayTraining > 0 {
+		time.Sleep(time.Second * time.Duration(delayTraining))
+	}
+
 	logging.Infof("Indexer::initiateTraining retry:%v maxSampleSize:%v maxRatio:%v multiplier:%v", retry, maxSampleSize, maxRatio, multiplier)
 
 	instVectorsMap := make(map[common.IndexInstId]int, 0)

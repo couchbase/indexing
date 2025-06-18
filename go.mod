@@ -61,6 +61,7 @@ require (
 	github.com/prataprc/monster v0.0.0-20210210112206-07525cc27b6d
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
 	github.com/stretchr/testify v1.10.0
+	golang.org/x/sync v0.12.0
 	gopkg.in/couchbase/gocb.v1 v1.6.7
 )
 
@@ -117,7 +118,6 @@ require (
 	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/exp v0.0.0-20231226003508-02704c960a9b // indirect
 	golang.org/x/net v0.35.0 // indirect
-	golang.org/x/sync v0.12.0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 	golang.org/x/time v0.5.0 // indirect

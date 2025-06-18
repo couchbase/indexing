@@ -2061,6 +2061,22 @@ func (si *secondaryIndex6) Scan6(
 		return
 	}
 
+	// If IndexDistanceType is cosine and indexVector is zero vector return error
+	if si.vectorDistanceType == datastore.IX_DIST_COSINE && indexVector.QueryVector != nil {
+		allZero := true
+		for _, v := range indexVector.QueryVector {
+			if v != 0 {
+				allZero = false
+				break
+			}
+		}
+		if allZero {
+			msg := "cosine distance type requires a non-zero vector"
+			conn.Error(errors.NewError(fmt.Errorf(msg), msg))
+			return
+		}
+	}
+
 	gsiscans := n1qlspanstogsi(spans)
 	gsiIncludeColumnScans := n1qlspanstogsi(includeColumnScans)
 	gsiprojection := n1qlprojectiontogsi(projection)
