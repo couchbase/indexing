@@ -3765,21 +3765,17 @@ var SystemConfig = Config{
 	},
 	"indexer.planner.internal.min_partitions_per_shard": ConfigValue{
 		map[string]interface{}{
-			"256":   5, // 256 MB
-			"1024":  4, // 1GB
-			"2048":  3, // 2GB
-			"6144":  2, // 6GB
-			"16384": 1, // 16GB
+			"256":   8, // 256 MB
+			"4096":  6, // 4GB
+			"65536": 4, // 64GB
 		},
 		"Minimum partitions per shard beyond which a shard is considered to be above soft limit for the " +
 			"shard dealer. It is a map of memory quota (in MBs) to min partitions per shard. " +
 			"This is ignored if the shard dealer is disabled",
 		map[string]interface{}{
-			"256":   5, // 256 MB
-			"1024":  4, // 1GB
-			"2048":  3, // 2GB
-			"6144":  2, // 6GB
-			"16384": 1, // 16GB
+			"256":   8, // 256 MB
+			"4096":  6, // 4GB
+			"65536": 4, // 64GB
 		},
 		false,
 		false,
@@ -4369,9 +4365,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.bhive.topNScan": ConfigValue{
-		40,
+		0,
 		"return top N results from each centroid ",
-		40,
+		0,
 		false,
 		false,
 	},

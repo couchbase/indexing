@@ -2330,7 +2330,7 @@ func (s *memdbSnapshot) Range(ctx IndexReaderContext, low, high IndexKey, inclus
 }
 
 func (s *memdbSnapshot) Range2(ctx IndexReaderContext, low, high IndexKey,
-	inclusion Inclusion, callb EntryCallback, fincb FinishCallback,
+	inclusion Inclusion, limit int64, callb EntryCallback, fincb FinishCallback,
 	inlineFilterCb InlineFilterCallback) error { // Supported only for BHIVE storage engine
 	return nil
 }

@@ -426,11 +426,11 @@ func (w *ScanWorker) Scanner() {
 			err = snap.Range(ctx, scan.Low, scan.High, scan.Incl, handler, fincb)
 		} else if w.r.isBhiveScan {
 			if w.r.includeColumnFilters != nil {
-				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, handler, fincb, w.inlineFilterCb2)
+				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, w.r.Limit, handler, fincb, w.inlineFilterCb2)
 			} else if w.r.inlineFilterExpr != nil {
-				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, handler, fincb, w.inlineFilterCb)
+				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, w.r.Limit, handler, fincb, w.inlineFilterCb)
 			} else {
-				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, handler, fincb, nil)
+				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, w.r.Limit, handler, fincb, nil)
 			}
 		} else {
 			err = snap.Lookup(ctx, scan.Low, handler, fincb)
