@@ -50,8 +50,8 @@ import (
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 	"github.com/couchbase/indexing/secondary/testcode"
-	vectorutil "github.com/couchbase/indexing/secondary/vector/util"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
+	vectorutil "github.com/couchbase/indexing/secondary/vector/util"
 )
 
 type Indexer interface {
@@ -13353,19 +13353,20 @@ func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c
 	}
 
 	if itemsCount < uint64(vm.TrainList) {
-		errStr := c.ERR_TRAINING + fmt.Sprintf("The number train_list: %v in keyspace: %v is greater than the "+
+		errStr := c.ERR_TRAINING + c.INVALID_TRAIN_LIST_SIZE + fmt.Sprintf("The number train_list: %v in keyspace: %v is greater than the "+
 			"number of documents: %v", vm.TrainList, keyspaceId, itemsCount)
+		logging.Errorf("Indexer::validateTrainListSize %v", errStr)
 		return errors.New(errStr)
 	}
 
 	if trainlistSize < uint64(minCentroidsRequired) {
 		var errStr string
 		if vm.TrainList == 0 {
-			errStr = c.ERR_TRAINING + fmt.Sprintf("The number of documents: %v in keyspace: %v are less than the "+
+			errStr = c.ERR_TRAINING + c.INVALID_TRAIN_LIST_SIZE + fmt.Sprintf("The number of documents: %v in keyspace: %v are less than the "+
 				"minimum number of documents: %v required for training %v centroids", trainlistSize,
 				keyspaceId, minCentroidsRequired, minCentroidsRequired)
 		} else {
-			errStr = c.ERR_TRAINING + fmt.Sprintf("Trainlist %v is less than the number "+
+			errStr = c.ERR_TRAINING + c.INVALID_TRAIN_LIST_SIZE + fmt.Sprintf("Trainlist %v is less than the number "+
 				"of documents %v required for training %v centroids", trainlistSize, minCentroidsRequired,
 				minCentroidsRequired)
 		}

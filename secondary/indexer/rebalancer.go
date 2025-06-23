@@ -2233,6 +2233,19 @@ func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.Transfe
 					}
 				}
 				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
+			} else if common.IsVectorTrainingErrorInvalidTrainList(errStr) {
+				// If there are vector training error due to not enough qualifying docs
+				// don't fail the rebalance, move the TT to Committed state
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")
+				for ttid, tt := range buildTokens {
+					if id == tt.IndexInst.InstId {
+						l.Infof("%v Error due to not enough qualifying docs. error: %v. Skipping. ttid %v, new state %v", method, errStr, ttid, c.TransferTokenCommit)
+						tt.State = c.TransferTokenCommit
+						setTransferTokenInMetakv(ttid, tt)
+						break
+					}
+				}
+				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")
 			} else {
 				goto cleanup // unrecoverable error
 			}
@@ -2406,6 +2419,19 @@ func (r *Rebalancer) buildAcceptedIndexesBatch(buildTokens map[string]*common.Tr
 					}
 				}
 				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
+			} else if common.IsVectorTrainingErrorInvalidTrainList(errStr) {
+				// If there are vector training error due to not enough qualifying docs
+				// don't fail the rebalance, move the TT to Committed state
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")
+				for ttid, tt := range buildTokens {
+					if id == tt.IndexInst.InstId {
+						l.Infof("%v Error due to not enough qualifying docs. error: %v. Skipping. ttid %v, new state %v", method, errStr, ttid, c.TransferTokenCommit)
+						tt.State = c.TransferTokenCommit
+						setTransferTokenInMetakv(ttid, tt)
+						break
+					}
+				}
+				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")
 			} else {
 				goto cleanup // unrecoverable error
 			}
