@@ -20,7 +20,7 @@ import (
 )
 
 var PLASMA_METRICS_PREFIX = METRICS_PREFIX + "storage_"
-var BHIVE_METRICS_PREFIX = PLASMA_METRICS_PREFIX + "bhive_"
+var HVI_METRICS_PREFIX = PLASMA_METRICS_PREFIX + "hvi_"
 var PLASMA_TENANT_METRICS_PREFIX = PLASMA_METRICS_PREFIX + "tenant_"
 
 func populateAggregatedStorageMetrics(st []byte) []byte {
@@ -128,53 +128,53 @@ func populateAggregatedStorageMetrics(st []byte) []byte {
 		vSts := aggregatedBhiveStats.VSStats.(*bhive.MagmaStats)
 		pSts := aggregatedBhiveStats.PSStats.(*bhive.LssStats)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vmemory_used gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vmemory_used %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.MemUsed))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vmemory_used gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vmemory_used %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.MemUsed))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vbuf_memused gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vbuf_memused %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.BufMemUsed))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vbuf_memused gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vbuf_memused %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.BufMemUsed))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_reads gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vnum_reads %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.NumReads))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_reads gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vnum_reads %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.NumReads))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vblk_read_bs gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vblk_read_bs %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.BlkReadBytes))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vblk_read_bs gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vblk_read_bs %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.BlkReadBytes))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_reads_get gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vnum_reads_get %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.ReaderNumReads))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_reads_get gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vnum_reads_get %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.ReaderNumReads))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vblk_reads_bs_get gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vblk_reads_bs_get %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.ReaderBlkReadBytes))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vblk_reads_bs_get gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vblk_reads_bs_get %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.ReaderBlkReadBytes))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_reads_lookup gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vnum_reads_lookup %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.LookupNumReads))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_reads_lookup gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vnum_reads_lookup %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.LookupNumReads))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vblk_reads_bs_lookup gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vblk_reads_bs_lookup %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.LookupBlkReadBytes))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vblk_reads_bs_lookup gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vblk_reads_bs_lookup %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.LookupBlkReadBytes))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vbytes_written gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vbytes_written %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.BytesWritten))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vbytes_written gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vbytes_written %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.BytesWritten))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vbytes_incoming gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vbytes_incoming %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.BytesIncoming))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vbytes_incoming gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vbytes_incoming %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.BytesIncoming))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vtotal_used_size gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vtotal_used_size %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.DiskUsedSpace))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vtotal_used_size gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vtotal_used_size %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.DiskUsedSpace))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vtotal_disk_size gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vtotal_disk_size %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.DiskUsage))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vtotal_disk_size gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vtotal_disk_size %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.DiskUsage))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vfragmentation gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vfragmentation %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.Frag))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vfragmentation gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vfragmentation %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.Frag))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vresident_ratio gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vresident_ratio %v\n", BHIVE_METRICS_PREFIX, pSts.ResidentRatio))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vresident_ratio gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vresident_ratio %v\n", HVI_METRICS_PREFIX, pSts.ResidentRatio))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vcompacts gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vcompacts %v\n", BHIVE_METRICS_PREFIX, vSts.NCompacts+pSts.NCompacts))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vcompacts gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vcompacts %v\n", HVI_METRICS_PREFIX, vSts.NCompacts+pSts.NCompacts))...)
 
-		st = append(st, []byte(fmt.Sprintf("# TYPE %vcompression_ratio_avg gauge\n", BHIVE_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vcompression_ratio_avg %v\n", BHIVE_METRICS_PREFIX, aggregatedBhiveStats.AvgCompressionRatio))...)
+		st = append(st, []byte(fmt.Sprintf("# TYPE %vcompression_ratio_avg gauge\n", HVI_METRICS_PREFIX))...)
+		st = append(st, []byte(fmt.Sprintf("%vcompression_ratio_avg %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.AvgCompressionRatio))...)
 	}
 
 	return st

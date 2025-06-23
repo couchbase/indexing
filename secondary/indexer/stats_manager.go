@@ -3638,7 +3638,7 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_codebook_memory_usage gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_codebook_memory_usage %v\n", METRICS_PREFIX, is.totalCodebookMemUsage.Value()))...)
 
-	// aggregated plasma stats
+	// aggregated storage stats
 	out = populateAggregatedStorageMetrics(out)
 
 	if common.IsServerlessDeployment() {
