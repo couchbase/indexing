@@ -586,6 +586,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		mCfg.MinCPUsForInMemCompression = slice.sysconf["plasma.mainIndex.minCPUsForInMemCompression"].Int()
 		mCfg.CompressFullMarshal = slice.sysconf["plasma.mainIndex.enableCompressFullMarshal"].Bool()
 		mCfg.CompressInSwapper = slice.sysconf["plasma.mainIndex.enableCompressInSwapper"].Bool()
+		mCfg.HoleFinderMinEmptyPercent = int64(slice.sysconf["plasma.mainIndex.holeFinderMinEmptyPercent"].Int())
+		mCfg.HoleFinderMinNumPages = int64(slice.sysconf["plasma.mainIndex.holeFinderMinNumPages"].Int())
 
 		if common.IsServerlessDeployment() {
 			mCfg.MaxDeltaChainLen = slice.sysconf["plasma.serverless.mainIndex.maxNumPageDeltas"].Int()
@@ -629,6 +631,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		bCfg.MinCPUsForInMemCompression = slice.sysconf["plasma.backIndex.minCPUsForInMemCompression"].Int()
 		bCfg.CompressFullMarshal = slice.sysconf["plasma.backIndex.enableCompressFullMarshal"].Bool()
 		bCfg.CompressInSwapper = slice.sysconf["plasma.backIndex.enableCompressInSwapper"].Bool()
+		bCfg.HoleFinderMinEmptyPercent = int64(slice.sysconf["plasma.backIndex.holeFinderMinEmptyPercent"].Int())
+		bCfg.HoleFinderMinNumPages = int64(slice.sysconf["plasma.backIndex.holeFinderMinNumPages"].Int())
 
 		if common.IsServerlessDeployment() {
 			bCfg.MaxPageItems = slice.sysconf["plasma.serverless.backIndex.pageSplitThreshold"].Int()
@@ -3531,6 +3535,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.MinCPUsForInMemCompression = mdb.sysconf["plasma.mainIndex.minCPUsForInMemCompression"].Int()
 	mdb.mainstore.CompressFullMarshal = mdb.sysconf["plasma.mainIndex.enableCompressFullMarshal"].Bool()
 	mdb.mainstore.CompressInSwapper = mdb.sysconf["plasma.mainIndex.enableCompressInSwapper"].Bool()
+	mdb.mainstore.HoleFinderMinEmptyPercent = int64(mdb.sysconf["plasma.mainIndex.holeFinderMinEmptyPercent"].Int())
+	mdb.mainstore.HoleFinderMinNumPages = int64(mdb.sysconf["plasma.mainIndex.holeFinderMinNumPages"].Int())
 
 	mdb.mainstore.BufMemQuotaRatio = mdb.sysconf["plasma.BufMemQuotaRatio"].Float64()
 	mdb.mainstore.MaxSMRWorkerPerCore = mdb.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
@@ -3658,6 +3664,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.MinCPUsForInMemCompression = mdb.sysconf["plasma.backIndex.minCPUsForInMemCompression"].Int()
 		mdb.backstore.CompressFullMarshal = mdb.sysconf["plasma.backIndex.enableCompressFullMarshal"].Bool()
 		mdb.backstore.CompressInSwapper = mdb.sysconf["plasma.backIndex.enableCompressInSwapper"].Bool()
+		mdb.backstore.HoleFinderMinEmptyPercent = int64(mdb.sysconf["plasma.backIndex.holeFinderMinEmptyPercent"].Int())
+		mdb.backstore.HoleFinderMinNumPages = int64(mdb.sysconf["plasma.backIndex.holeFinderMinNumPages"].Int())
 
 		mdb.backstore.BufMemQuotaRatio = mdb.sysconf["plasma.BufMemQuotaRatio"].Float64()
 		mdb.backstore.MaxSMRWorkerPerCore = mdb.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
