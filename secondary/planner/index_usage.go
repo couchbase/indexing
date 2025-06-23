@@ -711,7 +711,7 @@ func (o *IndexUsage) Normalize() {
 	o.ActualDrainRate = max(o.MutationRate, o.DrainRate)
 
 	if o.TotalRecords > 0 {
-		o.ActualResidentPercent = float64(o.ActualRecsInMem) * 100.0 / float64(o.TotalRecords)
+		o.ActualResidentPercent = common.ComputePercentFloat(int64(o.ActualRecsInMem), int64(o.TotalRecords))
 	} else {
 		o.ActualResidentPercent = o.ActualResidentPercent / float64(o.NumInstances)
 	}
