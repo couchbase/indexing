@@ -1704,6 +1704,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.holeFinderMinEmptyPercent": ConfigValue{
+		10,
+		"Minimum percent of pages that need to be empty in order to trigger hole finding",
+		10,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.holeFinderMinNumPages": ConfigValue{
+		10,
+		"Minimum number of pages needed in order to trigger hole finding",
+		10,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.enablePageBloomFilter": ConfigValue{
 		false,
 		"Enable maintenance and use of bloom filter for lookup of swapped out items",
@@ -1883,6 +1897,20 @@ var SystemConfig = Config{
 		false,
 		"Compress page after full marshal",
 		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.holeFinderMinEmptyPercent": ConfigValue{
+		10,
+		"Minimum percent of pages that need to be empty in order to trigger hole finding",
+		10,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.holeFinderMinNumPages": ConfigValue{
+		10,
+		"Minimum number of pages needed in order to trigger hole finding",
+		10,
 		false, // mutable
 		false, // case-insensitive
 	},
