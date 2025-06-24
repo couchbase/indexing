@@ -399,8 +399,8 @@ func (k *primaryKey) String() string {
 
 type secondaryKey []byte
 
-func NewSecondaryKey(key []byte, buf []byte, allowLargeKeys bool, maxSecKeyLen int) (IndexKey, error) {
-	if isNilJsonKey(key) {
+func NewSecondaryKey(key []byte, buf []byte, allowLargeKeys bool, maxSecKeyLen int, emptyArrAsNil bool) (IndexKey, error) {
+	if emptyArrAsNil && isNilJsonKey(key) {
 		return &NilIndexKey{}, nil
 	}
 
