@@ -3445,6 +3445,8 @@ func updatePlasmaConfig(cfg common.Config) {
 	plasma.SetHoleCleanerMaxThreads(int64(numHoleCleanerThreads))
 
 	plasma.SetupArenaSeparationOnce(cfg["plasma.enableArenaSeparation"].Bool())
+
+	plasma.SetLogReclaimBlockSize(int64(cfg["plasma.LSSReclaimBlockSize"].Int()))
 }
 
 func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
