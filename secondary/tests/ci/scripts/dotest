@@ -267,14 +267,26 @@ if [[ "$MODE" == *"$phase"* ]]; then
     run_tests_param="-run ^$TEST_NAME$"
     echo "Running test with param - $run_tests_param"
   fi
-  go test -timeout 6h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql $run_tests_param 2>&1 | tee -a $WORKSPACE/test.log
+
+  # Weekly custom build tag test for plasma (runs on first day of week)
+  current_day=$(date +%u)
+  time_limit="6h"
+  test_tags=""
+  if [ "$current_day" = "1" ]; then
+    echo "Running weekly custom build tag functional tests for plasma storage"
+    test_tags="-tags=weekly_plasma_test"
+    time_limit="8h"
+  fi
+
+  go test $test_tags -timeout 6h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql $run_tests_param 2>&1 | tee -a $WORKSPACE/test.log
   echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_1/indexer_functests_pprof.log"
   curl http://$Username:$Password@127.0.0.1:9108/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_1/indexer_functests_pprof.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests
-  go test -timeout 8h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql 2>&1 | tee -a $WORKSPACE/test.log
+  go test $test_tags -timeout 8h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql 2>&1 | tee -a $WORKSPACE/test.log
   echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_1/indexer_largedata_pprof.log"
   curl http://$Username:$Password@127.0.0.1:9108/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_1/indexer_largedata_pprof.log
+
   collect_logs
   stop_cluster
 fi
