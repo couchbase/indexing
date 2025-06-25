@@ -201,6 +201,25 @@ func TestVectorIndexDCPRebalance(t *testing.T) {
 		}
 
 	})
+
+	// entry cluster config - [0: kv n1ql] [1: index] [2: index]
+	// index should be present on Node1
+	t.Run("TestTrainingFailNotEnoughDocument", func(subt *testing.T) {
+		printClusterConfig(subt.Name(), "entry")
+
+		removeNode(clusterconfig.Nodes[2], subt)
+		printClusterConfig(subt.Name(), "after setup")
+
+		// flush all the docs in the bucket
+		kvutility.EnableBucketFlush(BUCKET, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		kvutility.FlushBucket(BUCKET, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+		addNode(clusterconfig.Nodes[3], "index", subt)
+		if err := clusterutility.RemoveNode(clusterconfig.KVAddress, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1]); err != nil {
+			subt.Fatalf("%v expected rebalance to pass since index is kept in error state but rebalance fail", subt.Name())
+		}
+
+	})
 }
 
 func Test_SaveMProf(t *testing.T) {
