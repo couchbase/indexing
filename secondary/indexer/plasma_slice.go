@@ -4423,7 +4423,7 @@ func (s *plasmaSnapshot) Range(ctx IndexReaderContext, low, high IndexKey,
 }
 
 func (s *plasmaSnapshot) Range2(ctx IndexReaderContext, low, high IndexKey,
-	inclusion Inclusion, limit int64, callb EntryCallback, fincb FinishCallback,
+	inclusion Inclusion, limit int64, queryTopNScan int, callb EntryCallback, fincb FinishCallback,
 	inlineFilterCb InlineFilterCallback) error { // Supported only for BHIVE storage engine
 	return nil
 }

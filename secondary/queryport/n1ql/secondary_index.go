@@ -2862,6 +2862,7 @@ func n1qlindexvectortogsi(indexVector *datastore.IndexVector) *qclient.IndexVect
 		QueryVector: make([]float32, len(indexVector.QueryVector)),
 		IndexKeyPos: indexVector.IndexKeyPos,
 		Probes:      indexVector.Probes,
+		TopNScan:    indexVector.TopNScan,
 		Rerank:      indexVector.ReRank,
 	}
 
