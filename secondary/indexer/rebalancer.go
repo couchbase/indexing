@@ -2570,17 +2570,27 @@ loop:
 						remainingBuildTime = 0
 					}
 
+					bhiveGraphReady := checkBhiveInstGraphReadyTT(tt, localMeta)
+
 					now := time.Now()
 					if now.Sub(lastLogTime) > 30*time.Second {
 						lastLogTime = now
+
+						graphBuildProgress := defnStats.int64Stats(func(ss *IndexStats) int64 {
+							return ss.graphBuildProgress.Value()
+						})
+
 						l.Infof("%v Index: %v:%v:%v:%v State: %v"+
 							" DocsPending: %v DocsQueued: %v DocsProcessed: %v, Rate: %v"+
-							" Remaining: %v EstTime: %v Partns: %v DestAddr: %v", _waitForIndexBuild,
-							defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
-							numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
-							tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
+							" Remaining: %v EstTime: %v Partns: %v DestAddr: %v"+
+							" BhiveGraphReady: %v GraphBuildProgress: %v",
+							_waitForIndexBuild, defn.Bucket, defn.Scope, defn.Collection,
+							defn.Name, indexState, numDocsPending, numDocsQueued,
+							numDocsProcessed, processing_rate, tot_remaining,
+							remainingBuildTime, defn.Partitions, r.localaddr,
+							bhiveGraphReady, graphBuildProgress)
 					}
-					bhiveGraphReady := checkBhiveInstGraphReady(tt, localMeta)
+
 					if indexState == c.INDEX_STATE_ACTIVE && bhiveGraphReady &&
 						remainingBuildTime < maxRemainingBuildTime {
 						r.destTokenToMergeOrReadyLOCKED(ttid, tt)
@@ -2737,17 +2747,26 @@ loop:
 						remainingBuildTime = 0
 					}
 
+					bhiveGraphReady := checkBhiveInstGraphReadyTT(tt, localMeta)
+
 					now := time.Now()
 					if now.Sub(lastLogTime) > 30*time.Second {
 						lastLogTime = now
+
+						graphBuildProgress := defnStats.int64Stats(func(ss *IndexStats) int64 {
+							return ss.graphBuildProgress.Value()
+						})
+
 						l.Infof("%v Index: %v:%v:%v:%v State: %v"+
 							" DocsPending: %v DocsQueued: %v DocsProcessed: %v, Rate: %v"+
-							" Remaining: %v EstTime: %v Partns: %v DestAddr: %v", _waitForIndexBuildBatch,
+							" Remaining: %v EstTime: %v Partns: %v DestAddr: %v"+
+							" BhiveGraphReady: %v GraphBuildProgress: %v", _waitForIndexBuildBatch,
 							defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
 							numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
-							tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
+							tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr,
+							bhiveGraphReady, graphBuildProgress)
 					}
-					bhiveGraphReady := checkBhiveInstGraphReady(tt, localMeta)
+
 					if indexState == c.INDEX_STATE_ACTIVE && bhiveGraphReady &&
 						remainingBuildTime < maxRemainingBuildTime {
 						logging.Infof("%v Index: %v:%v:%v:%v BuildDone", _waitForIndexBuildBatch, defn.Bucket,
@@ -3339,23 +3358,27 @@ func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMe
 	return state, errMsg
 }
 
-func checkBhiveInstGraphReady(tt *c.TransferToken, localMeta *manager.LocalIndexMetadata) bool {
+func checkBhiveInstGraphReadyTT(tt *c.TransferToken, localMeta *manager.LocalIndexMetadata) bool {
 
 	inst := tt.IndexInst
-
 	//for non Bhive index always return true
 	if !inst.Defn.IsBhive() {
 		return true
 	}
+	return checkBhiveInstGraphReady(tt.InstId, tt.RealInstId, inst.Defn, localMeta)
+}
 
-	topology := findTopologyByCollection(localMeta.IndexTopologies, inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
+func checkBhiveInstGraphReady(instId, realInstId c.IndexInstId,
+	defn common.IndexDefn, localMeta *manager.LocalIndexMetadata) bool {
+
+	topology := findTopologyByCollection(localMeta.IndexTopologies, defn.Bucket, defn.Scope, defn.Collection)
 	if topology == nil {
 		return false
 	}
 
-	bhiveGraphStatus := topology.GetBhiveGraphStatusForInst(inst.Defn.DefnId, tt.InstId)
-	if bhiveGraphStatus == nil && tt.RealInstId != 0 {
-		bhiveGraphStatus = topology.GetBhiveGraphStatusForInst(inst.Defn.DefnId, tt.RealInstId)
+	bhiveGraphStatus := topology.GetBhiveGraphStatusForInst(defn.DefnId, instId)
+	if bhiveGraphStatus == nil && realInstId != 0 {
+		bhiveGraphStatus = topology.GetBhiveGraphStatusForInst(defn.DefnId, realInstId)
 	}
 	//all partitions need to be ready for the instance to be considered ready
 	for _, ready := range bhiveGraphStatus {
