@@ -14536,6 +14536,8 @@ func (idx *indexer) handleBhiveGraphReady(cmd Message) {
 		bhiveGraphStatus = make(map[c.PartitionId]bool)
 		bhiveGraphStatus[idxPartnId] = true
 		idx.indexInstMap[idxInstId] = inst
+	} else {
+		logging.Infof("Indexer::handleBhiveGraphReady Not Found InstId %v", idxInstId)
 	}
 
 	// Send a message to cluster manager to update index instance state to topology
