@@ -894,6 +894,20 @@ func (idx *indexer) initHTTPMux() {
 
 	httpMux = http.NewServeMux()
 
+	// Wrapper handler to return 503 while the /api/ REST apis are not yet ready
+	// Once ready it will forward the requests to usual handler
+	httpMux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		if h, ok := apiRouter.Load().(func(http.ResponseWriter, *http.Request)); ok && h != nil {
+			h(w, r)
+			return
+		}
+
+		rhSend(http.StatusServiceUnavailable, w, map[string]interface{}{
+			"code":   "error",
+			"error":  "Indexer is still bootstrapping – please retry later",
+		})
+	})
+
 	overrideHttpDebugHandlers := func() {
 		httpMux.HandleFunc("/debug/pprof/", common.PProfHandler)
 		httpMux.HandleFunc("/debug/pprof/goroutine", common.GrHandler)
