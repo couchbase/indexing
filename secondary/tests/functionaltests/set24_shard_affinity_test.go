@@ -243,6 +243,11 @@ func skipShardAffinityTests(t *testing.T) {
 
 const SHARD_AFFINITY_INDEXER_QUOTA = "384"
 
+// shouldTestWithShardDealer is a global variable that is used to determine if the shard affinity
+// tests should be run with the shard dealer;
+// This is used to ensure we have not regressed from the basic 7.6 shard affinity functionality;
+var shouldTestWithShardDealer = true
+
 func TestWithShardAffinity(t *testing.T) {
 	skipShardAffinityTests(t)
 
@@ -261,6 +266,11 @@ func TestWithShardAffinity(t *testing.T) {
 			"indexer.settings.enable_shard_affinity": true,
 			"indexer.planner.honourNodesInDefn":      true,
 		}
+
+		if !shouldTestWithShardDealer {
+			configChanges["indexer.planner.use_shard_dealer"] = false
+		}
+
 		err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 	})
@@ -637,8 +647,15 @@ func TestRebalancePseudoOfflineUgradeWithShardAffinity(t *testing.T) {
 
 	log.Printf("********Updating `indexer.settings.enable_shard_affinity`=true**********")
 
+	var configChanges = map[string]interface{}{
+		"indexer.settings.enable_shard_affinity": true,
+	}
+	if !shouldTestWithShardDealer {
+		configChanges["indexer.planner.use_shard_dealer"] = false
+	}
+
 	// config - [0: kv n1ql] [1: index] [2: index]
-	err = secondaryindex.ChangeIndexerSettings("indexer.settings.enable_shard_affinity", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 	tc.HandleError(err, "Unable to change indexer setting `indexer.settings.enable_shard_affinity`")
 
 	defer func() {
@@ -738,6 +755,10 @@ func TestSwapRebalanceMixedMode(t *testing.T) {
 		"indexer.planner.honourNodesInDefn":            true,
 		"indexer.thisNodeOnly.ignoreAlternateShardIds": true,
 	}
+	if !shouldTestWithShardDealer {
+		configChanges["indexer.planner.use_shard_dealer"] = false
+	}
+
 	err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 	tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 
@@ -795,6 +816,10 @@ func TestFailoverAndRebalanceMixedMode(t *testing.T) {
 		"indexer.planner.honourNodesInDefn":            true,
 		"indexer.thisNodeOnly.ignoreAlternateShardIds": true,
 	}
+	if !shouldTestWithShardDealer {
+		configChanges["indexer.planner.use_shard_dealer"] = false
+	}
+
 	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[3])
 	tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 
@@ -875,6 +900,10 @@ func TestRebalanceOutNewerNodeInMixedMode(t *testing.T) {
 		"indexer.planner.honourNodesInDefn":            true,
 		"indexer.thisNodeOnly.ignoreAlternateShardIds": true,
 	}
+	if !shouldTestWithShardDealer {
+		configChanges["indexer.planner.use_shard_dealer"] = false
+	}
+
 	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[3])
 	tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 
@@ -993,6 +1022,10 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 		"indexer.thisNodeOnly.ignoreAlternateShardIds":    true,
 		"indexer.settings.rebalance.redistribute_indexes": true,
 	}
+	if !shouldTestWithShardDealer {
+		configChanges["indexer.planner.use_shard_dealer"] = false
+	}
+
 	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[3])
 	tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 
@@ -1144,6 +1177,10 @@ init:
 		"indexer.planner.honourNodesInDefn":               true,
 		"indexer.settings.rebalance.redistribute_indexes": true,
 	}
+	if !shouldTestWithShardDealer {
+		configChanges["indexer.planner.use_shard_dealer"] = false
+	}
+
 	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 	tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 

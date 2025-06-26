@@ -182,6 +182,14 @@ func (idx *IndexImpl) EncodeAndAssignPQ(x []float32, codes []byte,
 	n := len(x) / idx.D()
 	//code size is dependent on nbits and nsub
 	code_size := (nbits*nsub + 7) / 8
+	total_code_size := code_size + coarse_size
+
+	if len(codes) < n*total_code_size {
+		panic(fmt.Errorf("undersized output buffer %v. reqd %v. "+
+			"code_size %v, coarse_size %v. dim %v. nx %v", len(codes), n*total_code_size,
+			code_size, coarse_size, idx.D(), n))
+	}
+
 	if c := C.faiss_Index_sa_encode(
 		ivfPtr,
 		C.idx_t(n),
@@ -263,7 +271,13 @@ func (idx *IndexImpl) EncodeAndAssignSQ(x []float32, codes []byte,
 	code_size := total_code_size - coarse_size
 
 	n := len(x) / idx.D()
-	//code size is dependent on nbits and nsub
+
+	if len(codes) < n*total_code_size {
+		panic(fmt.Errorf("undersized output buffer %v. reqd %v. "+
+			"code_size %v, coarse_size %v. dim %v. nx %v", len(codes), n*total_code_size,
+			code_size, coarse_size, idx.D(), n))
+	}
+
 	if c := C.faiss_Index_sa_encode(
 		ivfPtr,
 		C.idx_t(n),

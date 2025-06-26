@@ -11,9 +11,6 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
-const maxDataUsageOfShard = 250 * 1024 * 1024 * 1024      // 250GB
-const softLimitDataUsageOfShard = maxDataUsageOfShard / 2 // 150 GB
-
 // ShardCategory defines the shard category for an index
 // it can be Standard, Vector or Bhive
 type ShardCategory uint8
@@ -182,18 +179,24 @@ type ShardDealer struct {
 	alternateShardIDGenerator func() (*c.AlternateShardId, error)
 	moveInstance              moveFuncCb
 
-	minShardsPerNode      uint64
-	minPartitionsPerShard uint64
-	maxDiskUsagePerShard  uint64
-	shardCapacityPerNode  uint64
+	minShardsPerNode           uint64
+	minPartitionsPerShard      uint64
+	maxDiskUsagePerShard       uint64
+	softLimitDiskUsagePerShard uint64
+	shardCapacityPerNode       uint64
+	diskUsageThresholdRatio    float64 // percentage of max disk usage per shard to be used as soft limit. values 0 to 1.0
+	maxPartitionsPerSlot       uint64
 }
 
 func (sd *ShardDealer) logDealerConfig() {
 	logging.Infof(
-		"ShardDealer::log: config minShardsPerNode %v; minPartitionsPerShard %v; shardCapacityPerNode - %v;",
+		"ShardDealer::log: config minShardsPerNode %v; minPartitionsPerShard %v; maxPartitionsPerSlot - %v; shardCapacityPerNode - %v; maxDiskUsagePerShard - %v; diskUsageThresholdRatio - %v; ",
 		sd.minShardsPerNode,
 		sd.minPartitionsPerShard,
+		sd.maxPartitionsPerSlot,
 		sd.shardCapacityPerNode,
+		sd.maxDiskUsagePerShard,
+		sd.diskUsageThresholdRatio,
 	)
 }
 
@@ -215,14 +218,22 @@ func (sd *ShardDealer) LogDealerStats() {
 
 // NewShardDealer is a constructor for the ShardDealer
 func NewShardDealer(minShardsPerNode, minPartitionsPerShard, maxDiskUsagePerShard,
-	shardCapacity uint64,
+	maxPartitionsPerSlot, shardCapacity uint64, diskUsageThresholdRatio float64,
 	alternateShardIDGenerater func() (*c.AlternateShardId, error),
 	moveInstanceCb moveFuncCb) *ShardDealer {
+
+	maxAllowedDiskUsagePerShard := uint64(
+		float64(maxDiskUsagePerShard) * diskUsageThresholdRatio / 100.0,
+	)
+
 	return &ShardDealer{
-		minShardsPerNode:      minShardsPerNode,
-		minPartitionsPerShard: minPartitionsPerShard,
-		shardCapacityPerNode:  shardCapacity,
-		maxDiskUsagePerShard:  maxDiskUsagePerShard,
+		minShardsPerNode:           minShardsPerNode,
+		minPartitionsPerShard:      minPartitionsPerShard,
+		shardCapacityPerNode:       shardCapacity,
+		maxDiskUsagePerShard:       maxAllowedDiskUsagePerShard,
+		maxPartitionsPerSlot:       maxPartitionsPerSlot,
+		diskUsageThresholdRatio:    diskUsageThresholdRatio / 100.0,
+		softLimitDiskUsagePerShard: maxAllowedDiskUsagePerShard / 2,
 
 		slotsPerCategory:    make(map[ShardCategory]map[asSlotID]bool),
 		slotsMap:            make(map[asSlotID]map[asReplicaID]map[asGroupID]*pseudoShardContainer),
@@ -238,12 +249,14 @@ func NewShardDealer(minShardsPerNode, minPartitionsPerShard, maxDiskUsagePerShar
 
 // NewDefaultShardDealer is a constructor for the ShardDealer with default alternate shard ID generator
 func NewDefaultShardDealer(minShardsPerNode, minPartitionsPerShard, maxDiskUsagePerShard,
-	shardCapacity uint64) *ShardDealer {
+	maxPartitionsPerSlot, shardCapacity uint64, diskUsageThresholdRatio float64) *ShardDealer {
 	return NewShardDealer(
 		minShardsPerNode,
 		minPartitionsPerShard,
 		maxDiskUsagePerShard,
+		maxPartitionsPerSlot,
 		shardCapacity,
+		diskUsageThresholdRatio,
 		c.NewAlternateId,
 		nil,
 	)
@@ -1050,7 +1063,7 @@ findCategory:
 	commonSlotIDs = make(map[asSlotID]*pseudoShardContainer, 0)
 
 	for nodeUUID := range nodesForShard {
-		var alternateShardIDs = sd.getSlotsOfCategory(nodeUUID, indexShardCategory)
+		var alternateShardIDs = sd.findSlotsUnderHardLimit(nodeUUID, indexShardCategory)
 
 		for slotID, shardContainer := range alternateShardIDs {
 			if maxContainer, exists := commonSlotIDs[slotID]; exists {
@@ -1172,7 +1185,7 @@ func (sd *ShardDealer) findShardUnderSoftLimit(nodeUUID nodeUUID,
 		var mainstoreGroupID asGroupID = 0
 		var shardContainer = slotGroup[mainstoreGroupID]
 		if shardContainer != nil {
-			if shardContainer.getDataSize() > softLimitDataUsageOfShard {
+			if shardContainer.getDiskUsage() > sd.softLimitDiskUsagePerShard {
 				aboveCapacity = true
 			}
 
@@ -1199,7 +1212,28 @@ func (sd *ShardDealer) isSlotOfCategory(slotID asSlotID,
 	return false
 }
 
-func (sd *ShardDealer) getSlotsOfCategory(
+// isSlotUnderHardLimit checks if the entire slot (including all replicas) is under the hard limit.
+// while the hard limit on number of partitions is per shard, we need to enforce that on the entire
+// slot (including all replicas). this is because we don't want indexes with different replica count
+// leading to higher number of partitions on replica ID 0 of the slot leading it to get full
+func (sd *ShardDealer) isSlotUnderHardLimit(slotID asSlotID) bool {
+	slotGroup := sd.slotsMap[slotID]
+	if slotGroup == nil {
+		return false
+	}
+
+	for _, replicaSlot := range slotGroup {
+		shardContainer := replicaSlot[0]
+		if shardContainer.getDiskUsage() > sd.maxDiskUsagePerShard ||
+			shardContainer.totalPartitions > sd.maxPartitionsPerSlot {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (sd *ShardDealer) findSlotsUnderHardLimit(
 	nodeUUID nodeUUID, category ShardCategory,
 ) map[asSlotID]*pseudoShardContainer {
 	var slotsOnNode = sd.nodeToSlotMap[nodeUUID]
@@ -1210,7 +1244,17 @@ func (sd *ShardDealer) getSlotsOfCategory(
 	var slotsToContainerMap = make(map[asSlotID]*pseudoShardContainer)
 
 	for slotID, replicaID := range slotsOnNode {
-		if !sd.isSlotOfCategory(slotID, category) {
+		/*
+			Check if the slot is of the correct category and if it is under the hard limit.
+			if a slot is of the correct category, we check if the entire slot (including all
+			replicas) is under the hard limit. This is because some other node in the cluster could
+			be housing the replica slot which could be under the hard limit due to difference in
+			replica count across indexes. So we need to ensure that all shards under the slot are
+			under the hard limit. this is mainly done because the callers are expected to take a
+			union of slots under hard limit on nodes used for planning.
+		*/
+		if !sd.isSlotOfCategory(slotID, category) ||
+			!sd.isSlotUnderHardLimit(slotID) {
 			continue
 		}
 		slotsToContainerMap[slotID] = sd.slotsMap[slotID][replicaID][0]
