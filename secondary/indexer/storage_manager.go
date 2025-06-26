@@ -3218,7 +3218,7 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 
 	if bhiveQuotaPercent >= 0 {
 		// user has set config to fix percent of quota to give to bhive
-		bhiveQuota = (storageQuota * bhiveQuotaPercent) / 100
+		bhiveQuota = int64(math.Floor((float64(storageQuota) * float64(bhiveQuotaPercent)) / float64(100)))
 		bhive.SetMemoryQuota(bhiveQuota)
 
 		plasmaQuota = storageQuota - bhiveQuota
@@ -3246,7 +3246,7 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		}
 
 		timeLeft := decayDuration - sinceCreation
-		return mt * int64(timeLeft) / int64(decayDuration)
+		return int64(math.Round(float64(mt) * float64(timeLeft) / float64(decayDuration)))
 	}
 
 	pLowestBP := int64(100)
@@ -3267,7 +3267,7 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 	}
 
 	applyBuildProgDecay := func(mt, bp int64) int64 {
-		return mt * (100 - bp) / 100
+		return int64(math.Round(float64(mt) * float64(100-bp) / float64(100)))
 	}
 
 	// we don't want this minThresh to stick around when not needed, so it has to be decayed.
@@ -3287,7 +3287,7 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 			half := remQuota / 2
 			return half, remQuota - half, 0, 0, 0
 		}
-		bs := (remQuota * bProp) / total
+		bs := int64(math.Floor((float64(remQuota) * float64(bProp)) / float64(total)))
 
 		minBSplit := int64(0)
 		maxBSplit := remQuota
@@ -3295,7 +3295,7 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		// make sure the quota does not move too much at once
 		if prevBSplit > 0 {
 			maxShiftPercent := int64(s.config["bhive.quotaMaxShiftPercent"].Int())
-			maxShift := (maxShiftPercent * storageQuota) / 100
+			maxShift := int64(math.Floor((float64(maxShiftPercent) * float64(storageQuota)) / float64(100)))
 
 			if ms := prevBSplit - maxShift; ms > minBSplit {
 				minBSplit = ms
