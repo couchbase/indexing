@@ -96,6 +96,7 @@ var (
 	ErrInvalidMetadata          = errors.New("Invalid Metadata")
 	ErrBucketEphemeral          = errors.New("Ephemeral Buckets Must Use MOI or PLASMA Storage")
 	ErrBucketEphemeralStd       = errors.New("Standard GSI Index on ephemeral bucket requires fully upgraded cluster")
+	ErrTrainingInProgress       = errors.New("Training in progress")
 )
 
 // Backup corrupt index data files
@@ -4391,7 +4392,22 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 			logging.Infof("Indexer::handleDropIndex Deferring drop for instId: %v as it is being built with vector insts under training",
 				indexInstId)
 		}
-		idx.updateDropInstsDuringTrainingMap(indexInstId, clientCh)
+
+		if reqCtx.ReqSource != common.DDLRequestSourceUser {
+			// Add to the drop instance during training map so that index
+			// will be dropped after training is done
+			idx.updateDropInstsDuringTrainingMap(indexInstId, nil)
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEX_TRAINING_IN_PROGRESS,
+						severity: NORMAL,
+						cause:    ErrTrainingInProgress,
+						category: INDEXER}}
+			}
+		} else {
+			// For user initiated drop, the caller will wait for drop to finish
+			idx.updateDropInstsDuringTrainingMap(indexInstId, clientCh)
+		}
 		resp = &MsgSuccess{}
 		return
 	}
