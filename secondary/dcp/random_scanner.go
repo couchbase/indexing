@@ -237,8 +237,8 @@ func (rs *randomScan) doScan() {
 
 	defer func() {
 		//panic safe
-		if r := recover(); r != nil {
-			logging.Errorf("RandomScanner::doScan crashed %v", rs)
+		if recov := recover(); recov != nil {
+			logging.Errorf("RandomScanner::doScan crashed %v rs: %v", recov, rs)
 			logging.Errorf("%s", logging.StackTrace())
 		}
 
@@ -269,6 +269,7 @@ func (rs *randomScan) doScan() {
 			close(rs.abortch)
 			//wait for all workers to be done
 			<-donech
+			return
 
 		case err := <-rs.errch:
 			logging.Errorf("RandomScanner::doScan err %v", err)
