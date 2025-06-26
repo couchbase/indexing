@@ -256,7 +256,7 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 
 		updatedBuildTs := index.BuildTs
 		updatedTrainingPhase := index.TrainingPhase
-		numCentroids := index.GetNumCentroids()
+		numCentroidsPerPartn := index.Nlist
 
 		if len(partnBhiveGraphStatus) > 0 {
 			for partnId, ready := range partnBhiveGraphStatus {
@@ -270,14 +270,14 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
 					index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
 					updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds,
-					updatedTrainingPhase, numCentroids, updatedBhiveGraphStatus)
+					updatedTrainingPhase, numCentroidsPerPartn, updatedBhiveGraphStatus)
 				respCh <- err
 			}()
 		} else {
 			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
 				index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
 				updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds,
-				updatedTrainingPhase, numCentroids, updatedBhiveGraphStatus)
+				updatedTrainingPhase, numCentroidsPerPartn, updatedBhiveGraphStatus)
 		}
 		common.CrashOnError(err)
 	}

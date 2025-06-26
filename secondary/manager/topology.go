@@ -57,7 +57,6 @@ type IndexInstDistribution struct {
 	RealInstId     uint64                  `json:"realInstId,omitempty"`
 
 	TrainingPhase common.TrainingPhase `json:"trainingPhase,omitempty"`
-	NumCentroids  int                  `json:"numCentroids,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -68,6 +67,7 @@ type IndexPartDistribution struct {
 	ShardIds          []common.ShardId            `json:"shardIds,omitempty"`
 	AlternateShardIds []string                    `json:"alternateShardIds,omitempty"`
 	BhiveGraphReady   bool                        `json:"bhiveGraphReady,omitempty"`
+	NumCentroids      int                         `json:"numCentroids,omitempty"`
 }
 
 type IndexSinglePartDistribution struct {
@@ -310,7 +310,7 @@ func (t *IndexTopology) UpdateShardIdsForIndexPartn(defnId common.IndexDefnId, i
 
 // Update training phase on instance
 func (t *IndexTopology) UpdateTrainingPhaseForIndex(defnId common.IndexDefnId, instId common.IndexInstId,
-	trainingPhase common.TrainingPhase, numCentroids int) bool {
+	trainingPhase common.TrainingPhase, numCentroidsPerPartn map[common.PartitionId]int) bool {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
@@ -319,13 +319,17 @@ func (t *IndexTopology) UpdateTrainingPhaseForIndex(defnId common.IndexDefnId, i
 
 					if t.Definitions[i].Instances[j].TrainingPhase != trainingPhase {
 						t.Definitions[i].Instances[j].TrainingPhase = trainingPhase
-						logging.Debugf("IndexTopology.UpdateTrainingPhaseForIndex(): Set trainingPhase for index '%v' inst '%v.  TrainingPhase = '%v',"+
-							"NumCentroids: '%v'.", defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].TrainingPhase,
-							t.Definitions[i].Instances[j].NumCentroids)
 
-						if t.Definitions[i].Instances[j].TrainingPhase == common.TRAINING_COMPLETED {
-							t.Definitions[i].Instances[j].NumCentroids = numCentroids
+						partitions := t.Definitions[i].Instances[j].Partitions
+						for k, partn := range partitions {
+							if numCentroids, ok := numCentroidsPerPartn[common.PartitionId(partn.PartId)]; ok {
+								t.Definitions[i].Instances[j].Partitions[k].NumCentroids = numCentroids
+							}
 						}
+
+						logging.Debugf("IndexTopology.UpdateTrainingPhaseForIndex(): Set trainingPhase for index '%v' inst '%v.  TrainingPhase = '%v'"+
+							"NumCentroidsPerPartn: %+v.", defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].TrainingPhase, numCentroidsPerPartn)
+
 						return true
 					}
 				}
@@ -985,6 +989,7 @@ func transformPartnDist(partitions *IndexPartDistribution) *mc.IndexPartDistribu
 	partn.KeyPartition = *transformKeyPartitions(&partitions.KeyPartition)
 	partn.ShardIds = partitions.ShardIds
 	partn.AlternateShardIds = partitions.AlternateShardIds
+	partn.NumCentroids = partitions.NumCentroids
 
 	return partn
 }

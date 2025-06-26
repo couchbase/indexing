@@ -6096,18 +6096,23 @@ func (r *metadataRepo) makeInstanceDefn(defnId c.IndexDefnId, inst *mc.IndexInst
 	idxInst.IndexerId = make(map[c.PartitionId]c.IndexerId)
 	idxInst.Versions = make(map[c.PartitionId]uint64)
 	idxInst.NumPartitions = inst.NumPartitions
-	idxInst.NumCentroids = inst.NumCentroids
 
 	if idxInst.NumPartitions == 0 {
 		idxInst.NumPartitions = uint32(len(inst.Partitions))
 	}
 
+	maxNumCentroids := 0
 	for _, partition := range inst.Partitions {
 		for _, slice := range partition.SinglePartition.Slices {
 			idxInst.IndexerId[c.PartitionId(partition.PartId)] = c.IndexerId(slice.IndexerId)
 		}
 		idxInst.Versions[c.PartitionId(partition.PartId)] = partition.Version
+
+		if partition.NumCentroids > maxNumCentroids {
+			maxNumCentroids = partition.NumCentroids
+		}
 	}
+	idxInst.NumCentroids = maxNumCentroids
 
 	return idxInst
 }

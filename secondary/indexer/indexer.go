@@ -14149,7 +14149,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 
 	toBuildInstIds := make([]common.IndexInstId, 0)
 	allInsts := make([]common.IndexInstId, 0)
-
+	skippedInsts := make([]common.IndexInstId, 0)
 	// Set isTrained to true for all successful instances
 	// For failed instances, set isTrained to false
 	for instId := range successMap {
@@ -14175,6 +14175,8 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 			// corrupt before this processing leading to bigger problems
 			logging.Errorf("Indexer::handleIndexTrainingDone: inst id %v not found. indexer book keeping mismatch",
 				instId)
+			skippedInsts = append(skippedInsts, instId)
+			continue
 		}
 
 		if inst.Defn.IsVectorIndex {
@@ -14200,6 +14202,9 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		if _, ok := idx.stats.indexes[instId]; ok {
 			idx.stats.indexes[instId].cbTrainDuration.Set(instTrainDurMap[instId])
 		}
+	}
+	if len(skippedInsts) > 0 {
+		logging.Warnf("Indexer::handleIndexTrainingDone: skipped insts from successful insts which are likely dropped: %v", skippedInsts)
 	}
 
 	for instId, partnErrMap := range errMap {

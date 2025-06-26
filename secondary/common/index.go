@@ -758,14 +758,6 @@ func (inst IndexInst) IsTrained() bool {
 	return inst.TrainingPhase == TRAINING_COMPLETED
 }
 
-func (inst IndexInst) GetNumCentroids() int {
-	for _, value := range inst.Nlist {
-		return value
-	}
-
-	return 0
-}
-
 func GetImmutableFlag(defn IndexDefn) bool {
 	immutable := IsPartitioned(defn.PartitionScheme)
 	if len(defn.WhereExpr) > 0 {
