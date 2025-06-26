@@ -609,8 +609,10 @@ func TestRebalancePseudoOfflineUgradeWithShardAffinity(t *testing.T) {
 	numDocs := 1000
 	CreateDocs(numDocs)
 
+	var indexPrefix = strings.ReplaceAll(t.Name(), "/", "_")
+
 	// create primary index
-	indexName := t.Name() + "_idx_primary"
+	indexName := indexPrefix + "_idx_primary"
 	n1qlStmt := fmt.Sprintf("create primary index %v on `%v`", indexName, BUCKET)
 	executeN1qlStmt(n1qlStmt, BUCKET, t.Name(), t)
 	log.Printf("%v %v index is now active.", t.Name(), indexName)
@@ -619,7 +621,7 @@ func TestRebalancePseudoOfflineUgradeWithShardAffinity(t *testing.T) {
 	// create deffered indices
 	for field1, fieldName1 := range fieldNames {
 		fieldName2 := fieldNames[(field1+1)%len(fieldNames)]
-		indexName := t.Name() + "_DFRD_" + fieldName1 + "_" + fieldName2
+		indexName := indexPrefix + "_DFRD_" + fieldName1 + "_" + fieldName2
 		n1qlStmt := fmt.Sprintf("create index %v on `%v`(%v, %v) with {\"defer_build\":true}",
 			indexName, BUCKET, fieldName1, fieldName2)
 
@@ -633,7 +635,7 @@ func TestRebalancePseudoOfflineUgradeWithShardAffinity(t *testing.T) {
 	for field1 := 0; field1 < 2; field1++ {
 		fieldName1 := fieldNames[field1%len(fieldNames)]
 		fieldName2 := fieldNames[(field1+4)%len(fieldNames)]
-		indexName := t.Name() + "_5PTN_1RP_" + fieldName1 + "_" + fieldName2
+		indexName := indexPrefix + "_5PTN_1RP_" + fieldName1 + "_" + fieldName2
 		n1qlStmt := fmt.Sprintf(
 			"create index %v on `%v`(%v, %v) partition by hash(Meta().id) with {\"num_partition\":5, \"num_replica\":1}",
 			indexName, BUCKET, fieldName1, fieldName2)
@@ -690,6 +692,8 @@ func TestCreateInSimulatedMixedMode(t *testing.T) {
 		t.Fatalf("%v Unexpected cluster configuration: %v", t.Name(), status)
 	}
 
+	var indexPrefix = strings.ReplaceAll(t.Name(), "/", "_")
+
 	log.Println("*********Setup cluster*********")
 	err := secondaryindex.DropAllNonSystemIndexes(clusterconfig.Nodes[1])
 	tc.HandleError(err, "failed to drop all secondary indices")
@@ -723,7 +727,7 @@ func TestCreateInSimulatedMixedMode(t *testing.T) {
 	for field1 := 0; field1 < 2; field1++ {
 		fieldName1 := fieldNames[field1%len(fieldNames)]
 		fieldName2 := fieldNames[(field1+4)%len(fieldNames)]
-		indexName := t.Name() + "_5PTN_1RP_" + fieldName1 + "_" + fieldName2
+		indexName := indexPrefix + "_5PTN_1RP_" + fieldName1 + "_" + fieldName2
 		n1qlStmt := fmt.Sprintf(
 			"create index %v on `%v`(%v, %v) partition by hash(Meta().id) with {\"num_partition\":5, \"num_replica\":1}",
 			indexName, BUCKET, fieldName1, fieldName2)
@@ -831,13 +835,15 @@ func TestFailoverAndRebalanceMixedMode(t *testing.T) {
 		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 	}()
 
+	var indexPrefix = strings.ReplaceAll(t.Name(), "/", "_")
+
 	log.Printf("********Create indices with nodes clause**********")
 	indices := []string{}
 	// create non-deffered partitioned indices
 	for field1 := 0; field1 < 2; field1++ {
 		fieldName1 := fieldNames[field1%len(fieldNames)]
 		fieldName2 := fieldNames[(field1+4)%len(fieldNames)]
-		indexName := t.Name() + "_5PTN_1RP_" + fieldName1 + "_" + fieldName2
+		indexName := indexPrefix + "_5PTN_1RP_" + fieldName1 + "_" + fieldName2
 		n1qlStmt := fmt.Sprintf(
 			"create index %v on `%v`(%v, %v) partition by hash(Meta().id) with {\"num_partition\":5, \"num_replica\":1, \"nodes\": [\"%v\", \"%v\"]}",
 			indexName, BUCKET, fieldName1, fieldName2, clusterconfig.Nodes[3], clusterconfig.Nodes[randomNum(1, 3)])
@@ -916,13 +922,15 @@ func TestRebalanceOutNewerNodeInMixedMode(t *testing.T) {
 		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 	}()
 
+	var indexPrefix = strings.ReplaceAll(t.Name(), "/", "_")
+
 	log.Printf("********Create indices with nodes clause**********")
 	indices := []string{}
 	// create non-deffered partitioned indices
 	for field1 := 0; field1 < 2; field1++ {
 		fieldName1 := fieldNames[field1%len(fieldNames)]
 		fieldName2 := fieldNames[(field1+4)%len(fieldNames)]
-		indexName := t.Name() + "_5PTN_1RP_" + fieldName1 + "_" + fieldName2
+		indexName := indexPrefix + "_5PTN_1RP_" + fieldName1 + "_" + fieldName2
 		n1qlStmt := fmt.Sprintf(
 			"create index %v on `%v`(%v, %v) partition by hash(Meta().id) with {\"num_partition\":5, \"num_replica\":1, \"nodes\": [\"%v\", \"%v\"]}",
 			indexName, BUCKET, fieldName1, fieldName2, clusterconfig.Nodes[3], clusterconfig.Nodes[randomNum(1, 3)])
@@ -1039,13 +1047,15 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 	}()
 
+	var indexPrefix = strings.ReplaceAll(t.Name(), "/", "_")
+
 	log.Printf("********Create indices**********")
 	indices := []string{}
 	// create non-deffered partitioned indices
 	for field1 := 0; field1 < 6; field1++ {
 		fieldName1 := fieldNames[field1%len(fieldNames)]
 		fieldName2 := fieldNames[(field1+4)%len(fieldNames)]
-		indexName := t.Name() + "_5PTN_1RP_" + fieldName1 + "_" + fieldName2
+		indexName := indexPrefix + "_5PTN_1RP_" + fieldName1 + "_" + fieldName2
 		n1qlStmt := fmt.Sprintf(
 			"create index %v on `%v`(%v, %v) partition by hash(Meta().id) with {\"num_partition\":5, \"num_replica\":1}",
 			indexName, BUCKET, fieldName1, fieldName2)
@@ -1212,6 +1222,8 @@ init:
 
 	defer clearCreateComandTokens()
 
+	var indexPrefix = strings.ReplaceAll(t.Name(), "/", "_")
+
 	// create equivalent replicated indexes on both nodes
 	var defnIDs = make([]uint64, 0, 5)
 	var baseDefnID c.IndexDefnId = 100
@@ -1219,7 +1231,7 @@ init:
 		defns := make(map[c.IndexerId][]c.IndexDefn)
 		defnID := baseDefnID
 		defn := preparePrimaryIndexDefn(defnID,
-			t.Name()+"_index_"+strconv.Itoa(i),
+			indexPrefix+"_index_"+strconv.Itoa(i),
 			bucket, bucketUUID, "_default", "_default",
 			scopeID, collectionID, indexerIDs, uint32(len(indexerIDs)-1), c.SINGLE, false)
 		for j, indexerID := range indexerIDs {
@@ -1245,7 +1257,7 @@ init:
 	// create duplicate indexes
 	defnID1 := baseDefnID
 	defn1 := preparePrimaryIndexDefn(defnID1,
-		t.Name()+"_index",
+		indexPrefix+"_index",
 		bucket, bucketUUID, "_default", "_default",
 		scopeID, collectionID, indexerIDs, 0, c.SINGLE, false)
 	defn1.Nodes = []string{indexerIDs[0]}

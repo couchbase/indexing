@@ -11,17 +11,47 @@ func TestWithShardAffinity2(t *testing.T) {
 	skipShardAffinityTests(t)
 	t.Log("Running shard affinity tests without shard dealer")
 	var oldShouldTestWithShardDealer = shouldTestWithShardDealer
+
 	shouldTestWithShardDealer = false
 
-	TestWithShardAffinity(t)
-	TestRebalancePseudoOfflineUgradeWithShardAffinity(t)
-	TestCreateInSimulatedMixedMode(t)
-	TestSwapRebalanceMixedMode(t)
-	TestFailoverAndRebalanceMixedMode(t)
-	TestRebalanceOutNewerNodeInMixedMode(t)
-	TestReplicaRepairInMixedModeRebalance(t)
-	TestShardRebalance_DropDuplicateIndexes(t)
-	TestShardRebalanceSetupCluster(t)
+	defer func() {
+		shouldTestWithShardDealer = oldShouldTestWithShardDealer
+	}()
 
-	shouldTestWithShardDealer = oldShouldTestWithShardDealer
+	if !t.Run("Sanity", TestWithShardAffinity) {
+		return
+	}
+
+	if !t.Run("RebalancePseudoOfflineUgradeWithShardAffinity", TestRebalancePseudoOfflineUgradeWithShardAffinity) {
+		return
+	}
+
+	if !t.Run("CreateInSimulatedMixedMode", TestCreateInSimulatedMixedMode) {
+		return
+	}
+
+	if !t.Run("SwapRebalanceMixedMode", TestSwapRebalanceMixedMode) {
+		return
+	}
+
+	if !t.Run("FailoverAndRebalanceMixedMode", TestFailoverAndRebalanceMixedMode) {
+		return
+	}
+
+	if !t.Run("RebalanceOutNewerNodeInMixedMode", TestRebalanceOutNewerNodeInMixedMode) {
+		return
+	}
+
+	if !t.Run("ReplicaRepairInMixedModeRebalance", TestReplicaRepairInMixedModeRebalance) {
+		return
+	}
+
+	if !t.Run("ShardRebalance_DropDuplicateIndexes", TestShardRebalance_DropDuplicateIndexes) {
+		return
+	}
+
+	if !t.Run("ShardRebalanceSetupCluster", TestShardRebalanceSetupCluster) {
+		return
+	}
+
 }
