@@ -21,7 +21,7 @@ const (
 	shardCapacity           uint64  = 1000
 	maxDiskUsagePerShard    uint64  = 256 * 1024 * 1024
 	diskUsageThresholdRatio float64 = 0.5
-	maxPartitionsPerSlot    uint64  = 102
+	maxPartitionsPerSlot    uint64  = 10200
 )
 
 func getTestShardDealer(minShardsPerNode, minPartitionsPerShard, maxDiskUsage, shardCapacity uint64,
@@ -1862,7 +1862,7 @@ func TestRecordIndexUsage(t *testing.T) {
 
 	// this fails on invalid shard category
 	moiIndex.InitialAlternateShardIds = []string{""}
-	err = dealer.RecordIndexUsage(moiIndex, nil, true)
+	err = dealer.RecordIndexUsage(moiIndex, &IndexerNode{}, true)
 	if err == nil {
 		t.Fatalf(
 			"expected to fail in recording MoI index due to invalid category but it got recorded",
@@ -1871,7 +1871,7 @@ func TestRecordIndexUsage(t *testing.T) {
 
 	// this fails on invalid shard category
 	moiIndex.AlternateShardIds = []string{""}
-	err = dealer.RecordIndexUsage(moiIndex, nil, false)
+	err = dealer.RecordIndexUsage(moiIndex, &IndexerNode{}, false)
 	if err == nil {
 		t.Fatalf(
 			"expected to fail in recording MoI index due to invalid category but it got recorded",
@@ -1880,7 +1880,7 @@ func TestRecordIndexUsage(t *testing.T) {
 
 	var plasmaCip = createIdxParam{}
 	var plasmaIndex = createDummyIndexUsage(plasmaCip)
-	err = dealer.RecordIndexUsage(plasmaIndex, nil, false)
+	err = dealer.RecordIndexUsage(plasmaIndex, &IndexerNode{}, false)
 	if err != nil {
 		t.Fatalf(
 			"expected to not fail record index usage if index has nil shards but it failed with %v",
@@ -1890,7 +1890,7 @@ func TestRecordIndexUsage(t *testing.T) {
 
 	// this fails on invalid alternate shard IDs
 	plasmaIndex.InitialAlternateShardIds = []string{""}
-	err = dealer.RecordIndexUsage(plasmaIndex, nil, true)
+	err = dealer.RecordIndexUsage(plasmaIndex, &IndexerNode{}, true)
 	if err == nil {
 		t.Fatalf(
 			"expected to fail record index usage as index has invalid shards but it did not fail",
@@ -1899,7 +1899,7 @@ func TestRecordIndexUsage(t *testing.T) {
 
 	// this fails on invalid alternate shard IDs
 	plasmaIndex.AlternateShardIds = []string{""}
-	err = dealer.RecordIndexUsage(plasmaIndex, nil, false)
+	err = dealer.RecordIndexUsage(plasmaIndex, &IndexerNode{}, false)
 	if err == nil {
 		t.Fatalf(
 			"expected to fail record index usage as index has invalid shards but it did not fail",
@@ -1917,7 +1917,7 @@ func TestRecordIndexUsage(t *testing.T) {
 
 	var alternateShardIDs = []string{mainAlternateID.String(), backAlternateID.String()}
 	plasmaIndex.InitialAlternateShardIds = alternateShardIDs
-	err = dealer.RecordIndexUsage(plasmaIndex, nil, false)
+	err = dealer.RecordIndexUsage(plasmaIndex, &IndexerNode{}, false)
 	if err != nil {
 		t.Fatalf("expected no-op record usage to succeed but it failed with err %v",
 			err)
@@ -3839,6 +3839,112 @@ func TestMultiNode_MixedModeRebalance(t *testing.T) {
 		validateShardDealerInternals(dealer, cluster),
 		"internal shard dealer validation failed for mixed mode rebalance test",
 	)
+}
+
+func TestSingleNode_HardLimit(t *testing.T) {
+	t.Parallel()
+
+	const (
+		testShardCapacity         = uint64(10)
+		testMinShardsPerNode      = uint64(1)
+		testMinPartitionsPerShard = uint64(1)
+		testMaxPartitionsPerSlot  = uint64(5)
+	)
+
+	var ciplist = []createIdxParam{
+		{count: 3},                 // 6 shards (3 slots)
+		{count: 1, isVector: true}, // 6 shards + 2 = 8 shards (4 slots)
+		{count: 1, isBhive: true},  // 8 shards + 2 = 10 shards -> shard capacity (5 slots)
+		{count: 4, numPartns: 3},   // 3 slots * (1+ 4 new indexes) = 15 partitions
+	}
+
+	var dealer = NewShardDealer(
+		testMinShardsPerNode, testMinPartitionsPerShard,
+		maxDiskUsagePerShard,
+		testMaxPartitionsPerSlot,
+		testShardCapacity,
+		diskUsageThresholdRatio,
+		createNewAlternateShardIDGenerator(), nil)
+
+	var indexerNode = createDummyIndexerNode(t.Name(), ciplist...)
+
+	var slotIDs = make(map[c.AlternateShard_SlotId]bool)
+
+	var replicaMaps = getReplicaMapsForIndexerNodes(indexerNode)
+
+	var tracker uint64
+	for i := 0; i < len(indexerNode.Indexes); i++ {
+		defnID := c.IndexDefnId(i)
+		repMaps := replicaMaps[defnID]
+		for partnID, repmap := range repMaps {
+			tracker++
+			slotID := dealer.GetSlot(defnID, partnID, repmap, tracker, false)
+
+			if slotID == 0 {
+				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass",
+					t.Name(), repmap)
+			}
+
+			slotIDs[slotID] = true
+		}
+	}
+
+	if len(slotIDs) != int(testShardCapacity/2) {
+		t.Fatalf("%v slots created are %v but should have been only %v slots",
+			t.Name(), slotIDs, testShardCapacity/2)
+	}
+
+	if len(dealer.partnSlots) != len(replicaMaps) {
+		t.Fatalf(
+			"%v shard dealer book keeping mismatch - index defns recorded are %v but should have been only %v defns",
+			t.Name(),
+			dealer.partnSlots,
+			len(replicaMaps),
+		)
+	}
+	if len(dealer.slotsMap) != int(testShardCapacity/2) {
+		t.Fatalf(
+			"%v shard dealer book keeping mismatch - slots created are %v but should have been only %v slots",
+			t.Name(),
+			dealer.slotsMap,
+			testShardCapacity/2,
+		)
+	}
+	if dealer.nodeToShardCountMap[indexerNode.NodeUUID] != testShardCapacity {
+		t.Fatalf(
+			"%v shard dealer book keeping mismatch - node slot count is %v but should have been only %v",
+			t.Name(),
+			dealer.nodeToShardCountMap[indexerNode.NodeUUID],
+			testShardCapacity,
+		)
+	}
+	assert.NoError(
+		t,
+		validateShardDealerInternals(dealer, []*IndexerNode{indexerNode}),
+		"internal shard dealer validation failed for basic test",
+	)
+
+	cip := createIdxParam{defnid: uint64(len(replicaMaps) + 1)}
+	var extraIndex = createDummyIndexUsage(cip)
+	indexerNode.Indexes = append(indexerNode.Indexes, extraIndex)
+
+	var replicaMap = make(map[int]map[*IndexerNode]*IndexUsage)
+	replicaMap[extraIndex.Instance.ReplicaId] = make(map[*IndexerNode]*IndexUsage)
+	replicaMap[extraIndex.Instance.ReplicaId][indexerNode] = extraIndex
+	tracker++
+	slotID := dealer.GetSlot(extraIndex.DefnId, extraIndex.PartnId, replicaMap, tracker, false)
+	if _, exists := slotIDs[slotID]; slotID != 0 && exists {
+		t.Fatalf(
+			"%v extra slot not created when it was not expected. slot returned %v. All Slots %v. Dealer info about slot %v",
+			t.Name(),
+			slotID,
+			slotIDs,
+			dealer.slotsMap[slotID],
+		)
+	}
+
+	assert.NoErrorf(t, validateShardDealerInternals(dealer, []*IndexerNode{indexerNode}),
+		"internal shard dealer validation failed for basic test after adding extra index")
 }
 
 // TODO: add tests for disk usage check in recordIndex

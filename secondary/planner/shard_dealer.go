@@ -1261,7 +1261,7 @@ func (sd *ShardDealer) isSlotUnderHardLimit(slotID asSlotID) bool {
 	for _, replicaSlot := range slotGroup {
 		shardContainer := replicaSlot[0]
 		if shardContainer.getDiskUsage() > sd.maxDiskUsagePerShard ||
-			shardContainer.totalPartitions > sd.maxPartitionsPerSlot {
+			shardContainer.totalPartitions >= sd.maxPartitionsPerSlot {
 			return false
 		}
 	}
