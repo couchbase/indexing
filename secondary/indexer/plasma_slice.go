@@ -3790,6 +3790,9 @@ func tryCloseplasmaSlice(mdb *plasmaSlice) {
 		mdb.backstore.Close()
 	}
 
+	if mdb.idxDefn.IsVectorIndex {
+		mdb.ResetCodebook() // Ignore error for now
+	}
 }
 
 func (mdb *plasmaSlice) getCmdsCount() int {

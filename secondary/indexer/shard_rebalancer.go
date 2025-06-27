@@ -2801,18 +2801,33 @@ loop:
 						remainingBuildTime = 0
 					}
 
+					bhiveGraphReady := false
+					if defn.IsBhive() {
+						bhiveGraphReady = checkBhiveInstGraphReady(instId, realInstId, defn, localMeta)
+					} else {
+						bhiveGraphReady = true
+					}
+
 					now := time.Now()
 					if now.Sub(lastLogTime) > 30*time.Second {
 						lastLogTime = now
+
+						graphBuildProgress := defnStats.int64Stats(func(ss *IndexStats) int64 {
+							return ss.graphBuildProgress.Value()
+						})
+
 						l.Infof("ShardRebalancer::waitForIndexState Index: %v:%v:%v:%v State: %v"+
 							" DocsPending: %v DocsQueued: %v DocsProcessed: %v, Rate: %v"+
-							" Remaining: %v EstTime: %v Partns: %v DestAddr: %v, instId: %v, realInstId: %v",
+							" Remaining: %v EstTime: %v Partns: %v DestAddr: %v, instId: %v,"+
+							" realInstId: %v BhiveGraphReady: %v GraphBuildProgress: %v",
 							defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
 							numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
 							tot_remaining, remainingBuildTime, defn.Partitions, sr.localaddr,
-							instId, realInstId)
+							instId, realInstId, bhiveGraphReady, graphBuildProgress)
 					}
-					if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
+
+					if indexState == c.INDEX_STATE_ACTIVE && bhiveGraphReady &&
+						remainingBuildTime < maxRemainingBuildTime {
 						delete(processedInsts, instKey)
 						// remove realInstId irrespective of merge as the instance is processed
 						delete(processedInsts, realInstId)
