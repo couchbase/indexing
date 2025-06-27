@@ -2862,6 +2862,7 @@ func tryCloseBhiveSlice(mdb *bhiveSlice) {
 	mdb.waitForPersistorThread()
 	mdb.mainstore.Close()
 	mdb.backstore.Close()
+	mdb.ResetCodebook() // Ignore error for now
 }
 
 func destroySlice_Bhive(storageDir string, path string) error {
