@@ -3,6 +3,7 @@ package planner
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -154,7 +155,8 @@ type (
 	asSlotID    = c.AlternateShard_SlotId
 	asReplicaID = c.AlternateShard_ReplicaId
 	asGroupID   = c.AlternateShard_GroupId
-	nodeUUID    = string
+	nodeUUID    = string // nodeUUID - is the UUID of the indexer node
+	nodeHost    = string // nodeHost - is the IP or FQDN of the indexer node
 	moveFuncCb  = func(
 		srcNode, destNode nodeUUID,
 		partn *IndexUsage,
@@ -174,6 +176,7 @@ type ShardDealer struct {
 	// per node pic of which shard pair belongs to which node
 	nodeToSlotMap       map[nodeUUID]map[asSlotID]asReplicaID
 	nodeToShardCountMap map[nodeUUID]uint64
+	nodeUUIDToHostMap   map[nodeUUID]nodeHost // nodeUUID to nodeHost mapping - only for logging
 
 	// config
 	alternateShardIDGenerator func() (*c.AlternateShardId, error)
@@ -212,7 +215,29 @@ func (sd *ShardDealer) LogDealerStats() {
 	logging.Infof("ShardDealer::log: total definitions with slots %v", len(sd.partnSlots))
 	logging.Infof("ShardDealer::log: shards per node - ")
 	for nodeUUID, shardCount := range sd.nodeToShardCountMap {
-		logging.Infof("\t\t* %v - %v", nodeUUID, shardCount)
+		logging.Infof("\t\t* %v (%v) - %v",
+			nodeUUID, sd.nodeUUIDToHostMap[nodeUUID], shardCount)
+	}
+	if logging.IsEnabled(logging.Debug) {
+		for cat, slots := range sd.slotsPerCategory {
+			for slotID := range slots {
+				var replicaToNodeMap = sd.slotsToNodeMap[slotID]
+				var replicaToContainerMap = sd.slotsMap[slotID]
+				var logStr strings.Builder
+
+				for replicaID, nodeUUID := range replicaToNodeMap {
+					containers := replicaToContainerMap[replicaID]
+
+					logStr.WriteString(fmt.Sprintf("ShardDealer::log: slot %v (cat %v) replica %v node %v (%v)\n",
+						slotID, cat, replicaID, nodeUUID, sd.nodeUUIDToHostMap[nodeUUID]))
+					for groupID, container := range containers {
+						logStr.WriteString(fmt.Sprintf("\t\t\t- group %v memUsage %v diskUsage %v dataSize %v\n",
+							groupID, container.getMemUsage(), container.getDiskUsage(), container.getDataSize()))
+					}
+				}
+				logging.Debugf(logStr.String())
+			}
+		}
 	}
 }
 
@@ -241,6 +266,7 @@ func NewShardDealer(minShardsPerNode, minPartitionsPerShard, maxDiskUsagePerShar
 		partnSlots:          make(map[c.IndexDefnId]map[c.PartitionId]asSlotID),
 		nodeToShardCountMap: make(map[nodeUUID]uint64),
 		nodeToSlotMap:       make(map[nodeUUID]map[asSlotID]asReplicaID),
+		nodeUUIDToHostMap:   make(map[nodeUUID]nodeHost),
 
 		alternateShardIDGenerator: alternateShardIDGenerater,
 		moveInstance:              moveInstanceCb,
@@ -288,6 +314,11 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, is
 	} else if !isInit && len(index.AlternateShardIds) == 0 {
 		return nil
 	}
+
+	if sd.nodeUUIDToHostMap == nil {
+		sd.nodeUUIDToHostMap = make(map[nodeUUID]nodeHost)
+	}
+	sd.nodeUUIDToHostMap[node.NodeUUID] = node.NodeId
 
 	if index.IsShardProxy {
 		for _, subIndex := range index.GroupedIndexes {
@@ -345,8 +376,9 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, is
 		existingNodeWithSlot, exists = sd.slotsToNodeMap[slotID][replicaID]
 	}
 	if exists && existingNodeWithSlot != node.NodeUUID {
-		err := fmt.Errorf("slot %v already assigned to node %v and cannot goto node %v",
-			slotID, existingNodeWithSlot, node.NodeUUID)
+		err := fmt.Errorf("slot %v already assigned to node %v (%v) and cannot goto node %v (%v)",
+			slotID, existingNodeWithSlot, sd.nodeUUIDToHostMap[existingNodeWithSlot],
+			node.NodeUUID, node.NodeId)
 		logging.Errorf("ShardDealer::RecordIndexUsage: %v", err)
 		return err
 	}
@@ -386,8 +418,8 @@ func (sd *ShardDealer) RecordIndexUsage(index *IndexUsage, node *IndexerNode, is
 		existingReplicaID, exists = sd.nodeToSlotMap[node.NodeUUID][slotID]
 	}
 	if exists && existingReplicaID != replicaID {
-		err := fmt.Errorf("node %v already assigned slot %v with replica %v and cannot have replica %v",
-			node.NodeUUID, slotID, existingReplicaID, replicaID)
+		err := fmt.Errorf("node %v (%v) already assigned slot %v with replica %v and cannot have replica %v",
+			node.NodeUUID, node.NodeId, slotID, existingReplicaID, replicaID)
 		logging.Errorf("ShardDealer::RecordIndexUsage: %v", err)
 
 		// cleanup updates from mainstore and backstore container
@@ -600,12 +632,17 @@ findCategory:
 	defnDbgLog = fmt.Sprintf("(d: %v, p: %v, cat: %d, t: %d)",
 		defnID, partnID, indexShardCategory, tracker)
 
-	var defnJSONLog = func(replicaID int, nodeUUID nodeUUID) string {
-		return fmt.Sprintf("{defnID: %v, partnID: %v, repID: %v, node: %v, cat: %s, t: %v}",
+	var defnJSONLog = func(replicaID int, nodeUUIDs ...nodeUUID) string {
+		var nodeHosts = make([]nodeHost, 0, len(nodeUUIDs))
+		for _, nodeUUID := range nodeUUIDs {
+			nodeHosts = append(nodeHosts, sd.nodeUUIDToHostMap[nodeUUID])
+		}
+		return fmt.Sprintf("{defnID: %v, partnID: %v, repID: %v, nodeUUIDs: %v, nodeHost: %v, cat: %s, t: %v}",
 			defnID,
 			partnID,
 			replicaID,
-			nodeUUID,
+			nodeUUIDs,
+			nodeHosts,
 			indexShardCategory.String(),
 			tracker,
 		)
@@ -734,9 +771,9 @@ findCategory:
 
 				if slotReplicaNode, exists := replicaSlotToNodeMap[uint8(indexReplicaID)]; exists &&
 					node.NodeUUID != slotReplicaNode {
-					logging.Infof("ShardDealer::GetSlot: moving %v to %v to maintain index-replica and slot-replica alignment for slot %v (pass %v)",
+					logging.Infof("ShardDealer::GetSlot: moving %v to %v (%v) to maintain index-replica and slot-replica alignment for slot %v (pass %v)",
 						defnJSONLog(indexReplicaID, node.NodeUUID),
-						slotReplicaNode,
+						slotReplicaNode, sd.nodeUUIDToHostMap[slotReplicaNode],
 						slotID,
 						passes[currPassItr],
 					)
@@ -805,7 +842,6 @@ findCategory:
 						logging.Infof("ShardDealer::GetSlot: swapping %v <-> %v to maintain index-replica and slot-replica alignment for slot %v (pass %v)",
 							defnJSONLog(indexReplicaID, node.NodeUUID),
 							defnJSONLog(swapPartn.Instance.ReplicaId, newDestNodeUUID),
-							slotReplicaNode,
 							slotID,
 							passes[currPassItr],
 						)
@@ -950,8 +986,8 @@ findCategory:
 	for nodeUUID := range nodesForShard {
 		var slotsUnderSoftLimit = sd.findShardUnderSoftLimit(nodeUUID, indexShardCategory)
 
-		logging.Debugf("ShardDealer::GetSlot node %v shards under soft limit %v",
-			nodeUUID, slotsUnderSoftLimit)
+		logging.Debugf("ShardDealer::GetSlot node %v (%v) shards under soft limit %v",
+			nodeUUID, sd.nodeUUIDToHostMap[nodeUUID], slotsUnderSoftLimit)
 
 		if len(slotsUnderSoftLimit) != 0 {
 			nodesUnderSoftLimit[nodeUUID] = slotsUnderSoftLimit
@@ -990,7 +1026,7 @@ findCategory:
 			// this scenario should not be possible
 			logging.Warnf("ShardDealer::GetSlot failed to get min slot from available slots %v as they are not available on all nodes for index %v in pass %v",
 				commonSlotIDs,
-				defnJSONLog(-1, "-"),
+				defnJSONLog(-1, slices.Collect(maps.Keys(nodesForShard))...),
 				passes[currPassItr],
 			)
 		} else {
@@ -1094,7 +1130,7 @@ findCategory:
 			// this scenario should not be possible
 			logging.Warnf("ShardDealer::GetSlot failed to get common slot from available slots %v across all nodes for inst %v in pass %v",
 				commonSlotIDs,
-				defnJSONLog(-1, ""),
+				defnJSONLog(-1, slices.Collect(maps.Keys(nodesForShard))...),
 				passes[currPassItr],
 			)
 		} else {
@@ -1225,7 +1261,7 @@ func (sd *ShardDealer) isSlotUnderHardLimit(slotID asSlotID) bool {
 	for _, replicaSlot := range slotGroup {
 		shardContainer := replicaSlot[0]
 		if shardContainer.getDiskUsage() > sd.maxDiskUsagePerShard ||
-			shardContainer.totalPartitions > sd.maxPartitionsPerSlot {
+			shardContainer.totalPartitions >= sd.maxPartitionsPerSlot {
 			return false
 		}
 	}
