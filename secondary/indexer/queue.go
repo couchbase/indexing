@@ -337,6 +337,8 @@ func (r *Row) copy(source *Row) {
 	if source.includeColumn != nil {
 		r.copyInclude(source.includeColumn)
 	}
+
+	r.sortKey = source.sortKey
 }
 
 func (r *Row) copyForBhive(source *Row) {
@@ -363,6 +365,8 @@ func (r *Row) copyForBhive(source *Row) {
 	// to this memory.
 	// Hence, avoid making unnecessary copy here
 	r.cid = source.cid
+
+	r.sortKey = source.sortKey
 }
 
 func (r *Row) copyKey(key []byte) {

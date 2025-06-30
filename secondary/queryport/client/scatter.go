@@ -1945,7 +1945,6 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 
 		// Check if sortKey is needed or not. If keys in indexOrder and and actual index
 		// are different order we will need sortKey this can happen for vector indexes
-		// OrderBy pushdowns for BHive are not implemented yet
 		if c.defn.NonBhiveVectorIndex() {
 			lastKeyPos := -1
 			for _, indexKeyPos := range c.indexOrder.KeyPos {
@@ -1955,7 +1954,16 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 				}
 				lastKeyPos = indexKeyPos
 			}
-
+			c.indexPosToProjnPos = make(map[int]int)
+		} else if c.defn.IsBhive() {
+			// If we have more than one orderby keys for bhive index or
+			// Else if the orderby key is not the first key
+			// we need to sort
+			if len(c.indexOrder.KeyPos) > 1 {
+				c.sortkeyNeeded = true
+			} else if keyPos := c.indexOrder.KeyPos[0]; keyPos != 0 {
+				c.sortkeyNeeded = true
+			}
 			c.indexPosToProjnPos = make(map[int]int)
 		}
 
@@ -1964,12 +1972,12 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 			// Entry key can be an index key, group key expression, or aggregate expression.
 			for projnKeyPos, indexKeyPos := range c.projections.EntryKeys {
 				projection[indexKeyPos] = true
-				if c.defn.NonBhiveVectorIndex() {
+				if c.defn.IsVectorIndex {
 					c.indexPosToProjnPos[int(indexKeyPos)] = projnKeyPos
 				}
 			}
 		} else {
-			if c.defn.NonBhiveVectorIndex() {
+			if c.defn.IsVectorIndex {
 				// When projecting everything we project it in indexOrder so index order
 				// and projection order is same
 				for i := range c.defn.SecExprs {
@@ -1992,7 +2000,7 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 		}
 		for _, order := range c.indexOrder.KeyPos {
 			if !projection[int64(order)] {
-				if c.defn.NonBhiveVectorIndex() {
+				if c.defn.IsVectorIndex {
 					// For vector indexes, maintain sorted order and track positions
 					insertPos := 0
 					for ; insertPos < len(c.projections.EntryKeys); insertPos++ {
