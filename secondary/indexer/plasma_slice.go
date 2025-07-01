@@ -3477,8 +3477,15 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.LSSCleanerMinSize = int64(mdb.sysconf["plasma.mainIndex.LSSFragMinFileSize"].Int())
 	mdb.mainstore.LSSCleanerFlushInterval = time.Duration(mdb.sysconf["plasma.LSSCleanerFlushInterval"].Int()) * time.Minute
 	mdb.mainstore.LSSCleanerMinReclaimSize = int64(mdb.sysconf["plasma.LSSCleanerMinReclaimSize"].Int())
+
 	mdb.mainstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
-	mdb.mainstore.EnableReadDelayedFree = mdb.sysconf["plasma.enableReadDelayedFree"].Bool()
+	if !mdb.idxDefn.IsVectorIndex {
+		// IteratorRefreshRate is not mapped to an indexer setting, so it is not changed after initStores
+		// EnableReadDelayedFree is not configurable for vector index, it is always set to true, so update
+		// the setting here only for non-vector index
+		mdb.mainstore.EnableReadDelayedFree = mdb.sysconf["plasma.enableReadDelayedFree"].Bool()
+	}
+
 	mdb.mainstore.EnablePeriodicEvict = mdb.sysconf["plasma.mainIndex.enablePeriodicEvict"].Bool()
 	mdb.mainstore.EvictMinThreshold = mdb.sysconf["plasma.mainIndex.evictMinThreshold"].Float64()
 	mdb.mainstore.EvictMaxThreshold = mdb.sysconf["plasma.mainIndex.evictMaxThreshold"].Float64()
@@ -3605,7 +3612,9 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.LSSCleanerFlushInterval = time.Duration(mdb.sysconf["plasma.LSSCleanerFlushInterval"].Int()) * time.Minute
 		mdb.backstore.LSSCleanerMinReclaimSize = int64(mdb.sysconf["plasma.LSSCleanerMinReclaimSize"].Int())
 		mdb.backstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
-		mdb.backstore.EnableReadDelayedFree = mdb.sysconf["plasma.enableReadDelayedFree"].Bool()
+		if !mdb.idxDefn.IsVectorIndex {
+			mdb.backstore.EnableReadDelayedFree = mdb.sysconf["plasma.enableReadDelayedFree"].Bool()
+		}
 		mdb.backstore.EnablePeriodicEvict = mdb.sysconf["plasma.backIndex.enablePeriodicEvict"].Bool()
 		mdb.backstore.EvictMinThreshold = mdb.sysconf["plasma.backIndex.evictMinThreshold"].Float64()
 		mdb.backstore.EvictMaxThreshold = mdb.sysconf["plasma.backIndex.evictMaxThreshold"].Float64()
