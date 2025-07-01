@@ -51,7 +51,7 @@ import (
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 	"github.com/couchbase/indexing/secondary/testcode"
-	"github.com/couchbase/indexing/secondary/vector/codebook"
+	"github.com/couchbase/indexing/secondary/vector"
 	vectorutil "github.com/couchbase/indexing/secondary/vector/util"
 )
 
@@ -864,13 +864,13 @@ func (idx *indexer) initFromConfig() {
 		logging.Infof("memcachedTimeout set to %v\n", uint32(mcdTimeout.Int()))
 	}
 
-	maxVectorCPU := idx.config["vector.max_cpu"].Float64()
+	maxVectorCPU := idx.config["vector.max_cpu"].Int()
 	numCores := runtime.GOMAXPROCS(-1)
-	allocatedVectorCores := int(maxVectorCPU * float64(numCores))
+	allocatedVectorCores := int64((maxVectorCPU * numCores) / 100)
 	if allocatedVectorCores == 0 {
 		allocatedVectorCores = 1
 	}
-	codebook.SetMaxCPU(allocatedVectorCores)
+	vector.SetConcurrency(allocatedVectorCores)
 	logging.Infof("Indexer: Vector MaxCPU set to %v\n", allocatedVectorCores)
 }
 
@@ -1954,13 +1954,13 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	}
 	idx.cpuThrottle.SetCpuTarget(throttleVal)
 
-	maxVectorCPU := newConfig["vector.max_cpu"].Float64()
+	maxVectorCPU := newConfig["vector.max_cpu"].Int()
 	numCores := runtime.GOMAXPROCS(-1)
-	allocatedVectorCores := int(maxVectorCPU * float64(numCores))
+	allocatedVectorCores := int64((maxVectorCPU * numCores) / 100)
 	if allocatedVectorCores == 0 {
 		allocatedVectorCores = 1
 	}
-	codebook.SetMaxCPU(allocatedVectorCores)
+	vector.SetConcurrency(allocatedVectorCores)
 	logging.Infof("Indexer: Vector MaxCPU set to %v\n", allocatedVectorCores)
 
 	idx.config = newConfig

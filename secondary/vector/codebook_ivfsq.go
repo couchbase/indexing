@@ -81,6 +81,9 @@ func NewCodebookIVFSQ(dim, nlist int, sqRange common.ScalarQuantizerRange, metri
 // Train the codebook using input vectors.
 func (cb *codebookIVFSQ) Train(vecs []float32) error {
 
+	token := acquireGlobal()
+	defer releaseGlobal(token)
+
 	if cb.index == nil {
 		return c.ErrCodebookClosed
 	}
@@ -158,6 +161,9 @@ func (cb *codebookIVFSQ) EncodeVector(vec []float32, code []byte) error {
 // Must be run on a trained codebook.
 func (cb *codebookIVFSQ) EncodeVectors(vecs []float32, codes []byte) error {
 
+	token := acquireGlobal()
+	defer releaseGlobal(token)
+
 	if !cb.IsTrained() {
 		return c.ErrCodebookNotTrained
 	}
@@ -174,6 +180,9 @@ func (cb *codebookIVFSQ) EncodeVectors(vecs []float32, codes []byte) error {
 // for a given list of vectors. Must be run on a trained codebook.
 func (cb *codebookIVFSQ) EncodeAndAssignVectors(vecs []float32, codes []byte, labels []int64) error {
 
+	token := acquireGlobal()
+	defer releaseGlobal(token)
+
 	if !cb.IsTrained() {
 		return c.ErrCodebookNotTrained
 	}
@@ -189,6 +198,9 @@ func (cb *codebookIVFSQ) EncodeAndAssignVectors(vecs []float32, codes []byte, la
 // Find the nearest k centroidIDs for a given vector.
 // Must be run on a trained codebook.
 func (cb *codebookIVFSQ) FindNearestCentroids(vec []float32, k int64) ([]int64, error) {
+
+	token := acquireGlobal()
+	defer releaseGlobal(token)
 
 	if !cb.IsTrained() {
 		return nil, c.ErrCodebookNotTrained
@@ -234,6 +246,9 @@ func (cb *codebookIVFSQ) DecodeVector(code []byte, vec []float32) error {
 // Must be run on a trained codebook.
 func (cb *codebookIVFSQ) DecodeVectors(n int, codes []byte, vecs []float32) error {
 
+	token := acquireGlobal()
+	defer releaseGlobal(token)
+
 	if !cb.IsTrained() {
 		return c.ErrCodebookNotTrained
 	}
@@ -242,6 +257,10 @@ func (cb *codebookIVFSQ) DecodeVectors(n int, codes []byte, vecs []float32) erro
 
 // Compute the distance between a vector with another given set of vectors.
 func (cb *codebookIVFSQ) ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error {
+
+	token := acquireGlobal()
+	defer releaseGlobal(token)
+
 	if cb.metric == c.METRIC_L2 {
 		return faiss.L2sqrNy(dist, qvec, fvecs, cb.dim)
 	} else if cb.metric == c.METRIC_INNER_PRODUCT {
@@ -274,21 +293,32 @@ func (cb *codebookIVFSQ) ComputeDistance(qvec []float32, fvecs []float32, dist [
 }
 
 func (cb *codebookIVFSQ) ComputeDistanceTable(vec []float32, dtable []float32) error {
+
+	token := acquireGlobal()
+	defer releaseGlobal(token)
+
 	//Not yet implemented
 	return nil
 }
 
 func (cb *codebookIVFSQ) ComputeDistanceWithDT(code []byte, dtable []float32) float32 {
+
+	token := acquireGlobal()
+	defer releaseGlobal(token)
+
 	//Not yet implemented
 	return 0
 }
 
-//Compute the distance between a vector and flat quantized codes.
-//Quantized codes are decoded first before distance comparison.
-//Codes must be provided without coarse code(i.e. centroid ID).
-//This function only works with vectors belonging to the same centroid(input as listno).
+// Compute the distance between a vector and flat quantized codes.
+// Quantized codes are decoded first before distance comparison.
+// Codes must be provided without coarse code(i.e. centroid ID).
+// This function only works with vectors belonging to the same centroid(input as listno).
 func (cb *codebookIVFSQ) ComputeDistanceEncoded(qvec []float32,
 	n int, codes []byte, dists []float32, dtable []float32, listno int64) error {
+
+	token := acquireGlobal()
+	defer releaseGlobal(token)
 
 	return cb.index.ComputeDistanceEncoded(qvec, n, codes, dists, nil, listno,
 		convertToFaissMetric(cb.metric), cb.dim)
@@ -341,6 +371,9 @@ func (cb *codebookIVFSQ) Close() error {
 }
 
 func (cb *codebookIVFSQ) Marshal() ([]byte, error) {
+
+	token := acquireGlobal()
+	defer releaseGlobal(token)
 
 	cbio := new(codebookIVFSQ_IO)
 
