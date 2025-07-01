@@ -2,6 +2,14 @@
 
 source ~/.cienv
 
+# Check if sudo is available
+if command -v sudo >/dev/null 2>&1; then
+    SUDO_CMD="sudo"
+else
+    SUDO_CMD=""
+    echo "sudo is not available, running without elevated privileges"
+fi
+
 # echo "Disabled integration tests"
 
 echo '</pre><h3>Testing</h3><pre>'
@@ -38,7 +46,7 @@ start_cluster() {
     cd $WORKSPACE/ns_server
     cluster_run_path="./cluster_run"
     if [ -f build/cluster_run ]; then cluster_run_path="build/cluster_run"; fi
-    $cluster_run_path -n4 $SVR_LESS_OPT 1>$WORKSPACE/run.log 2>&1 &
+    $cluster_run_path -n5 $SVR_LESS_OPT 1>$WORKSPACE/run.log 2>&1 &
     disown
     for i in {1..120}; do
       grep -qs 'Couchbase Server has started' logs/n_0/info.log && \
@@ -119,7 +127,7 @@ stop_cluster() {
   killall -9 beam.smp epmd memcached projector indexer gometa python memcached.json 1>/dev/null 2>&1
   cd $WORKSPACE/ns_server
   make dataclean 1>/dev/null 2>&1
-  sudo rm -f /tmp/core*
+  $SUDO_CMD rm -f /tmp/core*
   sleep 10
 }
 
@@ -196,7 +204,7 @@ fi
 # Core dumps
 export GOTRACEBACK=single
 ulimit -c 2097152
-sudo bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
+$SUDO_CMD bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
 perl -pi -e 's/num_files, 10/num_files, 50/' $WORKSPACE/install/etc/couchbase/static_config
 
 arch=`uname -m`
@@ -286,7 +294,7 @@ if [[ "$MODE" == *"$phase"* ]]; then
     time_limit="8h"
   fi
 
-  go test $test_tags -timeout 6h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql $run_tests_param 2>&1 | tee -a $WORKSPACE/test.log
+  go test $test_tags -timeout $time_limit -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql $run_tests_param 2>&1 | tee -a $WORKSPACE/test.log
   echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_1/indexer_functests_pprof.log"
   curl http://$Username:$Password@127.0.0.1:9108/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_1/indexer_functests_pprof.log
 
