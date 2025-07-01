@@ -30,6 +30,10 @@ func MemoryInUse() int64 {
 	return 0
 }
 
+func BufferMemoryInUse() int64 {
+	return 0
+}
+
 func TenantQuotaNeeded() int64 {
 	return 0
 }

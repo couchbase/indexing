@@ -26,7 +26,11 @@ func SetLogReclaimBlockSize(sz int64) {
 }
 
 func MemoryInUse() int64 {
-	return ee.MemoryInUse()
+	return ee.MemoryInUse() + ee.GetFlushBufferMemoryAllocated()
+}
+
+func BufferMemoryInUse() int64 {
+	return ee.GetFlushBufferMemoryAllocated()
 }
 
 func TenantQuotaNeeded() int64 {

@@ -20,3 +20,12 @@ func GetMandatoryQuota() (int64, int64) {
 func GetWorkingSetSize() int64 {
 	return ee.GetWorkingSetSize()
 }
+
+// MemoryInUse includes BufferMemoryInUse
+func MemoryInUse() int64 {
+	return int64(ee.GetMemoryUsage())
+}
+
+func BufferMemoryInUse() int64 {
+	return int64(ee.GetBufferMemoryUsage())
+}
