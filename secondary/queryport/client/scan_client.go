@@ -1161,6 +1161,7 @@ func (c *GsiScanClient) Scan(
 			QueryVector: make([]float32, len(indexVector.QueryVector)),
 			IndexKeyPos: proto.Int32(int32(indexVector.IndexKeyPos)),
 			Probes:      proto.Int32(int32(indexVector.Probes)),
+			TopNScan:    proto.Int32(int32(indexVector.TopNScan)),
 			Rerank:      proto.Bool(indexVector.Rerank),
 		}
 		copy(protoIndexVector.QueryVector, indexVector.QueryVector)

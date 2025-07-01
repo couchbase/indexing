@@ -128,6 +128,7 @@ type ScanRequest struct {
 	SkipReadMetering bool
 
 	nprobes                  int
+	topNScan                 int
 	vectorPos                int
 	isVectorScan             bool
 	isBhiveScan              bool
@@ -646,6 +647,7 @@ func (r *ScanRequest) setVectorIndexParams(ivec *protobuf.IndexVector) {
 	// If r.nprobes is 0 fallback to value from index creation time after getting the definition
 	// Currently set to value from query and can be 0 its reset in setVectorIndexParamsFromDefn
 	r.nprobes = int(ivec.GetProbes())
+	r.topNScan = int(ivec.GetTopNScan())
 }
 
 // setVectorIndexParamsFromDefn will set vectorPos in ScanRequest and should be called after getting indexn instance

@@ -23,7 +23,8 @@ message IndexVector {
     repeated float queryVector   = 1;
     required int32 indexKeyPos   = 2;
     required int32 probes        = 3;
-    required bool  rerank   = 4;
+    required int32 topNScan      = 4;
+    required bool  rerank        = 5;
 }
 
 message IndexKeyOrder {

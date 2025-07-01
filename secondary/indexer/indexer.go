@@ -942,9 +942,9 @@ func muxWithPanicRecover(next http.Handler) http.Handler {
 			if err != nil {
 				trimmedPath := r.URL.Path[:min(100, len(r.URL.Path))]
 				trimmedUa := r.UserAgent()[:min(100, len(r.UserAgent()))]
-				logging.Errorf("indexer::mWPR recovered in req- u=%v, r=%v, m=%v, ua=%v; from panic - \n%v",
+				logging.Errorf("indexer::mWPR recovered in req- u=%v, r=%v, m=%v, ua=%v; from panic - \n%v\n\n",
 					string(trimmedPath), r.RemoteAddr, r.Method, string(trimmedUa), err)
-
+				logging.Errorf("%s", logging.StackTrace())
 				jsonBody, _ := json.Marshal(map[string]string{
 					"error": "There was an internal server error",
 					"ts":    fmt.Sprintf("%v", time.Now().UnixMilli()),
