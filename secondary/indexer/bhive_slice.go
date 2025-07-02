@@ -708,7 +708,22 @@ func (mdb *bhiveSlice) IsActive() bool {
 	return mdb.isActive
 }
 
+// IsDirty returns true if there has been any change in
+// in the slice storage after last in-mem/persistent snapshot
+//
+// flushActive will be true if there are going to be any
+// messages in the cmdCh of slice after flush is done.
+// It will be cleared during snapshot generation as the
+// cmdCh would be empty at the time of snapshot generation
 func (mdb *bhiveSlice) IsDirty() bool {
+	flushActive := atomic.LoadUint32(&mdb.flushActive)
+	if flushActive == 0 { // No flush happening
+		return false
+	}
+
+	// Flush in progress - wait till all commands on cmdCh
+	// are processed
+	mdb.waitPersist()
 	return mdb.isDirty
 }
 
