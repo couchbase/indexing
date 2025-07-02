@@ -3,6 +3,7 @@ package indexer
 import (
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"fmt"
 	re "regexp"
@@ -12,6 +13,8 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	log "github.com/couchbase/indexing/secondary/logging"
 )
+
+var apiRouter atomic.Value // stores func(http.ResponseWriter,*http.Request)
 
 type target struct {
 	version    string
@@ -57,8 +60,7 @@ func NewRestServer(cluster string, stMgr *statsManager) (*restServer, Message) {
 	log.Infof("%v starting RESTful services", cluster)
 	restapi := &restServer{statsMgr: stMgr}
 	initHandlers(restapi)
-	mux := GetHTTPMux()
-	mux.HandleFunc("/api/", restapi.routeRequest)
+	apiRouter.Store(restapi.routeRequest)
 	return restapi, nil
 }
 
