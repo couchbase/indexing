@@ -917,6 +917,7 @@ findCategory:
 	for _, nodeMap := range replicaMap {
 		for idxrNode := range nodeMap {
 			nodesForShard[idxrNode.NodeUUID] = true
+			sd.nodeUUIDToHostMap[idxrNode.NodeUUID] = idxrNode.NodeId
 		}
 	}
 
