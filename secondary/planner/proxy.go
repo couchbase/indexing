@@ -956,11 +956,8 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		}
 
 		// check if the index is a vector index and non-deferred
-		if index.Instance != nil && index.Instance.Defn.IsVectorIndex {
-			if index.NoUsageInfo {
-				// this is a static estimation, hence we can perform at the start of creating the IndexUsage
-				index.EstimatedCodebookMem = estimateCodebookMemUsage(index.Instance.Defn.VectorMeta, index.Instance.Nlist[index.PartnId])
-			} else if codebookMemUsageVal, ok := GetIndexStat(index, "codebook_mem_usage", statsMap, true, clusterVersion); ok {
+		if index.Instance != nil && index.Instance.Defn.IsVectorIndex && !index.NeedsEstimation() {
+			if codebookMemUsageVal, ok := GetIndexStat(index, "codebook_mem_usage", statsMap, true, clusterVersion); ok {
 				index.ActualCodebookMemUsage = uint64(codebookMemUsageVal.(float64))
 			}
 		}
