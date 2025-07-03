@@ -24,3 +24,11 @@ func GetWorkingSetSize() int64 {
 func (d *StubType) HandleHttp(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "not implemented")
 }
+
+func MemoryInUse() int64 {
+	return 0
+}
+
+func BufferMemoryInUse() int64 {
+	return 0
+}

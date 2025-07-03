@@ -47,6 +47,7 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	"github.com/couchbase/indexing/secondary/security"
+	"github.com/couchbase/indexing/secondary/stubs/nitro/bhive"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 	"github.com/couchbase/indexing/secondary/testcode"
@@ -11054,7 +11055,7 @@ func (idx *indexer) handleResetStats() {
 }
 
 func (idx *indexer) memoryUsedStorage() int64 {
-	mem_used := int64(forestdb.BufferCacheUsed()) + memdb.MemoryInUse() + plasma.MemoryInUse() + nodetable.MemoryInUse()
+	mem_used := int64(forestdb.BufferCacheUsed()) + memdb.MemoryInUse() + plasma.MemoryInUse() + nodetable.MemoryInUse() + bhive.MemoryInUse()
 	return mem_used
 }
 
@@ -11798,12 +11799,17 @@ func (idx *indexer) memoryUsed(forceRefresh bool) (uint64, uint64, uint64) {
 	}
 
 	mem_used := ms.HeapInuse + ms.HeapIdle - ms.HeapReleased + ms.GCSys + forestdb.BufferCacheUsed()
+
 	mem_storage := uint64(0)
+	var jemallocHeap uint64
+
 	mode := common.GetStorageMode()
 	if mode == common.MOI || mode == common.PLASMA {
-		mem_storage += mm.Size()
+		jemallocHeap = mm.Size()
+		mem_storage = jemallocHeap + uint64(plasma.BufferMemoryInUse()+bhive.BufferMemoryInUse()) - uint64(idx.stats.totalCodebookMemUsage.Value())
 	}
-	mem_used += mem_storage
+
+	mem_used += jemallocHeap
 
 	idle := ms.HeapIdle - ms.HeapReleased
 
