@@ -248,7 +248,12 @@ func (o *IndexerNode) String() string {
 // Get the free memory and cpu usage of this node
 func (o *IndexerNode) freeUsage(s *Solution, constraint ConstraintMethod) (uint64, float64) {
 
-	freeMem := constraint.GetMemQuota() - o.GetMemTotal(s.UseLiveData())
+	freeMem := uint64(0)
+
+	if (o.GetMemTotal(s.UseLiveData()) < constraint.GetMemQuota()) {
+		freeMem = constraint.GetMemQuota() - o.GetMemTotal(s.UseLiveData())
+	}
+
 	freeCpu := float64(constraint.GetCpuQuota()) - o.GetCpuUsage(s.UseLiveData())
 
 	return freeMem, freeCpu
