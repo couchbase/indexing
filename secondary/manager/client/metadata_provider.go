@@ -2785,6 +2785,20 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 		return nil, nil, false, err
 	}
 
+	isPartialLayout := func() bool {
+		o.mutex.Lock()
+		var isClusterHealthy, err = o.checkProviderHealthNoLock()
+		o.mutex.Unlock()
+
+		isClusterHealthy = isClusterHealthy && err == nil
+
+		var allWatchers = o.getAllWatchers()
+		var allAvailWatchers = o.getAllAvailWatchers()
+
+		return len(defn.Nodes) != 0 || // user specified nodes in index definition
+			!isClusterHealthy || // cluster is not healthy - has failed nodes
+			len(allWatchers) != len(allAvailWatchers) // some nodes have exclude parameters set
+	}()
 	useGreedyPlanner := o.settings.UseGreedyPlanner()
 	serverlessIndexLimit := o.settings.ServerlessIndexLimit()
 	allowDDLDuringScaleUp := o.settings.AllowDDLDuringScaleUp()
@@ -2803,7 +2817,8 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 		}
 	} else {
 		solution, err = planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes,
-			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits, allowDDLDuringScaleUp, binSize, enableShardAffinity, useShardDealer)
+			isPartialLayout, useGreedyPlanner, enforceLimits,
+			allowDDLDuringScaleUp, binSize, enableShardAffinity, useShardDealer)
 		if err != nil {
 			return nil, nil, false, err
 		}
