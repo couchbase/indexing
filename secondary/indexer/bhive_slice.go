@@ -1692,8 +1692,19 @@ func (mdb *bhiveSlice) buildGraph(idxInstId common.IndexInstId, callb BuildDoneC
 	donech := make(chan bool)
 
 	go func() {
-		mdb.mainstore.BuildGraph()
-		close(donech)
+		isNotClosed := mdb.CheckAndIncrRef()
+
+		if isNotClosed {
+			defer mdb.DecrRef() // decrement ref after graph building is done
+
+			mdb.mainstore.BuildGraph()
+			close(donech)
+		} else { // Slice is closed
+			logging.Infof("bhiveSlice::buildGraph Returning as slice is closed for instId: %v, partnId: %v",
+				mdb.IndexInstId(), mdb.IndexPartnId())
+			close(donech)
+			return
+		}
 	}()
 
 	select {
