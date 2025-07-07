@@ -13496,7 +13496,7 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 			common.CrashOnError(err)
 
 			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap),
-				keyspaceId, idx.config.Clone(), reqcid, reqCtx, itemsCount, 0, nil, 0, nil)
+				keyspaceId, idx.config.Clone(), reqcid, reqCtx, itemsCount, 0, nil, nil, nil, 0, nil)
 
 			return nil // Return nil so that handleBuildIndex does not take the build further
 		}
@@ -13656,13 +13656,23 @@ func getInstCodebookIfExists(indexPartnMap PartitionInstMap) ([]byte, error, c.P
 func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap,
 	keyspaceId string, config common.Config, cid string,
-	reqCtx *c.MetadataRequestContext, itemsCount uint64, retry int, retryTrainingInstRatioMap map[common.IndexInstId]int, initialSampleSize int64, nlistMap map[common.IndexInstId]map[common.PartitionId]int) {
+	reqCtx *c.MetadataRequestContext, itemsCount uint64, retry int,
+	retryTrainingInstRatioMap map[common.IndexInstId]int,
+	successMap map[c.IndexInstId]bool, droppedInsts map[c.IndexInstId]bool,
+	initialSampleSize int64, nlistMap map[common.IndexInstId]map[common.PartitionId]int) {
 
 	errMap := make(map[common.IndexInstId]map[common.PartitionId]error)
 	retryingMap := make(map[common.IndexInstId]map[common.PartitionId]bool)
-	successMap := make(map[common.IndexInstId]bool)
-	droppedInsts := make(map[common.IndexInstId]bool)
 	instTrainDurMap := make(map[common.IndexInstId]int64)
+
+	initialCaller := false
+	if successMap == nil {
+		initialCaller = true
+		successMap = make(map[common.IndexInstId]bool)
+	}
+	if droppedInsts == nil {
+		droppedInsts = make(map[common.IndexInstId]bool)
+	}
 	if retryTrainingInstRatioMap == nil {
 		retryTrainingInstRatioMap = make(map[common.IndexInstId]int)
 	}
@@ -13907,18 +13917,20 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 				// Qualifying vectors are less than user provided TrainList, change idx state to err.
 				if len(vectors[i])/vm.Dimension < vm.TrainList {
-					errStr := c.ERR_TRAINING + fmt.Sprintf("The number train_list: %v in keyspace: %v is greater than the "+
-						"number of qualifying documents: %v", vm.TrainList, keyspaceId, instVectorsMap[instId])
+					errStr := c.ERR_TRAINING + fmt.Sprintf("The number train_list: %v in keyspace: %v "+
+						"is greater than the number of qualifying documents: %v", vm.TrainList, keyspaceId, instVectorsMap[instId])
 					updateErrMap(instId, partnId, errors.New(errStr))
 					continue
 				}
 
 				if slice.IsTrained() {
-					logging.Infof("Indexer::initateTraining Skipping training for slice as it is already trained instId: %v, partnId: %v", instId, partnId)
+					logging.Infof("Indexer::initateTraining Skipping training for slice as it is already "+
+						"trained instId: %v, partnId: %v", instId, partnId)
 					continue
 				}
 
-				logging.Infof("Indexer::initateTraining Starting training for vector index with instId: %v, partnId: %v", instId, partnId)
+				logging.Infof("Indexer::initateTraining Starting training for vector index with instId: %v, "+
+					"partnId: %v", instId, partnId)
 				start := time.Now()
 				slice.SetNlist(idxInst.Nlist[partnId])
 
@@ -13926,21 +13938,24 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 					if err := testcode.TestActionAtTag(idx.config, testcode.BUILD_INDEX_TRAINING); err != nil {
 						slice.ResetCodebook()
-						logging.Errorf("Indexer::initiateTraining testAction induced error for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+						logging.Errorf("Indexer::initiateTraining testAction induced error for instId: %v, "+
+							"partnId: %v, err: %v", instId, partnId, err)
 						updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
 						continue
 					}
 
 					if err := slice.InitCodebook(); err != nil {
 						slice.ResetCodebook()
-						logging.Errorf("Indexer::initiateTraining error observed while initialising codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+						logging.Errorf("Indexer::initiateTraining error observed while initialising codebook "+
+							"for instId: %v, partnId: %v, err: %v", instId, partnId, err)
 						updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
 						continue
 					}
 
 					if err := idx.handleTrainingAndCheckForDrop(keyspaceId, instId, slice, vectors[i], droppedInsts, allInsts); err != nil {
 						slice.ResetCodebook()
-						logging.Errorf("Indexer::initiateTraining error observed during training phase of codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+						logging.Errorf("Indexer::initiateTraining error observed during training phase of "+
+							"codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
 						updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
 						continue
 					}
@@ -13959,7 +13974,8 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					// Serialize codebook for persistance
 					codebook, err := slice.SerializeCodebook()
 					if err != nil {
-						logging.Errorf("Indexer::initiateTraining error observed while serializing codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+						logging.Errorf("Indexer::initiateTraining error observed while serializing codebook for instId: %v, "+
+							"partnId: %v, err: %v", instId, partnId, err)
 						updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
 						slice.ResetCodebook() // Reset codebook as build retry will initiate training again
 						continue
@@ -13989,7 +14005,8 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				// Persist codebook to disk
 				err = idx.persistCodebookToDisk(storeEngineDir, idxInst, partnId, slice.Id(), defnCodebook)
 				if err != nil {
-					logging.Errorf("Indexer::initiateTraining error observed while persisting codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+					logging.Errorf("Indexer::initiateTraining error observed while persisting codebook for instId: %v, "+
+						"partnId: %v, err: %v", instId, partnId, err)
 					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
 					slice.ResetCodebook() // Reset codebook as build retry will initiate training again
 					continue
@@ -14029,10 +14046,14 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		}
 	}
 
-	if len(successMap) > 0 || len(errMap) > 0 {
+	// Fail fast - If there are any instances with error, respond back to indexer
+	// mainloop so that any blocking operations (like dropIndex) can be finished
+	// on those indexes. successMap is set to nil on purpose so that only one message
+	// can be sent after all recursive calls are finished
+	if len(errMap) > 0 {
 		idx.internalRecvCh <- &MsgIndexTrainingDone{
 			keyspaceId:       keyspaceId,
-			successMap:       successMap,
+			successMap:       nil,
 			reqCtx:           reqCtx,
 			errMap:           errMap,
 			droppedInsts:     droppedInsts,
@@ -14050,9 +14071,13 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	}
 	if len(retryInsts) > 0 {
 		if retry < maxRetry && uint64(maxSampleSize) < itemsCount {
-			idx.initiateTraining(retryInsts, indexInstMap, indexPartnMap, keyspaceId, config, cid, reqCtx, itemsCount, retry+1, retryTrainingInstRatioMap, initialSampleSize, nil)
+			idx.initiateTraining(retryInsts, indexInstMap, indexPartnMap, keyspaceId,
+				config, cid, reqCtx, itemsCount, retry+1, retryTrainingInstRatioMap,
+				successMap, droppedInsts, initialSampleSize, nil)
+
 		} else if retry == maxRetry || uint64(maxSampleSize) < itemsCount {
-			logging.Infof("Indexer::initiateTraining retries over, checking if number of centroids can be changed for retryInsts: %v.", retryInsts)
+			logging.Infof("Indexer::initiateTraining retries over, checking if number of centroids "+
+				"can be changed for retryInsts: %v.", retryInsts)
 
 			retryInstsFinal := make([]common.IndexInstId, 0)
 			newNlistMap := make(map[common.IndexInstId]map[common.PartitionId]int)
@@ -14065,15 +14090,18 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					}
 
 					if inst.Defn.VectorMeta.Quantizer.Nlist > 0 {
-						logging.Infof("Indexer::initiateTraining skipping changing number of centroids for instance:%v since centroids are provided in the definition.", inst.InstId)
+						logging.Infof("Indexer::initiateTraining skipping changing number of centroids for instance:%v "+
+							"since centroids are provided in the definition.", inst.InstId)
 						continue
 					} else if instVectors == 0 {
-						logging.Infof("Indexer::initiateTraining skipping changing number of centroids for instance:%v since 0 vectors were sampled for the definition.", inst.InstId)
+						logging.Infof("Indexer::initiateTraining skipping changing number of centroids for instance:%v "+
+							"since 0 vectors were sampled for the definition.", inst.InstId)
 						continue
 					}
 
 					if (inst.Defn.VectorMeta.Quantizer.Type == c.PQ) && (1<<inst.Defn.VectorMeta.Quantizer.Nbits > instVectors) {
-						logging.Infof("Indexer::initiateTraining skipping changing number of centroids for instance:%v since vectors doesn't follow nbits criteria for PQ Quantization.", inst.InstId)
+						logging.Infof("Indexer::initiateTraining skipping changing number of centroids for instance:%v "+
+							"since vectors doesn't follow nbits criteria for PQ Quantization.", inst.InstId)
 						continue
 					}
 
@@ -14091,9 +14119,32 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					logging.Warnf("Indexer::initiateTraining instId:%v not found in indexInstMap", instId)
 				}
 			}
-			idx.initiateTraining(retryInstsFinal, indexInstMap, indexPartnMap, keyspaceId, config, cid, reqCtx, itemsCount, retry+1, retryTrainingInstRatioMap, initialSampleSize, newNlistMap)
+			idx.initiateTraining(retryInstsFinal, indexInstMap, indexPartnMap, keyspaceId, config,
+				cid, reqCtx, itemsCount, retry+1, retryTrainingInstRatioMap,
+				successMap, droppedInsts, initialSampleSize, newNlistMap)
 		} else if retry > maxRetry {
-			logging.Errorf("Indexer::initiateTraining training failed after retry:%v maxRetry:%v for instIds: %v", retry, maxRetry, retryInsts)
+			logging.Errorf("Indexer::initiateTraining training failed after retry:%v maxRetry:%v for instIds: %v",
+				retry, maxRetry, retryInsts)
+		}
+	}
+
+	// End-of-recursive loop for initiateTraining() - Send message with success response
+	// for the initial caller. As "initiateTraining()" is being called recursively and
+	// successMap is shared, every iteration will send a message to indexer but only one
+	// message is required (Otherwise, index instance metadata will be inconsistent).
+	// Hence, only the initialCaller (from indexer mainloop) will take the job of sending
+	// this message back to indexer
+	//
+	// errMap can be nil here as indexer is already updated with errMap before retry was attempted
+	if initialCaller && len(successMap) > 0 {
+		idx.internalRecvCh <- &MsgIndexTrainingDone{
+			keyspaceId:       keyspaceId,
+			successMap:       successMap,
+			reqCtx:           reqCtx,
+			errMap:           nil,
+			droppedInsts:     droppedInsts,
+			nlistInstPartMap: nlistMap,
+			instTrainDurMap:  instTrainDurMap,
 		}
 	}
 }
