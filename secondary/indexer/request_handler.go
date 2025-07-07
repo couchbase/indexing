@@ -1042,7 +1042,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 			// to bhive explicitly
 			indexType := string(defn.Using)
 			if defn.IsBhive() {
-				indexType = "bhive"
+				indexType = "Hyperscale Vector Index"
 			}
 			mergeCounter(defn.DefnId, defn.NumReplica2, numReplicas)
 			if topology, ok := topoMap[defn.Bucket][defn.Scope][defn.Collection]; ok && topology != nil {
