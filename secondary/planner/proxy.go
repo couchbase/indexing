@@ -488,7 +488,12 @@ func getIndexStats(plan *Plan, config common.Config) error {
 			logging.Errorf("Planner::getIndexStats: Error from reading indexer version for node %v. Error = %v", nodeId, err)
 			return err
 		}
-		SetStatsInIndexer(indexer, statsMap, clusterVersion, indexerVersion, config)
+
+		if err = SetStatsInIndexer(indexer, statsMap, clusterVersion, indexerVersion, config); err != nil {
+			err = fmt.Errorf("Error while setting stats for node %v. err: %v", nodeId, err)
+			logging.Errorf("Planner::getIndexStats: %v", err)
+			return err
+		}
 	}
 
 	return nil
@@ -535,7 +540,7 @@ func getShardStats(plan *Plan, config common.Config) error {
 
 // SetStatsInIndexer will collect all the relevant stats from statsMap and put them in indexer
 // so that it can be planned in the cluster
-func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, clusterVersion uint64, indexerVersion int, config common.Config) {
+func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, clusterVersion uint64, indexerVersion int, config common.Config) error {
 	/*
 		CpuUsage    uint64 `json:"cpuUsage,omitempty"`
 		DiskUsage   uint64 `json:"diskUsage,omitempty"`
@@ -633,6 +638,8 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			DiskUsage   uint64 `json:"diskUsage,omitempty"`
 		*/
 
+		isBhive := index.Instance.Defn.IsBhive()
+
 		// items_count captures number of key per index
 		if itemsCount, ok := GetIndexStat(index, "items_count", statsMap, true, clusterVersion); ok {
 			index.ActualNumDocs = uint64(itemsCount.(float64))
@@ -655,6 +662,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 
 		// data_size is the total key size of index, including back index.
 		// data_size for MOI is 0.
+		// For bhive indexes, no need to consider compression.
 		if dataSize, ok := GetIndexStat(index, "data_size", statsMap, true, clusterVersion); ok {
 			index.ActualDataSize = uint64(dataSize.(float64))
 			// From 6.5, data_size stat contains uncompressed data size for plasma
@@ -662,7 +670,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			// parameters like ActualKeySize, AvgDocKeySize, AvgSecKeySize does not break
 			if indexerVersion >= common.INDEXER_65_VERSION {
 				if index.StorageMode == common.PlasmaDB {
-					if config["indexer.plasma.useCompression"].Bool() {
+					if config["indexer.plasma.useCompression"].Bool() && !isBhive {
 						// factor in compression estimation (compression ratio defaulted to 3)
 						index.ActualDataSize = index.ActualDataSize / 3
 					}
@@ -676,6 +684,11 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			index.ActualMemUsage = index.ActualMemStats
 			totalIndexMemUsed += index.ActualMemUsage
 		} else {
+			if isBhive {
+				err := fmt.Errorf("memory_used is not available for bhive index %v", index.InstId)
+				return err
+			}
+
 			// calibrate memory usage based on resident percent
 			// ActualMemUsage will be rewritten later
 			index.ActualMemUsage = uint64((float64(index.ActualDataSize) * index.ActualResidentPercent) / 100)
@@ -701,6 +714,10 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		if diskUsed, ok := GetIndexStat(index, "disk_size", statsMap, true, clusterVersion); ok {
 			index.ActualDiskSize = uint64(diskUsed.(float64))
 		} else {
+			if isBhive {
+				err := fmt.Errorf("disk_size is not available for bhive index %v", index.InstId)
+				return err
+			}
 			// Estimate disk usage from data_size assuming 30% fragmentation
 			index.ActualDiskSize = uint64(float64(index.ActualDataSize) * 1.3)
 		}
@@ -777,6 +794,11 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		if avgMutationRate, ok := GetIndexStat(index, "avg_mutation_rate", statsMap, true, clusterVersion); ok {
 			index.MutationRate = uint64(avgMutationRate.(float64))
 		} else {
+			if isBhive {
+				err := fmt.Errorf("avg_mutation_rate is not available for bhive index %v", index.InstId)
+				return err
+			}
+
 			if flushQueuedStat, ok := GetIndexStat(index, "num_flush_queued", statsMap, true, clusterVersion); ok {
 				flushQueued := uint64(flushQueuedStat.(float64))
 
@@ -825,12 +847,22 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		if msRecsOnDisk, ok := GetIndexStat(index, "recs_on_disk", statsMap, true, clusterVersion); ok {
 			index.TotalRecords = uint64(msRecsOnDisk.(float64))
 		} else {
+			if isBhive {
+				err := fmt.Errorf("recs_on_disk is not available for bhive index %v", index.InstId)
+				return err
+			}
+
 			index.TotalRecords = index.ActualNumDocs
 		}
 		if !index.IsPrimary {
 			if bsRecsOnDisk, ok := GetIndexStat(index, "backstore_recs_on_disk", statsMap, true, clusterVersion); ok {
 				index.TotalRecords += uint64(bsRecsOnDisk.(float64))
 			} else {
+				if isBhive {
+					err := fmt.Errorf("backstore_recs_on_disk is not available for bhive index %v", index.InstId)
+					return err
+				}
+
 				index.TotalRecords += index.ActualNumDocs
 			}
 		}
@@ -838,6 +870,11 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		if msRecsInMem, ok := GetIndexStat(index, "recs_in_mem", statsMap, true, clusterVersion); ok {
 			index.ActualRecsInMem = uint64(msRecsInMem.(float64))
 		} else {
+			if isBhive {
+				err := fmt.Errorf("recs_in_mem is not available for bhive index %v", index.InstId)
+				return err
+			}
+
 			index.ActualRecsInMem = uint64(float64(index.ActualResidentPercent/100.0) * float64(index.ActualNumDocs))
 		}
 
@@ -845,6 +882,11 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			if bsRecsInMem, ok := GetIndexStat(index, "backstore_recs_in_mem", statsMap, true, clusterVersion); ok {
 				index.ActualRecsInMem += uint64(bsRecsInMem.(float64))
 			} else {
+				if isBhive {
+					err := fmt.Errorf("backstore_recs_in_mem is not available for bhive index %v", index.InstId)
+					return err
+				}
+
 				index.ActualRecsInMem += uint64(float64(index.ActualResidentPercent/100.0) * float64(index.ActualNumDocs))
 			}
 		}
@@ -870,6 +912,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 	//    of the index at the time when the planner is run.
 	//
 	for _, index := range indexer.Indexes {
+		isBhive := index.Instance.Defn.IsBhive()
 		ratio := float64(0)
 		if totalIndexMemUsed != 0 {
 			ratio = float64(index.ActualMemUsage) / float64(totalIndexMemUsed)
@@ -970,7 +1013,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 				// If index has no resident memory but it has keys, then estimate using sizing equation.
 				dataSize := index.ActualDataSize
 				if index.StorageMode == common.PlasmaDB {
-					if config["indexer.plasma.useCompression"].Bool() {
+					if config["indexer.plasma.useCompression"].Bool() && !isBhive {
 						dataSize = dataSize * 3
 					}
 				}
@@ -1051,6 +1094,8 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		indexer.ActualDrainRate += index.ActualDrainRate
 		indexer.ActualScanRate += index.ActualScanRate
 	}
+
+	return nil
 }
 
 // This function extract the topology metadata for a bucket, scope and collection.

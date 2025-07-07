@@ -732,8 +732,11 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken,
 
 		indexerNode.Indexes = indexerUsage
 
-		planner.SetStatsInIndexer(indexerNode, statsPerNode, clusterVersion, indexerVersion,
-			sysConfig)
+		if err = planner.SetStatsInIndexer(indexerNode, statsPerNode, clusterVersion, indexerVersion, sysConfig); err != nil {
+			err = fmt.Errorf("Couldn't set stats for node: %v. err: %v", nodeId, err)
+			logging.Errorf("Resumer::masterGenerateResumePlan: %v", err)
+			return nil, err
+		}
 
 		resumeNodes = append(resumeNodes, indexerNode)
 	}
