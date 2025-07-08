@@ -92,7 +92,8 @@ func resetCluster(t *testing.T) {
 	username := clusterconfig.Username
 	password := clusterconfig.Password
 
-	dropNodes := []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2], clusterconfig.Nodes[3]}
+	dropNodes := []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2],
+		clusterconfig.Nodes[3], clusterconfig.Nodes[4]}
 	keepNodes := make(map[string]string)
 	keepNodes[clusterconfig.Nodes[1]] = "index"
 

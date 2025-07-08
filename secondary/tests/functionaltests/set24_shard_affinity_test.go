@@ -79,6 +79,10 @@ func getShardGroupingFromLiveCluster() (tc.AlternateShardMap, *tc.IndexStatusRes
 
 		var ok bool
 
+		if status.Scope == "_system" && status.Collection == "_query" {
+			continue
+		}
+
 		if defnStruct, ok := shardGrouping[status.DefnId]; !ok {
 			replicaMap = make(map[int]map[c.PartitionId][]string)
 			shardGrouping[status.DefnId] = &struct {
@@ -593,10 +597,12 @@ func TestRebalancePseudoOfflineUgradeWithShardAffinity(t *testing.T) {
 	tc.HandleError(err, "Waiting for indices in system scope")
 
 	addNodeAndRebalance(clusterconfig.Nodes[2], "index", t)
+	addNodeAndRebalance(clusterconfig.Nodes[3], "index", t)
 
 	status := getClusterStatus()
-	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
-		!isNodeIndex(status, clusterconfig.Nodes[2]) {
+	if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[2]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[3]) {
 		t.Fatalf("%v Unexpected cluster configuration: %v", t.Name(), status)
 	}
 
@@ -656,7 +662,7 @@ func TestRebalancePseudoOfflineUgradeWithShardAffinity(t *testing.T) {
 		configChanges["indexer.planner.use_shard_dealer"] = false
 	}
 
-	// config - [0: kv n1ql] [1: index] [2: index]
+	// config - [0: kv n1ql] [1: index] - old [2: index] - old [3: index]
 	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
 	tc.HandleError(err, "Unable to change indexer setting `indexer.settings.enable_shard_affinity`")
 
@@ -667,28 +673,32 @@ func TestRebalancePseudoOfflineUgradeWithShardAffinity(t *testing.T) {
 
 	log.Printf("********Swap rebalance all nodes**********")
 
-	swapRebalance(t, 3, 2) // config - [0: kv n1ql] [1: index] .......... [3 index] - movements via DCP
-	swapRebalance(t, 2, 1) // config - [0: kv n1ql] .......... [2: index] [3 index] - movements via DCP
+	swapRebalance(t, 4, 3) // config - [0: kv n1ql] [1: index] [2: index] .......... [4: index] - movements via DCP
+	swapRebalance(t, 3, 2) // config - [0: kv n1ql] [1: index] .......... [3: index] [4: index] - movements via DCP
+	swapRebalance(t, 2, 1) // config - [0: kv n1ql] .......... [2: index] [3: index] [4: index] - movements via DCP
+
 	log.Printf("%v all nodes swap rebalanced. All indices should have under gone movement and we should have shard affinity in cluster. Validating the same...",
 		t.Name())
 	performClusterStateValidation(t, false)
 
 	log.Printf("%v swap rebalancing a node to test shard rebalance and validate cluster affinity..",
 		t.Name())
-	swapRebalance(t, 1, 3) // config - [0: kv n1ql] [1: index] [2: index] - movements via Shards
+
+	swapRebalance(t, 1, 4) // config - [0: kv n1ql] [1: index] [2: index] [3: index] - movements via shard
 	performClusterStateValidation(t, false)
 
 	printClusterConfig(t.Name(), "exit")
 }
 
 // expected cluster state in entry
-// - [0: kv n1ql] [1: index] [2: index]
+// - [0: kv n1ql] [1: index] [2: index] [3: index]
 func TestCreateInSimulatedMixedMode(t *testing.T) {
 	skipShardAffinityTests(t)
 
 	status := getClusterStatus()
-	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
-		!isNodeIndex(status, clusterconfig.Nodes[2]) {
+	if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[2]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[3]) {
 		t.Fatalf("%v Unexpected cluster configuration: %v", t.Name(), status)
 	}
 
@@ -698,7 +708,7 @@ func TestCreateInSimulatedMixedMode(t *testing.T) {
 	err := secondaryindex.DropAllNonSystemIndexes(clusterconfig.Nodes[1])
 	tc.HandleError(err, "failed to drop all secondary indices")
 
-	// config - [0: kv n1ql] [1: index] [2: index]
+	// config - [0: kv n1ql] [1: index] [2: index] [3: index]
 	printClusterConfig(t.Name(), "entry")
 
 	log.Printf("********Updating `indexer.settings.enable_shard_affinity`=true**********")
@@ -741,14 +751,15 @@ func TestCreateInSimulatedMixedMode(t *testing.T) {
 }
 
 // expected cluster state in entry
-// [0: kv n1ql] [1: index] [2: index]
+// [0: kv n1ql] [1: index] [2: index] [3: index]
 // indices on node[1] do not have Alternate Shard IDs
 func TestSwapRebalanceMixedMode(t *testing.T) {
 	skipShardAffinityTests(t)
 
 	status := getClusterStatus()
-	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
-		!isNodeIndex(status, clusterconfig.Nodes[2]) {
+	if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[2]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[3]) {
 		t.Fatalf("%v Unexpected cluster configuration: %v", t.Name(), status)
 	}
 
@@ -757,7 +768,7 @@ func TestSwapRebalanceMixedMode(t *testing.T) {
 	configChanges := map[string]interface{}{
 		"indexer.settings.enable_shard_affinity":       true,
 		"indexer.planner.honourNodesInDefn":            true,
-		"indexer.thisNodeOnly.ignoreAlternateShardIds": true,
+		"indexer.thisNodeOnly.ignoreAlternateShardIds": false,
 	}
 	if !shouldTestWithShardDealer {
 		configChanges["indexer.planner.use_shard_dealer"] = false
@@ -776,26 +787,30 @@ func TestSwapRebalanceMixedMode(t *testing.T) {
 		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 	}()
 
-	swapRebalance(t, 3, 2) // config - [0: kv n1ql] [1: index]            [3: index] - swap rebalance via Shard
+	swapRebalance(t, 4, 3) // config - [0: kv n1ql] [1: index] [2: index] .......... [4: index] - swap rebalance via Shard
 	// cluster state still not valid wrt Alternate Shard IDs
 	performClusterStateValidation(t, true)
 
-	swapRebalance(t, 2, 1) // config - [0: kv n1ql]            [2: index] [3: index] - swap rebalance via DCP
+	swapRebalance(t, 3, 2) // config - [0: kv n1ql] [1: index] .......... [3: index] [4: index] - swap rebalance via Shard
+	performClusterStateValidation(t, true)
+
+	swapRebalance(t, 2, 1) // config - [0: kv n1ql]            [2: index] [3: index] [4: index] - swap rebalance via DCP
 	performClusterStateValidation(t, false)
 
 	// indexer.thisNodeOnly.ignoreAlternateShardIds no longer valid for node[1]
-	swapRebalance(t, 1, 3) // config - [0: kv n1ql] [1: index] [2: index] - swap rebalance via Shard
+	swapRebalance(t, 1, 4) // config - [0: kv n1ql] [1: index] [2: index] [3: index] - swap rebalance via Shard
 	performClusterStateValidation(t, false)
 }
 
 // expected cluster state in entry
-// [0: kv n1ql] [1: index] [2: index]
+// [0: kv n1ql] [1: index] [2: index] [3: index]
 func TestFailoverAndRebalanceMixedMode(t *testing.T) {
 	skipShardAffinityTests(t)
 
 	status := getClusterStatus()
-	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
-		!isNodeIndex(status, clusterconfig.Nodes[2]) {
+	if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[2]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[3]) {
 		t.Fatalf("%v Unexpected cluster configuration: %v", t.Name(), status)
 	}
 
@@ -803,14 +818,16 @@ func TestFailoverAndRebalanceMixedMode(t *testing.T) {
 	err := secondaryindex.DropAllNonSystemIndexes(clusterconfig.Nodes[1])
 	tc.HandleError(err, "failed to drop all secondary indices")
 
-	addNodeAndRebalance(clusterconfig.Nodes[3], "index", t)
+	addNodeAndRebalance(clusterconfig.Nodes[4], "index", t)
 	status = getClusterStatus()
-	if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
-		!isNodeIndex(status, clusterconfig.Nodes[2]) || !isNodeIndex(status, clusterconfig.Nodes[3]) {
+	if len(status) != 5 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[2]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[3]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[4]) {
 		t.Fatalf("%v Unexpected cluster configuration: %v", t.Name(), status)
 	}
 
-	// config - [0: kv n1ql] [1: index] [2: index] [3: index]
+	// config - [0: kv n1ql] [1: index] [2: index] [3: index] [4: index]
 	printClusterConfig(t.Name(), "entry")
 
 	log.Printf("********Updating `indexer.settings.enable_shard_affinity`=true**********")
@@ -824,7 +841,7 @@ func TestFailoverAndRebalanceMixedMode(t *testing.T) {
 		configChanges["indexer.planner.use_shard_dealer"] = false
 	}
 
-	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[3])
+	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[4])
 	tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 
 	defer func() {
@@ -846,7 +863,7 @@ func TestFailoverAndRebalanceMixedMode(t *testing.T) {
 		indexName := indexPrefix + "_5PTN_1RP_" + fieldName1 + "_" + fieldName2
 		n1qlStmt := fmt.Sprintf(
 			"create index %v on `%v`(%v, %v) partition by hash(Meta().id) with {\"num_partition\":5, \"num_replica\":1, \"nodes\": [\"%v\", \"%v\"]}",
-			indexName, BUCKET, fieldName1, fieldName2, clusterconfig.Nodes[3], clusterconfig.Nodes[randomNum(1, 3)])
+			indexName, BUCKET, fieldName1, fieldName2, clusterconfig.Nodes[4], clusterconfig.Nodes[randomNum(1, 4)])
 		executeN1qlStmt(n1qlStmt, BUCKET, t.Name(), t)
 		indices = append(indices, indexName)
 	}
@@ -855,29 +872,30 @@ func TestFailoverAndRebalanceMixedMode(t *testing.T) {
 	// cluster state still not valid wrt Alternate Shard IDs
 	performClusterStateValidation(t, true)
 
-	err = secondaryindex.ChangeMultipleIndexerSettings(map[string]interface{}{"indexer.thisNodeOnly.ignoreAlternateShardIds": false}, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[3])
-	tc.HandleError(err, fmt.Sprintf("failed to reset `indexer.thisNodeOnly.ignoreAlternateShardIds` on %v", clusterconfig.Nodes[3]))
+	err = secondaryindex.ChangeMultipleIndexerSettings(map[string]interface{}{"indexer.thisNodeOnly.ignoreAlternateShardIds": false}, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[4])
+	tc.HandleError(err, fmt.Sprintf("failed to reset `indexer.thisNodeOnly.ignoreAlternateShardIds` on %v", clusterconfig.Nodes[4]))
 
 	failoverNode(clusterconfig.Nodes[2], t)
-	rebalance(t) // config - [0: kv n1ql] [1: index]            [3: index] - replica/partn repair needs to happen
+	rebalance(t) // config - [0: kv n1ql] [1: index]            [3: index] [4: index] - replica/partn repair needs to happen
 	// cluster state will still not be valid as some indices on node 3 will not have Alternate Shard IDs
 	performClusterStateValidation(t, true)
 
-	swapRebalance(t, 2, 3) // config - [0: kv n1ql] [1: index] [2: index] - shard + DCP rebalance
+	swapRebalance(t, 2, 4) // config - [0: kv n1ql] [1: index] [2: index] [3: index] - shard + DCP rebalance
 	performClusterStateValidation(t, false)
 }
 
 // expected cluster state in entry
-// [0: kv n1ql] [1: index] [2: index]
+// [0: kv n1ql] [1: index] [2: index] [3: index]
 // exit cluster config
-// [0: kv n1ql] [1: index]            [3: index]
+// [0: kv n1ql] [1: index]            [3: index] [4: index]
 func TestRebalanceOutNewerNodeInMixedMode(t *testing.T) {
 	// t.Skipf("Unstable test")
 	skipShardAffinityTests(t)
 
 	status := getClusterStatus()
-	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
-		!isNodeIndex(status, clusterconfig.Nodes[2]) {
+	if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[2]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[3]) {
 		t.Fatalf("%v Unexpected cluster configuration: %v", t.Name(), status)
 	}
 
@@ -885,18 +903,19 @@ func TestRebalanceOutNewerNodeInMixedMode(t *testing.T) {
 	err := secondaryindex.DropAllNonSystemIndexes(clusterconfig.Nodes[1])
 	tc.HandleError(err, "failed to drop all secondary indices")
 
-	addNodeAndRebalance(clusterconfig.Nodes[3], "index", t)
+	addNodeAndRebalance(clusterconfig.Nodes[4], "index", t)
 
 	err = secondaryindex.WaitForSystemIndices(kvaddress, 0)
 	tc.HandleError(err, "Waiting for indices in system scope")
 
 	status = getClusterStatus()
-	if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
-		!isNodeIndex(status, clusterconfig.Nodes[2]) || !isNodeIndex(status, clusterconfig.Nodes[3]) {
+	if len(status) != 5 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[2]) || !isNodeIndex(status, clusterconfig.Nodes[3]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[4]) {
 		t.Fatalf("%v Unexpected cluster configuration: %v", t.Name(), status)
 	}
 
-	// config - [0: kv n1ql] [1: index] [2: index] [3: index]
+	// config - [0: kv n1ql] [1: index] [2: index] [3: index] [4: index]
 	printClusterConfig(t.Name(), "entry")
 
 	log.Printf("********Updating `indexer.settings.enable_shard_affinity`=true**********")
@@ -910,7 +929,7 @@ func TestRebalanceOutNewerNodeInMixedMode(t *testing.T) {
 		configChanges["indexer.planner.use_shard_dealer"] = false
 	}
 
-	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[3])
+	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[4])
 	tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 
 	defer func() {
@@ -918,7 +937,7 @@ func TestRebalanceOutNewerNodeInMixedMode(t *testing.T) {
 			"indexer.settings.enable_shard_affinity": false,
 			"indexer.planner.honourNodesInDefn":      false,
 		}
-		err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[3])
+		err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[4])
 		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 	}()
 
@@ -933,7 +952,7 @@ func TestRebalanceOutNewerNodeInMixedMode(t *testing.T) {
 		indexName := indexPrefix + "_5PTN_1RP_" + fieldName1 + "_" + fieldName2
 		n1qlStmt := fmt.Sprintf(
 			"create index %v on `%v`(%v, %v) partition by hash(Meta().id) with {\"num_partition\":5, \"num_replica\":1, \"nodes\": [\"%v\", \"%v\"]}",
-			indexName, BUCKET, fieldName1, fieldName2, clusterconfig.Nodes[3], clusterconfig.Nodes[randomNum(1, 3)])
+			indexName, BUCKET, fieldName1, fieldName2, clusterconfig.Nodes[4], clusterconfig.Nodes[randomNum(1, 4)])
 		executeN1qlStmt(n1qlStmt, BUCKET, t.Name(), t)
 		indices = append(indices, indexName)
 	}
@@ -948,9 +967,11 @@ func TestRebalanceOutNewerNodeInMixedMode(t *testing.T) {
 	log.Printf("********Validating Mixed Mode State**********")
 	node1Meta, err := getLocalMetaWithRetry(clusterconfig.Nodes[1])
 	tc.HandleError(err, "Failed to getLocalMetadata from node 1")
-
 	node3Meta, err := getLocalMetaWithRetry(clusterconfig.Nodes[3])
-	tc.HandleError(err, "Failed to getLocalMetdata from node 3")
+	tc.HandleError(err, "Failed to getLocalMetadata from node 3")
+
+	node4Meta, err := getLocalMetaWithRetry(clusterconfig.Nodes[4])
+	tc.HandleError(err, "Failed to getLocalMetdata from node 4")
 
 	indicesInCluster := make(map[c.IndexDefnId][]string)
 
@@ -971,8 +992,25 @@ func TestRebalanceOutNewerNodeInMixedMode(t *testing.T) {
 		indicesInCluster[defn.DefnId] = append(indicesInCluster[defn.DefnId], defn.Name)
 	}
 
-	// node 3 - no indices should have Alternate Shard ID
+	// node 3 - all indies should have Alternate Shard ID
 	for _, defn := range node3Meta.IndexDefinitions {
+		if strings.Contains(defn.Scope, "system") {
+			continue
+		}
+		for partn, asis := range defn.AlternateShardIds {
+			if defn.IsPrimary && len(asis) != 1 {
+				t.Fatalf("%v Expected to have 1 Alternate Shard ID but found %v for index %v partn %v on node %v",
+					t.Name(), asis, defn.Name, partn, clusterconfig.Nodes[3])
+			} else if !defn.IsPrimary && len(asis) != 2 {
+				t.Fatalf("%v Expected to have 2 Alternate Shard ID but found %v for index %v partn %v on node %v",
+					t.Name(), asis, defn.Name, partn, clusterconfig.Nodes[3])
+			}
+		}
+		indicesInCluster[defn.DefnId] = append(indicesInCluster[defn.DefnId], defn.Name)
+	}
+
+	// node 4 - no indices should have Alternate Shard ID
+	for _, defn := range node4Meta.IndexDefinitions {
 		if strings.Contains(defn.Scope, "system") {
 			continue
 		}
@@ -992,14 +1030,14 @@ func TestRebalanceOutNewerNodeInMixedMode(t *testing.T) {
 	printClusterConfig(t.Name(), "exit")
 }
 
-// cluster in mixed mode; node 1 - new node, node 3 - old node
-// drop indices on both node for replica repair
+// cluster in mixed mode; node 1,3 - new node, node 4 - old node
+// drop indices on all nodes for replica repair
 // add node 2 (new node) and run rebalance
 // entry cluster config -
-// [0: kv n1ql] [1: index]            [3: index]
+// [0: kv n1ql] [1: index]            [3: index] [4: index]
 // cluster in mixed mode
 // exit cluster config -
-// [0: kv n1ql] [1: index] [2: index]
+// [0: kv n1ql] [1: index] [2: index] [3: index]
 func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 	// t.Skipf("Disabled until MB-60242 is fixed")
 	skipShardAffinityTests(t)
@@ -1011,19 +1049,20 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 	// tc.HandleError(err, "Failed to set memory quota in cluster")
 
 	status := getClusterStatus()
-	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
-		!isNodeIndex(status, clusterconfig.Nodes[3]) {
+	if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[3]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[4]) {
 		t.Fatalf("%v Unexpected cluster configuration: %v", t.Name(), status)
 	}
 
-	// config - [0: kv n1ql] [1: index]            [3: index]
+	// config - [0: kv n1ql] [1: index]            [3: index] [4: index]
 	printClusterConfig(t.Name(), "entry")
 
 	log.Println("*********Setup cluster*********")
 	err = secondaryindex.DropAllNonSystemIndexes(clusterconfig.Nodes[1])
 	tc.HandleError(err, "Failed to drop all non-system indices")
 
-	log.Printf("********Updating `indexer.settings.enable_shard_affinity`=true with node 3 in simulated mixed mode**********")
+	log.Printf("********Updating `indexer.settings.enable_shard_affinity`=true with node 4 in simulated mixed mode**********")
 	configChanges := map[string]interface{}{
 		"indexer.settings.enable_shard_affinity":          true,
 		"indexer.planner.honourNodesInDefn":               true,
@@ -1034,7 +1073,7 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 		configChanges["indexer.planner.use_shard_dealer"] = false
 	}
 
-	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[3])
+	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[4])
 	tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
 
 	defer func() {
@@ -1084,10 +1123,10 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 		}
 	}
 
-	node3meta, err := getLocalMetaWithRetry(clusterconfig.Nodes[3])
-	tc.HandleError(err, "Failed to getLocalMetadata from node 3")
+	node4meta, err := getLocalMetaWithRetry(clusterconfig.Nodes[4])
+	tc.HandleError(err, "Failed to getLocalMetadata from node 4")
 
-	for _, defn := range node3meta.IndexTopologies[0].Definitions {
+	for _, defn := range node4meta.IndexTopologies[0].Definitions {
 		if len(dropIndicesMap) == 6 {
 			break
 		}
@@ -1100,7 +1139,7 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 		}
 	}
 
-	log.Printf("********Drop replicas on node 1 and 3**********")
+	log.Printf("********Drop replicas on node 1 and 4**********")
 
 	for idxName, replicaId := range dropIndicesMap {
 		stmt := fmt.Sprintf("alter index %v on %v with {\"action\": \"drop_replica\", \"replicaId\": %v}",
@@ -1116,9 +1155,13 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 
 	performClusterStateValidation(t, true)
 
-	log.Printf("********Swap Rebalance node 3 <=> 2**********")
+	// safety! remove ignoreAlternateShardIds from node 4
+	err = secondaryindex.ChangeMultipleIndexerSettings(map[string]interface{}{"indexer.thisNodeOnly.ignoreAlternateShardIds": false}, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[4])
+	tc.HandleError(err, fmt.Sprintf("failed to reset `indexer.thisNodeOnly.ignoreAlternateShardIds` on %v", clusterconfig.Nodes[4]))
 
-	swapRebalance(t, 2, 3)
+	log.Printf("********Swap Rebalance node 4 <=> 2**********")
+
+	swapRebalance(t, 2, 4)
 
 	performClusterStateValidation(t, false)
 }
@@ -1164,14 +1207,37 @@ func TestShardRebalance_DropDuplicateIndexes(t *testing.T) {
 		tc.HandleError(err, "failed to delete all create command token")
 	}
 
+	status := getClusterStatus()
+	if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[2]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[3]) {
+		t.Fatalf("%v Unexpected cluster configuration: %v", t.Name(), status)
+	}
+	removeNode(clusterconfig.Nodes[3], t)
+
 	var retry = 0
+
 init:
+
 	clearCreateComandTokens()
 
-	status := getClusterStatus()
+	setupRetry := func(errMsg string) {
+		if retry > 5 {
+			t.Fatalf("WARN - %v. failed after %v retries", errMsg, retry)
+			return
+		}
+		log.Printf("WARN - %v. retrying test...", errMsg)
+		time.Sleep(10 * time.Second)
+		resetCluster(t)
+		addNodeAndRebalance(clusterconfig.Nodes[2], "index", t)
+		retry++
+	}
+
+	status = getClusterStatus()
 	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
 		!isNodeIndex(status, clusterconfig.Nodes[2]) {
-		t.Fatalf("%v Unexpected cluster configuration: %v", t.Name(), status)
+		setupRetry(fmt.Sprintf("unexpected cluster configuration - %v", status))
+		goto init
 	}
 
 	// config - [0: kv n1ql] [1: index] [2: index]
@@ -1181,7 +1247,7 @@ init:
 	err := secondaryindex.DropAllNonSystemIndexes(clusterconfig.Nodes[1])
 	tc.HandleError(err, "Failed to drop all non-system indices")
 
-	log.Printf("********Updating `indexer.settings.enable_shard_affinity`=true with node 3 in simulated mixed mode**********")
+	log.Printf("********Updating `indexer.settings.enable_shard_affinity`=true**********")
 	configChanges := map[string]interface{}{
 		"indexer.settings.enable_shard_affinity":          true,
 		"indexer.planner.honourNodesInDefn":               true,
@@ -1210,8 +1276,9 @@ init:
 	tc.HandleError(err, "failed to get client")
 
 	bucketUUID, err := c.GetBucketUUID(kvaddress, bucket)
-	scopeID, collectionID, err := c.GetScopeAndCollectionID(kvaddress, bucket, "_default", "_default")
 	tc.HandleError(err, "failed to get bucket UUID")
+	scopeID, collectionID, err := c.GetScopeAndCollectionID(kvaddress, bucket, "_default", "_default")
+	tc.HandleError(err, "failed to get scope and collection ID")
 
 	indexerIDs := []string{}
 	nodes, err := secondaryindex.GetIndexerNodes(indexManagementAddress)
@@ -1250,7 +1317,11 @@ init:
 		tc.HandleError(err, "failed to post create command token")
 
 		err = secondaryindex.WaitTillIndexActive(uint64(defnID), client, 60)
-		tc.HandleError(err, "failed to wait for index to be active")
+		if err != nil {
+			errMsg := fmt.Sprintf("failed to wait for index %v to be active. err - %v", defnID, err)
+			setupRetry(errMsg)
+			goto init
+		}
 		baseDefnID++
 	}
 
@@ -1294,7 +1365,11 @@ init:
 
 	log.Printf("waiting for all indexes %v to be active", defnIDs)
 	err = secondaryindex.WaitTillAllIndexesActive(defnIDs, client, 60)
-	tc.HandleError(err, "failed to wait for all indexes to be active")
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to wait for all indexes to be active. err - %v", err)
+		setupRetry(errMsg)
+		goto init
+	}
 
 	var numIndexesBeforeRebal = 0
 	indexNamesBeforeRebal := []string{}
@@ -1326,11 +1401,8 @@ init:
 				t.Skipf("skipping test as we could not deterministically drop the moving index in 5 tries")
 				return
 			}
-			log.Printf("WARN duplicate index with defnID %v on moving shard ['1-0-0'] was not dropped. %v would have been dropped. retrying test...", defnID2, defnID1)
-			time.Sleep(10 * time.Second)
-			resetCluster(t)
-			addNodeAndRebalance(clusterconfig.Nodes[2], "index", t)
-			retry++
+			errMsg := fmt.Sprintf("duplicate index with defnID %v on moving shard ['1-0-0'] was not dropped. %v would have been dropped. retrying test...", defnID2, defnID1)
+			setupRetry(errMsg)
 			goto init
 		}
 		numIndexesAfterRebal++
