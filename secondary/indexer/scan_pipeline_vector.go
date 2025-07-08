@@ -343,6 +343,28 @@ func (w *ScanWorker) setSenderBatchSize() {
 func (w *ScanWorker) Close() {
 	w.r.connCtx.Put(fmt.Sprintf("%v%v", VectorScanWorker, w.id), w.mem)
 	w.mem = nil
+
+	w.buf = nil
+
+	w.currBatchRows = nil
+	w.codes = nil
+	w.fvecs = nil
+	w.dists = nil
+	w.cktmp = nil
+	w.dtable = nil
+
+	w.includeColumnBuf = nil
+	w.includeColumnExplode = nil
+	w.includeColumnDecode = nil
+	w.includeColumncktemp = nil
+	w.includeColumndktemp = nil
+
+	w.heap = nil
+	w.rowBuf = nil
+	w.svPool = nil
+	w.cv = nil
+	w.av = nil
+	w.exprContext = nil
 }
 
 func (w *ScanWorker) SetStartTime() {
@@ -1209,9 +1231,13 @@ func NewWorkerPool(r *ScanRequest, numWorkers int, mergeSort bool, config c.Conf
 }
 
 func (wp *WorkerPool) Close() {
-	for _, w := range wp.workers {
+	for i, w := range wp.workers {
 		w.Close()
+		wp.workers[i] = nil
 	}
+	wp.mergeHeap = nil
+	wp.workers = nil
+	wp.recvChList = nil
 }
 
 func (wp *WorkerPool) Init() {
@@ -1832,6 +1858,16 @@ func (fio *MergeOperator) handleProjection(entry []byte, row *Row) ([]byte, erro
 	return entry, nil
 }
 
+func (fio *MergeOperator) Close() {
+
+	fio.heap = nil
+	fio.buf = nil
+	fio.cktmp = nil
+	fio.includebuf = nil
+	fio.includecktmp = nil
+
+}
+
 // ----------------
 // IndexScanSource2
 // ----------------
@@ -1915,6 +1951,7 @@ func (s *IndexScanSource2) Routine() error {
 		s.CloseWithError(err)
 		return err
 	}
+	defer fanIn.Close()
 
 	// Make ScanJobs and schedule them on the WorkerPool
 	// * readersPerPartition should be launched in parallel
