@@ -29,6 +29,6 @@ func MemoryInUse() int64 {
 	return 0
 }
 
-func BufferMemoryInUse() int64 {
+func GolangMemoryInUse() int64 {
 	return 0
 }

@@ -29,7 +29,7 @@ func MemoryInUse() int64 {
 	return ee.MemoryInUse() + ee.GetFlushBufferMemoryAllocated()
 }
 
-func BufferMemoryInUse() int64 {
+func GolangMemoryInUse() int64 {
 	return ee.GetFlushBufferMemoryAllocated()
 }
 

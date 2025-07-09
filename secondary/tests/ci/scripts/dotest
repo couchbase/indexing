@@ -259,10 +259,10 @@ if [[ "$MODE" == *"$phase"* ]]; then
   # Run shard dealer tests
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/planner
 
-  # Step 1: Extract test names
-  TEST_NAMES=$(grep -E '^func Test[A-Z]' shard_dealer_test.go | grep -v 'TestMain' | sed 's/^func //' | sed 's/(t \*testing\.T) {.*$//' | tr '\n' '|' | sed 's/|$//')
-  # Step 2: Run the tests
-  GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 30s -v -run "^($TEST_NAMES)$" 2>&1 | tee -a $WORKSPACE/test.log
+  # # Step 1: Extract test names
+  # TEST_NAMES=$(grep -E '^func Test[A-Z]' shard_dealer_test.go | grep -v 'TestMain' | sed 's/^func //' | sed 's/(t \*testing\.T) {.*$//' | tr '\n' '|' | sed 's/|$//')
+  # # Step 2: Run the tests
+  GOTRACEBACK=crash go test -timeout 30s -v -skip "^TestSimulation$" 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
   GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log

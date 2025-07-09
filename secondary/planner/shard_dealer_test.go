@@ -138,7 +138,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestBasicSlotAssignment(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	var dealer = getTestShardDealer(
 		minShardsPerNode,
@@ -350,7 +350,7 @@ func getReplicaMapsForIndexerNodes(
 }
 
 func TestSingleNode_Pass0(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	t.Run("Basic-AllPrimary", func(t0 *testing.T) {
 		t0.Parallel()
@@ -740,7 +740,7 @@ func TestSingleNode_Pass0(t *testing.T) {
 }
 
 func TestSingleNode_Pass1(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	t.Run("Basic-AllPrimary", func(t0 *testing.T) {
 		t0.Parallel()
@@ -1172,7 +1172,7 @@ func TestSingleNode_Pass1(t *testing.T) {
 }
 
 func TestSingleNode_Pass2(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	t.Run("Basic-AllPrimary", func(t0 *testing.T) {
 		t0.Parallel()
@@ -1540,7 +1540,7 @@ func TestSingleNode_Pass2(t *testing.T) {
 }
 
 func TestSingleNode_Pass3(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	var testShardCapacity uint64 = 10
 
@@ -1774,7 +1774,7 @@ func TestSingleNode_Pass3(t *testing.T) {
 }
 
 func TestGetShardCategory(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	var moiCip = createIdxParam{defnid: 1, isMoi: true}
 	// MOI index
@@ -1834,7 +1834,7 @@ func TestGetShardCategory(t *testing.T) {
 }
 
 func TestRecordIndexUsage(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	var dealer = getTestShardDealer(
 		minPartitionsPerShard, minPartitionsPerShard, maxDiskUsagePerShard,
@@ -2618,7 +2618,7 @@ func (psc1 *pseudoShardContainer) String() string {
 }
 
 func TestMultNode_NoReplicas(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	var dealer = getTestShardDealer(
 		minShardsPerNode,
@@ -2661,7 +2661,7 @@ func TestMultNode_NoReplicas(t *testing.T) {
 }
 
 func TestMultiNode_NegTestSameIndexOnAllNodes(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	var dealer = getTestShardDealer(minShardsPerNode,
 		minPartitionsPerShard,
@@ -2691,7 +2691,7 @@ func TestMultiNode_NegTestSameIndexOnAllNodes(t *testing.T) {
 }
 
 func TestMultiNode_NegTestSameDefnMultiReplicaSameNode(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	var dealer = getTestShardDealer(
 		minShardsPerNode,
@@ -2725,7 +2725,7 @@ func TestMultiNode_NegTestSameDefnMultiReplicaSameNode(t *testing.T) {
 // TestMultiNode_Pass0 tests the shard dealer for multi node setup with replicated indexes for
 // only Pass 0 cases
 func TestMultiNode_Pass0(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	t.Run("BasicAllPrimary", func(t0 *testing.T) {
 		t0.Parallel()
@@ -3035,7 +3035,7 @@ func genMoveInstanceCb(cluster []*IndexerNode) moveFuncCb {
 }
 
 func TestMultiNode_Pass1(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	t.Run("BasicAllPrimary", func(t0 *testing.T) {
 		t0.Parallel()
@@ -3244,7 +3244,7 @@ func TestMultiNode_Pass1(t *testing.T) {
 }
 
 func TestMultiNode_Pass2(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	t.Run("BasicAllPrimary", func(t0 *testing.T) {
 		t0.Parallel()
@@ -3351,7 +3351,7 @@ func TestMultiNode_Pass2(t *testing.T) {
 }
 
 func TestMultiNode_Pass3(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	var testShardCapacity uint64 = 200
 
@@ -3411,7 +3411,7 @@ func TestMultiNode_Pass3(t *testing.T) {
 }
 
 func TestMultiNode_RandomLayoutTests(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	var testShardCapacity uint64 = 200
 
@@ -3518,7 +3518,7 @@ func TestMultiNode_RandomLayoutTests(t *testing.T) {
 }
 
 func TestMultiNode_HighReuseTests(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	var testShardCapacity uint64 = 10
 
@@ -3599,7 +3599,7 @@ func clusterStr(cluster ...*IndexerNode) string {
 // in both the cases, we are mainly targeting to test shard reuse logic and the logic to ensure
 // that index-replicaID and slot-replicaID mapping is aligned
 func TestMultiNode_UnevenDistribution(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	{
 		// each node has 1 slot common
@@ -3775,7 +3775,7 @@ func TestMultiNode_UnevenDistribution(t *testing.T) {
 }
 
 func TestMultiNode_MixedModeRebalance(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	var testShardCapacity uint64 = 10
 
@@ -3842,7 +3842,7 @@ func TestMultiNode_MixedModeRebalance(t *testing.T) {
 }
 
 func TestSingleNode_HardLimit(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	const (
 		testShardCapacity         = uint64(10)

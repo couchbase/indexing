@@ -21,11 +21,11 @@ func GetWorkingSetSize() int64 {
 	return ee.GetWorkingSetSize()
 }
 
-// MemoryInUse includes BufferMemoryInUse
+// MemoryInUse includes GolangMemoryInUse
 func MemoryInUse() int64 {
 	return int64(ee.GetMemoryUsage())
 }
 
-func BufferMemoryInUse() int64 {
-	return int64(ee.GetBufferMemoryUsage())
+func GolangMemoryInUse() int64 {
+	return int64(ee.GetGolangMemoryUsage())
 }

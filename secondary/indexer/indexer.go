@@ -904,8 +904,8 @@ func (idx *indexer) initHTTPMux() {
 		}
 
 		rhSend(http.StatusServiceUnavailable, w, map[string]interface{}{
-			"code":   "error",
-			"error":  "Indexer is still bootstrapping – please retry later",
+			"code":  "error",
+			"error": "Indexer is still bootstrapping – please retry later",
 		})
 	})
 
@@ -11806,7 +11806,7 @@ func (idx *indexer) memoryUsed(forceRefresh bool) (uint64, uint64, uint64) {
 	mode := common.GetStorageMode()
 	if mode == common.MOI || mode == common.PLASMA {
 		jemallocHeap = mm.Size()
-		mem_storage = jemallocHeap + uint64(plasma.BufferMemoryInUse()+bhive.BufferMemoryInUse()) - uint64(idx.stats.totalCodebookMemUsage.Value())
+		mem_storage = jemallocHeap + uint64(plasma.GolangMemoryInUse()+bhive.GolangMemoryInUse()) - uint64(idx.stats.totalCodebookMemUsage.Value())
 	}
 
 	mem_used += jemallocHeap
