@@ -128,7 +128,7 @@ func NewDcpFeed(
 		logPrefix:     name.StreamLogPrefix(),
 		stats:         &DcpStats{StreamNo: fmt.Sprintf("%v", name.StreamId)},
 		seqOrders:     make(map[uint16]transport.SeqOrderState),
-		closeMutQueue: make(chan bool, 1),
+		closeMutQueue: make(chan bool, 2),
 		dequeueDoneCh: make(chan bool),
 	}
 

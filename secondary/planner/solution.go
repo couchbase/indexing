@@ -1781,6 +1781,12 @@ func (s *Solution) runSizeEstimation(placement PlacementMethod, newInstCount int
 						}
 					}
 
+					if index.Instance != nil && index.Instance.Defn.IsVectorIndex {
+						// estimation will be used before build i.e. training happens, thus nlist provided in defn can be used
+						nlist := index.Instance.Defn.VectorMeta.Quantizer.Nlist
+						index.EstimatedCodebookMem = estimateCodebookMemUsage(index.Instance.Defn.VectorMeta, nlist)
+					}
+
 					indexer.AddMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage, index.EstimatedCodebookMem)
 					indexer.AddDataSize(s, index.EstimatedDataSize)
 				}
@@ -1952,6 +1958,7 @@ func (s *Solution) cleanupEstimation() {
 				indexer.SubtractDataSize(s, index.EstimatedDataSize)
 				index.EstimatedMemUsage = 0
 				index.EstimatedDataSize = 0
+				index.EstimatedCodebookMem = 0
 			}
 		}
 	}

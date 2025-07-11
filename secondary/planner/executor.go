@@ -127,28 +127,30 @@ type Plan struct {
 
 type IndexSpec struct {
 	// definition
-	Name                   string             `json:"name,omitempty"`
-	Bucket                 string             `json:"bucket,omitempty"`
-	Scope                  string             `json:"scope,omitempty"`
-	Collection             string             `json:"collection,omitempty"`
-	DefnId                 common.IndexDefnId `json:"defnId,omitempty"`
-	IsPrimary              bool               `json:"isPrimary,omitempty"`
-	SecExprs               []string           `json:"secExprs,omitempty"`
-	WhereExpr              string             `json:"where,omitempty"`
-	Deferred               bool               `json:"deferred,omitempty"`
-	Immutable              bool               `json:"immutable,omitempty"`
-	IsArrayIndex           bool               `json:"isArrayIndex,omitempty"`
-	IsCompositeVectorIndex bool               `json:"isCompositeVectorIndex,omitempty"`
-	IsBhiveIndex           bool               `json:"isBhiveIndex,omitempty"`
-	RetainDeletedXATTR     bool               `json:"retainDeletedXATTR,omitempty"`
-	NumPartition           uint64             `json:"numPartition,omitempty"`
-	PartitionScheme        string             `json:"partitionScheme,omitempty"`
-	HashScheme             uint64             `json:"hashScheme,omitempty"`
-	PartitionKeys          []string           `json:"partitionKeys,omitempty"`
-	Replica                uint64             `json:"replica,omitempty"`
-	Desc                   []bool             `json:"desc,omitempty"`
-	Using                  string             `json:"using,omitempty"`
-	ExprType               string             `json:"exprType,omitempty"`
+	Name                   string                  `json:"name,omitempty"`
+	Bucket                 string                  `json:"bucket,omitempty"`
+	Scope                  string                  `json:"scope,omitempty"`
+	Collection             string                  `json:"collection,omitempty"`
+	DefnId                 common.IndexDefnId      `json:"defnId,omitempty"`
+	IsPrimary              bool                    `json:"isPrimary,omitempty"`
+	SecExprs               []string                `json:"secExprs,omitempty"`
+	WhereExpr              string                  `json:"where,omitempty"`
+	Deferred               bool                    `json:"deferred,omitempty"`
+	Immutable              bool                    `json:"immutable,omitempty"`
+	IsArrayIndex           bool                    `json:"isArrayIndex,omitempty"`
+	IsCompositeVectorIndex bool                    `json:"isCompositeVectorIndex,omitempty"`
+	IsBhiveIndex           bool                    `json:"isBhiveIndex,omitempty"`
+	RetainDeletedXATTR     bool                    `json:"retainDeletedXATTR,omitempty"`
+	NumPartition           uint64                  `json:"numPartition,omitempty"`
+	PartitionScheme        string                  `json:"partitionScheme,omitempty"`
+	HashScheme             uint64                  `json:"hashScheme,omitempty"`
+	PartitionKeys          []string                `json:"partitionKeys,omitempty"`
+	Replica                uint64                  `json:"replica,omitempty"`
+	Desc                   []bool                  `json:"desc,omitempty"`
+	Using                  string                  `json:"using,omitempty"`
+	ExprType               string                  `json:"exprType,omitempty"`
+	NumCentroid            int                     `json:"numCentroid,omitempty"`
+	QuantizationType       common.QuantizationType `json:"quantizationType,omitempty"`
 
 	IndexMissingLeadingKey bool `json:"indexMissingLeadingKey,omitempty"`
 
@@ -4287,6 +4289,13 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 					IsCompositeIndex: spec.IsCompositeVectorIndex,
 					IsBhive:          spec.IsBhiveIndex,
 				}
+
+				quantizer := &common.VectorQuantizer{
+					Nlist: spec.NumCentroid,
+					Type:  spec.QuantizationType,
+				}
+
+				index.Instance.Defn.VectorMeta.Quantizer = quantizer
 			}
 
 			// This is need to compute stats for new indexes

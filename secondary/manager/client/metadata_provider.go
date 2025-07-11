@@ -2717,6 +2717,10 @@ func (o *MetadataProvider) prepareIndexSpec(defn *c.IndexDefn) *planner.IndexSpe
 	if defn.IsVectorIndex {
 		spec.IsCompositeVectorIndex = defn.VectorMeta.IsCompositeIndex
 		spec.IsBhiveIndex = defn.VectorMeta.IsBhive
+		if defn.VectorMeta.Quantizer != nil {
+			spec.QuantizationType = defn.VectorMeta.Quantizer.Type
+			spec.NumCentroid = defn.VectorMeta.Quantizer.Nlist
+		}
 	}
 
 	return &spec
