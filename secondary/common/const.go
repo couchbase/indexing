@@ -10,6 +10,7 @@ import (
 const ERR_TRAINING string = "ErrTraining: "
 const ERR_BUILD_AFTER_TRAINING string = "ErrInBuildAfterTraining: "
 const INVALID_TRAIN_LIST_SIZE string = "InvalidTrainListSize: "
+const INVALID_ITEMS_COUNT string = "InvalidItemsCount: "
 
 // error codes
 
@@ -230,6 +231,6 @@ func IsVectorTrainingErrorQualifyingDocs(errStr string) bool {
 	return IsVectorTrainingError(errStr) && strings.Contains(errStr, "Number of qualifying")
 }
 
-func IsVectorTrainingErrorInvalidTrainList(errStr string) bool {
-	return IsVectorTrainingError(errStr) && strings.Contains(errStr, INVALID_TRAIN_LIST_SIZE)
+func IsRebalSafeVectorTrainingError(errStr string) bool {
+	return IsVectorTrainingError(errStr) && (strings.Contains(errStr, INVALID_TRAIN_LIST_SIZE) || strings.Contains(errStr, INVALID_ITEMS_COUNT))
 }

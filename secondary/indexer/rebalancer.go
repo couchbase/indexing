@@ -2233,7 +2233,7 @@ func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.Transfe
 					}
 				}
 				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
-			} else if common.IsVectorTrainingErrorInvalidTrainList(errStr) {
+			} else if common.IsRebalSafeVectorTrainingError(errStr) {
 				// If there are vector training error due to not enough qualifying docs
 				// don't fail the rebalance, move the TT to Committed state
 				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")
@@ -2419,7 +2419,7 @@ func (r *Rebalancer) buildAcceptedIndexesBatch(buildTokens map[string]*common.Tr
 					}
 				}
 				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
-			} else if common.IsVectorTrainingErrorInvalidTrainList(errStr) {
+			} else if common.IsRebalSafeVectorTrainingError(errStr) {
 				// If there are vector training error due to not enough qualifying docs
 				// don't fail the rebalance, move the TT to Committed state
 				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")

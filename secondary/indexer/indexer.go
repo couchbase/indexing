@@ -13416,6 +13416,7 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 	vecInstIdList []c.IndexInstId, errMap map[c.IndexInstId]error) ([]common.IndexInstId, uint64) {
 
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	validVecInsts := make([]common.IndexInstId, 0)
 
 	itemsCount, err := idx.getItemsCount(cluster, bucket, reqcid)
 	if err != nil {
@@ -13425,10 +13426,18 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 		for _, instId := range vecInstIdList {
 			errMap[instId] = err
 		}
-		return nil, 0
+		return validVecInsts, 0
+	} else if itemsCount == 0 {
+		logging.Errorf("Indexer::computeCentroids items_count is 0 "+
+			"for keyspaceId: %v, reqcid: %v",
+			keyspaceId, reqcid)
+		err = errors.New(common.ERR_TRAINING + common.INVALID_ITEMS_COUNT + fmt.Sprintf("computeCentroids items_count is 0 for keyspaceId: ", keyspaceId))
+		for _, instId := range vecInstIdList {
+			errMap[instId] = err
+		}
+		return validVecInsts, 0
 	}
 
-	validVecInsts := make([]common.IndexInstId, 0)
 	for _, instId := range vecInstIdList {
 		inst := idx.indexInstMap[instId]
 
