@@ -2516,18 +2516,23 @@ func (cicl *ClusterInfoCacheLiteClient) IsEphemeral(bucketName string) (bool, er
 	return bi.IsEphemeral(bucketName)
 }
 
-func (cicl *ClusterInfoCacheLiteClient) ValidateBucket(bucketName string, uuids []string) (resp bool) {
-	validateBucket := func() bool {
+// Validate bucket returns false for cases where we can check is successful and the bucket is
+// invalid/deleted.
+// For any other errors that may be arising in cicl or timeouts are regarded as successful cases.
+// The caller should take an optimistic approach, where if the check can't be made currently, the
+// validity should be handled later.
+func (cicl *ClusterInfoCacheLiteClient) ValidateBucket(bucketName string, uuids []string) (valid bool) {
+	validateBucket := func() error {
 		bi, err := cicl.GetBucketInfo(bucketName)
 		if err != nil {
 			logging.Errorf("ValidateBucket: Unable to GetBucketInfo due to err %v", err)
-			return false
+			return err
 		}
 
 		if len(bi.bucket.HibernationState) != 0 {
 			logging.Infof("ValidateBucket: Bucket(%v) in hibernation state %v",
 				bucketName, bi.bucket.HibernationState)
-			return true
+			return nil
 		}
 
 		if nids, err := bi.GetNodesByBucket(bucketName); err == nil && len(nids) != 0 {
@@ -2535,21 +2540,32 @@ func (cicl *ClusterInfoCacheLiteClient) ValidateBucket(bucketName string, uuids 
 			currentUUID := bi.GetBucketUUID(bucketName)
 			for _, uuid := range uuids {
 				if uuid != currentUUID {
-					return false
+					// a changed UUID signifies a new bucket with the same name was created
+					return ErrBucketUUIDChanged
 				}
 			}
-			return true
+			return nil
 		} else {
 			logging.Fatalf("Error Fetching Bucket Info: %v Nids: %v", err, nids)
-			return false
+			return err
 		}
 	}
 
-	resp = validateBucket()
-	if resp == false {
-		return validateBucket()
+	validitySoftCheck := func(deletedErrs []error, currErr error) bool {
+		for _, e := range deletedErrs {
+			if strings.Contains(currErr.Error(), e.Error()) {
+				return false
+			}
+		}
+		return true
 	}
-	return resp
+
+	err := validateBucket()
+	if err != nil {
+		err = validateBucket()
+		return err == nil || validitySoftCheck(KeyspaceDeletedErrorsInCreate, err)
+	}
+	return true
 }
 
 func (cicl *ClusterInfoCacheLiteClient) IsMagmaStorage(bucketName string) (bool, error) {
@@ -2654,26 +2670,42 @@ func (c *ClusterInfoCacheLiteClient) GetIndexScopeLimit(bucket, scope string) (u
 	return ci.GetIndexScopeLimit(bucket, scope)
 }
 
+// Validate Collection returns false for cases where we can check is successful and the bucket is
+// invalid/deleted.
+// For any other errors that may be arising in cicl or timeouts are regarded as successful cases.
+// The caller should take an optimistic approach, where if the check can't be made currently, the
+// validity should be handled later.
 func (c *ClusterInfoCacheLiteClient) ValidateCollectionID(bucket, scope,
 	collection, collnID string, retry bool) bool {
-	validateKeyspace := func() bool {
+	validateKeyspace := func() error {
 		ci, err := c.GetCollectionInfo(bucket)
 		if err != nil {
-			return false
+			return err
 		}
 
 		cid := ci.CollectionID(bucket, scope, collection)
 		if cid != collnID {
-			return false
+			// a changed UUID signifies a new collection with the same name was created
+			return ErrCollectionIdChanged
+		}
+		return nil
+	}
+
+	validitySoftCheck := func(deleteErrs []error, currErr error) bool {
+		for _, e := range deleteErrs {
+			if strings.Contains(currErr.Error(), e.Error()) {
+				return false
+			}
 		}
 		return true
 	}
 
-	resp := validateKeyspace()
-	if resp == false && retry == true {
-		return validateKeyspace()
+	err := validateKeyspace()
+	if err != nil && retry == true {
+		err = validateKeyspace()
+		return err == nil || validitySoftCheck(KeyspaceDeletedErrorsInCreate, err)
 	}
-	return resp
+	return err == nil
 }
 
 // Stub function to implement ClusterInfoProvider interface
