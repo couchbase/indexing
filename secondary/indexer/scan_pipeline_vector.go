@@ -447,12 +447,16 @@ func (w *ScanWorker) Scanner() {
 		} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
 			err = snap.Range(ctx, scan.Low, scan.High, scan.Incl, handler, fincb)
 		} else if w.r.isBhiveScan {
+			// Create copies of scan.Low and scan.High for Range2 calls
+			lowBytes := bhiveCentroidId(append([]byte(nil), scan.Low.Bytes()...))
+			highBytes := bhiveCentroidId(append([]byte(nil), scan.High.Bytes()...))
+
 			if w.r.includeColumnFilters != nil {
-				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, w.r.Limit, w.r.topNScan, handler, fincb, w.inlineFilterCb2)
+				err = snap.Range2(ctx, lowBytes, highBytes, scan.Incl, w.r.Limit, w.r.topNScan, handler, fincb, w.inlineFilterCb2)
 			} else if w.r.inlineFilterExpr != nil {
-				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, w.r.Limit, w.r.topNScan, handler, fincb, w.inlineFilterCb)
+				err = snap.Range2(ctx, lowBytes, highBytes, scan.Incl, w.r.Limit, w.r.topNScan, handler, fincb, w.inlineFilterCb)
 			} else {
-				err = snap.Range2(ctx, scan.Low, scan.High, scan.Incl, w.r.Limit, w.r.topNScan, handler, fincb, nil)
+				err = snap.Range2(ctx, lowBytes, highBytes, scan.Incl, w.r.Limit, w.r.topNScan, handler, fincb, nil)
 			}
 		} else {
 			err = snap.Lookup(ctx, scan.Low, handler, fincb)
@@ -2161,6 +2165,14 @@ func NewAtomicRowBuffer(size int) *AtomicRowBuffer {
 
 // Put adds a new Row pointer to the queue and blocks if the queue is full
 func (q *AtomicRowBuffer) Put(row *Row) {
+
+	//set row references to nil
+	row.key = nil
+	row.value = nil
+	row.includeColumn = nil
+	row.cid = nil
+	row.sortKey = nil
+
 	for {
 		// Check if the queue is full
 		if atomic.LoadInt64(&q.count) == q.size {
