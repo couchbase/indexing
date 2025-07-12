@@ -4734,17 +4734,18 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.vector.largeDataThreshold": ConfigValue{
+	"indexer.vector.max_sample_threshold": ConfigValue{
 		1000000, // 1M
-		"Number of items after which indexer uses a smaller train_vecs_per_centroid",
+		"Max number of vectors sampled during training.",
 		1000000, // 1M
 		false,
 		false,
 	},
-	"indexer.vector.train_vecs_per_centroid": ConfigValue{
-		50,
-		"For training the index, number of vectors to use per centroid",
-		50,
+	"indexer.vector.train_vecs_percent": ConfigValue{
+		10,
+		"Percentage of vectors sampled from the dataset for training. This is capped by the setting " +
+			"indexer.vector.max_sample_threshold",
+		10,
 		false,
 		false,
 	},
