@@ -1035,6 +1035,8 @@ const (
 	DOT                                = "DOT"
 )
 
+var DEFAULT_VECTOR_SIMILARITY = "L2_SQUARED"
+
 type VectorMetadata struct {
 	IsCompositeIndex  bool             `json:"isCompositeIndex,omitempty"`
 	IsBhive           bool             `json:"isBhive,omitempty"`
