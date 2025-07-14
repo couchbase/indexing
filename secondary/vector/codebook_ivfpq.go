@@ -90,8 +90,9 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric c.MetricType, useCosin
 
 // Train the codebook using input vectors.
 func (cb *codebookIVFPQ) Train(vecs []float32) error {
-	token := acquireGlobal()
-	defer releaseGlobal(token)
+
+	acquireTraining()
+	defer releaseTraining()
 
 	if cb.index == nil {
 		return c.ErrCodebookClosed

@@ -872,6 +872,10 @@ func (idx *indexer) initFromConfig() {
 	}
 	vector.SetConcurrency(allocatedVectorCores)
 	logging.Infof("Indexer: Vector MaxCPU set to %v\n", allocatedVectorCores)
+
+	maxParallelTraining  := idx.config["vector.max_parallel_training"].Int()
+	vector.SetTrainingConcurrency(maxParallelTraining)
+	logging.Infof("Indexer: Vector Max Training set to %v\n", maxParallelTraining)
 }
 
 func GetHTTPMux() *http.ServeMux {
@@ -1962,6 +1966,10 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	}
 	vector.SetConcurrency(allocatedVectorCores)
 	logging.Infof("Indexer: Vector MaxCPU set to %v\n", allocatedVectorCores)
+
+	maxParallelTraining  := newConfig["vector.max_parallel_training"].Int()
+	vector.SetTrainingConcurrency(maxParallelTraining)
+	logging.Infof("Indexer: Vector Max Training set to %v\n", maxParallelTraining)
 
 	idx.config = newConfig
 

@@ -30,6 +30,13 @@ var (
 	globalCurrentLimit int64 // Current effective concurrency
 
 	globalShardedSem atomic.Pointer[shardedSem] // Sharded semaphore to control concurrency
+
+	//training concurrency control
+	trainingConcurrencyLock sync.RWMutex
+	trainingSemaphore       chan struct{}
+	trainingMaxCapacity     int // Maximum possible concurrent trainings
+	trainingCurrentCapacity int // Current effective training capacity
+
 )
 
 func init() {
@@ -42,6 +49,12 @@ func init() {
 	globalCurrentLimit = 1
 
 	initShardedSemaphore(numShards, globalCurrentLimit)
+
+	//set max training capacity as the number of CPUs
+	trainingMaxCapacity = numCores
+	trainingSemaphore = make(chan struct{}, trainingMaxCapacity)
+	trainingSemaphore <- struct{}{}
+	trainingCurrentCapacity = 1 //minimum 1 training is allowed
 
 	faiss.SetOMPThreads(defaultOMPThreads)
 	var gomaxprocs = runtime.GOMAXPROCS(-1)
@@ -70,6 +83,7 @@ func initShardedSemaphore(numShards int, capacityPerShard int64) {
 	}
 
 	globalShardedSem.Store(newShardedSem)
+
 }
 
 // SetConcurrency sets the global maximum number of concurrent codebook operations
@@ -116,6 +130,65 @@ func acquireGlobal() *shardedToken {
 // releaseGlobal releases a permit back to the global semaphore
 func releaseGlobal(token *shardedToken) {
 	token.Release()
+}
+
+// SetTrainingConcurrency sets the maximum number of concurrent training operations
+// 1 is the minimum training allowed.
+func SetTrainingConcurrency(maxConcurrent int) {
+	trainingConcurrencyLock.Lock()
+	defer trainingConcurrencyLock.Unlock()
+
+	if maxConcurrent <= 0 {
+		// Keep 1 permit minimum
+		for i := 0; i < trainingCurrentCapacity-1; i++ {
+			<-trainingSemaphore // Block until permit is available
+		}
+		trainingCurrentCapacity = 1
+	} else {
+		if maxConcurrent > trainingMaxCapacity {
+			logging.Warnf("Codebook::SetTrainingConcurrency Requested capacity %d exceeds maximum %d, using maximum",
+				maxConcurrent, trainingMaxCapacity)
+			maxConcurrent = trainingMaxCapacity
+		}
+
+		diff := maxConcurrent - trainingCurrentCapacity
+		if diff > 0 {
+			// Increasing capacity - add permits to channel
+			for i := 0; i < diff; i++ {
+				trainingSemaphore <- struct{}{}
+			}
+		} else if diff < 0 {
+			// Decreasing capacity - remove permits from channel
+			for i := 0; i < -diff; i++ {
+				<-trainingSemaphore // Block until permit is available
+			}
+		}
+		trainingCurrentCapacity = maxConcurrent
+	}
+}
+
+// GetTrainingConcurrency returns the current global maximum number of concurrent trainings.
+func GetTrainingConcurrency() int {
+	trainingConcurrencyLock.RLock()
+	defer trainingConcurrencyLock.RUnlock()
+
+	return trainingCurrentCapacity
+}
+
+// acquireTraining acquires a permit from the training semaphore
+func acquireTraining() {
+	<-trainingSemaphore
+}
+
+// releaseTraining releases a permit back to the training semaphore
+func releaseTraining() {
+	select {
+	case trainingSemaphore <- struct{}{}:
+		// Successfully returned the permit
+	default:
+		// Channel is full
+		logging.Warnf("Codebook::releaseTraining Attempted to release when channel is full")
+	}
 }
 
 type CodebookVer int

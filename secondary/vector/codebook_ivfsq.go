@@ -81,8 +81,8 @@ func NewCodebookIVFSQ(dim, nlist int, sqRange common.ScalarQuantizerRange, metri
 // Train the codebook using input vectors.
 func (cb *codebookIVFSQ) Train(vecs []float32) error {
 
-	token := acquireGlobal()
-	defer releaseGlobal(token)
+	acquireTraining()
+	defer releaseTraining()
 
 	if cb.index == nil {
 		return c.ErrCodebookClosed

@@ -4777,6 +4777,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.vector.max_parallel_training": ConfigValue{
+		1,
+		"Max number of training that can execute in parallel.",
+		1,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another
