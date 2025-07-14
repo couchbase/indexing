@@ -252,6 +252,7 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 	slice.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()
 	slice.maxNumWriters = NumKVStore // num writers must match kvstore
 	slice.topNScan = sysconf["bhive.topNScan"].Int()
+	updateBhiveConfig(slice.sysconf)
 
 	numReaders := sysconf["bhive.numReaders"].Int()
 	slice.readers = make(chan *bhive.Reader, numReaders)
@@ -738,12 +739,22 @@ func (mdb *bhiveSlice) IsCleanupDone() bool {
 // Settings
 ////////////////////////////////////////////////
 
+func updateBhiveConfig(cfg common.Config) {
+	bhive.MTunerDecrementRatio = cfg["plasma.memtuner.trimDownRatio"].Float64()
+	bhive.MTunerIncrementRatio = cfg["plasma.memtuner.incrementRatio"].Float64()
+	bhive.MTunerMinFreeMemRatio = cfg["plasma.memtuner.minFreeRatio"].Float64()
+	bhive.MTunerMaxFreeMemory = cfg["plasma.memtuner.maxFreeMemory"].Int()
+	bhive.MTunerOvershootRatio = cfg["plasma.memtuner.overshootRatio"].Float64()
+}
+
 func (mdb *bhiveSlice) UpdateConfig(cfg common.Config) {
 
 	mdb.confLock.Lock()
 	defer mdb.confLock.Unlock()
 
 	mdb.sysconf = cfg
+
+	updateBhiveConfig(cfg)
 
 	logLevel := cfg["settings.log_level"].String()
 	if bc.GetLogLevel() != bc.Level(logLevel) {
