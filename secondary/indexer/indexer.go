@@ -871,6 +871,7 @@ func (idx *indexer) initFromConfig() {
 		allocatedVectorCores = 1
 	}
 	vector.SetConcurrency(allocatedVectorCores)
+	vector.SetOMPThreadLimit(allocatedVectorCores)
 	logging.Infof("Indexer: Vector MaxCPU set to %v\n", allocatedVectorCores)
 
 	maxParallelTraining  := idx.config["vector.max_parallel_training"].Int()

@@ -83,7 +83,12 @@ func initShardedSemaphore(numShards int, capacityPerShard int64) {
 	}
 
 	globalShardedSem.Store(newShardedSem)
+}
 
+//SetOMPThreadLimit sets the thread limit for OpenMP regions.
+//It is best to call this before calling into faiss for regular operations.
+func SetOMPThreadLimit(maxThreads int) {
+	os.Setenv("OMP_THREAD_LIMIT", strconv.Itoa(maxThreads))
 }
 
 // SetConcurrency sets the global maximum number of concurrent codebook operations
@@ -113,8 +118,6 @@ func SetConcurrency(maxConcurrent int64) {
 	}
 
 	initShardedSemaphore(numShards, capacityPerShard)
-
-	atomic.StoreInt64(&globalCurrentLimit, newLimit)
 }
 
 // GetConcurrency returns the current global maximum number of concurrent operations
