@@ -629,15 +629,15 @@ findCategory:
 			}
 		}
 	}
-	defnDbgLog = fmt.Sprintf("(d: %v, p: %v, cat: %d, t: %d)",
-		defnID, partnID, indexShardCategory, tracker)
+	defnDbgLog = fmt.Sprintf("(d: %v, p: %v, cat: %d, t: %d, ipc: %v)",
+		defnID, partnID, indexShardCategory, tracker, isPartialCluster)
 
 	var defnJSONLog = func(replicaID int, nodeUUIDs ...nodeUUID) string {
 		var nodeHosts = make([]nodeHost, 0, len(nodeUUIDs))
 		for _, nodeUUID := range nodeUUIDs {
 			nodeHosts = append(nodeHosts, sd.nodeUUIDToHostMap[nodeUUID])
 		}
-		return fmt.Sprintf("{defnID: %v, partnID: %v, repID: %v, nodeUUIDs: %v, nodeHost: %v, cat: %s, t: %v}",
+		return fmt.Sprintf("{defnID: %v, partnID: %v, repID: %v, nodeUUIDs: %v, nodeHost: %v, cat: %s, t: %v, ipc: %v}",
 			defnID,
 			partnID,
 			replicaID,
@@ -645,6 +645,7 @@ findCategory:
 			nodeHosts,
 			indexShardCategory.String(),
 			tracker,
+			isPartialCluster,
 		)
 	}
 

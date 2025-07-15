@@ -181,6 +181,9 @@ type ScanWorker struct {
 	includeColumnLen     int
 	explodeUpto          int
 
+	incBuf   *[]byte
+	inccktmp [][]byte
+
 	//For caching values
 	cv          *value.ScopeValue
 	av          value.AnnotatedValue
@@ -210,6 +213,11 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		includeColumnLen:     len(r.IndexInst.Defn.Include),
 		cktmp:                make([][]byte, len(r.IndexInst.Defn.SecExprs)),
 		config:               config,
+	}
+
+	if w.includeColumnLen > 0 && r.indexOrder != nil && r.indexOrder.IsSortKeyNeeded() {
+		w.incBuf = r.getFromSecKeyBufPool()
+		w.inccktmp = make([][]byte, len(r.IndexInst.Defn.Include))
 	}
 
 	//init temp buffers
@@ -607,7 +615,6 @@ func (w *ScanWorker) flushLocalHeap() {
 
 			entry1 := secondaryIndexEntry(row.key)
 			newRow.len = entry1.lenKey()
-			newRow.sortKey = row.sortKey
 		}
 		newRow.workerId = w.id
 
@@ -756,9 +763,10 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		if w.r.indexOrder != nil && w.r.indexOrder.IsSortKeyNeeded() {
 			// VECTOR_TODO: Optimize buffer allocation
 			sortKey = make([]byte, 0, len(w.currBatchRows[i].key)*3)
-			sortKey, err = w.makeSortKeyForOrderBy(nil, w.r.indexOrder,
-				w.currBatchRows[i].key, w.dists[i], w.r.getVectorKeyPos(),
-				w.r.indexOrder.vectorDistDesc, sortKey)
+			// VECTOR_TODO: Avoid exploding composite and include keys multiple times
+			sortKey, err = w.makeSortKeyForOrderBy(nil, nil, w.r.indexOrder,
+				w.currBatchRows[i].key, w.currBatchRows[i].includeColumn, w.dists[i],
+				w.r.getVectorKeyPos(), w.r.indexOrder.vectorDistDesc, sortKey)
 			if err != nil {
 				return err
 			}
@@ -2087,18 +2095,40 @@ func NewScanPipeline2(req *ScanRequest, w ScanResponseWriter, is IndexSnapshot, 
 	return scanPipeline
 }
 
-func (w *ScanWorker) makeSortKeyForOrderBy(compositeKeys [][]byte, indexOrder *IndexKeyOrder, key []byte,
-	dist float32, vectorKeyPos int, vectorKeyPosDesc bool, buf []byte) ([]byte, error) {
+func (w *ScanWorker) makeSortKeyForOrderBy(compositeKeys, explodedIncludekeys [][]byte, indexOrder *IndexKeyOrder, key []byte,
+	includeKeys []byte, dist float32, vectorKeyPos int, vectorKeyPosDesc bool, buf []byte) ([]byte, error) {
 
 	var keysToJoin [][]byte
 	var err error
 
 	desc := w.r.IndexInst.Defn.Desc
+	isBhive := w.r.IndexInst.Defn.IsBhive()
 
-	if compositeKeys == nil {
+	var numCompositeKeys int32
+	var numIncludeKeys int32 = int32(len(w.r.IndexInst.Defn.Include))
+	if compositeKeys == nil && !isBhive {
 		compositeKeys, err = jsonEncoder.ExplodeArray4(key, buf)
 		if err != nil {
 			return nil, err
+		}
+		numCompositeKeys = int32(len(compositeKeys))
+	} else if isBhive {
+		// For bhive index we have only one composite key i.e. vector key
+		numCompositeKeys = 1
+	}
+
+	if explodedIncludekeys == nil && includeKeys != nil {
+		explodedIncludekeys, _, err = jsonEncoder.ExplodeArray3(includeKeys, (*w.incBuf)[:0], w.inccktmp, nil,
+			w.r.Indexprojection.projectIncludeKeys, nil, len(w.r.IndexInst.Defn.Include))
+		if err != nil {
+			if err == collatejson.ErrorOutputLen {
+				newBuf := make([]byte, 0, len(key)*3)
+				explodedIncludekeys, _, err = jsonEncoder.ExplodeArray3(includeKeys, newBuf, w.inccktmp, nil,
+					w.r.Indexprojection.projectIncludeKeys, nil, len(w.r.IndexInst.Defn.Include))
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -2115,19 +2145,33 @@ func (w *ScanWorker) makeSortKeyForOrderBy(compositeKeys [][]byte, indexOrder *I
 				logging.Verbosef("makeSortKeyForOrderBy: Sender got error: %v from EncodeN1qlvalue", err)
 				return nil, err
 			}
+			// Vector index has no order on distance as centroid is stored in index
+			// So use order given in orderby pushdown
 			if vectorKeyPosDesc {
 				FlipBits(distCode)
 			}
 			keysToJoin = append(keysToJoin, distCode)
-			continue
+		} else if keyPos >= numCompositeKeys && keyPos < numCompositeKeys+numIncludeKeys {
+			// For include keys there is no order in index so use order give in orderby pushdown
+			revBuf := explodedIncludekeys[keyPos-numCompositeKeys]
+			if indexOrder.desc[i] {
+				revBuf = make([]byte, 0)
+				revBuf = append(revBuf, explodedIncludekeys[keyPos-numCompositeKeys]...)
+				FlipBits(revBuf)
+			}
+			keysToJoin = append(keysToJoin, revBuf)
+		} else if keyPos < numCompositeKeys {
+			// For composite keys flip bit when query orderBy order is different from index order
+			revBuf := compositeKeys[keyPos]
+			if desc != nil && desc[keyPos] != indexOrder.desc[i] {
+				revBuf = make([]byte, 0)
+				revBuf = append(revBuf, compositeKeys[keyPos]...)
+				FlipBits(revBuf)
+			}
+			keysToJoin = append(keysToJoin, revBuf)
+		} else {
+			return nil, errors.New(fmt.Sprintf("keyPos %v is out of range indexOrder: %v", keyPos, indexOrder))
 		}
-		revBuf := compositeKeys[keyPos]
-		if desc != nil && desc[keyPos] != indexOrder.desc[i] {
-			revBuf = make([]byte, 0)
-			revBuf = append(revBuf, compositeKeys[keyPos]...)
-			FlipBits(revBuf)
-		}
-		keysToJoin = append(keysToJoin, revBuf)
 	}
 
 	buf = buf[:0]
