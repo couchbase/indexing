@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/system"
+	"github.com/couchbase/indexing/secondary/vector"
 )
 
 const MAX_THROTTLE_ADJUST_MS float64 = 5.0 // max msec to adjust throttleDelayMs by at one time
@@ -36,6 +37,10 @@ type CpuThrottle struct {
 	stopCh             chan struct{}  // close to stop the runThrottling goroutine
 	throttleDelayMs    unsafe.Pointer // *int64 ms to delay an action when CPU throttling is enabled
 	throttleStateMutex sync.Mutex     // sync throttling enabled/disabled state changes, incl stopCh
+
+	// Vector concurrency control
+	baseVectorConcurrency int        // original vector concurrency setting
+	vectorConcurrencyLock sync.Mutex // protects vector concurrency adjustments
 
 	// getCurrentCpuUsageStd's circular buffer of past CPU stats and index of next one to (re)use
 	cpuStatsStd    [NUM_CPU_STATS]*system.SigarCpuT // CPU ticks in categories since sigar start
@@ -65,6 +70,8 @@ func NewCpuThrottle(cpuTarget float64) *CpuThrottle {
 
 	var throttleDelayMs int64 = 0
 	cpuThrottle.throttleDelayMs = (unsafe.Pointer)(&throttleDelayMs)
+
+	cpuThrottle.baseVectorConcurrency = 0 // Initialize to 0; will be set by indexer
 
 	return &cpuThrottle
 }
@@ -110,6 +117,8 @@ func (this *CpuThrottle) SetCpuThrottling(cpuThrottling bool) {
 		go this.runThrottling(this.stopCh)
 	} else if priorCpuThrottling && !cpuThrottling { // stop
 		close(this.stopCh)
+		// Reset vector concurrency to baseline when throttling is disabled
+		this.resetVectorConcurrency()
 	}
 }
 
@@ -167,6 +176,8 @@ func (this *CpuThrottle) runThrottling(stopCh chan struct{}) {
 	const method string = "CpuThrottle::runThrottling:" // for logging
 
 	this.setThrottleDelayMs(0) // always start with 0 delay
+	// Reset vector concurrency to baseline when throttling starts
+	this.resetVectorConcurrency()
 	logging.Infof("%v Starting. cpuTarget: %v, throttleDelayMs: %v", method,
 		this.getCpuTarget(), this.getThrottleDelayMs())
 
@@ -235,6 +246,18 @@ func (this *CpuThrottle) adjustThrottleDelay(systemStats *system.SystemStats) {
 		newThrottleDelayMs = 0
 	}
 	this.setThrottleDelayMs(newThrottleDelayMs)
+
+	// Also adjust vector concurrency based on CPU usage
+	currentVectorConcurrency := int(vector.GetConcurrency())
+	targetVectorConcurrency := this.calculateVectorConcurrency(currCpu, cpuTarget)
+
+	if targetVectorConcurrency > 0 && currentVectorConcurrency != targetVectorConcurrency {
+		vector.SetConcurrency(int64(targetVectorConcurrency))
+		logging.Infof("%v Adjusted vector concurrency. cpuTarget: %v, currCpu: %v,"+
+			" vectorConcurrency (new, old): (%v, %v)",
+			method, cpuTarget, currCpu, targetVectorConcurrency, currentVectorConcurrency)
+	}
+
 	if newThrottleDelayMs != throttleDelayMs {
 		logging.Infof("%v Adjusted throttle. cpuTarget: %v, currCpu: %v,"+
 			" throttleDelayMs (new, old, change): (%v, %v, %v)",
@@ -338,4 +361,80 @@ func (this *CpuThrottle) getCurrentCpuUsageCgroup(systemStats *system.SystemStat
 		cpuUseNew = 0.0
 	}
 	return true, cpuUseNew
+}
+
+// SetBaseVectorConcurrency sets the baseline vector concurrency level that will be used
+// when CPU usage is at or below the target. This should be called when the indexer
+// configuration is updated.
+func (this *CpuThrottle) SetBaseVectorConcurrency(concurrency int) {
+	this.vectorConcurrencyLock.Lock()
+	defer this.vectorConcurrencyLock.Unlock()
+
+	this.baseVectorConcurrency = concurrency
+	logging.Infof("CpuThrottle::SetBaseVectorConcurrency: Base vector concurrency set to %v", concurrency)
+}
+
+// GetBaseVectorConcurrency returns the baseline vector concurrency level
+func (this *CpuThrottle) GetBaseVectorConcurrency() int {
+	this.vectorConcurrencyLock.Lock()
+	defer this.vectorConcurrencyLock.Unlock()
+
+	return this.baseVectorConcurrency
+}
+
+// calculateVectorConcurrency calculates the appropriate vector concurrency based on
+// current CPU usage vs target. It reduces concurrency when CPU usage is above target
+// and restores it when CPU usage is below target.
+func (this *CpuThrottle) calculateVectorConcurrency(currCpu, cpuTarget float64) int {
+	this.vectorConcurrencyLock.Lock()
+	defer this.vectorConcurrencyLock.Unlock()
+
+	if this.baseVectorConcurrency <= 0 {
+		return 0 // No baseline set, don't adjust
+	}
+
+	// If CPU usage is at or below target, use full concurrency
+	if currCpu <= cpuTarget {
+		return this.baseVectorConcurrency
+	}
+
+	// Calculate reduction factor based on how much we're over the target
+	// The reduction is proportional to the overage, with a maximum reduction of 90%
+	maxReduction := 0.90
+	normalizer := 1.00 - cpuTarget
+
+	if normalizer <= 0 {
+		return this.baseVectorConcurrency
+	}
+
+	overage := currCpu - cpuTarget
+	if overage > normalizer {
+		overage = normalizer
+	}
+
+	reductionFactor := maxReduction * (overage / normalizer)
+	adjustedConcurrency := int(float64(this.baseVectorConcurrency) * (1.0 - reductionFactor))
+
+	// Ensure we don't go below 1 (minimum concurrency)
+	if adjustedConcurrency < 1 {
+		adjustedConcurrency = 1
+	}
+
+	return adjustedConcurrency
+}
+
+// resetVectorConcurrency resets the vector concurrency to its baseline value.
+// This should be called when throttling is disabled to restore full concurrency.
+func (this *CpuThrottle) resetVectorConcurrency() {
+	this.vectorConcurrencyLock.Lock()
+	defer this.vectorConcurrencyLock.Unlock()
+
+	if this.baseVectorConcurrency > 0 {
+		currentConcurrency := int(vector.GetConcurrency())
+		if currentConcurrency != this.baseVectorConcurrency {
+			vector.SetConcurrency(int64(this.baseVectorConcurrency))
+			logging.Infof("CpuThrottle::resetVectorConcurrency: Restored vector concurrency to baseline %v (was %v)",
+				this.baseVectorConcurrency, currentConcurrency)
+		}
+	}
 }

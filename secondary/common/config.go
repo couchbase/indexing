@@ -4771,9 +4771,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.vector.max_cpu": ConfigValue{
-		90,
+		100,
 		"Percent of total CPU that can be used by vector library",
-		90,
+		100,
 		false, // mutable
 		false, // case-insensitive
 	},

@@ -870,11 +870,14 @@ func (idx *indexer) initFromConfig() {
 	if allocatedVectorCores == 0 {
 		allocatedVectorCores = 1
 	}
+	vector.SetOMPThreadLimit(int(allocatedVectorCores/2))
 	vector.SetConcurrency(allocatedVectorCores)
-	vector.SetOMPThreadLimit(allocatedVectorCores)
-	logging.Infof("Indexer: Vector MaxCPU set to %v\n", allocatedVectorCores)
 
-	maxParallelTraining  := idx.config["vector.max_parallel_training"].Int()
+	actualConcurrency := vector.GetConcurrency()
+	idx.cpuThrottle.SetBaseVectorConcurrency(int(actualConcurrency))
+	logging.Infof("Indexer: Vector Max Concurrency set to %v\n", actualConcurrency)
+
+	maxParallelTraining := idx.config["vector.max_parallel_training"].Int()
 	vector.SetTrainingConcurrency(maxParallelTraining)
 	logging.Infof("Indexer: Vector Max Training set to %v\n", maxParallelTraining)
 }
@@ -1965,10 +1968,14 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	if allocatedVectorCores == 0 {
 		allocatedVectorCores = 1
 	}
-	vector.SetConcurrency(allocatedVectorCores)
-	logging.Infof("Indexer: Vector MaxCPU set to %v\n", allocatedVectorCores)
 
-	maxParallelTraining  := newConfig["vector.max_parallel_training"].Int()
+	vector.SetConcurrency(allocatedVectorCores)
+
+	actualConcurrency := vector.GetConcurrency()
+	idx.cpuThrottle.SetBaseVectorConcurrency(int(actualConcurrency))
+	logging.Infof("Indexer: Vector Max Concurrency set to %v\n", actualConcurrency)
+
+	maxParallelTraining := newConfig["vector.max_parallel_training"].Int()
 	vector.SetTrainingConcurrency(maxParallelTraining)
 	logging.Infof("Indexer: Vector Max Training set to %v\n", maxParallelTraining)
 

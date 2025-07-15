@@ -64,9 +64,9 @@ func init() {
 	trainingSemaphore <- struct{}{}
 	trainingCurrentCapacity = 1 //minimum 1 training is allowed
 
-	faiss.SetOMPThreads(defaultOMPThreads)
 	var gomaxprocs = runtime.GOMAXPROCS(-1)
-	os.Setenv("OMP_THREAD_LIMIT", strconv.Itoa(gomaxprocs))
+	os.Setenv("OMP_THREAD_LIMIT", strconv.Itoa(gomaxprocs/2))
+	faiss.SetOMPThreads(defaultOMPThreads)
 	os.Setenv("OMP_WAIT_POLICY", defaultWaitPolicy)
 	os.Setenv("OPENBLAS_NUM_THREADS", strconv.Itoa(1))
 }
@@ -126,6 +126,8 @@ func SetConcurrency(maxConcurrent int64) {
 	}
 
 	initShardedSemaphore(numShards, capacityPerShard)
+
+    atomic.StoreInt64(&globalCurrentLimit, newLimit)
 }
 
 // GetConcurrency returns the current global maximum number of concurrent operations
