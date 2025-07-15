@@ -24,6 +24,10 @@ import (
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
+//OpenBLAS is being compiled with max NUM_THREADS as 256. Limit the
+//max concurrency to the same number to prevent exceptions from the library.
+const MAX_GLOBAL_CONCURRENCY = 256
+
 // Global concurrency control
 var (
 	globalMaxLimit     int64 // Maximum possible concurrent operations
@@ -43,6 +47,10 @@ func init() {
 	// Set max capacity as 10 times the number of CPUs
 	numCores := runtime.NumCPU()
 	globalMaxLimit = int64(10 * numCores)
+
+	if globalMaxLimit > MAX_GLOBAL_CONCURRENCY {
+		globalMaxLimit = MAX_GLOBAL_CONCURRENCY
+	}
 
 	// Initialize with 1 shard and 1 concurrency per shard
 	numShards := 1
