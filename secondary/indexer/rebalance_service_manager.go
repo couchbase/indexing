@@ -4162,6 +4162,7 @@ func (m *RebalanceServiceManager) genTransferToken(indexInst *c.IndexInst, sourc
 	tt.IndexInst.Defn.NumPartitions = uint32(tt.IndexInst.Pc.GetNumPartitions())
 	tt.IndexInst.Defn.Partitions = partitions
 	tt.IndexInst.Defn.Versions = versions
+	tt.IndexInst.Defn.AlternateShardIds = nil
 	tt.IndexInst.Pc = nil
 
 	// reset defn id and instance id as if it is a new index.
