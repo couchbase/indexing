@@ -637,10 +637,20 @@ findCategory:
 		for _, nodeUUID := range nodeUUIDs {
 			nodeHosts = append(nodeHosts, sd.nodeUUIDToHostMap[nodeUUID])
 		}
-		return fmt.Sprintf("{defnID: %v, partnID: %v, repID: %v, nodeUUIDs: %v, nodeHost: %v, cat: %s, t: %v, ipc: %v}",
+		var instID c.IndexInstId = 0
+		if replicaMap[replicaID] != nil {
+			for _, index := range replicaMap[replicaID] {
+				if index != nil {
+					instID = index.Instance.InstId
+					break
+				}
+			}
+		}
+		return fmt.Sprintf("{defnID: %v (rID: %v), partnID: %v, instID: %v, nodeUUIDs: %v, nodeHost: %v, cat: %s, t: %v, ipc: %v}",
 			defnID,
-			partnID,
 			replicaID,
+			partnID,
+			instID,
 			nodeUUIDs,
 			nodeHosts,
 			indexShardCategory.String(),
