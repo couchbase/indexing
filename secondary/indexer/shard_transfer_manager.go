@@ -1895,7 +1895,8 @@ func (c *plasmaCopyConfigMeta) GetDestination() string {
 func makeFileCopierForCodebook(meta *plasmaCopyConfigMeta) (plasma.Copier, error) {
 	cfg := generatePlasmaCopierConfigForCodebook(meta)
 	copyRoot := getCodebookRootDir(meta)
-	return plasma.MakeFileCopier(copyRoot, "", plasma.Env, &plasma.DefaultRateLimiter{}, cfg.CopyConfig)
+	rlim := plasma.GetOpRateLimiter(plasma.GSIRebalanceId) // this function is currently called only during rebalance
+	return plasma.MakeFileCopier(copyRoot, "", plasma.Env, rlim, cfg.CopyConfig)
 }
 
 func generatePlasmaCopierConfigForCodebook(meta *plasmaCopyConfigMeta) *plasma.Config {
