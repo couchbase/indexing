@@ -1900,6 +1900,7 @@ func makeFileCopierForCodebook(meta *plasmaCopyConfigMeta) (plasma.Copier, error
 
 func generatePlasmaCopierConfigForCodebook(meta *plasmaCopyConfigMeta) *plasma.Config {
 	cfg := plasma.DefaultConfig()
+	cfg.CopyConfig = plasma.GetUpdatedCopyConfig() // reflects any update in copy config settings provided there are plasma shards
 
 	cfg.CopyConfig.RPCHttpClientCfg = cfg.CopyConfig.RPCHttpClientCfg.WithTLS(meta.GetTLSConfig())
 	cfg.CopyConfig.RPCHttpClientCfg = cfg.CopyConfig.RPCHttpClientCfg.WithAuth(meta.GetAuthCallback())

@@ -505,15 +505,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		}
 
 		// shard transfer
-		// note: server config is set in shard transfer manager during spawn
-		cfg.RPCHttpClientCfg.MaxRetries = int64(slice.sysconf["plasma.shardCopy.maxRetries"].Int())
-		cfg.RPCHttpClientCfg.MaxPartSize = int64(slice.sysconf["plasma.shardCopy.rpc.maxPartSize"].Int())
-		cfg.RPCHttpClientCfg.MaxParts = int64(slice.sysconf["plasma.shardCopy.rpc.client.maxParts"].Int())
-		cfg.RPCHttpClientCfg.MemQuota = int64(slice.sysconf["plasma.shardCopy.rpc.client.memQuota"].Int())
-		cfg.RPCHttpClientCfg.ReqTimeOut = time.Duration(slice.sysconf["plasma.shardCopy.rpc.client.reqTimeout"].Int()) * time.Second
-		cfg.RPCHttpClientCfg.RateAdjInterval = time.Duration(slice.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
-		cfg.RPCHttpClientCfg.RateAdjMaxRatio = slice.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustRatioMax"].Float64()
-		cfg.RPCHttpClientCfg.Debug = slice.sysconf["plasma.shardCopy.rpc.client.dbg"].Int()
+		loadClientCopyConfig(&cfg.CopyConfig, slice.sysconf, false)
 
 		if common.IsServerlessDeployment() {
 			cfg.MaxInstsPerShard = slice.sysconf["plasma.serverless.maxInstancePerShard"].Uint64()
@@ -527,12 +519,6 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 			cfg.UseMultipleContainers = slice.sysconf["plasma.serverless.useMultipleContainers"].Bool()
 
 			cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.serverless.LSSSegmentFileSize"].Int())
-
-			cfg.CPdbg = slice.sysconf["plasma.shardCopy.dbg"].Bool()
-			cfg.CPMaxRetries = int64(slice.sysconf["plasma.shardCopy.maxRetries"].Int())
-			cfg.S3HttpDbg = int64(slice.sysconf["plasma.serverless.shardCopy.s3dbg"].Int())
-			cfg.S3PartSize = int64(slice.sysconf["plasma.serverless.shardCopy.s3PartSize"].Int())
-			cfg.S3MaxRetries = int64(slice.sysconf["plasma.serverless.shardCopy.s3MaxRetries"].Int())
 		}
 
 		cfg.StorageDir = slice.storageDir
@@ -3564,13 +3550,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		time.Duration(mdb.sysconf["plasma.fbtuner.rebalInterval"].Int()) * time.Second
 	mdb.mainstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
-	mdb.mainstore.RPCHttpClientCfg.MaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
-	mdb.mainstore.RPCHttpClientCfg.MaxParts = int64(mdb.sysconf["plasma.shardCopy.rpc.client.maxParts"].Int())
-	mdb.mainstore.RPCHttpClientCfg.MemQuota = int64(mdb.sysconf["plasma.shardCopy.rpc.client.memQuota"].Int())
-	mdb.mainstore.RPCHttpClientCfg.ReqTimeOut = time.Duration(mdb.sysconf["plasma.shardCopy.rpc.client.reqTimeout"].Int()) * time.Second
-	mdb.mainstore.RPCHttpClientCfg.RateAdjInterval = time.Duration(mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
-	mdb.mainstore.RPCHttpClientCfg.RateAdjMaxRatio = mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustRatioMax"].Float64()
-	mdb.mainstore.RPCHttpClientCfg.Debug = mdb.sysconf["plasma.shardCopy.rpc.client.dbg"].Int()
+	loadClientCopyConfig(&mdb.mainstore.Config.CopyConfig, mdb.sysconf, true)
 
 	if common.IsServerlessDeployment() {
 		mdb.mainstore.MaxInstsPerShard = mdb.sysconf["plasma.serverless.maxInstancePerShard"].Uint64()
@@ -3585,12 +3565,6 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.mainstore.MaxPageItems = mdb.sysconf["plasma.serverless.mainIndex.pageSplitThreshold"].Int()
 		mdb.mainstore.EvictMinThreshold = mdb.sysconf["plasma.serverless.mainIndex.evictMinThreshold"].Float64()
 		mdb.mainstore.UseMultipleContainers = mdb.sysconf["plasma.serverless.useMultipleContainers"].Bool()
-
-		mdb.mainstore.CPdbg = mdb.sysconf["plasma.shardCopy.dbg"].Bool()
-		mdb.mainstore.CPMaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
-		mdb.mainstore.S3HttpDbg = int64(mdb.sysconf["plasma.serverless.shardCopy.s3dbg"].Int())
-		mdb.mainstore.S3PartSize = int64(mdb.sysconf["plasma.serverless.shardCopy.s3PartSize"].Int())
-		mdb.mainstore.S3MaxRetries = int64(mdb.sysconf["plasma.serverless.shardCopy.s3MaxRetries"].Int())
 	}
 
 	mdb.mainstore.UpdateConfig()
@@ -3695,13 +3669,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 			time.Duration(mdb.sysconf["plasma.fbtuner.rebalInterval"].Int()) * time.Second
 		mdb.backstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
-		mdb.backstore.RPCHttpClientCfg.MaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
-		mdb.backstore.RPCHttpClientCfg.MaxParts = int64(mdb.sysconf["plasma.shardCopy.rpc.client.maxParts"].Int())
-		mdb.backstore.RPCHttpClientCfg.MemQuota = int64(mdb.sysconf["plasma.shardCopy.rpc.client.memQuota"].Int())
-		mdb.backstore.RPCHttpClientCfg.ReqTimeOut = time.Duration(mdb.sysconf["plasma.shardCopy.rpc.client.reqTimeout"].Int()) * time.Second
-		mdb.backstore.RPCHttpClientCfg.RateAdjInterval = time.Duration(mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
-		mdb.backstore.RPCHttpClientCfg.RateAdjMaxRatio = mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustRatioMax"].Float64()
-		mdb.backstore.RPCHttpClientCfg.Debug = mdb.sysconf["plasma.shardCopy.rpc.client.dbg"].Int()
+		loadClientCopyConfig(&mdb.mainstore.Config.CopyConfig, mdb.sysconf, true)
 
 		if common.IsServerlessDeployment() {
 			mdb.backstore.MaxInstsPerShard = mdb.sysconf["plasma.serverless.maxInstancePerShard"].Uint64()
@@ -3715,12 +3683,6 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 			mdb.backstore.MaxPageItems = mdb.sysconf["plasma.serverless.backIndex.pageSplitThreshold"].Int()
 			mdb.backstore.EvictMinThreshold = mdb.sysconf["plasma.serverless.backIndex.evictMinThreshold"].Float64()
 			mdb.backstore.UseMultipleContainers = mdb.sysconf["plasma.serverless.useMultipleContainers"].Bool()
-
-			mdb.backstore.CPdbg = mdb.sysconf["plasma.shardCopy.dbg"].Bool()
-			mdb.backstore.CPMaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
-			mdb.backstore.S3HttpDbg = int64(mdb.sysconf["plasma.serverless.shardCopy.s3dbg"].Int())
-			mdb.backstore.S3PartSize = int64(mdb.sysconf["plasma.serverless.shardCopy.s3PartSize"].Int())
-			mdb.backstore.S3MaxRetries = int64(mdb.sysconf["plasma.serverless.shardCopy.s3MaxRetries"].Int())
 		}
 
 		mdb.backstore.UpdateConfig()
@@ -3751,6 +3713,36 @@ func loadRPCServerConfig(cfg common.Config) plasma.Config {
 		pCfg.RPCHttpServerCfg.Debug = cfg["plasma.shardCopy.rpc.server.dbg"].Int()
 	}
 	return pCfg
+}
+
+func loadClientCopyConfig(pcfg *plasma.CopyConfig, cfg common.Config, update bool) {
+	if pcfg == nil || cfg == nil {
+		return
+	}
+
+	pcfg.CPdbg = cfg["plasma.shardCopy.dbg"].Bool()
+	pcfg.CPMaxRetries = int64(cfg["plasma.shardCopy.maxRetries"].Int())
+
+	// node xfer client
+	pcfg.RPCHttpClientCfg.MaxParts = int64(cfg["plasma.shardCopy.rpc.client.maxParts"].Int())
+	if !update { // immutable
+		pcfg.RPCHttpClientCfg.MaxPartSize = int64(cfg["plasma.shardCopy.rpc.maxPartSize"].Int())
+	}
+	pcfg.RPCHttpClientCfg.MemQuota = int64(cfg["plasma.shardCopy.rpc.client.memQuota"].Int())
+	pcfg.RPCHttpClientCfg.MaxRetries = int64(cfg["plasma.shardCopy.maxRetries"].Int())
+	pcfg.RPCHttpClientCfg.ReqTimeOut = time.Duration(cfg["plasma.shardCopy.rpc.client.reqTimeout"].Int()) * time.Second
+	pcfg.RPCHttpClientCfg.RateAdjInterval = time.Duration(cfg["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
+	pcfg.RPCHttpClientCfg.RateAdjMaxRatio = cfg["plasma.shardCopy.rpc.client.rateControl.adjustRatioMax"].Float64()
+	pcfg.RPCHttpClientCfg.Debug = cfg["plasma.shardCopy.rpc.client.dbg"].Int()
+
+	// serverless
+	if common.IsServerlessDeployment() {
+		if !update {
+			pcfg.S3PartSize = int64(cfg["plasma.serverless.shardCopy.s3PartSize"].Int())
+		}
+		pcfg.S3MaxRetries = int64(cfg["plasma.serverless.shardCopy.s3MaxRetries"].Int())
+		pcfg.S3HttpDbg = int64(cfg["plasma.serverless.shardCopy.s3dbg"].Int())
+	}
 }
 
 func (mdb *plasmaSlice) String() string {
