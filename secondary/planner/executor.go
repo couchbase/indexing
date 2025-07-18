@@ -308,6 +308,8 @@ func filterSolution(solution *Solution) error {
 		}
 	}
 
+	var didMoveShards = false
+
 	indexDefnMap := make(map[common.IndexDefnId]map[common.PartitionId][]*IndexUsage)
 	indexerMap := make(map[string]*IndexerNode)
 
@@ -397,6 +399,7 @@ func filterSolution(solution *Solution) error {
 						index.destNode = destIndexer
 						// Note: Avoiding constraint check as we are just avoiding un necessary movements
 						// not using moveIndex2 for stats update at indexer level
+						didMoveShards = true
 						err := solution.moveIndex(preFilterDest, index, index.destNode, true)
 						if err != nil {
 							logging.Warnf("Planner::filterSolution moveIndex failed to move index to different node.")
@@ -453,6 +456,7 @@ func filterSolution(solution *Solution) error {
 						}
 						// Note: Avoiding constraint check as we are just avoiding un necessary movements
 						// not using moveIndex2 for stats update at indexer level
+						didMoveShards = true
 						err := solution.moveIndex(preFilterDest, index, index.destNode, true)
 						if err != nil {
 							logging.Errorf("Planner::filterSolution moveIndex failed for un-necessary movement.")
@@ -463,6 +467,9 @@ func filterSolution(solution *Solution) error {
 				}
 			}
 		}
+	}
+	if didMoveShards && solution.shardDealer != nil {
+		solution.updateSlotMap()
 	}
 	return nil
 }
