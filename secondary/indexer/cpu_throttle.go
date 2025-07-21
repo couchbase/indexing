@@ -17,7 +17,8 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/system"
-	"github.com/couchbase/indexing/secondary/vector"
+
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 )
 
 const MAX_THROTTLE_ADJUST_MS float64 = 5.0 // max msec to adjust throttleDelayMs by at one time
@@ -248,11 +249,11 @@ func (this *CpuThrottle) adjustThrottleDelay(systemStats *system.SystemStats) {
 	this.setThrottleDelayMs(newThrottleDelayMs)
 
 	// Also adjust vector concurrency based on CPU usage
-	currentVectorConcurrency := int(vector.GetConcurrency())
+	currentVectorConcurrency := int(codebook.GetConcurrency())
 	targetVectorConcurrency := this.calculateVectorConcurrency(currCpu, cpuTarget)
 
 	if targetVectorConcurrency > 0 && currentVectorConcurrency != targetVectorConcurrency {
-		vector.SetConcurrency(int64(targetVectorConcurrency))
+		codebook.SetConcurrency(int64(targetVectorConcurrency))
 		logging.Infof("%v Adjusted vector concurrency. cpuTarget: %v, currCpu: %v,"+
 			" vectorConcurrency (new, old): (%v, %v)",
 			method, cpuTarget, currCpu, targetVectorConcurrency, currentVectorConcurrency)
@@ -430,9 +431,9 @@ func (this *CpuThrottle) resetVectorConcurrency() {
 	defer this.vectorConcurrencyLock.Unlock()
 
 	if this.baseVectorConcurrency > 0 {
-		currentConcurrency := int(vector.GetConcurrency())
+		currentConcurrency := int(codebook.GetConcurrency())
 		if currentConcurrency != this.baseVectorConcurrency {
-			vector.SetConcurrency(int64(this.baseVectorConcurrency))
+			codebook.SetConcurrency(int64(this.baseVectorConcurrency))
 			logging.Infof("CpuThrottle::resetVectorConcurrency: Restored vector concurrency to baseline %v (was %v)",
 				this.baseVectorConcurrency, currentConcurrency)
 		}

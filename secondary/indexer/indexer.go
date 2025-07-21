@@ -51,7 +51,7 @@ import (
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 	"github.com/couchbase/indexing/secondary/testcode"
-	"github.com/couchbase/indexing/secondary/vector"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 	vectorutil "github.com/couchbase/indexing/secondary/vector/util"
 )
 
@@ -870,15 +870,15 @@ func (idx *indexer) initFromConfig() {
 	if allocatedVectorCores == 0 {
 		allocatedVectorCores = 1
 	}
-	vector.SetOMPThreadLimit(int(allocatedVectorCores/2))
-	vector.SetConcurrency(allocatedVectorCores)
+	codebook.SetOMPThreadLimit(int(allocatedVectorCores/2))
+	codebook.SetConcurrency(allocatedVectorCores)
 
-	actualConcurrency := vector.GetConcurrency()
+	actualConcurrency := codebook.GetConcurrency()
 	idx.cpuThrottle.SetBaseVectorConcurrency(int(actualConcurrency))
 	logging.Infof("Indexer: Vector Max Concurrency set to %v\n", actualConcurrency)
 
 	maxParallelTraining := idx.config["vector.max_parallel_training"].Int()
-	vector.SetTrainingConcurrency(maxParallelTraining)
+	codebook.SetTrainingConcurrency(maxParallelTraining)
 	logging.Infof("Indexer: Vector Max Training set to %v\n", maxParallelTraining)
 }
 
@@ -1969,14 +1969,14 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		allocatedVectorCores = 1
 	}
 
-	vector.SetConcurrency(allocatedVectorCores)
+	codebook.SetConcurrency(allocatedVectorCores)
 
-	actualConcurrency := vector.GetConcurrency()
+	actualConcurrency := codebook.GetConcurrency()
 	idx.cpuThrottle.SetBaseVectorConcurrency(int(actualConcurrency))
 	logging.Infof("Indexer: Vector Max Concurrency set to %v\n", actualConcurrency)
 
 	maxParallelTraining := newConfig["vector.max_parallel_training"].Int()
-	vector.SetTrainingConcurrency(maxParallelTraining)
+	codebook.SetTrainingConcurrency(maxParallelTraining)
 	logging.Infof("Indexer: Vector Max Training set to %v\n", maxParallelTraining)
 
 	idx.config = newConfig
