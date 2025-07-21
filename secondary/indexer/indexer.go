@@ -3650,8 +3650,12 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 			}
 
 			// Soft delete the slice
-			for _, partnInst := range pruned {
+			for pid, partnInst := range pruned {
 				//close all the slices
+				if partnInst.isNil() {
+					logging.Warnf("PrunePartition. Partition instance for Index instance %v partnId:%v is nil. Skip", instId, pid)
+					continue
+				}
 				idx.sendMonitorSliceMsg(partnInst.Sc.GetAllSlices())
 				for _, slice := range partnInst.Sc.GetAllSlices() {
 					partnId := slice.IndexPartnId()

@@ -21,6 +21,10 @@ type PartitionInst struct {
 	Sc   SliceContainer
 }
 
+func (pi *PartitionInst) isNil() bool {
+	return pi.Defn == nil && pi.Sc == nil
+}
+
 type partitionInstList []PartitionInst
 
 func (s partitionInstList) Len() int      { return len(s) }
