@@ -12598,29 +12598,22 @@ func (idx *indexer) destroyEmptyShards() {
 	}
 	logging.Infof("Indexer::destroyEmptyShards Starting destroyEmptyShards go-routine with interval of: %v min", destroyTickerInterval)
 
-	destroyShardsTicker := time.NewTicker(time.Duration(destroyTickerInterval) * time.Minute)
-	defer destroyShardsTicker.Stop()
-
 	for {
-		select {
-		case <-destroyShardsTicker.C:
-			// Send a message to indexer internal receive channel to destroy empty shards
-			idx.internalRecvCh <- &MsgDestroyEmptyShard{}
+		// Send a message to indexer internal receive channel to destroy empty shards
+		idx.internalRecvCh <- &MsgDestroyEmptyShard{}
 
-			newDestroyTickerInterval := idx.config["empty_shard_destroy_interval"].Int()
-			if newDestroyTickerInterval != destroyTickerInterval {
+		time.Sleep(time.Duration(destroyTickerInterval) * time.Minute)
 
-				if newDestroyTickerInterval == 0 {
-					logging.Infof("Indexer::destroyEmptyShards Exiting as destroy interval is set to 0")
-					return
-				}
+		newDestroyTickerInterval := idx.config["empty_shard_destroy_interval"].Int()
+		if newDestroyTickerInterval != destroyTickerInterval {
 
-				logging.Infof("Indexer::destroyEmptyShards Updating empty shard destroy interval to: %v", newDestroyTickerInterval)
-				destroyTickerInterval = newDestroyTickerInterval
-
-				destroyShardsTicker.Stop()
-				destroyShardsTicker = time.NewTicker(time.Duration(destroyTickerInterval) * time.Minute)
+			if newDestroyTickerInterval == 0 {
+				logging.Infof("Indexer::destroyEmptyShards Exiting as destroy interval is set to 0")
+				return
 			}
+
+			logging.Infof("Indexer::destroyEmptyShards Updating empty shard destroy interval to: %v", newDestroyTickerInterval)
+			destroyTickerInterval = newDestroyTickerInterval
 		}
 	}
 }

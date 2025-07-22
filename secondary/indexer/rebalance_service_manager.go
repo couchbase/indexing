@@ -242,6 +242,7 @@ func (m *RebalanceServiceManager) initService(cleanupPending bool) {
 	mux.HandleFunc("/rebalanceCleanupStatus", m.handleRebalanceCleanupStatus)
 	mux.HandleFunc("/lockShards", m.handleLockShards)
 	mux.HandleFunc("/unlockShards", m.handleUnlockShards)
+	mux.HandleFunc("/destroyEmptyShards", m.handleDestroyEmptyShards)
 	mux.HandleFunc("/dropCleanupPending", m.handleDropCleanupPending)
 	mux.HandleFunc("/isPersistanceActive", m.handleIsPersistanceActive)
 }
@@ -4708,4 +4709,30 @@ func (m *RebalanceServiceManager) checkIfPersistanceActive() bool {
 	isPersistorActive := <-respCh
 
 	return isPersistorActive
+}
+
+func (m *RebalanceServiceManager) handleDestroyEmptyShards(w http.ResponseWriter, r *http.Request) {
+
+	creds, ok := m.validateAuth(w, r)
+	if !ok {
+		l.Errorf("RebalanceServiceManager::handleDestroyEmptyShards Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, "RebalanceServiceManager:handleUnlockShards") {
+		return
+	}
+
+	if r.Method == "POST" {
+
+		logging.Infof("RebalanceServiceManager::handleDestroyEmptyShards Destroying empty shards")
+
+		m.supvMsgch <- &MsgDestroyEmptyShard{
+			force: false, // this should be true only when rebalance is running
+		}
+
+		m.writeOk(w)
+	} else {
+		m.writeError(w, errors.New("Unsupported method"))
+	}
 }
