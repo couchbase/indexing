@@ -22,30 +22,31 @@ import (
 
 	"github.com/couchbase/indexing/secondary/logging"
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
-
 )
-
 
 const (
-    defaultOMPThreads = 1
-    defaultWaitPolicy = "PASSIVE"
+	defaultOMPThreads = 1
+	defaultWaitPolicy = "PASSIVE"
 
-    //OpenBLAS is being compiled with max NUM_THREADS as 256. Limit the
-    //max concurrency to the same number to prevent exceptions from the library.
-    MAX_GLOBAL_CONCURRENCY = 256
+	//OpenBLAS is being compiled with max NUM_THREADS as 256. Limit the
+	//max concurrency to the same number to prevent exceptions from the library.
+	MAX_GLOBAL_CONCURRENCY = 256
 )
+
 // Global concurrency control
 var (
 	globalMaxLimit     int64 // Maximum possible concurrent operations
-	globalCurrentLimit int64
+	globalCurrentLimit int64 // Current effective concurrency
 
-	globalShardedSem atomic.Pointer[shardedSem]
+	globalShardedSem atomic.Pointer[shardedSem] // Sharded semaphore to control concurrency
 
 	//training concurrency control
 	trainingConcurrencyLock sync.RWMutex
 	trainingSemaphore       chan struct{}
 	trainingMaxCapacity     int // Maximum possible concurrent trainings
 	trainingCurrentCapacity int // Current effective training capacity
+
+	throttleDelayUs int64 //Delay in microseconds to throttle the concurrency
 
 )
 
@@ -107,8 +108,8 @@ func initShardedSemaphore(numShards int, capacityPerShard int64) {
 	globalShardedSem.Store(newShardedSem)
 }
 
-//SetOMPThreadLimit sets the thread limit for OpenMP regions.
-//It is best to call this before calling into faiss for regular operations.
+// SetOMPThreadLimit sets the thread limit for OpenMP regions.
+// It is best to call this before calling into faiss for regular operations.
 func SetOMPThreadLimit(maxThreads int) {
 	os.Setenv("OMP_THREAD_LIMIT", strconv.Itoa(maxThreads))
 }
@@ -130,23 +131,33 @@ func SetConcurrency(maxConcurrent int64) {
 	numShards := 1
 	capacityPerShard := int64(1)
 
-    if newLimit > 4 {
-        //Use 4 as fixed capacity of a shard. The perf degradation due to cache
-        //coherence is minimal with 4 cores.
-        capacityPerShard = int64(4)
-        numShards = int(newLimit / capacityPerShard)
-    } else {
-        capacityPerShard = newLimit
-    }
+	if newLimit > 4 {
+		//Use 4 as fixed capacity of a shard. The perf degradation due to cache
+		//coherence is minimal with 4 cores.
+		capacityPerShard = int64(4)
+		numShards = int(newLimit / capacityPerShard)
+	} else {
+		capacityPerShard = newLimit
+	}
 
 	initShardedSemaphore(numShards, capacityPerShard)
 
-    atomic.StoreInt64(&globalCurrentLimit, newLimit)
+	atomic.StoreInt64(&globalCurrentLimit, newLimit)
 }
 
 // GetConcurrency returns the current global maximum number of concurrent operations
 func GetConcurrency() int64 {
 	return atomic.LoadInt64(&globalCurrentLimit)
+}
+
+// SetThrottleDelay sets the delay in microseconds to throttle the concurrency
+func SetThrottleDelay(delayUs int64) {
+	atomic.StoreInt64(&throttleDelayUs, delayUs)
+}
+
+// GetThrottleDelay returns the delay in microseconds to throttle the concurrency
+func GetThrottleDelay() int64 {
+	return atomic.LoadInt64(&throttleDelayUs)
 }
 
 // acquireGlobal acquires a permit from the global semaphore
@@ -218,71 +229,83 @@ func ReleaseTraining() {
 	}
 }
 
-//Atomic Semaphore
+//Atomic Semaphore is a simple counting semaphore implementation that uses an atomic counter
+//to track the number of permits available. Atomic counter is used to avoid the overheads of a mutex.
+//It is used to control the concurrency of the codebook.
+//It is a simple implementation that uses a spin loop to acquire a permit.
 
 type atomicSem struct {
-    limit int64
-    count int64
+	limit int64
+	count int64
 }
 
 type atomicToken struct {
-    sem *atomicSem
+	sem *atomicSem
 }
 
 func (t *atomicToken) Release() {
-    atomic.AddInt64(&t.sem.count, -1)
+	atomic.AddInt64(&t.sem.count, -1)
 }
 
 func NewAtomicSemaphore(limit int64) *atomicSem {
-    return &atomicSem{
-        limit: limit,
-    }
+	return &atomicSem{
+		limit: limit,
+	}
 }
 
 func (s *atomicSem) Acquire() *atomicToken {
-    spin := 0
-    for {
-            cur := atomic.LoadInt64(&s.count)
-            lim := atomic.LoadInt64(&s.limit)
-            if cur < lim && atomic.CompareAndSwapInt64(&s.count, cur, cur+1) {
-                return &atomicToken{sem: s}
-            }
+	spin := 0
+	for {
+		cur := atomic.LoadInt64(&s.count)
+		lim := atomic.LoadInt64(&s.limit)
+		if cur < lim && atomic.CompareAndSwapInt64(&s.count, cur, cur+1) {
+			return &atomicToken{sem: s}
+		}
 
-            // Adaptive backoff
-            if spin < 10 {
+		// Check for throttle delay first
+		throttleDelay := atomic.LoadInt64(&throttleDelayUs)
+		if throttleDelay > 0 {
+			// Use throttle delay (in microseconds)
+			time.Sleep(time.Duration(throttleDelay) * time.Microsecond)
+		} else {
+			// Adaptive backoff when no throttling is configured
+			if spin < 10 {
                 // Short sleep (reduce contention, low latency)
-                time.Sleep(5 * time.Microsecond)
-            } else if spin < 20 {
+                time.Sleep(10 * time.Microsecond)
+			} else if spin < 20 {
 				// medium sleep
-                time.Sleep(20 * time.Microsecond)
-            } else {
-                // Longer sleep (very high contention)
-                time.Sleep(100 * time.Microsecond)
-        }
-        spin++
-    }
+				time.Sleep(20 * time.Microsecond)
+			} else {
+				// Longer sleep (very high contention)
+				time.Sleep(100 * time.Microsecond)
+			}
+		}
+		spin++
+	}
 }
 
-//Sharded Atomic Semaphore
+//Sharded Atomic Semaphore is a wrapper around the atomic semaphore to allow for
+//sharding the semaphore across multiple cores. Sharding helps in scaling the semaphore
+//across large number of cores by reducing the cache coherence overheads.
 
 type shardedSem struct {
-       shards    []*atomicSem
-       numShards int
-       rngPool   sync.Pool
+	shards    []*atomicSem
+	numShards int
+	rngPool   sync.Pool
 }
 
 type shardedToken struct {
-       token *atomicToken
+	token *atomicToken
 }
 
 func (t *shardedToken) Release() {
-       t.token.Release()
+	t.token.Release()
 }
 
 func (s *shardedSem) Acquire() *shardedToken {
-    rng := s.rngPool.Get().(*rand.Rand)
-    idx := rng.Intn(s.numShards)
-    s.rngPool.Put(rng)
+	rng := s.rngPool.Get().(*rand.Rand)
+	idx := rng.Intn(s.numShards)
+	s.rngPool.Put(rng)
 
-    return &shardedToken{token: s.shards[idx].Acquire()}
+	return &shardedToken{token: s.shards[idx].Acquire()}
 }

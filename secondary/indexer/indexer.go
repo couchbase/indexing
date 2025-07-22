@@ -874,7 +874,6 @@ func (idx *indexer) initFromConfig() {
 	codebook.SetConcurrency(allocatedVectorCores)
 
 	actualConcurrency := codebook.GetConcurrency()
-	idx.cpuThrottle.SetBaseVectorConcurrency(int(actualConcurrency))
 	logging.Infof("Indexer: Vector Max Concurrency set to %v\n", actualConcurrency)
 
 	maxParallelTraining := idx.config["vector.max_parallel_training"].Int()
@@ -1972,7 +1971,6 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	codebook.SetConcurrency(allocatedVectorCores)
 
 	actualConcurrency := codebook.GetConcurrency()
-	idx.cpuThrottle.SetBaseVectorConcurrency(int(actualConcurrency))
 	logging.Infof("Indexer: Vector Max Concurrency set to %v\n", actualConcurrency)
 
 	maxParallelTraining := newConfig["vector.max_parallel_training"].Int()
