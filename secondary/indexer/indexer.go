@@ -870,8 +870,8 @@ func (idx *indexer) initFromConfig() {
 	if allocatedVectorCores == 0 {
 		allocatedVectorCores = 1
 	}
-	codebook.SetOMPThreadLimit(int(allocatedVectorCores/2))
-	codebook.SetConcurrency(allocatedVectorCores)
+	codebook.SetOMPThreadLimit(int(allocatedVectorCores / 2))
+	codebook.SetConcurrency(int64(float64(allocatedVectorCores) * 1.5))
 
 	actualConcurrency := codebook.GetConcurrency()
 	logging.Infof("Indexer: Vector Max Concurrency set to %v\n", actualConcurrency)
@@ -1968,7 +1968,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		allocatedVectorCores = 1
 	}
 
-	codebook.SetConcurrency(allocatedVectorCores)
+	codebook.SetConcurrency(int64(float64(allocatedVectorCores) * 1.5))
 
 	actualConcurrency := codebook.GetConcurrency()
 	logging.Infof("Indexer: Vector Max Concurrency set to %v\n", actualConcurrency)
