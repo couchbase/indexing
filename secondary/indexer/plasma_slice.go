@@ -274,9 +274,6 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()
 
 	updatePlasmaConfig(sysconf)
-	if sysconf["plasma.UseQuotaTuner"].Bool() {
-		go plasma.RunMemQuotaTuner()
-	}
 
 	numReaders := sysconf["plasma.numReaders"].Int()
 	slice.readers = make(chan *plasma.Reader, numReaders)
