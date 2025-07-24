@@ -120,6 +120,140 @@ func TestIdxCorruptBasicSanityMultipleIndices(t *testing.T) {
 	FailTestIfError(err, "Error in verifyDeletedPath", t)
 }
 
+func TestIdxCorruptBasicBhiveIndex(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+	time.Sleep(10 * time.Second)
+
+	if !vectorsLoaded {
+		vectorSetup(t, bucket, "", "", numDocs)
+	}
+
+	idx_bhive := "idx_bhive"
+
+	// Create Index
+	stmt := "CREATE VECTOR INDEX " + idx_bhive +
+		" ON default(sift VECTOR) PARTITION BY HASH(meta().id)" +
+		" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true, \"num_partition\": 10};"
+	err := createWithDeferAndBuild(idx_bhive, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_sift10k", t)
+
+	limit := int64(5)
+
+	queryVectorStr := "["
+	for _, val := range indexVector.QueryVector {
+		queryVectorStr += fmt.Sprintf("%v,", val)
+	}
+	queryVectorStr = queryVectorStr[:len(queryVectorStr)-1]
+	queryVectorStr += "]"
+
+	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v, true) as distance "+
+		"from %v ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, bucket, limit)
+
+	annScanResults, err := execN1QL(bucket, annScanStmt)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	validateScanStats(bucket, idx_bhive, 1, limit, t)
+
+	// validate the results using KNN
+	knnScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\") as distance "+
+		"from %v ORDER BY distance limit %v",
+		queryVectorStr, bucket, limit)
+
+	knnScanResults, err := execN1QL(bucket, knnScanStmt)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	validateScanStats(bucket, idx_bhive, 1, limit, t) // The num-request should not change because of KNN scan
+
+	recall := computeRecallWithKNNResults(annScanResults, knnScanResults, 2, t)
+	log.Printf("TestBhiveVectorIndex recall observed is: %v", recall)
+	if recall < 0.5 {
+		log.Printf("ANN scan results: %v, KNN scan results: %v", annScanResults, knnScanResults)
+	}
+
+	hosts, errHosts := secondaryindex.GetIndexerNodesHttpAddresses(indexManagementAddress)
+	if len(hosts) > 1 {
+		errHosts = errors.New("Unexpected number of hosts")
+	}
+	FailTestIfError(errHosts, "Error in GetIndexerNodesHttpAddresses", t)
+
+	fmt.Println("hosts =", hosts)
+	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir",
+		clusterconfig.Username, clusterconfig.Password)
+	FailTestIfError(errGetSetting, "Error in GetIndexerSetting", t)
+
+	strIndexStorageDir := fmt.Sprintf("%v", indexStorageDir)
+	absIndexStorageDir, err1 := filepath.Abs(strIndexStorageDir)
+	FailTestIfError(err1, "Error while finding absolute path", t)
+	bhiveIndexStorageDir := filepath.Join(absIndexStorageDir, c.BHIVE_DIR_PREFIX)
+
+	ok, err := verifyPathExists(bhiveIndexStorageDir)
+	if !ok || err != nil {
+		t.Fatalf("bhiveIndexStorageDir does not exist: %v", err)
+		return
+	}
+
+	partn5SlicePath, err := tc.GetIndexSlicePath(idx_bhive, "default", bhiveIndexStorageDir, 5)
+	FailTestIfError(err, "Error in GetIndexSlicePath", t)
+
+	// Corrupt the index
+	err = secondaryindex.CorruptIndex(idx_bhive, "default", bhiveIndexStorageDir,
+		clusterconfig.IndexUsing, 5)
+	FailTestIfError(err, "Error while corrupting the index", t)
+
+	// Restart indexer process and wait for some time.
+	forceKillIndexer()
+
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	FailTestIfError(err, "Error in WaitForIndexerActive", t)
+
+	err = verifyDeletedPath(partn5SlicePath)
+	FailTestIfError(err, "Error in verifyDeletedPath", t)
+
+	// verify other partitions exist
+	slicePath, err := tc.GetIndexSlicePath(idx_bhive, "default", bhiveIndexStorageDir, 1)
+	FailTestIfError(err, "Error in GetIndexSlicePath", t)
+
+	ok, err = verifyPathExists(slicePath)
+	if !ok || err != nil {
+		t.Fatalf("slicePath does not exist: %v", err)
+	}
+
+	testIndexStatuses := func() {
+		indexStatuses, err := getIndexStatusFromIndexer()
+		FailTestIfError(err, "Error in GetIndexStatusFromIndexer", t)
+
+		var bhiveIndexStatuses = make(map[c.PartitionId]bool)
+		for _, indexStatus := range indexStatuses.Status {
+			if indexStatus.IndexName == idx_bhive {
+				for _, partition := range indexStatus.PartitionMap {
+					for _, partnID := range partition {
+						bhiveIndexStatuses[c.PartitionId(partnID)] = true
+					}
+				}
+			}
+		}
+
+		if len(bhiveIndexStatuses) != 9 {
+			t.Fatalf("Expected 9 partitions for bhive index but got %v", bhiveIndexStatuses)
+		}
+
+		if bhiveIndexStatuses[5] {
+			t.Fatal("Partition 5 should not exist for corrupt bhive index")
+		}
+	}
+
+	testIndexStatuses()
+
+	forceKillIndexer()
+
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	FailTestIfError(err, "Error in WaitForIndexerActive", t)
+
+	testIndexStatuses()
+
+}
+
 func TestIdxCorruptPartitionedIndex(t *testing.T) {
 	if clusterconfig.IndexUsing == "forestdb" {
 		fmt.Println("Not running TestPartitionedIndex for forestdb")
