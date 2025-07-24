@@ -117,6 +117,12 @@ type IndexStatus struct {
 	SecExprs   []string `json:"secExprs,omitempty"`
 	WhereExpr  string   `json:"where,omitempty"`
 	IndexType  string   `json:"indexType,omitempty"`
+	// Vector-index specific metadata
+	IsVectorIndex      bool                     `json:"isVectorIndex,omitempty"`
+	VectorPos          int                      `json:"vectorPos"`
+	Include            []string                 `json:"include,omitempty"`
+	With               map[string]interface{}   `json:"with,omitempty"`
+
 	Status     string   `json:"status,omitempty"`
 	Definition string   `json:"definition"`
 
@@ -1044,6 +1050,46 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 			if defn.IsBhive() {
 				indexType = "Hyperscale Vector Index"
 			}
+
+			var secExprs []string
+			if len(defn.UnexplodedSecExprs) > 0 {
+				secExprs = defn.UnexplodedSecExprs
+			} else {
+				secExprs, _, _, _ = common.GetUnexplodedExprs(defn.SecExprs, defn.Desc, defn.HasVectorAttr)
+			}
+
+			// Vector specific fields
+			vectorPos := -1
+			var includeFields []string
+			withObj := make(map[string]interface{})
+
+			if defn.IsVectorIndex && defn.VectorMeta != nil {
+				withObj["similarityDistance"] = string(defn.VectorMeta.Similarity)
+				if desc := defn.VectorMeta.Quantizer.String(); desc != "" {
+					// may need a change if any future vector index has a different format for desc string
+					if idx := strings.LastIndex(desc, ","); idx >= 0 && idx < len(desc)-1 {
+						desc = desc[idx+1:]
+					}
+					withObj["quantization"] = desc
+				}
+				withObj["dimension"] = defn.VectorMeta.Dimension
+				if defn.VectorMeta.TrainList > 0 {
+					withObj["trainList"] = defn.VectorMeta.TrainList
+				}
+				withObj["scanNProbes"] = defn.VectorMeta.Nprobes
+				if defn.VectorMeta.Quantizer.Nlist > 0 {
+					withObj["nlist"] = defn.VectorMeta.Quantizer.Nlist
+				}
+
+				vecPos := defn.GetVectorKeyPosExploded()
+				if vecPos >= 0 && vecPos < len(secExprs) {
+					vectorPos = vecPos
+				}
+
+				if defn.IsBhive() && len(defn.Include) > 0 {
+					includeFields = append(includeFields, defn.Include...)
+				}
+			}
 			mergeCounter(defn.DefnId, defn.NumReplica2, numReplicas)
 			if topology, ok := topoMap[defn.Bucket][defn.Scope][defn.Collection]; ok && topology != nil {
 				instances := topology.GetIndexInstancesByDefn(defn.DefnId)
@@ -1126,12 +1172,6 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 						isInstanceDeferred[common.IndexInstId(instance.InstId)] = defn.Deferred
 						defn.NumPartitions = instance.NumPartitions
 
-						var secExprs []string
-						if len(defn.UnexplodedSecExprs) > 0 {
-							secExprs = defn.UnexplodedSecExprs
-						} else {
-							secExprs, _, _, _ = common.GetUnexplodedExprs(defn.SecExprs, defn.Desc, defn.HasVectorAttr)
-						}
 
 						status := IndexStatus{
 							DefnId:            defn.DefnId,
@@ -1145,6 +1185,10 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 							SecExprs:          secExprs,
 							WhereExpr:         defn.WhereExpr,
 							IndexType:         indexType,
+							IsVectorIndex:     defn.IsVectorIndex,
+							VectorPos:         vectorPos,
+							Include:           includeFields,
+							With:              withObj,
 							Status:            stateStr,
 							Error:             errStr,
 							Hosts:             []string{mgmtAddr},
