@@ -17,6 +17,8 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/system"
+
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 )
 
 const MAX_THROTTLE_ADJUST_MS float64 = 5.0 // max msec to adjust throttleDelayMs by at one time
@@ -110,6 +112,8 @@ func (this *CpuThrottle) SetCpuThrottling(cpuThrottling bool) {
 		go this.runThrottling(this.stopCh)
 	} else if priorCpuThrottling && !cpuThrottling { // stop
 		close(this.stopCh)
+		// Reset vector throttle delay when throttling is disabled
+		this.resetVectorThrottleDelay()
 	}
 }
 
@@ -167,6 +171,8 @@ func (this *CpuThrottle) runThrottling(stopCh chan struct{}) {
 	const method string = "CpuThrottle::runThrottling:" // for logging
 
 	this.setThrottleDelayMs(0) // always start with 0 delay
+	// Reset vector throttle delay when throttling starts
+	this.resetVectorThrottleDelay()
 	logging.Infof("%v Starting. cpuTarget: %v, throttleDelayMs: %v", method,
 		this.getCpuTarget(), this.getThrottleDelayMs())
 
@@ -235,6 +241,15 @@ func (this *CpuThrottle) adjustThrottleDelay(systemStats *system.SystemStats) {
 		newThrottleDelayMs = 0
 	}
 	this.setThrottleDelayMs(newThrottleDelayMs)
+
+	// Also adjust vector throttle delay to 1/10th of regular throttle delay, using microseconds for better granularity
+	currentThrottleDelay := codebook.GetThrottleDelay()
+	// Convert to microseconds, divide by 10, preserving granularity
+	vectorThrottleDelayUs := (newThrottleDelayMs * 1000) / 10
+	if currentThrottleDelay != vectorThrottleDelayUs {
+		codebook.SetThrottleDelay(vectorThrottleDelayUs)
+	}
+
 	if newThrottleDelayMs != throttleDelayMs {
 		logging.Infof("%v Adjusted throttle. cpuTarget: %v, currCpu: %v,"+
 			" throttleDelayMs (new, old, change): (%v, %v, %v)",
@@ -338,4 +353,11 @@ func (this *CpuThrottle) getCurrentCpuUsageCgroup(systemStats *system.SystemStat
 		cpuUseNew = 0.0
 	}
 	return true, cpuUseNew
+}
+
+// resetVectorThrottleDelay resets the vector throttle delay to zero.
+// This should be called when throttling is disabled to remove throttling delay.
+func (this *CpuThrottle) resetVectorThrottleDelay() {
+	codebook.SetThrottleDelay(0)
+	logging.Infof("CpuThrottle::resetVectorThrottleDelay: Reset vector throttle delay to 0")
 }

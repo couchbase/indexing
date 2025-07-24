@@ -10,23 +10,12 @@ package vector
 
 import (
 	"errors"
-	"os"
-	"runtime"
-	"strconv"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	codebook "github.com/couchbase/indexing/secondary/vector/codebook"
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
-
-func init() {
-	faiss.SetOMPThreads(defaultOMPThreads)
-	var numCores = runtime.GOMAXPROCS(-1)
-	os.Setenv("OMP_THREAD_LIMIT", strconv.Itoa(numCores))
-	os.Setenv("OMP_WAIT_POLICY", defaultWaitPolicy)
-	os.Setenv("OPENBLAS_NUM_THREADS", strconv.Itoa(1))
-}
 
 type CodebookVer int
 

@@ -4229,9 +4229,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.shardCopy.rpc.server.dbg": ConfigValue{
-		1,
+		0,
 		"rpc debug level - default logs only control requests (see plasma rpc.go for levels)",
-		1,
+		0,
 		false,
 		false,
 	},
@@ -4771,9 +4771,16 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.vector.max_cpu": ConfigValue{
-		float64(0.9),
-		"Max CPU usage by vector library",
-		float64(0.9),
+		100,
+		"Percent of total CPU that can be used by vector library",
+		100,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.vector.max_parallel_training": ConfigValue{
+		1,
+		"Max number of training that can execute in parallel.",
+		1,
 		false, // mutable
 		false, // case-insensitive
 	},

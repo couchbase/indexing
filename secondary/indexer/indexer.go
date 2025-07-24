@@ -864,14 +864,21 @@ func (idx *indexer) initFromConfig() {
 		logging.Infof("memcachedTimeout set to %v\n", uint32(mcdTimeout.Int()))
 	}
 
-	maxVectorCPU := idx.config["vector.max_cpu"].Float64()
+	maxVectorCPU := idx.config["vector.max_cpu"].Int()
 	numCores := runtime.GOMAXPROCS(-1)
-	allocatedVectorCores := int(maxVectorCPU * float64(numCores))
+	allocatedVectorCores := int64((maxVectorCPU * numCores) / 100)
 	if allocatedVectorCores == 0 {
 		allocatedVectorCores = 1
 	}
-	codebook.SetMaxCPU(allocatedVectorCores)
-	logging.Infof("Indexer: Vector MaxCPU set to %v\n", allocatedVectorCores)
+	codebook.SetOMPThreadLimit(int(allocatedVectorCores / 2))
+	codebook.SetConcurrency(int64(float64(allocatedVectorCores) * 1.5))
+
+	actualConcurrency := codebook.GetConcurrency()
+	logging.Infof("Indexer: Vector Max Concurrency set to %v\n", actualConcurrency)
+
+	maxParallelTraining := idx.config["vector.max_parallel_training"].Int()
+	codebook.SetTrainingConcurrency(maxParallelTraining)
+	logging.Infof("Indexer: Vector Max Training set to %v\n", maxParallelTraining)
 }
 
 func GetHTTPMux() *http.ServeMux {
@@ -1954,14 +1961,21 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	}
 	idx.cpuThrottle.SetCpuTarget(throttleVal)
 
-	maxVectorCPU := newConfig["vector.max_cpu"].Float64()
+	maxVectorCPU := newConfig["vector.max_cpu"].Int()
 	numCores := runtime.GOMAXPROCS(-1)
-	allocatedVectorCores := int(maxVectorCPU * float64(numCores))
+	allocatedVectorCores := int64((maxVectorCPU * numCores) / 100)
 	if allocatedVectorCores == 0 {
 		allocatedVectorCores = 1
 	}
-	codebook.SetMaxCPU(allocatedVectorCores)
-	logging.Infof("Indexer: Vector MaxCPU set to %v\n", allocatedVectorCores)
+
+	codebook.SetConcurrency(int64(float64(allocatedVectorCores) * 1.5))
+
+	actualConcurrency := codebook.GetConcurrency()
+	logging.Infof("Indexer: Vector Max Concurrency set to %v\n", actualConcurrency)
+
+	maxParallelTraining := newConfig["vector.max_parallel_training"].Int()
+	codebook.SetTrainingConcurrency(maxParallelTraining)
+	logging.Infof("Indexer: Vector Max Training set to %v\n", maxParallelTraining)
 
 	idx.config = newConfig
 
