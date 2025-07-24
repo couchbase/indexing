@@ -3705,19 +3705,78 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 func loadRPCServerConfig(cfg common.Config) plasma.Config {
 	pCfg := plasma.DefaultConfig()
 	if cfg != nil {
-		pCfg.RPCHttpServerCfg.MaxPartSize = int64(cfg["plasma.shardCopy.rpc.maxPartSize"].Int())
-		pCfg.RPCHttpServerCfg.MemQuota = int64(cfg["plasma.shardCopy.rpc.server.memQuota"].Int())
-		pCfg.RPCHttpServerCfg.ReadTimeOut = time.Duration(cfg["plasma.shardCopy.rpc.server.readTimeout"].Int()) * time.Second
-		pCfg.RPCHttpServerCfg.WriteTimeOut = time.Duration(cfg["plasma.shardCopy.rpc.server.writeTimeout"].Int()) * time.Second
-		pCfg.RPCHttpServerCfg.ChanTimeOut = time.Duration(cfg["plasma.shardCopy.rpc.server.channelTimeout"].Int()) * time.Second
-		pCfg.RPCHttpServerCfg.RateControl = cfg["plasma.shardCopy.rpc.server.rateControl"].Bool()
-		pCfg.RPCHttpServerCfg.LowMemRatio = cfg["plasma.shardCopy.rpc.server.rateControl.lowMemRatio"].Float64()
-		pCfg.RPCHttpServerCfg.HighMemRatio = cfg["plasma.shardCopy.rpc.server.rateControl.highMemRatio"].Float64()
-		pCfg.RPCHttpServerCfg.CommitDataSize = int64(cfg["plasma.shardCopy.rpc.server.periodicSyncSize"].Int())
-		pCfg.RPCHttpServerCfg.FileIdleInterval = time.Duration(cfg["plasma.shardCopy.rpc.server.fileIdleInterval"].Int()) * time.Second
-		pCfg.RPCHttpServerCfg.Debug = cfg["plasma.shardCopy.rpc.server.dbg"].Int()
+		if v, ok := cfg["plasma.shardCopy.rpc.maxPartSize"]; ok && v.Int() > 0 {
+			pCfg.RPCHttpServerCfg.MaxPartSize = int64(v.Int())
+		}
+		if v, ok := cfg["plasma.shardCopy.rpc.server.memQuota"]; ok && v.Int() > 0 {
+			pCfg.RPCHttpServerCfg.MemQuota = int64(v.Int())
+		}
+		if v, ok := cfg["plasma.shardCopy.rpc.server.readTimeout"]; ok && v.Int() > 0 {
+			pCfg.RPCHttpServerCfg.ReadTimeOut = time.Duration(v.Int()) * time.Second
+		}
+		if v, ok := cfg["plasma.shardCopy.rpc.server.writeTimeout"]; ok && v.Int() > 0 {
+			pCfg.RPCHttpServerCfg.WriteTimeOut = time.Duration(v.Int()) * time.Second
+		}
+		if v, ok := cfg["plasma.shardCopy.rpc.server.channelTimeout"]; ok && v.Int() > 0 {
+			pCfg.RPCHttpServerCfg.ChanTimeOut = time.Duration(v.Int()) * time.Second
+		}
+		if v, ok := cfg["plasma.shardCopy.rpc.server.rateControl"]; ok {
+			pCfg.RPCHttpServerCfg.RateControl = v.Bool()
+		}
+		if v, ok := cfg["plasma.shardCopy.rpc.server.rateControl.lowMemRatio"]; ok && v.Float64() > 0 {
+			pCfg.RPCHttpServerCfg.LowMemRatio = v.Float64()
+		}
+		if v, ok := cfg["plasma.shardCopy.rpc.server.rateControl.highMemRatio"]; ok && v.Float64() > 0 {
+			pCfg.RPCHttpServerCfg.HighMemRatio = v.Float64()
+		}
+		if v, ok := cfg["plasma.shardCopy.rpc.server.periodicSyncSize"]; ok && v.Int() > 0 {
+			pCfg.RPCHttpServerCfg.CommitDataSize = int64(v.Int())
+		}
+		if v, ok := cfg["plasma.shardCopy.rpc.server.fileIdleInterval"]; ok && v.Int() > 0 {
+			pCfg.RPCHttpServerCfg.FileIdleInterval = time.Duration(v.Int()) * time.Second
+		}
+		if v, ok := cfg["plasma.shardCopy.rpc.server.dbg"]; ok {
+			pCfg.RPCHttpServerCfg.Debug = v.Int()
+		}
 	}
 	return pCfg
+}
+
+func applyRPCServerConfig(dst, src *plasma.CopyConfig) {
+	if dst != nil && src != nil {
+		if v := src.RPCHttpServerCfg.MaxPartSize; v > 0 {
+			dst.RPCHttpServerCfg.MaxPartSize = v
+		}
+		if v := src.RPCHttpServerCfg.MemQuota; v > 0 {
+			dst.RPCHttpServerCfg.MemQuota = v
+		}
+		if v := src.RPCHttpServerCfg.ReadTimeOut; v > 0 {
+			dst.RPCHttpServerCfg.ReadTimeOut = v
+		}
+		if v := src.RPCHttpServerCfg.WriteTimeOut; v > 0 {
+			dst.RPCHttpServerCfg.WriteTimeOut = v
+		}
+		if v := src.RPCHttpServerCfg.ChanTimeOut; v > 0 {
+			dst.RPCHttpServerCfg.ChanTimeOut = v
+		}
+
+		dst.RPCHttpServerCfg.RateControl = src.RPCHttpServerCfg.RateControl
+
+		if v := src.RPCHttpServerCfg.LowMemRatio; v > 0 {
+			dst.RPCHttpServerCfg.LowMemRatio = v
+		}
+		if v := src.RPCHttpServerCfg.HighMemRatio; v > 0 {
+			dst.RPCHttpServerCfg.HighMemRatio = v
+		}
+		if v := src.RPCHttpServerCfg.CommitDataSize; v > 0 {
+			dst.RPCHttpServerCfg.CommitDataSize = v
+		}
+		if v := src.RPCHttpServerCfg.FileIdleInterval; v > 0 {
+			dst.RPCHttpServerCfg.FileIdleInterval = v
+		}
+
+		dst.RPCHttpServerCfg.Debug = src.RPCHttpServerCfg.Debug
+	}
 }
 
 func loadClientCopyConfig(pcfg *plasma.CopyConfig, cfg common.Config, update bool) {
