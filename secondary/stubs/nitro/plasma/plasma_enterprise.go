@@ -13,8 +13,8 @@ var Diag = &ee.Diag
 type MemTunerConfig = ee.MemTunerConfig
 type MemTunerDistStats = ee.MemTunerDistStats
 
-func SetMemoryQuota(sz int64, force bool) {
-	ee.SetMemoryQuota2(sz, force)
+func SetMemoryQuota(sz int64) {
+	ee.SetMemoryQuota(sz)
 }
 
 func GetMandatoryQuota() (int64, int64) {

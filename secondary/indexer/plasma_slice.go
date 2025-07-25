@@ -3403,7 +3403,8 @@ func (mdb *plasmaSlice) handleN1QLStorageStatistics() (StorageStatistics, error)
 	return sts, nil
 }
 
-func updatePlasmaConfig(cfg common.Config) {
+// These configs are meant for MemTuner and need to be updated for both plasma and bhive
+func updateMemTunerConfigs(cfg common.Config) {
 	plasma.MTunerMaxFreeMemory = int64(cfg["plasma.memtuner.maxFreeMemory"].Int())
 	plasma.MTunerMinFreeMemRatio = cfg["plasma.memtuner.minFreeRatio"].Float64()
 	plasma.MTunerTrimDownRatio = cfg["plasma.memtuner.trimDownRatio"].Float64()
@@ -3415,9 +3416,6 @@ func updatePlasmaConfig(cfg common.Config) {
 	plasma.MTunerMinQuota = int64(cfg["plasma.memtuner.minQuota"].Int())
 	plasma.MTunerRunInterval = time.Duration(cfg["plasma.memtuner.runInterval"].Float64() * float64(time.Second))
 	plasma.MFragThreshold = cfg["plasma.memFragThreshold"].Float64()
-	plasma.EnableContainerSupport = cfg["plasma.EnableContainerSupport"].Bool()
-	plasma.DQThreshold = float64(cfg["settings.thresholds.mem_low"].Int()) / 100
-	plasma.HighMemFragRatio = cfg["plasma.highMemFragThreshold"].Float64()
 
 	highWatermark := cfg["plasma.memtuner.freeMemHighWatermark"].Float64()
 	lowWatermark := cfg["plasma.memtuner.freeMemLowWatermark"].Float64()
@@ -3425,6 +3423,16 @@ func updatePlasmaConfig(cfg common.Config) {
 		plasma.MTunerFreeMemHigh = highWatermark
 		plasma.MTunerFreeMemLow = lowWatermark
 	}
+
+	// sigar
+	plasma.EnableContainerSupport = cfg["plasma.EnableContainerSupport"].Bool()
+}
+
+func updatePlasmaConfig(cfg common.Config) {
+	updateMemTunerConfigs(cfg)
+
+	plasma.DQThreshold = float64(cfg["settings.thresholds.mem_low"].Int()) / 100
+	plasma.HighMemFragRatio = cfg["plasma.highMemFragThreshold"].Float64()
 
 	// hole cleaner global config
 	numHoleCleanerThreads := int(math.Ceil(float64(runtime.GOMAXPROCS(0)) *
