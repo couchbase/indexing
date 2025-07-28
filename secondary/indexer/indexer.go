@@ -14751,7 +14751,7 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 
 	for i := 1; i < len(sortedIndexInfo); i++ {
 		if sortedIndexInfo[i].Bucket == sortedIndexInfo[i-1].Bucket &&
-			sortedIndexInfo[i].IndexName == sortedIndexInfo[i-1].IndexName &&
+			sortedIndexInfo[i].DefnId == sortedIndexInfo[i-1].DefnId &&
 			sortedIndexInfo[i].PartitionID == sortedIndexInfo[i-1].PartitionID &&
 			sortedIndexInfo[i].ReplicaID != sortedIndexInfo[i-1].ReplicaID {
 			// compare seqnos. first
@@ -14916,8 +14916,8 @@ func (idx *indexer) getIndexInfoFromTsCounts(tsCounts []*TimestampedCounts) []*I
 
 	// sort the output
 	sort.Slice(out, func(i, j int) bool {
-		return (out[i].IndexName < out[j].IndexName) ||
-			(out[i].IndexName == out[j].IndexName && out[i].PartitionID < out[j].PartitionID)
+		return (out[i].DefnId < out[j].DefnId) ||
+			(out[i].DefnId == out[j].DefnId && out[i].PartitionID < out[j].PartitionID)
 	})
 
 	return out
