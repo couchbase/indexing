@@ -458,6 +458,9 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	// cbcollect collects only from crash directory inside crash (ns_server:indexer_breakpad_minidump_dir)
 	cfg.MiniDumpDir = common.SystemConfig["indexer.diagnostics_dir"].String()
 
+	// shard transfer
+	loadClientCopyConfig(&cfg.CopyConfig, slice.sysconf, false) // bhive santizes config on update
+
 	logging.Infof("bhiveSlice:setupConfig efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v PersistFullVector: %v",
 		cfg.EfNumNeighbors, cfg.EfConstruction, cfg.VanamaBuildQuota, cfg.NumCompactor, slice.topNScan, cfg.PersistFullVector)
 
@@ -488,6 +491,10 @@ func (slice *bhiveSlice) setupBackstoreConfig() bhive.Config {
 	cfg.MiniDumpDir = common.SystemConfig["indexer.diagnostics_dir"].String()
 
 	cfg.NumWriters = slice.maxNumWriters
+
+	// shard transfer
+	loadClientCopyConfig(&cfg.CopyConfig, slice.sysconf, false)
+
 	return cfg
 }
 

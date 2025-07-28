@@ -57,5 +57,5 @@ func MakeFileCopier(location, region, endpoint, staging string, ratelimit int, c
 
 func MakeFileCopierForPauseResume(task *taskObj, cfg c.Config) (Copier, error) {
 	copyCfg := generatePlasmaCopierConfigForPauseResume(task, cfg)
-	return plasma.MakeFileCopier(task.archivePath, "", nil, &plasma.DefaultRateLimiter{}, copyCfg.CopyConfig)
+	return plasma.MakeFileCopier(task.archivePath, "", nil, plasma.GetOpRateLimiter("pause"), copyCfg.CopyConfig)
 }

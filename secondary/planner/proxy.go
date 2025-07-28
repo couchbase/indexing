@@ -976,6 +976,12 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		// If index has resident memory, then compute minimum memory usage using current memory usage.
 		if !index.NoUsageInfo {
 			if index.ActualResidentPercent > 0 {
+				indexStr := fmt.Sprintf("[%v, %v]:", index.InstId, index.PartnId)
+
+				if index.Instance != nil {
+					indexStr = index.GetDisplayName()
+				}
+
 				resRatio := float64(index.ActualResidentPercent) / 100
 				if index.ActualMemUsage < combinedMemSzIdx {
 					combinedMemSzIdx = 0
@@ -1006,6 +1012,12 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 				}
 
 				index.ActualMemMin = combinedMemSzIdx + uint64((scaledMem+memJemallocFragScaled)*minRatio) + uint64(otherMemOverheadScaled) + index.ActualCodebookMemUsage
+
+				if index.ActualResidentPercent <= 1 {
+					logging.Infof("Planner::SetStatsInIndexer %v combinedMemSzIdx:%v, scaledMem:%v, memJemallocFragScaled:%v, otherMemOverheadScaled:%v, index.ActualCodebookMemUsage:%v, index.ActualMemMin:%v",
+						indexStr, combinedMemSzIdx, scaledMem, memJemallocFragScaled, uint64(otherMemOverheadScaled), index.ActualCodebookMemUsage, index.ActualMemMin)
+				}
+
 			} else if index.ActualNumDocs > 0 {
 				// If index has no resident memory but it has keys, then estimate using sizing equation.
 				dataSize := index.ActualDataSize
