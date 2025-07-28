@@ -601,6 +601,10 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 	}
 
 	refreshEncrypt := msg.(*MsgSecurityChange).RefreshEncrypt()
+	refreshCert := msg.(*MsgSecurityChange).RefreshCert() // no action on this
+
+	logging.Infof("handleSecurityChange: received (refreshCert: %v, refreshEncrypt %v)",
+		refreshCert, refreshEncrypt)
 
 	if refreshEncrypt {
 		logging.Infof("handleSecurityChange: refresh security context")
@@ -610,23 +614,29 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 		}
 	}
 
-	// stop HTTPS server
-	idx.httpsSrvLock.Lock()
-	if idx.httpsSrv != nil {
-		// This does not close connections.  Use idx.httpSrv.Close() on 1.11
-		idx.tlsListener.Close()
-		idx.httpsSrv = nil
-		idx.tlsListener = nil
-	}
-	idx.httpsSrvLock.Unlock()
+	var shouldServersRestart = refreshEncrypt
 
-	idx.httpSrvLock.Lock()
-	if idx.httpSrv != nil {
-		idx.tcpListener.Close()
-		idx.httpSrv = nil
-		idx.tcpListener = nil
+	if shouldServersRestart {
+		// stop HTTPS server
+		logging.Infof("handleSecurityChange: stopping https servers")
+		idx.httpsSrvLock.Lock()
+		if idx.httpsSrv != nil {
+			// This does not close connections.  Use idx.httpSrv.Close() on 1.11
+			idx.tlsListener.Close()
+			idx.httpsSrv = nil
+			idx.tlsListener = nil
+		}
+		idx.httpsSrvLock.Unlock()
+
+		idx.httpSrvLock.Lock()
+		if idx.httpSrv != nil {
+			logging.Infof("handleSecurityChange: stopping http servers")
+			idx.tcpListener.Close()
+			idx.httpSrv = nil
+			idx.tcpListener = nil
+		}
+		idx.httpSrvLock.Unlock()
 	}
-	idx.httpSrvLock.Unlock()
 
 	if refreshEncrypt {
 		// restart lifecyclemgr
@@ -649,24 +659,26 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 		}
 	}
 
-	// start HTTP server
-	initHttp := func(r int, e error) error {
-		logging.Infof("handleSecurityChange: restarting http server")
-		return idx.initHttpServer()
-	}
-	rh := common.NewRetryHelper(10, time.Second, 1, initHttp)
-	if err := rh.Run(); err != nil {
-		exitFn(fmt.Sprintf("Fail to restart http server on security change. Error %v", err))
-	}
+	if shouldServersRestart {
+		// start HTTP server
+		initHttp := func(r int, e error) error {
+			logging.Infof("handleSecurityChange: restarting http server")
+			return idx.initHttpServer()
+		}
+		rh := common.NewRetryHelper(10, time.Second, 1, initHttp)
+		if err := rh.Run(); err != nil {
+			exitFn(fmt.Sprintf("Fail to restart http server on security change. Error %v", err))
+		}
 
-	// start HTTPS server
-	fn := func(r int, e error) error {
-		logging.Infof("handleSecurityChange: restarting https server")
-		return idx.initHttpsServer()
-	}
-	helper := common.NewRetryHelper(10, time.Second, 1, fn)
-	if err := helper.Run(); err != nil {
-		exitFn(fmt.Sprintf("Fail to restart https server on security change. Error %v", err))
+		// start HTTPS server
+		fn := func(r int, e error) error {
+			logging.Infof("handleSecurityChange: restarting https server")
+			return idx.initHttpsServer()
+		}
+		helper := common.NewRetryHelper(10, time.Second, 1, fn)
+		if err := helper.Run(); err != nil {
+			exitFn(fmt.Sprintf("Fail to restart https server on security change. Error %v", err))
+		}
 	}
 
 	if refreshEncrypt {

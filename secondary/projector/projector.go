@@ -1130,10 +1130,12 @@ func (p *Projector) initSecurityContext(encryptLocalHost bool) error {
 			return err
 		}
 
-		// restart HTTPS server
-		p.admind.Stop()
-		time.Sleep(500 * time.Millisecond)
-		p.setupHTTP()
+		if refreshEncrypt {
+			// restart HTTPS server
+			p.admind.Stop()
+			time.Sleep(500 * time.Millisecond)
+			p.setupHTTP()
+		}
 
 		return nil
 	}
