@@ -239,45 +239,10 @@ func setupServerTLSConfig() (*tls.Config, error) {
 	return getTLSConfigFromSettingForServer(setting)
 }
 
-func getTLSConfigFromSettingForServer(setting *SecuritySetting) (*tls.Config, error) {
-
-	// Get certifiicate and cbauth config
-	cert := setting.certificate
-	if cert == nil {
-		err := fmt.Errorf("No certificate has been provided. Can't establish ssl connection")
-		return nil, err
-	}
-
-	pref := setting.tlsPreference
-
-	// set up TLS server config
-	config := &tls.Config{}
-
-	// set up certificate
-	config.Certificates = []tls.Certificate{*cert}
-
-	if pref != nil {
-		// setup ciphers
-		config.CipherSuites = pref.CipherSuites
-		config.PreferServerCipherSuites = pref.PreferServerCipherSuites
-
-		// set up other attributes
-		config.MinVersion = pref.MinVersion
-		config.ClientAuth = pref.ClientAuthType
-
-		// set up client cert
-		if pref.ClientAuthType != tls.NoClientCert {
-
-			caCertPool, err := getCertPool(setting)
-			if err != nil {
-				return nil, fmt.Errorf("%v Can't establish ssl connection", err)
-			}
-
-			config.ClientCAs = caCertPool
-		}
-	}
-
-	return config, nil
+func getTLSConfigFromSettingForServer(_ *SecuritySetting) (*tls.Config, error) {
+	cfg := &tls.Config{}
+	cfg.GetConfigForClient = getLatestServerTLSConfig
+	return cfg, nil
 }
 
 // Set up a TLS listener
@@ -909,4 +874,57 @@ func SetIpv6(isIpv6 bool) {
 
 func IsIpv6() bool {
 	return _isIpv6
+}
+
+// getCurrentTLSConfigFromSettingForServer is an internal only call and meant to be used to read
+// latest server TLS config. this is useful when we aim to have zero downtime server TLS updates
+func getCurrentTLSConfigFromSettingForServer(setting *SecuritySetting) (*tls.Config, error) {
+	// Get certifiicate and cbauth config
+	cert := setting.certificate
+	if cert == nil {
+		err := fmt.Errorf("No certificate has been provided. Can't establish ssl connection")
+		return nil, err
+	}
+
+	pref := setting.tlsPreference
+
+	// set up TLS server config
+	config := &tls.Config{}
+
+	// set up certificate
+	config.Certificates = []tls.Certificate{*setting.certificate}
+
+	if pref != nil {
+		// setup ciphers
+		config.CipherSuites = pref.CipherSuites
+		config.PreferServerCipherSuites = pref.PreferServerCipherSuites
+
+		// set up other attributes
+		config.MinVersion = pref.MinVersion
+		config.ClientAuth = pref.ClientAuthType
+
+		// set up client cert
+		if pref.ClientAuthType != tls.NoClientCert {
+
+			caCertPool, err := getCertPool(setting)
+			if err != nil {
+				return nil, fmt.Errorf("%v Can't establish ssl connection", err)
+			}
+
+			config.ClientCAs = caCertPool
+		}
+	}
+
+	return config, nil
+}
+
+// getLatestServerTLSConfig - by doing this, we can avoid tearing down server
+// everytime there is a certificate refresh
+func getLatestServerTLSConfig(_ *tls.ClientHelloInfo) (*tls.Config, error) {
+	setting := GetSecuritySetting()
+	if setting == nil {
+		return nil, fmt.Errorf("Security setting is nil")
+	}
+
+	return getCurrentTLSConfigFromSettingForServer(setting)
 }
