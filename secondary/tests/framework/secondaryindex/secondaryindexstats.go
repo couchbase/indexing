@@ -101,7 +101,7 @@ func GetStatsForIndexerHttpAddress(indexerHttpAddr, serverUserName, serverPasswo
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	resp, err := client.Do(req)
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+	if resp != nil && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		log.Printf(address)
 		log.Printf("%v", req)
 		log.Printf("%v", resp)
