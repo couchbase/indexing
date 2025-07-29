@@ -2137,7 +2137,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}()
 
 	if !valid {
-		logging.Errorf("Indexer::handleCreateIndex Bucket %v Not Found")
+		logging.Errorf("Indexer::handleCreateIndex Bucket %v Not Found", indexInst.Defn.Bucket)
 
 		if clientCh != nil {
 			clientCh <- &MsgError{
@@ -13577,20 +13577,21 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 	indexPartnMap IndexPartnMap, config c.Config, itemsCount uint64) (int64, []*c.IndexInst, []*c.IndexInst) {
 	var vectorInsts, trainedOrNonVecInsts []*c.IndexInst
 
-	maxSampleSize := 0
+	var maxSampleSize int64
 
-	largeDataThreshold := config["vector.largeDataThreshold"].Int()
-	train_vecs_per_centroid := config["vector.train_vecs_per_centroid"].Int()
+	maxSampleThreshold := config["vector.max_sample_threshold"].Int()
+	train_vecs_percent := config["vector.train_vecs_percent"].Int()
+
+	defaultSampleSize := int64(itemsCount * uint64(train_vecs_percent) / 100)
 
 	//For larger datasets, a large training set can lead to very high
 	//training time specially if large number of centroids are used.
-	//Reduce training vecs based on threshold for large data set.
-	if itemsCount > uint64(largeDataThreshold) {
-		train_vecs_per_centroid /= 5 //VECTOR_TODO change this to const/config once stable
-	}
+	//Reduce training vecs based on threshold for max sampling.
+	defaultSampleSize = min(defaultSampleSize, int64(maxSampleThreshold))
 
-	if train_vecs_per_centroid <= 1 {
-		train_vecs_per_centroid = 1 // Minimum of one sample per centroid is required for training
+	//For smaller datasets, sample everything
+	if itemsCount <= 10000 {
+		defaultSampleSize = int64(itemsCount)
 	}
 
 	for _, instId := range instIds {
@@ -13604,27 +13605,44 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 		vectorInsts = append(vectorInsts, &idxInst)
 		partnInstMap := indexPartnMap[instId]
 		vm := idxInst.Defn.VectorMeta
-		for partnId := range partnInstMap {
-			minCentroidsRequired := idxInst.Nlist[partnId]
-			if vm.Quantizer.Type == c.PQ {
-				minCentroidsRequired = max(1<<vm.Quantizer.Nbits, idxInst.Nlist[partnId])
-			}
-			maxCentroids = max(maxCentroids, minCentroidsRequired)
-		}
 
-		//override with user specified train_list
-		if vm.TrainList == 0 {
-			maxSampleSize = max(maxSampleSize, maxCentroids*train_vecs_per_centroid)
+		sampleSize := int64(0)
+		//if user specified train_list, use that to sample vectors.
+		if vm.TrainList != 0 {
+			sampleSize = int64(vm.TrainList)
 		} else {
-			maxSampleSize = max(maxSampleSize, vm.TrainList)
+			for partnId := range partnInstMap {
+				minCentroidsRequired := idxInst.Nlist[partnId]
+				if vm.Quantizer.Type == c.PQ {
+					minCentroidsRequired = max(1<<vm.Quantizer.Nbits, idxInst.Nlist[partnId])
+				}
+				maxCentroids = max(maxCentroids, minCentroidsRequired)
+			}
+
+			//Use 10x sample size than the number of centroids.
+			sampleSize = int64(maxCentroids) * 10
+
+			if sampleSize > int64(maxSampleThreshold) {
+				logging.Infof("Indexer::getMaxSampleSize InstId: %v, updating new sampleSize from %v "+
+					"to maxSampleThreshold %v", instId, sampleSize, maxSampleThreshold)
+				sampleSize = int64(maxSampleThreshold)
+			}
+
+			//If sampleSize is less than defaultSampleSize, use defaultSampleSize.
+			sampleSize = max(sampleSize, defaultSampleSize)
+
 		}
-	}
-	if maxSampleSize > int(itemsCount) {
-		logging.Infof("Indexer::getMaxSampleSize updating new maxSampleSize from %v to %v", maxSampleSize, itemsCount)
-		maxSampleSize = int(itemsCount)
+		//If sampleSize is greater than maxSampleSize, use sampleSize.
+		maxSampleSize = max(maxSampleSize, sampleSize)
+
 	}
 
-	return int64(maxSampleSize), vectorInsts, trainedOrNonVecInsts
+	if maxSampleSize > int64(itemsCount) {
+		logging.Infof("Indexer::getMaxSampleSize updating new maxSampleSize from %v to itemsCount %v", maxSampleSize, itemsCount)
+		maxSampleSize = int64(itemsCount)
+	}
+
+	return maxSampleSize, vectorInsts, trainedOrNonVecInsts
 }
 
 // Returns codebook for index defn in IndexDefnCodebookMap

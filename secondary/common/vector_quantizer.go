@@ -28,6 +28,8 @@ const (
 	SQ_6BIT                              = "SQ6"
 )
 
+var DEFAULT_VECTOR_DESCRIPTION = "IVF,SQ8"
+
 type VectorQuantizer struct {
 	Type QuantizationType `json:"quantization_type,omitempty"`
 

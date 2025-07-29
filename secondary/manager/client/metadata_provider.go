@@ -3706,7 +3706,7 @@ func (o *MetadataProvider) getVectorSimilarity(plan map[string]interface{}, isVe
 
 	similarity, ok := plan[keyword].(string)
 	if !ok {
-		return "", fmt.Errorf("Fail to create vector index. `%v` parameter not specified. It should be one of the following strings: 'EUCLIDEAN_SQUARED', 'EUCLIDEAN', 'DOT', 'COSINE', 'L2', 'L2_SQUARED'", keyword)
+		similarity = c.DEFAULT_VECTOR_SIMILARITY
 	}
 
 	switch strings.ToUpper(similarity) {
@@ -3848,11 +3848,12 @@ func (o *MetadataProvider) getVectorDescription(plan map[string]interface{}, isV
 		return nil, nil // !ok is valid case for non-vector index
 	}
 
-	if val, ok := plan[keyword].(string); !ok {
-		return nil, errors.New("Description is mandatory to create vector index")
-	} else {
-		return c.ParseVectorDesciption(val)
+	description, ok := plan[keyword].(string)
+	if !ok {
+		description = c.DEFAULT_VECTOR_DESCRIPTION
 	}
+
+	return c.ParseVectorDesciption(description)
 }
 
 func (o *MetadataProvider) deleteScheduleTokens(defnID c.IndexDefnId) (bool, bool, error) {
