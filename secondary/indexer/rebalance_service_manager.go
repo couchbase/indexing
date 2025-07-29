@@ -1051,6 +1051,11 @@ func (m *RebalanceServiceManager) cleanupOrphanTokens(change service.TopologyCha
 
 }
 
+type ttListElement struct {
+	ttid string
+	tt   *c.TransferToken
+}
+
 func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.TransferToken) error {
 
 	if tts == nil || len(tts) == 0 {
@@ -1109,11 +1114,6 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 		}
 	}
 
-	type ttListElement struct {
-		ttid string
-		tt   *c.TransferToken
-	}
-
 	// normally transfer tokens are added to ttList
 	ttList := []ttListElement{}
 	// only transfter tokens of realInst where we have two or more TTs to same destid (this node)
@@ -1165,6 +1165,9 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	}
 	ttList = append(ttList, ttAppendRealInst...)
 
+	logging.Infof("RebalanceServiceManager::cleanupTransferTokens hasMultiPartsToSameDest: %v, ttListRealInst: %v ttList: %v",
+		hasMultiPartsToSameDest, ttListRealInst, ttList)
+
 	dropIssued := false
 
 	// cleanup transfer token
@@ -1179,7 +1182,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 			_, dropIssued = m.cleanupTransferTokensForSource(t.ttid, t.tt)
 		}
 		if t.tt.DestId == string(m.nodeInfo.NodeID) {
-			_, dropIssued = m.cleanupTransferTokensForDest(t.ttid, t.tt, indexStateMap)
+			_, dropIssued = m.cleanupTransferTokensForDest(t.ttid, t.tt, indexStateMap, hasMultiPartsToSameDest, ttListRealInst)
 		}
 	}
 
@@ -1258,7 +1261,36 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForSource(ttid string, tt
 
 }
 
-func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *c.TransferToken, indexStateMap map[c.IndexInstId]c.RebalanceState) (error, bool) {
+// realInstList is a list of transfer tokens of the real instances of the indexes
+// on the destination node and it only has transfter tokens of realInst where we
+// have two or more TTs to same destid (this node)
+// This function checks if the real instance is pending ready
+// If the real instance is not found, it returns true.
+func isRealInstPendingReady(tt *c.TransferToken, realInstList []ttListElement) bool {
+	var ttReal, ttIter *c.TransferToken
+	for _, ttElem := range realInstList {
+		ttIter = ttElem.tt
+		if ttIter.DestId != tt.DestId {
+			continue
+		}
+
+		if tt.RealInstId == ttIter.RealInstId {
+			ttReal = ttIter
+			break
+		}
+	}
+	// If real instance is not found, it could be that
+	// 1. The real instance is not partitioned index
+	// 2. The real instance is not having multiple paritions moving to this node
+	if ttReal == nil {
+		return true
+	}
+	return ttReal.IsPendingReady
+}
+
+func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *c.TransferToken,
+	indexStateMap map[c.IndexInstId]c.RebalanceState, hasMultiPartstoSameDest bool,
+	realInstList []ttListElement) (error, bool) {
 
 	cleanup := func() (error, bool) {
 		var err error
@@ -1292,6 +1324,11 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 		//On success, move the token to TransferTokenReady/TransferTokenCommit.
 		//In case of any failure, cleanup the index.
 		if tt.IsEmptyNodeBatch && tt.IsPendingReady {
+
+			// If corresponding real instance is not ready cleanup even the proxy instance on destination
+			if hasMultiPartstoSameDest && !isRealInstPendingReady(tt, realInstList) {
+				return cleanup()
+			}
 
 			logging.Infof("RebalanceServiceManager::cleanupTransferTokensForDest Found empty node batch token" +
 				" with IsPendingReady as true. Attempt to move to TransferTokenReady/TransferTokenCommit.")
