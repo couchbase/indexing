@@ -1130,6 +1130,11 @@ type failedShardsContainer struct {
 	cleanupFailedShards map[common.ShardId]bool
 }
 
+type ttListElement struct {
+	ttid string
+	tt   *c.TransferToken
+}
+
 func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.TransferToken) (map[c.ShardId]bool, []c.ShardId, error) {
 
 	if tts == nil || len(tts) == 0 {
@@ -1202,11 +1207,6 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 		}
 	}
 
-	type ttListElement struct {
-		ttid string
-		tt   *c.TransferToken
-	}
-
 	// normally transfer tokens are added to ttList
 	ttList := []ttListElement{}
 	// only transfter tokens of realInst where we have two or more TTs to same destid (this node)
@@ -1270,6 +1270,8 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	}
 	ttList = append(ttList, ttAppendRealInst...)
 
+	logging.Infof("RebalanceServiceManager::cleanupTransferTokens hasMultiPartsToSameDest: %v, ttListRealInst: %v ttList: %v", hasMultiPartsToSameDest, ttListRealInst, ttList)
+
 	tokenMap := make(map[string]*c.TransferToken)
 	for _, t := range ttList {
 		tokenMap[t.ttid] = t.tt
@@ -1312,7 +1314,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 				_, dropIssued = m.cleanupTransferTokensForSource(t.ttid, t.tt)
 			}
 			if t.tt.DestId == string(m.nodeInfo.NodeID) {
-				_, dropIssued = m.cleanupTransferTokensForDest(t.ttid, t.tt, indexStateMap, tokenMap)
+				_, dropIssued = m.cleanupTransferTokensForDest(t.ttid, t.tt, indexStateMap, tokenMap, hasMultiPartsToSameDest, ttListRealInst)
 			}
 		}
 	}
@@ -1433,8 +1435,36 @@ func canMergeOnDest(tt *c.TransferToken, tokenMap map[string]*c.TransferToken) b
 	return true
 }
 
+// realInstList is a list of transfer tokens of the real instances of the indexes
+// on the destination node and it only has transfter tokens of realInst where we
+// have two or more TTs to same destid (this node)
+// This function checks if the real instance is pending ready
+// If the real instance is not found, it returns true.
+func isRealInstPendingReady(tt *c.TransferToken, realInstList []ttListElement) bool {
+	var ttReal, ttIter *c.TransferToken
+	for _, ttElem := range realInstList {
+		ttIter = ttElem.tt
+		if ttIter.DestId != tt.DestId {
+			continue
+		}
+
+		if tt.RealInstId == ttIter.RealInstId {
+			ttReal = ttIter
+			break
+		}
+	}
+	// If real instance is not found, it could be that
+	// 1. The real instance is not partitioned index
+	// 2. The real instance is not having multiple paritions moving to this node
+	if ttReal == nil {
+		return true
+	}
+	return ttReal.IsPendingReady
+}
+
 func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *c.TransferToken,
-	indexStateMap map[c.IndexInstId]c.RebalanceState, tokenMap map[string]*c.TransferToken) (error, bool) {
+	indexStateMap map[c.IndexInstId]c.RebalanceState, tokenMap map[string]*c.TransferToken,
+	hasMultiPartstoSameDest bool, realInstList []ttListElement) (error, bool) {
 
 	cleanup := func() (error, bool) {
 		var err error
@@ -1474,6 +1504,11 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 			// If the shard token moved to ready state, then proceed with merging the DCP token. Otherwise, cleanup
 			// the index on destination
 			if canMergeOnDest(tt, tokenMap) == false {
+				return cleanup()
+			}
+
+			// If corresponding real instance is not ready cleanup even the proxy instance on destination
+			if hasMultiPartstoSameDest && !isRealInstPendingReady(tt, realInstList) {
 				return cleanup()
 			}
 
