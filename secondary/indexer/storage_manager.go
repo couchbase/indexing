@@ -24,7 +24,6 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/stubs/nitro/bhive"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 )
 
@@ -96,12 +95,7 @@ type storageMgr struct {
 	// - sending false in the channel will force a memory quota distribution
 	quotaDistCh chan bool
 
-	// for moving averages in quota distribution
-	oldBWSS, oldPWSS   int64
-	oldBMand, oldPMand int64
-
-	// for dampening large quota shifts
-	prevBSplit int64
+	lastCodebokMemLogTime uint64
 
 	// used to phase out the minQuotaThreshold over time
 	plasmaLastCreateTime, bhiveLastCreateTime time.Time
@@ -196,8 +190,14 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	//start Storage Manager loop which listens to commands from its supervisor
 	go s.run()
 
-	s.redistributeMemoryQuota(int64(config.GetIndexerMemoryQuota()), true)
-	go s.runMemoryQuotaDistributor()
+	if config["plasma.UseQuotaTuner"].Bool() {
+		plasma.RunMemQuotaTuner(
+			s.quotaDistCh,
+			s.getStorageQuota,
+			s.getStorageTunerConfig,
+			s.getStorageTunerStats,
+		)
+	}
 
 	return s, &MsgSuccess{}
 
@@ -3106,92 +3106,62 @@ func (sm *storageMgr) handlePersistanceStatus(msg Message) {
 	}()
 }
 
-//////////////////////////////////////////////////
-// STORAGE MEMORY QUOTA DISTRIBUTOR
-//////////////////////////////////////////////////
+// Used by storage to periodically get the quota
+func (s *storageMgr) getStorageQuota() int64 {
+	indexerQuota := int64(s.config.GetIndexerMemoryQuota())
 
-func (s *storageMgr) runMemoryQuotaDistributor() {
-	logging.Infof("storageMgr:runMemoryQuotaDistributor: Start")
-	defer logging.Infof("storageMgr:runMemoryQuotaDistributor: Stop")
-
-	ticker := time.NewTicker(time.Duration(10) * time.Second)
-	defer ticker.Stop()
-
-	var newMemQuota int64
-	var lastKnownQuota int64
-
-	lastLogTime := uint64(time.Now().UnixNano())
-
-	for {
-		select {
-
-		case <-ticker.C:
-			newMemQuota = int64(s.config.GetIndexerMemoryQuota())
-
-			//subtract the codebook memory usage from the total quota
-			//as codebook is fully memory resident and that memory cannot
-			//be allocated to storage.
-			stats := s.stats.Get()
-			if stats != nil {
-				codebookMemUsage := stats.totalCodebookMemUsage.Value()
-				if codebookMemUsage >= newMemQuota/2 {
-					//if codebook mem usage is more than 50% of quota,
-					//log a warning.
-					now := uint64(time.Now().UnixNano())
-					sinceLastLog := now - lastLogTime
-					if sinceLastLog > uint64(300*time.Second) {
-						logging.Warnf("StorageMgr:runMemoryQuotaDistributor: High Codebook Memory "+
-							"Usage Found %d. Quota %d.", codebookMemUsage, newMemQuota)
-						lastLogTime = uint64(time.Now().UnixNano())
-					}
-				}
-
-				if codebookMemUsage >= newMemQuota {
-					//If codebook memory usage is more than quota,
-					//set quota as 0. This action is not done for developer
-					//use cases with lower quota allocation(512MB or lower).
-					if newMemQuota >= 512*1024*1024 {
-						newMemQuota = 0
-					}
-				} else {
-					newMemQuota = newMemQuota - codebookMemUsage
-				}
+	//subtract the codebook memory usage from the total quota
+	//as codebook is fully memory resident and that memory cannot
+	//be allocated to storage.
+	stats := s.stats.Get()
+	if stats != nil {
+		codebookMemUsage := stats.totalCodebookMemUsage.Value()
+		if codebookMemUsage >= indexerQuota/2 {
+			//if codebook mem usage is more than 50% of quota,
+			//log a warning.
+			now := uint64(time.Now().UnixNano())
+			sinceLastLog := now - s.lastCodebokMemLogTime
+			if sinceLastLog > uint64(300*time.Second) {
+				logging.Warnf("StorageMgr:runMemoryQuotaDistributor: High Codebook Memory "+
+					"Usage Found %d. Quota %d.", codebookMemUsage, indexerQuota)
+				s.lastCodebokMemLogTime = uint64(time.Now().UnixNano())
 			}
+		}
 
-			forceUpdate := false
-			//Codebook memusage can keep changing due to index creation/
-			//deletion. If memQuota is different than the lastKnownQuota,
-			//force quota update for storage.
-			if newMemQuota != lastKnownQuota {
-				forceUpdate = true
+		if codebookMemUsage >= indexerQuota {
+			//If codebook memory usage is more than quota,
+			//set quota as 0. This action is not done for developer
+			//use cases with lower quota allocation(512MB or lower).
+			if indexerQuota >= 512*1024*1024 {
+				indexerQuota = 0
 			}
-
-			lastKnownQuota = newMemQuota
-
-			s.redistributeMemoryQuota(newMemQuota, forceUpdate)
-
-		case stop := <-s.quotaDistCh:
-
-			if stop {
-				// was signalled to stop the goroutine
-				s.quotaDistCh <- false
-				return
-			}
-
-			newMemQuota = int64(s.config.GetIndexerMemoryQuota())
-			logging.Infof("storageMgr:runMemoryQuotaDistributor: Distributing quota [%d] due to request", newMemQuota)
-
-			s.redistributeMemoryQuota(newMemQuota, true)
-			s.quotaDistCh <- false
-
+		} else {
+			indexerQuota = indexerQuota - codebookMemUsage
 		}
 	}
+
+	//Codebook memusage can keep changing due to index creation/
+	//deletion. If indexerQuota is different than the last time,
+	//storage will force an update conservatively.
+
+	// Storage takes 90% of the quota
+	storageQuota := int64(float64(indexerQuota) * PLASMA_MEMQUOTA_FRAC)
+
+	return storageQuota
 }
 
-func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
-	// Storage takes 90% of the quota
-	storageQuota := int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC)
+func (s *storageMgr) getStorageTunerConfig() plasma.MemTunerConfig {
+	return plasma.MakeMemTunerConfig(
+		int64(s.config["bhive.quotaSplitPercent"].Int()),
+		int64(s.config["bhive.minQuotaThreshold"].Int()),
+		int64(s.config["bhive.minQuotaDecayDur"].Int()),
+		int64(s.config["bhive.quotaMaxShiftPercent"].Int()),
+	)
+}
 
+func (s *storageMgr) getStorageTunerStats() plasma.MemTunerDistStats {
+
+	// numBhives
 	var numBhives int64
 	bhiveInstIds := make(map[common.IndexInstId]bool)
 	for instId, inst := range s.indexInstMap.Get() {
@@ -3201,54 +3171,7 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		}
 	}
 
-	if numBhives <= 0 {
-		if isRequest {
-			// There are no bhive indexes, give all the quota to plasma
-			plasma.SetMemoryQuota(storageQuota, true)
-		}
-
-		// If there are no bhive index, do not set the plasma quota periodically
-		return
-	}
-
-	// There are bhive indexes on this node, need to split the storageQuota between bhive and plasma
-
-	bhiveQuotaPercent := int64(s.config["bhive.quotaSplitPercent"].Int())
-	var bhiveQuota, plasmaQuota int64
-
-	if bhiveQuotaPercent >= 0 {
-		// user has set config to fix percent of quota to give to bhive
-		bhiveQuota = int64(math.Floor((float64(storageQuota) * float64(bhiveQuotaPercent)) / float64(100)))
-		bhive.SetMemoryQuota(bhiveQuota)
-
-		plasmaQuota = storageQuota - bhiveQuota
-		if plasmaQuota > 0 {
-			plasma.SetMemoryQuota(plasmaQuota, false)
-		}
-
-		logging.Infof("storageMgr:redistributeMemoryQuota: Fixed quota split enabled. bhiveQuotaPercent[%d%%]"+
-			" bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] ",
-			bhiveQuotaPercent, bhiveQuota, plasmaQuota, storageQuota)
-
-		return
-	}
-
-	// bhiveQuotaPercent is set to -1 by default, use mandatory quotas and working set size to split
-
-	minThresh := int64(s.config["bhive.minQuotaThreshold"].Int())
-	minThresh = min(minThresh, storageQuota*MIN_QUOTA_THRESH_PERCENT/100)
-
-	decayDuration := time.Duration(s.config["bhive.minQuotaDecayDur"].Int()) * time.Second
-	applyTimeDecay := func(mt int64, createTime time.Time) int64 {
-		sinceCreation := time.Since(createTime)
-		if sinceCreation > decayDuration {
-			sinceCreation = decayDuration
-		}
-
-		timeLeft := decayDuration - sinceCreation
-		return int64(math.Round(float64(mt) * float64(timeLeft) / float64(decayDuration)))
-	}
-
+	// build_progress
 	pLowestBP := int64(100)
 	bLowestBP := int64(100)
 	for instId, iSts := range s.stats.Get().indexes {
@@ -3266,186 +3189,13 @@ func (s *storageMgr) redistributeMemoryQuota(memQuota int64, isRequest bool) {
 		bLowestBP = 0
 	}
 
-	applyBuildProgDecay := func(mt, bp int64) int64 {
-		return int64(math.Round(float64(mt) * float64(100-bp) / float64(100)))
-	}
-
-	// we don't want this minThresh to stick around when not needed, so it has to be decayed.
-	pMinThresh := max(applyTimeDecay(minThresh, s.plasmaLastCreateTime), applyBuildProgDecay(minThresh, pLowestBP))
-	bMinThresh := max(applyTimeDecay(minThresh, s.bhiveLastCreateTime), applyBuildProgDecay(minThresh, bLowestBP))
-
-	splitByProportion := func(bProp, pProp, oldBProp, oldPProp, remQuota, prevBSplit int64) (int64, int64, int64, int64, int64) {
-
-		if oldBProp > 0 && oldPProp > 0 {
-			// moving avg to smooth out sudden changes and absorb noise
-			bProp = (oldBProp + bProp) / 2
-			pProp = (oldPProp + pProp) / 2
-		}
-
-		total := bProp + pProp
-		if total <= 0 || bProp < 0 || pProp < 0 {
-			half := remQuota / 2
-			return half, remQuota - half, 0, 0, 0
-		}
-		bs := int64(math.Floor((float64(remQuota) * float64(bProp)) / float64(total)))
-
-		minBSplit := int64(0)
-		maxBSplit := remQuota
-
-		// make sure the quota does not move too much at once
-		if prevBSplit > 0 {
-			maxShiftPercent := int64(s.config["bhive.quotaMaxShiftPercent"].Int())
-			maxShift := int64(math.Floor((float64(maxShiftPercent) * float64(storageQuota)) / float64(100)))
-
-			if ms := prevBSplit - maxShift; ms > minBSplit {
-				minBSplit = ms
-			}
-
-			if ms := prevBSplit + maxShift; ms < maxBSplit {
-				maxBSplit = ms
-			}
-		}
-
-		if bs < minBSplit {
-			bs = minBSplit
-		}
-
-		if bs > maxBSplit {
-			bs = maxBSplit
-		}
-
-		remQuota -= bs
-		ps := remQuota
-		remQuota = 0
-
-		return bs, ps, bProp, pProp, remQuota
-	}
-
-	ensureMinThreshold := func(mandQ, minQ, threshold int64) (int64, int64) {
-		if threshold < 0 {
-			threshold = 0
-		}
-
-		if minQ < threshold {
-			minQ = threshold
-		}
-
-		if mandQ < minQ {
-			mandQ = minQ
-		}
-
-		return mandQ, minQ
-	}
-
-	pMandQuota, pMinQuota := plasma.GetMandatoryQuota()
-	pMandQuota, pMinQuota = ensureMinThreshold(pMandQuota, pMinQuota, pMinThresh)
-
-	bMandQuota, bMinQuota := bhive.GetMandatoryQuota()
-	bMandQuota, bMinQuota = ensureMinThreshold(bMandQuota, bMinQuota, bMinThresh)
-
-	pWSS := plasma.GetWorkingSetSize()
-	if pWSS < 0 {
-		pWSS = 0
-	}
-	bWSS := bhive.GetWorkingSetSize()
-	if bWSS < 0 {
-		bWSS = 0
-	}
-
-	var pSplit, bSplit int64
-
-	remainingQuota := storageQuota
-
-	tryAssignQuotas := func(pq, bq int64, doSplitByMand bool) bool {
-		if (pq + bq) > remainingQuota {
-			// there is not enough quota to satisfy the request
-			return false
-		}
-
-		// there is enough to satisfy both, give both the requested amount
-
-		plasmaQuota = pq
-		remainingQuota -= pq
-
-		bhiveQuota = bq
-		remainingQuota -= bq
-
-		if remainingQuota > 0 {
-
-			if !doSplitByMand && (bWSS <= 0 && pWSS <= 0) {
-				doSplitByMand = true
-			}
-
-			if doSplitByMand {
-				// split proportional to mandatory quotas
-				bSplit, pSplit, s.oldBMand, s.oldPMand, remainingQuota = splitByProportion(bMandQuota, pMandQuota,
-					s.oldBMand, s.oldPMand, remainingQuota, s.prevBSplit)
-
-				s.oldBWSS = 0
-				s.oldPWSS = 0
-			} else {
-				// split proportional to working set
-				bSplit, pSplit, s.oldBWSS, s.oldPWSS, remainingQuota = splitByProportion(bWSS, pWSS,
-					s.oldBWSS, s.oldPWSS, remainingQuota, s.prevBSplit)
-
-				s.oldPMand = 0
-				s.oldBMand = 0
-			}
-
-			s.prevBSplit = bSplit
-			bhiveQuota += bSplit
-			plasmaQuota += pSplit
-		}
-
-		logging.Infof("storageMgr:redistributeMemoryQuota: bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] "+
-			"pMandQuota[%d] bMandQuota[%d] pMinQuota[%d] bMinQuota[%d] pWSS[%d] bWSS[%d] bSplit[%d] "+
-			"pMinThresh[%d] bMinThresh[%d]",
-			bhiveQuota, plasmaQuota, storageQuota,
-			pMandQuota, bMandQuota, pMinQuota, bMinQuota, pWSS, bWSS, bSplit,
-			pMinThresh, bMinThresh)
-
-		if bhiveQuota > 0 {
-			bhive.SetMemoryQuota(bhiveQuota)
-		}
-
-		if plasmaQuota > 0 {
-			plasma.SetMemoryQuota(plasmaQuota, false)
-		}
-
-		return true
-	}
-
-	// First try to give both mandatory, split remaining by working set
-	if tryAssignQuotas(pMandQuota, bMandQuota, false) {
-		return
-	}
-
-	// Couldn't give both mandatory, try to give both min and split remaining by mandatory
-	if tryAssignQuotas(pMinQuota, bMinQuota, true) {
-		return
-	}
-
-	// Couldn't give both min, quota is probably undersized or min is over reported
-	// plasma recovery may fail if minimum is not given, try to give plasma the minimum
-	if pMinQuota < remainingQuota {
-		if !tryAssignQuotas(pMinQuota, remainingQuota-pMinQuota, true) {
-			// Should surely have returned true, log error just in case
-			logging.Errorf("storageMgr:redistributeMemoryQuota: Failed to give plasma min: "+
-				"bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] pMandQuota[%d] bMandQuota[%d] pMinQuota[%d] "+
-				"bMinQuota[%d]",
-				bhiveQuota, plasmaQuota, storageQuota, pMandQuota, bMandQuota, pMinQuota, bMinQuota)
-		}
-	}
-
-	// Couldn't even give plasma the minimum, give both 50-50
-	half := remainingQuota / 2
-	if !tryAssignQuotas(half, remainingQuota-half, true) {
-		// Should surely have returned true, log error just in case
-		logging.Errorf("storageMgr:redistributeMemoryQuota: Failed to give plasma min: "+
-			"bhiveQuota[%d] plasmaQuota[%d] storageQuota[%d] pMandQuota[%d] bMandQuota[%d] pMinQuota[%d] "+
-			"bMinQuota[%d] half[%d]",
-			bhiveQuota, plasmaQuota, storageQuota, pMandQuota, bMandQuota, pMinQuota, bMinQuota, half)
-	}
+	return plasma.MakeMemTunerDistStats(
+		numBhives,
+		pLowestBP,
+		bLowestBP,
+		s.plasmaLastCreateTime,
+		s.bhiveLastCreateTime,
+	)
 }
 
 func (sm *storageMgr) handleBuildBhiveGraph(cmd Message) {

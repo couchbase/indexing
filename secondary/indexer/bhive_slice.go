@@ -747,10 +747,7 @@ func (mdb *bhiveSlice) IsCleanupDone() bool {
 ////////////////////////////////////////////////
 
 func updateBhiveConfig(cfg common.Config) {
-	bhive.MTunerDecrementRatio = cfg["plasma.memtuner.trimDownRatio"].Float64()
-	bhive.MTunerIncrementRatio = cfg["plasma.memtuner.incrementRatio"].Float64()
-	bhive.MTunerMinFreeMemRatio = cfg["plasma.memtuner.minFreeRatio"].Float64()
-	bhive.MTunerMaxFreeMemory = cfg["plasma.memtuner.maxFreeMemory"].Int()
+	updateMemTunerConfigs(cfg)
 	bhive.MTunerOvershootRatio = cfg["plasma.memtuner.overshootRatio"].Float64()
 }
 
