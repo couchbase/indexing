@@ -51,10 +51,6 @@ type IndexStatus struct {
 	SecExprs          []string                    `json:"secExprs,omitempty"`
 	WhereExpr         string                      `json:"where,omitempty"`
 	IndexType         string                      `json:"indexType,omitempty"`
-	IsVectorIndex     bool                        `json:"isVectorIndex,omitempty"`
-	VectorPos         int                         `json:"vectorPos"`
-	Include           []string                    `json:"include,omitempty"`
-	With              map[string]interface{}      `json:"with,omitempty"`
 	Status            string                      `json:"status,omitempty"`
 	Definition        string                      `json:"definition"`
 	Hosts             []string                    `json:"hosts,omitempty"`
