@@ -60,6 +60,11 @@ type ShardTransferManager struct {
 	rpcSrv              plasma.RPCServer
 	shouldRpcSrvBeAlive atomic.Bool // true when rpc server is started; false when it is supposed to be shutdown
 
+	// holds server config from settings update
+	rpcCfg    plasma.CopyConfig
+	updateCfg atomic.Bool
+	cfgMu     sync.Mutex
+
 	shardTypeMapper *ShardTypeMapper
 }
 
@@ -130,6 +135,13 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 				plasma.SetOpRateLimit(plasma.GSIRebalanceId, int64(stm.maxDiskBW))
 			}
 		}
+
+		cfg := loadRPCServerConfig(cfgUpdate.cfg)
+
+		stm.cfgMu.Lock()
+		stm.rpcCfg = cfg.CopyConfig
+		stm.updateCfg.Store(true)
+		stm.cfgMu.Unlock()
 
 	case START_SHARD_TRANSFER:
 		executionStr = "async-run"
@@ -1583,6 +1595,11 @@ func (stm *ShardTransferManager) initPeerRPCServerNoLock(rebalId string) error {
 
 	cfg := loadRPCServerConfig(stm.config)
 	cfg.RPCHttpServerCfg.DoServe = false
+	if stm.updateCfg.Load() {
+		stm.cfgMu.Lock()
+		applyRPCServerConfig(&cfg.CopyConfig, &stm.rpcCfg)
+		stm.cfgMu.Unlock()
+	}
 
 	httpSrv := &http.Server{
 		Addr: nodeAddr,
