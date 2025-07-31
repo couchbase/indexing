@@ -3669,7 +3669,7 @@ loop:
 
 				if pending > 0 {
 					l.Infof("ShardRebalancer::dropShardsWhenIdle Index %v:%v:%v:%v has %v pending scans",
-						method, defn.Bucket, defn.Scope, defn.Collection, defn.Name, pending)
+						defn.Bucket, defn.Scope, defn.Collection, defn.Name, pending)
 					break
 				}
 
@@ -3705,7 +3705,8 @@ loop:
 						return
 					}
 					// Ok: failed to drop source index because b/s/c was dropped. Continue to TransferTokenCommit state.
-					l.Infof("ShardRebalancer::dropShardsWhenIdle: Source index already dropped due to bucket/scope/collection dropped. tt %v.", method, tt)
+					l.Infof("ShardRebalancer::dropShardsWhenIdle: Source index already dropped due to bucket/scope/collection dropped. tt %v",
+						tt)
 				}
 				droppedIndexes[instKey] = true
 			}
