@@ -130,6 +130,7 @@ var op strings.Builder
 func TestMain(m *testing.M) {
 	op = strings.Builder{}
 	logging.SetLogWriter(&op)
+	logging.SetLogLevel(logging.Warn)
 	exitCode := m.Run()
 	if exitCode != 0 {
 		fmt.Println(op.String())
@@ -3814,7 +3815,6 @@ func TestMultiNode_MixedModeRebalance(t *testing.T) {
 			if slotID == 0 {
 				t.Fatalf("%v failed to get slot id for replicaMap %v in 0th pass", t.Name(), repmap)
 			}
-			t.Logf("Slot %v recorded for defnID %v partnID %v", slotID, defnID, partnID)
 			break
 		}
 		recordedDefnID = defnID
