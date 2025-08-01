@@ -2014,6 +2014,12 @@ func CanMaintanShardAffinity(config Config) bool {
 	return isShardAffinityEnabled && isStoragePlasma
 }
 
+func UseShardDealer(canMaintanShardAffinity bool, config Config) bool {
+	globalClustVer := GetClusterVersion()
+	isShardDealerEnabled := config.GetDeploymentModelAwareCfg("planner.use_shard_dealer").Bool()
+	return globalClustVer >= INDEXER_80_VERSION && canMaintanShardAffinity && isShardDealerEnabled
+}
+
 func GetBinSize(config Config) uint64 {
 	if binSize, ok := config["planner.internal.binSize"]; ok && binSize.Uint64() > 0 {
 		return binSize.Uint64()
