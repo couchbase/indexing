@@ -14,8 +14,12 @@ import (
 var idxFieldsDedicated = "idx_dedicated_partn"
 var idxFieldsShared = "idx_shared_partn"
 
+var idxDedicatedBhive = "idxBHIVE_dedicated_partn"
+var idxSharedBhive = "idxBHIVE_shared_partn"
+
 // This test will perform backup+restore operation on indexer node
 // An index will be created on bucket.scope.collection and backup restore operation will be done on the same
+// The test creates a mix of Scalar, Composite and Bhive Vector Indexes
 func TestVectorBackupRestore(t *testing.T) {
 	skipIfNotPlasma(t)
 
@@ -71,7 +75,22 @@ func TestVectorBackupRestore(t *testing.T) {
 	err = createWithDeferAndBuild(idxShared, BUCKET, scope, coll, stmt, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating "+idxShared, t)
 
-	// TODO: add BHIVE index after recovery is implemented
+	// Create Bhive Vector Indexes
+	stmt = fmt.Sprintf("CREATE VECTOR INDEX %v"+
+		" ON `%v`(sift VECTOR)"+
+		" PARTITION BY HASH(meta().id)"+
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_partition\":4, \"defer_build\":true};",
+		idxDedicatedBhive, BUCKET)
+	err = createWithDeferAndBuild(idxDedicatedBhive, BUCKET, "", "", stmt, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error in creating "+idxDedicatedBhive, t)
+
+	stmt = fmt.Sprintf("CREATE VECTOR INDEX %v"+
+		" ON `%v`.`%v`.`%v`(sift VECTOR)"+
+		" PARTITION BY HASH(meta().id)"+
+		" WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"num_partition\":4, \"defer_build\":true};",
+		idxSharedBhive, BUCKET, scope, coll)
+	err = createWithDeferAndBuild(idxSharedBhive, BUCKET, scope, coll, stmt, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error in creating "+idxSharedBhive, t)
 
 	indexers, _ := secondaryindex.GetIndexerNodesHttpAddresses(indexManagementAddress)
 	if len(indexers) == 0 {
@@ -121,8 +140,8 @@ func TestBuildRestoredVectorIndexes(t *testing.T) {
 		time.Sleep(bucketOpWaitDur * time.Second)
 	}()
 
-	sharedInsts := []string{idxShared, idxFieldsShared}
-	dedicatedInsts := []string{idxDedicated, idxFieldsDedicated}
+	sharedInsts := []string{idxShared, idxFieldsShared, idxSharedBhive}
+	dedicatedInsts := []string{idxDedicated, idxFieldsDedicated, idxBhiveDedicated}
 
 	// Validate Restore Operation
 	// During Restore, the indexes are not built, there have defer_build = true
