@@ -9003,17 +9003,28 @@ func (idx *indexer) doCleanupOrphanIndexes(mode c.StorageMode, storeEngineDir st
 }
 
 func (idx *indexer) cleanupRebalStagingDir() error {
-	storageDir, _ := common.GetStorageDirs(idx.config, common.NA_StorageEngine)
+
 	rpcDir := GetRPCRootDir()
-
-	if rpcDir != "" && common.GetStorageMode() == common.PLASMA {
+	cleanupStagingDir := func(storageDir string) error {
 		dir := filepath.Join(storageDir, rpcDir)
-
+		// removeResidualFile returns nil for a non-existing directory
 		if err := idx.removeResidualFile(dir); err != nil {
 			logging.Errorf("Indexer::cleanupRebalStagingDir Error observed while removing residual files at path: %v, err: %v", dir, err)
 			return err
 		}
 		logging.Infof("Indexer::cleanupRebalStagingDir cleaned up path:%v successfully", dir)
+		return nil
+	}
+
+	if rpcDir != "" && common.GetStorageMode() == common.PLASMA {
+		storageDir, _ := common.GetStorageDirs(idx.config, common.Plasma_StorageEngine)
+		if err := cleanupStagingDir(storageDir); err != nil {
+			return err
+		}
+		_, bhiveEngineDir := common.GetStorageDirs(idx.config, common.Bhive_StorageEngine)
+		if err := cleanupStagingDir(bhiveEngineDir); err != nil {
+			return err
+		}
 	}
 
 	return nil
