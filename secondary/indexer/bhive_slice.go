@@ -73,16 +73,17 @@ type bhiveSlice struct {
 
 	//
 	// status
-	newBorn        bool
-	isDirty        bool
-	isInitialBuild int32
-	isActive       bool
-	status         SliceStatus
-	isClosed       bool
-	isDeleted      bool
-	isSoftClosed   bool
-	isSoftDeleted  bool
-	refCount       uint64
+	newBorn          bool
+	isDirty          bool
+	isInitialBuild   int32
+	isGraphBuildDone bool
+	isActive         bool
+	status           SliceStatus
+	isClosed         bool
+	isDeleted        bool
+	isSoftClosed     bool
+	isSoftDeleted    bool
+	refCount         uint64
 
 	//
 	// main store
@@ -214,7 +215,7 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 	sysconf common.Config, idxStats *IndexStats, memQuota int64,
 	isNew bool, isInitialBuild bool,
 	numVBuckets int, replicaId int, shardIds []common.ShardId,
-	cancelCh chan bool, codebookPath string) (*bhiveSlice, error) {
+	cancelCh chan bool, codebookPath string, graphBuildDone bool) (*bhiveSlice, error) {
 
 	if !idxDefn.IsVectorIndex {
 		return nil, fmt.Errorf("index %v.%v is not a vector index", idxDefn.Bucket, idxDefn.Name)
@@ -242,6 +243,7 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 	slice.storageDir = storage_dir
 	slice.logDir = log_dir
 	slice.codebookPath = codebookPath
+	slice.isGraphBuildDone = graphBuildDone
 
 	// settings
 	slice.sysconf = sysconf
@@ -555,10 +557,11 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 			alternateShardId = slice.idxDefn.AlternateShardIds[slice.idxPartnId][MAIN_INDEX-1] // "-1" because MAIN_INDEX is "1" and back-index is "2"
 		}
 
-		slice.mainstore, mErr = bhive.New(
+		slice.mainstore, mErr = bhive.New2(
 			alternateShardId, // AlternateId
 			mCfg,             // config bhive.Config
 			slice.newBorn,    // new bool
+			slice.isGraphBuildDone,
 		)
 		if mErr != nil {
 			mErr = fmt.Errorf("unable to initialize %s, err = %v", mCfg.File, mErr)
@@ -576,10 +579,11 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 			alternateShardId = slice.idxDefn.AlternateShardIds[slice.idxPartnId][BACK_INDEX-1] // "-1" because MAIN_INDEX is "1" and back-index is "2"
 		}
 
-		slice.backstore, bErr = bhive.New(
+		slice.backstore, bErr = bhive.New2(
 			alternateShardId, // AlternateId
 			bCfg,             // config bhive.Config
 			slice.newBorn,    // new bool
+			slice.isGraphBuildDone,
 		)
 		if bErr != nil {
 			bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
@@ -1727,6 +1731,7 @@ func (mdb *bhiveSlice) buildGraph(idxInstId common.IndexInstId, callb BuildDoneC
 		if isNotClosed {
 			defer mdb.DecrRef() // decrement ref after graph building is done
 
+			// TBD: error check
 			mdb.mainstore.BuildGraph()
 			close(donech)
 		} else { // Slice is closed
@@ -1746,6 +1751,7 @@ func (mdb *bhiveSlice) buildGraph(idxInstId common.IndexInstId, callb BuildDoneC
 			idxPartnId: mdb.idxPartnId,
 		}
 		callb(resp)
+		mdb.isGraphBuildDone = true
 	}
 }
 
