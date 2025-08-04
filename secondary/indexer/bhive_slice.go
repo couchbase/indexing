@@ -458,6 +458,9 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	// cbcollect collects only from crash directory inside crash (ns_server:indexer_breakpad_minidump_dir)
 	cfg.MiniDumpDir = common.SystemConfig["indexer.diagnostics_dir"].String()
 
+	cfg.GraphRebuildInterval = slice.sysconf["bhive.graphRebuildInterval"].Int()
+	cfg.GraphRebuildThreshold = slice.sysconf["bhive.graphRebuildThreshold"].Int()
+
 	// shard transfer
 	loadClientCopyConfig(&cfg.CopyConfig, slice.sysconf, false) // bhive santizes config on update
 

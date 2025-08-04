@@ -4667,6 +4667,20 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.bhive.graphRebuildInterval": ConfigValue{
+		7200,
+		"duration in seconds before triggering graph rebuild",
+		7200,
+		false,
+		false,
+	},
+	"indexer.bhive.graphRebuildThreshold": ConfigValue{
+		100,
+		"number of mutations to accumulate in a centroid before triggering graph rebuild",
+		100,
+		false,
+		false,
+	},
 	"indexer.bhive.RecoveryFullDataReplay": ConfigValue{
 		true,
 		"Enables or disables the lssVIndex full data replay on recovery log error",
