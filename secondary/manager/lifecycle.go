@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -5271,33 +5272,18 @@ func (s *builder) getBuildList() ([]string, int32) {
 		}
 	}
 
-	// Primary sort buildList ascending by number of pending indexes for each key (to prevent starvation)
-	for i := 0; i < len(buildList)-1; i++ {
-		for j := i + 1; j < len(buildList); j++ {
-			key_i := buildList[i]
-			key_j := buildList[j]
-
-			if len(s.pendings[key_i]) < len(s.pendings[key_j]) {
-				tmp := buildList[i]
-				buildList[i] = buildList[j]
-				buildList[j] = tmp
-			}
-		}
-	}
+	// Primary sort buildList descending by number of pending indexes for each key (to prevent starvation)
+	sort.Slice(buildList, func(i, j int) bool {
+		return len(s.pendings[buildList[i]]) > len(s.pendings[buildList[j]])
+	})
 
 	// Secondary sort buildList from closest to farthest from quota (same distance over or under quota equally weighted)
-	for i := 0; i < len(buildList)-1; i++ {
-		for j := i + 1; j < len(buildList); j++ {
-			key_i := buildList[i]
-			key_j := buildList[j]
-
-			if math.Abs(float64(len(s.pendings[key_i])-int(quota))) > math.Abs(float64(len(s.pendings[key_j])-int(quota))) {
-				tmp := buildList[i]
-				buildList[i] = buildList[j]
-				buildList[j] = tmp
-			}
-		}
-	}
+	// SliceStable is used - to preserve the order from the first sort.
+	sort.SliceStable(buildList, func(i, j int) bool {
+		distI := math.Abs(float64(len(s.pendings[buildList[i]]) - int(quota)))
+		distJ := math.Abs(float64(len(s.pendings[buildList[j]]) - int(quota)))
+		return distI < distJ
+	})
 
 	return buildList, quota
 }
