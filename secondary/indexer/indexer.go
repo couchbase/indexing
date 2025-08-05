@@ -14751,7 +14751,7 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 
 	for i := 1; i < len(sortedIndexInfo); i++ {
 		if sortedIndexInfo[i].Bucket == sortedIndexInfo[i-1].Bucket &&
-			sortedIndexInfo[i].IndexName == sortedIndexInfo[i-1].IndexName &&
+			sortedIndexInfo[i].DefnId == sortedIndexInfo[i-1].DefnId &&
 			sortedIndexInfo[i].PartitionID == sortedIndexInfo[i-1].PartitionID &&
 			sortedIndexInfo[i].ReplicaID != sortedIndexInfo[i-1].ReplicaID {
 			// compare seqnos. first
@@ -14845,6 +14845,60 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 	idx.stats.divergingReplicaIndexesMap.Set(divergingReplicasMap)
 }
 
+// This method checks for any lost partitions of an index in the cluster.
+// partitions can be lost when planner decides to skip partition repair.
+//
+// This method compares the total number of partitions present in the clsuter
+// and the number of partitions expected as per the index definition. If logs
+// a fatal message if both mismatch
+func (idx *indexer) checkForLostPartitions(sortedIndexInfo []*IndexInfo) {
+	actualInstPartnMap := make(map[uint64]map[int]map[int]bool) // defnId -> replicaId -> partnId -> true
+	expectedInstPartnMap := make(map[uint64]int)                // defnId -> num_partitions
+
+	for _, indexInfo := range sortedIndexInfo {
+		indexName := indexInfo.IndexName
+		defnId := indexInfo.DefnId
+		replicaId := indexInfo.ReplicaID
+		partnId := indexInfo.PartitionID
+		numPartns := indexInfo.NumPartitions
+
+		if _, ok := actualInstPartnMap[defnId]; !ok {
+			actualInstPartnMap[defnId] = make(map[int]map[int]bool)
+		}
+
+		if _, ok := actualInstPartnMap[defnId][replicaId]; !ok {
+			actualInstPartnMap[defnId][replicaId] = make(map[int]bool)
+		}
+
+		if _, ok := actualInstPartnMap[defnId][replicaId][partnId]; ok {
+			// Ideally, it is expected to have only one instance for the partition
+			// of a replica in the cluster.
+			// However, during rebalance, if the source node is serving scans for
+			// an index, there is a narrow window of time where the partition can
+			// exist on both source and destination nodes. Hence, no-op in this case
+		}
+
+		actualInstPartnMap[defnId][replicaId][partnId] = true
+
+		if val, ok := expectedInstPartnMap[defnId]; !ok {
+			expectedInstPartnMap[defnId] = numPartns
+		} else if val != numPartns {
+			logging.Fatalf("Indexer::checkForLostPartitions Inconsistency in the number of partitions reported for "+
+				"indexName: %v, defnId: %v. Prev. recorded partns: %v, curr. recorded partns: %v", indexName, defnId, val, numPartns)
+		}
+	}
+
+	for defnId, replicaIdMap := range actualInstPartnMap {
+		for replicaId, partnIdMap := range replicaIdMap {
+			if len(partnIdMap) != expectedInstPartnMap[defnId] {
+				logging.Fatalf("Indexer::checkForLostPartitions defnId: %v, replicaId: %v has only %v(%v) partitions "+
+					"while it is expected to have %v partitions", defnId, replicaId, len(partnIdMap),
+					partnIdMap, expectedInstPartnMap[defnId])
+			}
+		}
+	}
+}
+
 func (idx *indexer) resetDivergingReplicaStats() {
 	idx.stats.numDivergingReplicaIndexes.Set(0)
 	idx.stats.divergingReplicaIndexesMap.Reset()
@@ -14862,8 +14916,8 @@ func (idx *indexer) getIndexInfoFromTsCounts(tsCounts []*TimestampedCounts) []*I
 
 	// sort the output
 	sort.Slice(out, func(i, j int) bool {
-		return (out[i].IndexName < out[j].IndexName) ||
-			(out[i].IndexName == out[j].IndexName && out[i].PartitionID < out[j].PartitionID)
+		return (out[i].DefnId < out[j].DefnId) ||
+			(out[i].DefnId == out[j].DefnId && out[i].PartitionID < out[j].PartitionID)
 	})
 
 	return out
@@ -14939,38 +14993,40 @@ func (idx *indexer) monitorItemsCount() {
 		return
 	}
 
-	getTimestampedCountsFromNode := func(addr string) []*TimestampedCounts {
+	getTimestampedCountsFromNode := func(addr string) ([]*TimestampedCounts, bool /*skipLostPartitions*/) {
 		resp, err := getWithAuth(addr + "/stats/timestampedCounts")
 		if err != nil {
 			logging.Warnf("Indexer::monitorItemsCount: Failed to get the timestampedCount stats from node: %v, err: %v. Ignoring the node", addr, err)
-			return nil
+			return nil, true
 		}
 
 		if resp == nil {
 			logging.Warnf("Indexer::monitorItemsCount: nil response received from timestampedCount stats req from node: %v. Ignoring the node", addr)
-			return nil
+			return nil, true
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			logging.Warnf("Indexer::monitorItemsCount: Invalid response received from timestampedCount stats req from node: %v, resp.StatusCode: %v. Ignoring the node", addr, resp.StatusCode)
-			return nil
+			return nil, true
 		}
 
 		var statusResp []*TimestampedCounts
 		bytes, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			l.Errorf("Indexer::monitorItemsCount Error while reading response from node: %v err: %v", addr, err)
-			return nil
+			return nil, true
 		}
 
 		if err = json.Unmarshal(bytes, &statusResp); err != nil {
 			l.Errorf("Indexer::monitorItemsCount Error unmarshal response from node: %v err: %v", addr, err)
-			return nil
+			return nil, true
 		}
 
-		return statusResp
+		return statusResp, false
 	}
+
+	skipLostPartitionsCheck := false
 
 	getFromActiveIndexerNodes := func() []*TimestampedCounts {
 		var allTimestampedCounts []*TimestampedCounts
@@ -14990,7 +15046,7 @@ func (idx *indexer) monitorItemsCount() {
 				defer wg.Done()
 				t0 := time.Now()
 
-				resp := getTimestampedCountsFromNode(addr)
+				resp, skipLostPartnCheck := getTimestampedCountsFromNode(addr)
 
 				dur := time.Since(t0)
 				if dur > 30*time.Second {
@@ -14999,6 +15055,8 @@ func (idx *indexer) monitorItemsCount() {
 
 				mu.Lock()
 				defer mu.Unlock()
+				// skip lost partitions check on erroneous conditions in metadata retrieval
+				skipLostPartitionsCheck = skipLostPartitionsCheck || skipLostPartnCheck
 				if resp != nil {
 					allTimestampedCounts = append(allTimestampedCounts, resp...)
 				}
@@ -15028,6 +15086,8 @@ func (idx *indexer) monitorItemsCount() {
 			selfRestart()
 			return
 		}
+
+		failedIndexerNodes := cinfo.GetFailedIndexerNodes()
 
 		if changeInIndexerNodes(currActiveIndexerNodes, newActiveIndexerNodes) {
 			currActiveIndexerNodes = newActiveIndexerNodes
@@ -15061,6 +15121,15 @@ func (idx *indexer) monitorItemsCount() {
 
 			// Step-3: Check for any items_count mismatches
 			idx.checkForItemsCountMismatch(sortedIndexInfo)
+
+			if len(failedIndexerNodes) == 0 && skipLostPartitionsCheck == false {
+				// Step-4: Check for any lost partitions if there are no
+				// failed indexer nodes in the cluster
+				idx.checkForLostPartitions(sortedIndexInfo)
+			} else {
+				logging.Infof("Indexer::monitorItemsCount Skipping lost partition check. numFailedOverNodes: %v, "+
+					"skipLostPartitionsCheck: %v", len(failedIndexerNodes), skipLostPartitionsCheck)
+			}
 
 		} else { // RESET any stats that are set on this node
 			idx.resetDivergingReplicaStats()

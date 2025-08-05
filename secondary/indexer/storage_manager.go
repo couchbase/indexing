@@ -3245,12 +3245,14 @@ type IndexInfo struct {
 	// The fully qualified name of the index (<bucket_name>:<scope_name>:<coll_name>:<index_name>)
 	IndexName string `json:"indexName"`
 
-	InstId       uint64 `json:"instId"`       // Index instanceId
-	ReplicaID    int    `json:"replica_id"`   // replica ID of the index
-	PartitionID  int    `json:"partition_id"` // partition ID of the index
-	Bucket       string `json:"bucket"`       // bucket to which the index belogs
-	IsArrayIndex bool   `json:"isArrayIndex"` // Some validations happen only for non-array indexes
-	ItemsCount   uint64 `json:"items_count"`  // total number of items in the snapshot at the recorded timestamp
+	DefnId        uint64 `json:"defnId"`        // Index definition ID
+	InstId        uint64 `json:"instId"`        // Index instanceId
+	ReplicaID     int    `json:"replicaId"`     // replica ID of the index
+	PartitionID   int    `json:"partitionId"`   // partition ID of the index
+	Bucket        string `json:"bucket"`        // bucket to which the index belogs
+	IsArrayIndex  bool   `json:"isArrayIndex"`  // Some validations happen only for non-array indexes
+	ItemsCount    uint64 `json:"itemsCount"`    // total number of items in the snapshot at the recorded timestamp
+	NumPartitions int    `json:"numPartitions"` // maximum number of partitions defined for this index
 
 	timestamp []uint64 // Used only for internal processing - not exported
 	nodeId    string   // ID of the node on which the replica partition exists - Used only for internal processing
@@ -3362,12 +3364,19 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 
 						indexInfo := &IndexInfo{
 							IndexName:    indexName,
+							DefnId:       uint64(indexInst.Defn.DefnId),
 							InstId:       uint64(indexInst.InstId),
 							ReplicaID:    replicaID,
 							PartitionID:  int(partnId),
 							Bucket:       indexInst.Defn.Bucket,
 							IsArrayIndex: indexInst.Defn.IsArrayIndex,
 							ItemsCount:   count,
+						}
+
+						if common.IsPartitioned(indexInst.Defn.PartitionScheme) {
+							indexInfo.NumPartitions = indexInst.Pc.GetNumPartitions()
+						} else {
+							indexInfo.NumPartitions = 1
 						}
 						timestampedCountsMap[key].Indexes = append(timestampedCountsMap[key].Indexes, indexInfo)
 
