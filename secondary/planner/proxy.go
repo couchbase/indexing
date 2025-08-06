@@ -998,7 +998,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 				if fragThresholdOverride, ok := config["indexer.planner.overrideMemFragThreshold"]; ok && fragThresholdOverride.Float64() > 0.0 {
 					memFragThreshold = fragThresholdOverride.Float64()
 				}
-				maxEstJemallocFragMem := (memFragThreshold * scaledMem) / (1 - memFragThreshold)
+				maxEstJemallocFragMem := (memFragThreshold*scaledMem)/(1-memFragThreshold) + (memFragThreshold*float64(combinedMemSzIdx))/(1-memFragThreshold)
 				if memJemallocFragScaled > maxEstJemallocFragMem {
 					memJemallocFragScaled = maxEstJemallocFragMem // this is estimated for 100% RR
 				}
