@@ -4486,6 +4486,24 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 		}
 	}
 
+	// Remove the instance from pruneList
+	if indexInst.Stream == common.INIT_STREAM && indexInst.RealInstId == 0 {
+		var remaining []pruneSpec
+		if len(idx.prunePartitionList) != 0 {
+			remaining = make([]pruneSpec, 0, len(idx.prunePartitionList))
+
+			for _, pruneSpec := range idx.prunePartitionList {
+				if pruneSpec.instId == indexInst.InstId {
+					logging.Infof("Indexer::handleDropIndex removing instance: %v from prune partion "+
+						"list as the index is being dropped", indexInst.InstId)
+				} else {
+					remaining = append(remaining, pruneSpec)
+				}
+			}
+			idx.prunePartitionList = remaining
+		}
+	}
+
 	//check if there is already a drop request waiting on this bucket
 	if ok := idx.checkDuplicateDropRequest(indexInst, clientCh); ok {
 		return
