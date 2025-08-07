@@ -5395,9 +5395,10 @@ func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 			// Clean up pendings map.  If there is any index that needs retry, they will be put into the notifych again.
 			// Once this function is done, the map will be populated again from the notifych.
 			if len(pendingList) == 0 {
-				pendingList = nil
+				delete(s.pendings, pendingKey) // no more pending indexes for this keyspace
+			} else {
+				s.pendings[pendingKey] = pendingList
 			}
-			s.pendings[pendingKey] = pendingList
 
 			// Submit the defnIds to be built, if any
 			if len(buildList) != 0 {
