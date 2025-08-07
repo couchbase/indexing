@@ -114,7 +114,7 @@ func mapifyTopology(indexStatuses []*IndexStatus) map[string]map[int]struct{} {
 
 // CPU_THROTTLE_EXPIRY_SEC is # of seconds after last HealthCheck call to asssume Autofailover is
 // disabled and thus CPU throttling should be turned off.
-const CPU_THROTTLE_EXPIRY_SEC = 10
+const CPU_THROTTLE_EXPIRY_SEC = 300
 
 // cpuThrottleExpirer is a helper class for the AutofailoverServiceManager class that automatically
 // shuts off CPU throttling if Autofailover is detected to be disabled based on no HealthCheck call
