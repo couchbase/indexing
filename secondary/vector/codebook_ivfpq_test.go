@@ -29,8 +29,8 @@ var codebookIVFPQTestCases = []codebookIVFPQTestCase{
 
 	{"PQ8x8 L2", 128, cbpkg.METRIC_L2, false, 1000, 8, 8, false, 10000, 10000},
 	{"PQ32x8 L2", 128, cbpkg.METRIC_L2, false, 1000, 32, 8, false, 10000, 10000},
-	{"PQ32x8 DOT", 128, cbpkg.METRIC_INNER_PRODUCT, false, 1000, 32, 8, false, 10000, 10000},
-	{"PQ32x8 COSINE", 128, cbpkg.METRIC_INNER_PRODUCT, true, 1000, 32, 8, false, 10000, 10000},
+	{"PQ8x8 DOT", 128, cbpkg.METRIC_INNER_PRODUCT, false, 1000, 8, 8, false, 10000, 10000},
+	{"PQ8x8 COSINE", 128, cbpkg.METRIC_INNER_PRODUCT, true, 1000, 8, 8, false, 10000, 10000},
 	//{"PQ32x4FS L2", 128, cbpkg.METRIC_L2, false, 1000, 32, 4, true, 10000, 10000},
 	//{"PQ8x10 L2", 128, cbpkg.METRIC_L2, 1000, 8, 10, 10000, 10000},
 	{"PQ32x8 L2 No Clustering", 128, cbpkg.METRIC_L2, false, 10000, 32, 8, false, 10000, 10000},
@@ -271,6 +271,8 @@ var computeDistanceEncodedTests = []codebookIVFPQTestCase{
 	{"PQ32x8 L2", 128, cbpkg.METRIC_L2, false, 1, 32, 8, false, 10000, 10000},
 	{"PQ8x4 L2", 128, cbpkg.METRIC_L2, false, 1, 8, 4, false, 10000, 10000},
 	{"PQ8x10 L2", 128, cbpkg.METRIC_L2, false, 1, 8, 4, false, 10000, 10000},
+	{"PQ8x8 DOT", 128, cbpkg.METRIC_INNER_PRODUCT, false, 1, 8, 8, false, 10000, 10000},
+	{"PQ8x8 COSINE", 128, cbpkg.METRIC_INNER_PRODUCT, true, 1, 8, 8, false, 10000, 10000},
 }
 
 func TestComputeDistanceEncodedPQ(t *testing.T) {
