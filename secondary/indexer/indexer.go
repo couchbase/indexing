@@ -6702,7 +6702,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool,
 	ephemeral bool, numVBuckets int, partnStats map[common.PartitionId]*IndexStats,
 	memQuota int64, cancelCh chan bool) (
-	// return values
+        // return values
 	PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
 
 	//initialize partitionInstMap for this index
@@ -15079,7 +15079,7 @@ func (idx *indexer) monitorItemsCount() {
 
 				dur := time.Since(t0)
 				if dur > 30*time.Second {
-					logging.Warnf("Indexer::monitorItemsCount %v took %v for addr %v", dur, addr)
+					logging.Warnf("Indexer::monitorItemsCount took %v for addr %v", dur, addr)
 				}
 
 				mu.Lock()

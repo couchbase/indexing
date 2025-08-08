@@ -206,14 +206,22 @@ func otpNodes(serverAddr, username, password string, removeNodes []string) (stri
 func waitForRebalanceFinish(serverAddr, username, password string) error {
 	timer := time.NewTicker(5 * time.Second)
 	timeout := time.After(30 * time.Minute)
+	var tasks []interface{}
+	defer func() {
+		if r := recover(); r != nil {
+			if tasks != nil {
+				log.Printf("[DEBUG] waitForRebalanceFinish:: for GET on %v tasks:%+v", getTaskUrl(serverAddr), tasks)
+			}
+			panic(r)
+		}
+	}()
 
 	for {
 		select {
 		case <-timer.C:
 
 			r, err := makeRequest(username, password, "GET", strings.NewReader(""), getTaskUrl(serverAddr))
-
-			var tasks []interface{}
+			tasks = nil
 			err = json.Unmarshal(r, &tasks)
 			if err != nil {
 				fmt.Println("tasks fetch, err:", err)
