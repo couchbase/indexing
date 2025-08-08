@@ -446,11 +446,11 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 
 	cfg.NumWriters = slice.maxNumWriters
 
-	cfg.ThrottleMinFragThreshold = float32(slice.sysconf["indexer.bhive.throttleMinFragThreshold"].Float64())
-	cfg.ThrottleMinSize = int64(slice.sysconf["indexer.bhive.throttleMinSize"].Int())
-	cfg.ThrottleDiskLimit = float32(slice.sysconf["indexer.bhive.throttleDiskLimit"].Float64()) / 100
-	cfg.MonitorTimerDuration = time.Duration(slice.sysconf["indexer.bhive.monitorTimerDuration"].Uint64()) * time.Second
-	cfg.MaxThrottleDuration = time.Duration(slice.sysconf["indexer.bhive.maxThrottleDuration"].Uint64()) * time.Second
+	cfg.ThrottleMinFragThreshold = float32(slice.sysconf["bhive.throttleMinFragThreshold"].Float64())
+	cfg.ThrottleMinSize = int64(slice.sysconf["bhive.throttleMinSize"].Int())
+	cfg.ThrottleDiskLimit = float32(slice.sysconf["bhive.throttleDiskLimit"].Int()) / 100
+	cfg.MonitorTimerDuration = time.Duration(slice.sysconf["bhive.monitorTimerDuration"].Int()) * time.Second
+	cfg.MaxThrottleDuration = time.Duration(slice.sysconf["bhive.maxThrottleDuration"].Int()) * time.Minute
 
 	cfg.PersistFullVector = slice.sysconf["bhive.persistFullVector"].Bool() && slice.idxDefn.VectorMeta.PersistFullVector
 
@@ -493,11 +493,11 @@ func (slice *bhiveSlice) setupBackstoreConfig() bhive.Config {
 	cfg.LSDFragmentationRatio = slice.sysconf["bhive.MagmaLSDFragmentationPercent"].Float64() / 100
 	cfg.MaxOpenFiles = uint64(slice.sysconf["bhive.MagmaMaxOpenFiles"].Int())
 
-	cfg.ThrottleMinFragThreshold = float32(slice.sysconf["indexer.bhive.throttleMinFragThreshold"].Float64())
-	cfg.ThrottleMinSize = int64(slice.sysconf["indexer.bhive.throttleMinSize"].Int())
-	cfg.ThrottleDiskLimit = float32(slice.sysconf["indexer.bhive.throttleDiskLimit"].Float64()) / 100
-	cfg.MonitorTimerDuration = time.Duration(slice.sysconf["indexer.bhive.monitorTimerDuration"].Uint64()) * time.Second
-	cfg.MaxThrottleDuration = time.Duration(slice.sysconf["indexer.bhive.maxThrottleDuration"].Uint64()) * time.Second
+	cfg.ThrottleMinFragThreshold = float32(slice.sysconf["bhive.throttleMinFragThreshold"].Float64())
+	cfg.ThrottleMinSize = int64(slice.sysconf["bhive.throttleMinSize"].Int())
+	cfg.ThrottleDiskLimit = float32(slice.sysconf["bhive.throttleDiskLimit"].Int()) / 100
+	cfg.MonitorTimerDuration = time.Duration(slice.sysconf["bhive.monitorTimerDuration"].Int()) * time.Second
+	cfg.MaxThrottleDuration = time.Duration(slice.sysconf["bhive.maxThrottleDuration"].Int()) * time.Minute
 
 	cfg.AutoBackupDiskLimit = float32(slice.sysconf["bhive.backupCorruptedDiskLimit"].Int()) / 100
 	cfg.AutoBackupShard = slice.sysconf["bhive.backupCorruptedShard"].Bool()
