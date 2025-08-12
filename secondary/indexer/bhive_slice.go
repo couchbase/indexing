@@ -296,8 +296,12 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 
 	slice.UpdateConfig(sysconf)
 
+	slice.shardIds = nil // Reset the slice and read the actuals from the store
+	slice.shardIds = append(slice.shardIds, common.ShardId(slice.mainstore.GetShardId()))
+	slice.shardIds = append(slice.shardIds, common.ShardId(slice.backstore.GetShardId()))
+
 	logging.Infof("bhiveSlice:NewBhiveSlice Created New Slice Id %v IndexInstId %v partitionId %v "+
-		"WriterThreads %v", sliceId, idxInstId, partitionId, slice.numWriters)
+		"WriterThreads %v, shardIds: %v", sliceId, idxInstId, partitionId, slice.numWriters, slice.shardIds)
 
 	// setup codebook
 	if !isNew && slice.idxDefn.IsVectorIndex {
@@ -313,10 +317,6 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 				time.Since(codebookRecoveryStartTm))
 		}
 	}
-
-	slice.shardIds = nil // Reset the slice and read the actuals from the store
-	slice.shardIds = append(slice.shardIds, common.ShardId(slice.mainstore.GetShardId()))
-	slice.shardIds = append(slice.shardIds, common.ShardId(slice.backstore.GetShardId()))
 
 	return slice, nil
 }

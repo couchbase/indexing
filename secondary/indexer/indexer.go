@@ -6702,7 +6702,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool,
 	ephemeral bool, numVBuckets int, partnStats map[common.PartitionId]*IndexStats,
 	memQuota int64, cancelCh chan bool) (
-        // return values
+	// return values
 	PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
 
 	//initialize partitionInstMap for this index
@@ -13471,7 +13471,8 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 		logging.Errorf("Indexer::computeCentroids items_count is 0 "+
 			"for keyspaceId: %v, reqcid: %v",
 			keyspaceId, reqcid)
-		err = errors.New(common.ERR_TRAINING + common.INVALID_ITEMS_COUNT + fmt.Sprintf("computeCentroids items_count is 0 for keyspaceId: ", keyspaceId))
+		err = errors.New(common.ERR_TRAINING + common.INVALID_ITEMS_COUNT + fmt.Sprintf("computeCentroids items_count is 0 for keyspaceId: %v",
+			keyspaceId))
 		for _, instId := range vecInstIdList {
 			errMap[instId] = err
 		}

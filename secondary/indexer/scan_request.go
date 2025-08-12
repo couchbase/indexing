@@ -804,8 +804,22 @@ func (r *ScanRequest) setReaderCtxMap() {
 	r.perPartnReaderCtx = ctxs
 
 	// As more than needed readers are released reset this value
+	// and also release the excess readers from semaphore
 	if r.readersPerPartition > r.perPartnScanParallelism {
+		// The number of readers acquired and released per slice is dependent on
+		// the readerPerPartition value. Since readersPerPartition is being reduced
+		// here due to "perPartnScanParallelism", we also need to release the
+		// equivalent amount of readers in semaphore. Otherwise, slice.releaseReaders()
+		// will end up releasing less readers than it acquired (as readersPerPartition is
+		// a shared variable) and we will end up in eventual deadlock
+		diff := r.readersPerPartition - r.perPartnScanParallelism
 		r.readersPerPartition = r.perPartnScanParallelism
+
+		for _, slice := range r.releaseReaderList {
+			if slice != nil {
+				slice.ReleaseReaders(diff)
+			}
+		}
 	}
 }
 
