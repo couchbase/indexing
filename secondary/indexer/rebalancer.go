@@ -2515,7 +2515,8 @@ loop:
 					}
 					indexState, err := getIndexStatusFromMeta(tt, localMeta)
 
-					if indexState == c.INDEX_STATE_READY && err != "" && common.IsVectorTrainingErrorQualifyingDocs(err) {
+					if indexState == c.INDEX_STATE_READY && err != "" &&
+						common.IsVectorTrainingError(err) {
 						logging.Infof("%v skipping ttid:%v, new state:%v err:%v", _waitForIndexBuild, ttid, c.TransferTokenCommit, err)
 						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
 						setTransferTokenInMetakv(ttid, tt)
@@ -2696,7 +2697,8 @@ loop:
 					}
 
 					indexState, err := getIndexStatusFromMeta(tt, localMeta)
-					if indexState == c.INDEX_STATE_READY && err != "" && common.IsVectorTrainingErrorQualifyingDocs(err) {
+					if indexState == c.INDEX_STATE_READY && err != "" &&
+						common.IsVectorTrainingError(err) {
 						logging.Infof("%v skipping ttid:%v, new state:%v err:%v", _waitForIndexBuildBatch, ttid, c.TransferTokenCommit, err)
 						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
 						setTransferTokenInMetakv(ttid, tt)

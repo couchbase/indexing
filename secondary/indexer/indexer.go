@@ -13477,16 +13477,6 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 			errMap[instId] = err
 		}
 		return validVecInsts, 0
-	} else if itemsCount == 0 {
-		logging.Errorf("Indexer::computeCentroids items_count is 0 "+
-			"for keyspaceId: %v, reqcid: %v",
-			keyspaceId, reqcid)
-		err = errors.New(common.ERR_TRAINING + common.INVALID_ITEMS_COUNT + fmt.Sprintf("computeCentroids items_count is 0 for keyspaceId: %v",
-			keyspaceId))
-		for _, instId := range vecInstIdList {
-			errMap[instId] = err
-		}
-		return validVecInsts, 0
 	}
 
 	for _, instId := range vecInstIdList {
