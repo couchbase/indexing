@@ -325,8 +325,41 @@ func (cb *codebookIVFPQ) ComputeDistanceEncoded(qvec []float32,
 	token := c.AcquireGlobal()
 	defer c.ReleaseGlobal(token)
 
-	return cb.index.ComputeDistanceEncoded(qvec, n, codes, dists, dtable,
-		listno, convertToFaissMetric(cb.metric), cb.dim)
+	if cb.metric == c.METRIC_L2 {
+		return cb.index.ComputeDistanceEncoded(qvec, n, codes, dists, dtable,
+			listno, convertToFaissMetric(cb.metric), cb.dim)
+	} else if cb.metric == c.METRIC_INNER_PRODUCT {
+		if cb.useCosine {
+			err := cb.index.ComputeDistanceEncoded(qvec, n, codes, dists, dtable,
+				listno, convertToFaissMetric(cb.metric), cb.dim)
+
+			// Cosine distance is calculated as 1 - (cosine similarity).
+			// Cosine similarity ranges from -1 (exactly opposite) to 1 (exactly the same),
+			// while cosine distance ranges from 0 (exactly the same) to 2 (exactly opposite).
+			if err == nil {
+				for i := range dists {
+					// Done to prevent floating-point precision errors from producing values
+					// slightly outside the valid [-1, 1] range.
+					dists[i] = 1 - dists[i]
+					dists[i] = clip(dists[i], 0, 2)
+				}
+			}
+			return err
+		} else {
+			err := cb.index.ComputeDistanceEncoded(qvec, n, codes, dists, dtable,
+				listno, convertToFaissMetric(cb.metric), cb.dim)
+
+			// InnnerProduct is a similarity measure,
+			// to convert to distance measure negate it.
+			if err == nil {
+				for i := range dists {
+					dists[i] = -1 * dists[i]
+				}
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 // Size returns the memory size in bytes.

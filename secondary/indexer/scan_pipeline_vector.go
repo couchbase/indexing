@@ -294,15 +294,8 @@ func (w *ScanWorker) getBufferInitBatchSize() int {
 	qtype := w.r.IndexInst.Defn.VectorMeta.Quantizer.Type
 	if qtype == c.SQ {
 		return batchSize
-	}
-	similarity := w.r.IndexInst.Defn.VectorMeta.Similarity
-	metric, _ := codebook.ConvertSimilarityToMetric(similarity)
-	if metric != codebook.METRIC_L2 {
-		return batchSize
-	}
-
-	//use a large batch size for PQ + L2
-	if qtype == c.PQ && metric == codebook.METRIC_L2 {
+	} else if qtype == c.PQ {
+		//use a large batch size for PQ as it is more efficient for PQ with distance table
 		return largeBatchSize
 	}
 	return batchSize
@@ -326,21 +319,17 @@ func (w *ScanWorker) setSenderBatchSize() {
 		return
 	}
 
-	similarity := w.r.IndexInst.Defn.VectorMeta.Similarity
-	metric, _ := codebook.ConvertSimilarityToMetric(similarity)
-	if metric != codebook.METRIC_L2 {
+	//Use a large batch size for PQ for a single centroid scan.
+	//Such scans reuse the distance table and large batch size reduces the
+	//overheads associated with each batch processing as less number of
+	//such calls need to be made to the faiss library.
+	if w.currJob.scan.MultiCentroid ||
+		w.r.IndexInst.Defn.VectorMeta.Quantizer.FastScan {
 		w.senderBatchSize = batchSize
 		return
 	}
 
-	//Use a large batch size for PQ + L2 for a single centroid scan.
-	//Such scans reuse the distance table and large batch size reduces the
-	//overheads associated with each batch processing as less number of
-	//such calls need to be made to the faiss library.
-	if !w.currJob.scan.MultiCentroid &&
-		qtype == c.PQ &&
-		metric == codebook.METRIC_L2 &&
-		!w.r.IndexInst.Defn.VectorMeta.Quantizer.FastScan {
+	if qtype == c.PQ {
 		w.senderBatchSize = largeBatchSize
 	} else {
 		w.senderBatchSize = batchSize
@@ -683,9 +672,13 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 			return w.r.IndexInst.Defn.VectorMeta.Quantizer.Type == common.SQ &&
 				metric == codebook.METRIC_L2
 		} else {
+			//ComputeDistanceEncoded is used for L2 for both PQ and SQ.
+			//For COSINE, it is only used for PQ as there is recall drop
+			//for SQ.
+			qtype := w.r.IndexInst.Defn.VectorMeta.Quantizer.Type
 			return !w.currJob.scan.MultiCentroid &&
-				metric == codebook.METRIC_L2 &&
-				!w.r.IndexInst.Defn.VectorMeta.Quantizer.FastScan
+				!w.r.IndexInst.Defn.VectorMeta.Quantizer.FastScan &&
+				(qtype == c.PQ || (qtype == c.SQ && metric == codebook.METRIC_L2))
 		}
 	}()
 

@@ -11144,7 +11144,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 			// safety call to make sure base dir exists before bhive directory is created
 			slice, err = NewBhiveSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
-				CodebookPath(indInst, partitionId, id))
+				CodebookPath(indInst, partitionId, id), indInst.BhiveGraphStatus[partitionId])
 		} else {
 			slice, err = NewPlasmaSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh,

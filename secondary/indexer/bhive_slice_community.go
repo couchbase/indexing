@@ -17,7 +17,7 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 	idxDefn common.IndexDefn, idxInstId common.IndexInstId, partitionId common.PartitionId,
 	numPartitions int, sysconf common.Config, idxStats *IndexStats, memQuota int64,
 	isNew bool, isInitialBuild bool, numVBuckets int, replicaId int, shardIds []common.ShardId,
-	cancelCh chan bool, codebookPath string) (Slice, error) {
+	cancelCh chan bool, codebookPath string, graphBuildDone bool) (Slice, error) {
 	panic("B-Hive storage engine not supported in community edition")
 }
 
