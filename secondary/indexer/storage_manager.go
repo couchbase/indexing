@@ -190,6 +190,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	//start Storage Manager loop which listens to commands from its supervisor
 	go s.run()
 
+	// start plasma's storage mem tuner
 	if config["plasma.UseQuotaTuner"].Bool() {
 		plasma.RunMemQuotaTuner(
 			s.quotaDistCh,
@@ -198,6 +199,10 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 			s.getStorageTunerStats,
 		)
 	}
+
+	// trigger initial set quota and distribution
+	s.quotaDistCh <- false
+	<-s.quotaDistCh
 
 	return s, &MsgSuccess{}
 
@@ -224,6 +229,7 @@ loop:
 						s.stm.ProcessCommand(cmd) // Shutdown storage manager cmdCh
 					}
 
+					// shutdown storage mem tuner
 					s.quotaDistCh <- true
 					<-s.quotaDistCh
 
