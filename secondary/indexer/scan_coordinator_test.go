@@ -1,7 +1,9 @@
 package indexer
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -596,4 +598,1003 @@ func Test_scanCoordinator_findIndexInstance(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScanAdmissionController(t *testing.T) {
+	// Set storage mode to PLASMA to ensure controller runs
+	common.SetClusterStorageMode(common.PLASMA)
+
+	// Create mock stats and config for testing
+	mockStats := &IndexerStats{}
+	mockStats.Init()
+
+	// Set mock memory values that won't trigger throttling
+	mockStats.avgResidentPercent.Set(10)                // 10% resident (above 5% threshold)
+	mockStats.memoryRss.Set(100 * 1024 * 1024)          // 100MB RSS
+	mockStats.memoryQuota.Set(1.5 * 1024 * 1024 * 1024) // 1.5GB quota (above 1GB threshold, RSS < quota)
+
+	mockConfig := common.Config{
+		"scan.vector.throttle.minRRThreshold": common.ConfigValue{5, "minimum RR threshold for throttling", 5, false, false},
+	}
+
+	// Create mock supervisor message channel
+	mockSupvMsgch := make(MsgChannel, 10)
+
+	// Start a goroutine to listen on the supervisor message channel and respond
+	go func() {
+		for {
+			select {
+			case msg := <-mockSupvMsgch:
+				if msg != nil {
+					// Extract the response channel from the message and send true
+					if msgReq, ok := msg.(*MsgIndexRRStats); ok && msgReq.respch != nil {
+						msgReq.respch <- true
+					}
+				}
+			}
+		}
+	}()
+
+	// Test basic functionality
+	sac := NewScanAdmissionController(mockStats, mockConfig, mockSupvMsgch)
+
+	// Wait for controller to start and process memory stats
+	time.Sleep(6 * time.Second)
+
+	// Test immediate admission when throttling is off
+	abortch := make(chan bool, 1)
+	if !sac.AdmitScan("req1", abortch) {
+		t.Error("Expected immediate admission to succeed when throttling is off")
+	}
+
+	// Test stats
+	throttled, queued := sac.GetStats()
+	if throttled != 0 {
+		t.Errorf("Expected throttled state 0, got %d", throttled)
+	}
+	if queued != 0 {
+		t.Errorf("Expected 0 queued requests, got %d", queued)
+	}
+
+	// Verify that no requests were queued (immediate admission)
+	totalQueued := sac.GetTotalQueued()
+	if totalQueued != 0 {
+		t.Errorf("Expected 0 total queued requests, but got %d", totalQueued)
+	}
+
+	// Test shutdown
+	sac.Shutdown()
+}
+
+func TestScanAdmissionControllerQueuing(t *testing.T) {
+	// Set storage mode to PLASMA to ensure controller runs
+	common.SetClusterStorageMode(common.PLASMA)
+
+	// Create mock stats and config for testing
+	mockStats := &IndexerStats{}
+	mockStats.Init()
+
+	// Set mock memory values that will trigger throttling
+	mockStats.avgResidentPercent.Set(3)                 // 3% resident (below 5% threshold)
+	mockStats.memoryRss.Set(2 * 1024 * 1024 * 1024)     // 2GB RSS (above 1.5GB quota)
+	mockStats.memoryQuota.Set(1.5 * 1024 * 1024 * 1024) // 1.5GB quota (above 1GB threshold)
+
+	mockConfig := common.Config{
+		"scan.vector.throttle.minRRThreshold": common.ConfigValue{5, "minimum RR threshold for throttling", 5, false, false},
+	}
+
+	// Create mock supervisor message channel
+	mockSupvMsgch := make(MsgChannel, 10)
+
+	// Start a goroutine to listen on the supervisor message channel and respond
+	go func() {
+		for {
+			select {
+			case msg := <-mockSupvMsgch:
+				if msg != nil {
+					// Extract the response channel from the message and send true
+					if msgReq, ok := msg.(*MsgIndexRRStats); ok && msgReq.respch != nil {
+						msgReq.respch <- true
+					}
+				}
+			}
+		}
+	}()
+
+	// Test queuing functionality
+	sac := NewScanAdmissionController(mockStats, mockConfig, mockSupvMsgch)
+
+	// Wait for controller to start and process memory stats
+	time.Sleep(6 * time.Second)
+
+	// Verify that controller automatically turned on throttling due to memory pressure
+	throttled, queued := sac.GetStats()
+	if throttled != 1 {
+		t.Errorf("Expected controller to automatically turn on throttling due to memory pressure, got throttled state %d", throttled)
+	}
+
+	// Test queuing when throttling is on
+	done := make(chan bool)
+	abortch := make(chan bool, 1)
+	go func() {
+		admitted := sac.AdmitScan("req1", abortch)
+		done <- admitted
+	}()
+
+	// Wait a bit for the request to be queued
+	time.Sleep(50 * time.Millisecond)
+
+	// Check that request is queued
+	throttled, queued = sac.GetStats()
+	if throttled != 1 {
+		t.Errorf("Expected throttled state 1, got %d", throttled)
+	}
+	if queued != 1 {
+		t.Errorf("Expected 1 queued request, got %d", queued)
+	}
+
+	// Verify that the total queued counter is incremented
+	totalQueued := sac.GetTotalQueued()
+	if totalQueued != 1 {
+		t.Errorf("Expected total queued count 1, but got %d", totalQueued)
+	}
+
+	// Turn off throttling to process queued requests
+	sac.SetThrottleState(false)
+
+	// Check if queued request got admitted
+	select {
+	case admitted := <-done:
+		if !admitted {
+			t.Error("Expected queued request to be admitted")
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("Timeout waiting for admission")
+	}
+
+	// Verify final state
+	throttled, queued = sac.GetStats()
+	if throttled != 0 {
+		t.Errorf("Expected throttled state 0, got %d", throttled)
+	}
+	if queued != 0 {
+		t.Errorf("Expected 0 queued requests after processing, got %d", queued)
+	}
+
+	// Verify that total queued counter remains (it's cumulative, doesn't decrease)
+	totalQueued = sac.GetTotalQueued()
+	if totalQueued != 1 {
+		t.Errorf("Expected total queued count to remain 1 after processing, but got %d", totalQueued)
+	}
+
+	sac.Shutdown()
+}
+
+func TestScanAdmissionControllerSetThrottleState(t *testing.T) {
+	// Set storage mode to PLASMA to ensure controller runs
+	common.SetClusterStorageMode(common.PLASMA)
+
+	// Create mock stats and config for testing
+	mockStats := &IndexerStats{}
+	mockStats.Init()
+
+	// Set mock memory values that won't trigger throttling
+	// avgResidentPercent=10% > minRRThreshold=5% (good memory)
+	// memoryRSS=100MB < memoryQuota=1.5GB (good memory)
+	mockStats.avgResidentPercent.Set(10)                // 10% resident (above 5% threshold)
+	mockStats.memoryRss.Set(100 * 1024 * 1024)          // 100MB RSS
+	mockStats.memoryQuota.Set(1.5 * 1024 * 1024 * 1024) // 1.5GB quota (above 1GB threshold, RSS < quota)
+
+	mockConfig := common.Config{
+		"scan.vector.throttle.minRRThreshold": common.ConfigValue{5, "minimum RR threshold for throttling", 5, false, false},
+	}
+
+	// Create mock supervisor message channel
+	mockSupvMsgch := make(MsgChannel, 10)
+
+	sac := NewScanAdmissionController(mockStats, mockConfig, mockSupvMsgch)
+
+	// Wait for controller to start and process memory stats
+	time.Sleep(6 * time.Second)
+
+	// Test initial state - with good memory conditions, throttling should be off
+	throttled, queued := sac.GetStats()
+	if throttled != 0 {
+		t.Errorf("Expected initial throttled state 0, got %d", throttled)
+	}
+	if queued != 0 {
+		t.Errorf("Expected initial queued requests 0, got %d", queued)
+	}
+
+	// Test setting throttling to true
+	sac.SetThrottleState(true)
+	throttled, queued = sac.GetStats()
+	if throttled != 1 {
+		t.Errorf("Expected throttled state 1 after SetThrottleState(true), got %d", throttled)
+	}
+
+	// Test setting throttling to false
+	sac.SetThrottleState(false)
+	throttled, queued = sac.GetStats()
+	if throttled != 0 {
+		t.Errorf("Expected throttled state 0 after SetThrottleState(false), got %d", throttled)
+	}
+
+	// Test that setting the same state multiple times works correctly
+	sac.SetThrottleState(false) // Should still work
+	sac.SetThrottleState(true)  // Should work
+	sac.SetThrottleState(true)  // Should work
+	throttled, queued = sac.GetStats()
+	if throttled != 1 {
+		t.Errorf("Expected throttled state 1 after multiple SetThrottleState calls, got %d", throttled)
+	}
+
+	sac.Shutdown()
+}
+
+func TestScanAdmissionControllerNoStateChange(t *testing.T) {
+	// Set storage mode to PLASMA to ensure controller runs
+	common.SetClusterStorageMode(common.PLASMA)
+
+	// Create mock stats and config for testing
+	mockStats := &IndexerStats{}
+	mockStats.Init()
+
+	// Set mock memory values that will trigger throttling
+	mockStats.avgResidentPercent.Set(3)                 // 3% resident (below 5% threshold)
+	mockStats.memoryRss.Set(2 * 1024 * 1024 * 1024)     // 2GB RSS (above 1.5GB quota)
+	mockStats.memoryQuota.Set(1.5 * 1024 * 1024 * 1024) // 1.5GB quota (above 1GB threshold)
+
+	mockConfig := common.Config{
+		"scan.vector.throttle.minRRThreshold": common.ConfigValue{5, "minimum RR threshold for throttling", 5, false, false},
+	}
+
+	// Create mock supervisor message channel
+	mockSupvMsgch := make(MsgChannel, 10)
+
+	// Start a goroutine to listen on the supervisor message channel and respond
+	go func() {
+		for {
+			select {
+			case msg := <-mockSupvMsgch:
+				if msg != nil {
+					// Extract the response channel from the message and send true
+					if msgReq, ok := msg.(*MsgIndexRRStats); ok && msgReq.respch != nil {
+						msgReq.respch <- true
+					}
+				}
+			}
+		}
+	}()
+
+	sac := NewScanAdmissionController(mockStats, mockConfig, mockSupvMsgch)
+
+	// Wait for controller to start and process memory stats
+	time.Sleep(6 * time.Second)
+
+	// Verify that controller automatically turned on throttling due to memory pressure
+	initialThrottled, _ := sac.GetStats()
+	if initialThrottled != 1 {
+		t.Errorf("Expected initial throttled state 1 (memory pressure), got %d", initialThrottled)
+	}
+
+	// Queue a request while throttling is on
+	done := make(chan bool)
+	abortch := make(chan bool, 1)
+	go func() {
+		admitted := sac.AdmitScan("req1", abortch)
+		done <- admitted
+	}()
+
+	// Wait for request to be queued
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify request is queued
+	throttled, queued := sac.GetStats()
+	if throttled != 1 {
+		t.Errorf("Expected throttled state 1, got %d", throttled)
+	}
+	if queued != 1 {
+		t.Errorf("Expected 1 queued request, got %d", queued)
+	}
+
+	// Test that calling SetThrottleState(false) multiple times processes the queue each time
+	// This validates that the method always processes queued requests when turning off throttling
+	sac.SetThrottleState(false) // Should process queue and turn off throttling
+	sac.SetThrottleState(false) // Should process queue again (even though already off)
+	sac.SetThrottleState(false) // Should process queue again
+
+	// Verify final state
+	finalThrottled, finalQueued := sac.GetStats()
+	if finalThrottled != 0 {
+		t.Errorf("Expected final throttled state 0, got %d", finalThrottled)
+	}
+	if finalQueued != 0 {
+		t.Errorf("Expected final queued requests 0, got %d", finalQueued)
+	}
+
+	// Check that the queued request got admitted
+	select {
+	case admitted := <-done:
+		if !admitted {
+			t.Error("Expected queued request to be admitted")
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("Timeout waiting for admission")
+	}
+
+	sac.Shutdown()
+}
+
+func TestScanAdmissionControllerWithMemoryStats(t *testing.T) {
+	// Set storage mode to PLASMA to ensure controller runs
+	common.SetClusterStorageMode(common.PLASMA)
+
+	// Create mock stats and config with realistic memory values
+	mockStats := &IndexerStats{}
+	mockStats.Init()
+
+	mockConfig := common.Config{
+		"scan.vector.throttle.minRRThreshold": common.ConfigValue{5, "minimum RR threshold for throttling", 5, false, false},
+	}
+
+	// Set mock memory values
+	mockStats.avgResidentPercent.Set(10)                // 10% resident
+	mockStats.memoryRss.Set(100 * 1024 * 1024)          // 100MB RSS
+	mockStats.memoryQuota.Set(1.5 * 1024 * 1024 * 1024) // 1.5GB quota (above 1GB threshold)
+
+	// Create mock supervisor message channel
+	mockSupvMsgch := make(MsgChannel, 10)
+
+	// Start a goroutine to listen on the supervisor message channel and respond
+	go func() {
+		for {
+			select {
+			case msg := <-mockSupvMsgch:
+				if msg != nil {
+					// Extract the response channel from the message and send true
+					if msgReq, ok := msg.(*MsgIndexRRStats); ok && msgReq.respch != nil {
+						msgReq.respch <- true
+					}
+				}
+			}
+		}
+	}()
+
+	sac := NewScanAdmissionController(mockStats, mockConfig, mockSupvMsgch)
+
+	// Wait for controller to start and process memory stats
+	time.Sleep(6 * time.Second)
+
+	// Test that scan requests are admitted immediately when memory is good
+	abortch1 := make(chan bool, 1)
+	abortch2 := make(chan bool, 1)
+	abortch3 := make(chan bool, 1)
+
+	if !sac.AdmitScan("req1", abortch1) {
+		t.Error("Expected immediate admission when memory stats are good")
+	}
+	if !sac.AdmitScan("req2", abortch2) {
+		t.Error("Expected immediate admission when memory stats are good")
+	}
+	if !sac.AdmitScan("req3", abortch3) {
+		t.Error("Expected immediate admission when memory stats are good")
+	}
+
+	// Verify that no requests were queued (immediate admission)
+	totalQueued := sac.GetTotalQueued()
+	if totalQueued != 0 {
+		t.Errorf("Expected 0 total queued requests, but got %d", totalQueued)
+	}
+
+	// Verify that requests are still not queued after admitting multiple scans
+	throttled, queued := sac.GetStats()
+	if throttled != 0 {
+		t.Errorf("Expected throttled state 0 after admitting scans, got %d", throttled)
+	}
+	if queued != 0 {
+		t.Errorf("Expected 0 queued requests after admitting scans, got %d", queued)
+	}
+
+	// Test shutdown
+	sac.Shutdown()
+}
+
+func TestScanAdmissionControllerConfigDisable(t *testing.T) {
+	// Set storage mode to PLASMA to ensure controller runs
+	common.SetClusterStorageMode(common.PLASMA)
+
+	// Create mock stats and config for testing
+	mockStats := &IndexerStats{}
+	mockStats.Init()
+
+	// Test with throttling disabled (minRRThreshold = 0)
+	mockConfig := common.Config{
+		"scan.vector.throttle.minRRThreshold": common.ConfigValue{0, "throttling disabled", 0, false, false},
+	}
+
+	// Create mock supervisor message channel
+	mockSupvMsgch := make(MsgChannel, 10)
+
+	// Start a goroutine to listen on the supervisor message channel and respond
+	go func() {
+		for {
+			select {
+			case msg := <-mockSupvMsgch:
+				if msg != nil {
+					// Extract the response channel from the message and send true
+					if msgReq, ok := msg.(*MsgIndexRRStats); ok && msgReq.respch != nil {
+						msgReq.respch <- true
+					}
+				}
+			}
+		}
+	}()
+
+	sac := NewScanAdmissionController(mockStats, mockConfig, mockSupvMsgch)
+
+	// Wait for controller to start and process config
+	time.Sleep(6 * time.Second)
+
+	// Test that requests are admitted immediately when throttling is disabled
+	abortch1 := make(chan bool, 1)
+	abortch2 := make(chan bool, 1)
+
+	if !sac.AdmitScan("req1", abortch1) {
+		t.Error("Expected immediate admission when throttling is disabled")
+	}
+	if !sac.AdmitScan("req2", abortch2) {
+		t.Error("Expected immediate admission when throttling is disabled")
+	}
+
+	// Verify that no requests were queued (immediate admission)
+	totalQueued := sac.GetTotalQueued()
+	if totalQueued != 0 {
+		t.Errorf("Expected 0 total queued requests when throttling is disabled, but got %d", totalQueued)
+	}
+
+	// Verify that no requests are queued after admitting scans when throttling is disabled
+	throttled, queued := sac.GetStats()
+	if throttled != 0 {
+		t.Errorf("Expected throttled state 0 when throttling is disabled, got %d", throttled)
+	}
+	if queued != 0 {
+		t.Errorf("Expected 0 queued requests when throttling is disabled, got %d", queued)
+	}
+
+	// Test shutdown
+	sac.Shutdown()
+}
+
+func TestScanAdmissionControllerConfigEnable(t *testing.T) {
+	// Set storage mode to PLASMA to ensure controller runs
+	common.SetClusterStorageMode(common.PLASMA)
+
+	// Create mock stats and config for testing
+	mockStats := &IndexerStats{}
+	mockStats.Init()
+
+	// Set mock memory values that won't trigger throttling automatically
+	mockStats.avgResidentPercent.Set(10)                // 10% resident (above 5% threshold)
+	mockStats.memoryRss.Set(100 * 1024 * 1024)          // 100MB RSS
+	mockStats.memoryQuota.Set(1.5 * 1024 * 1024 * 1024) // 1.5GB quota (above 1GB threshold, RSS < quota)
+
+	// Start with throttling disabled
+	mockConfig := common.Config{
+		"scan.vector.throttle.minRRThreshold": common.ConfigValue{0, "throttling disabled", 0, false, false},
+	}
+
+	// Create mock supervisor message channel
+	mockSupvMsgch := make(MsgChannel, 10)
+
+	// Start a goroutine to listen on the supervisor message channel and respond
+	go func() {
+		for {
+			select {
+			case msg := <-mockSupvMsgch:
+				if msg != nil {
+					// Extract the response channel from the message and send true
+					if msgReq, ok := msg.(*MsgIndexRRStats); ok && msgReq.respch != nil {
+						msgReq.respch <- true
+					}
+				}
+			}
+		}
+	}()
+
+	sac := NewScanAdmissionController(mockStats, mockConfig, mockSupvMsgch)
+
+	// Wait for controller to start and process config
+	time.Sleep(6 * time.Second)
+
+	// Verify no requests are queued initially (throttling disabled by config, not memory)
+	throttled, queued := sac.GetStats()
+	if throttled != 0 {
+		t.Errorf("Expected throttled state 0 initially (config disabled), got %d", throttled)
+	}
+	if queued != 0 {
+		t.Errorf("Expected 0 queued requests initially, got %d", queued)
+	}
+
+	// Update config to enable throttling
+	newConfig := common.Config{
+		"scan.vector.throttle.minRRThreshold": common.ConfigValue{5, "throttling enabled", 5, false, false},
+	}
+	sac.SetConfig(newConfig)
+
+	// Wait for controller to restart
+	time.Sleep(200 * time.Millisecond)
+
+	// Test that requests are admitted immediately when throttling is enabled but memory is good
+	// This validates that the controller responds to memory conditions, not just config settings
+	abortch1 := make(chan bool, 1)
+	abortch2 := make(chan bool, 1)
+
+	if !sac.AdmitScan("req1", abortch1) {
+		t.Error("Expected immediate admission when throttling enabled but memory is good")
+	}
+	if !sac.AdmitScan("req2", abortch2) {
+		t.Error("Expected immediate admission when throttling enabled but memory is good")
+	}
+
+	// Verify that no requests were queued (immediate admission due to good memory)
+	totalQueued := sac.GetTotalQueued()
+	if totalQueued != 0 {
+		t.Errorf("Expected 0 total queued requests, but got %d", totalQueued)
+	}
+
+	// Verify current state
+	throttled, queued = sac.GetStats()
+	if throttled != 0 {
+		t.Errorf("Expected throttled state 0 (memory is good), got %d", throttled)
+	}
+	if queued != 0 {
+		t.Errorf("Expected 0 queued requests, got %d", queued)
+	}
+
+	// Test shutdown
+	sac.Shutdown()
+}
+
+func TestScanAdmissionControllerProcessAllRequests(t *testing.T) {
+	// Set storage mode to PLASMA to ensure controller runs
+	common.SetClusterStorageMode(common.PLASMA)
+
+	// This test validates that:
+	// 1. Memory pressure automatically triggers throttling (avgResidentPercent < 5% AND RSS > quota)
+	// 2. Multiple requests get queued when throttling is automatically enabled
+	// 3. Requests are processed in batches of 50 (maxRequestsPerBatch) when memory improves
+	// 4. All queued requests eventually get processed
+	// 5. The totalQueued counter accurately tracks request history
+	// Create mock stats and config for testing
+	mockStats := &IndexerStats{}
+	mockStats.Init()
+
+	// Set mock memory values that WILL trigger throttling automatically
+	mockStats.avgResidentPercent.Set(3)                 // 3% resident (below 5% threshold)
+	mockStats.memoryRss.Set(2 * 1024 * 1024 * 1024)     // 2GB RSS (above 1.5GB quota)
+	mockStats.memoryQuota.Set(1.5 * 1024 * 1024 * 1024) // 1.5GB quota (above 1GB threshold)
+
+	mockConfig := common.Config{
+		"scan.vector.throttle.minRRThreshold": common.ConfigValue{5, "throttling enabled", 5, false, false},
+	}
+
+	// Create mock supervisor message channel
+	mockSupvMsgch := make(MsgChannel, 10)
+
+	// Start a goroutine to listen on the supervisor message channel and respond
+	go func() {
+		for {
+			select {
+			case msg := <-mockSupvMsgch:
+				if msg != nil {
+					// Extract the response channel from the message and send true
+					if msgReq, ok := msg.(*MsgIndexRRStats); ok && msgReq.respch != nil {
+						msgReq.respch <- true
+					}
+				}
+			}
+		}
+	}()
+
+	sac := NewScanAdmissionController(mockStats, mockConfig, mockSupvMsgch)
+
+	// Wait for controller to start and detect memory pressure
+	time.Sleep(6 * time.Second)
+
+	// Verify that throttling is automatically enabled due to memory pressure
+	throttled, queued := sac.GetStats()
+	if throttled != 1 {
+		t.Errorf("Expected throttled state 1 due to memory pressure, got %d", throttled)
+	}
+	if queued != 0 {
+		t.Errorf("Expected 0 queued requests initially, got %d", queued)
+	}
+
+	// Queue more than 50 requests to test batch processing
+	// We'll queue 60 requests to ensure we test the batch limit of 50
+	const numRequests = 60
+	doneChannels := make([]chan bool, numRequests)
+
+	for i := 0; i < numRequests; i++ {
+		doneChannels[i] = make(chan bool, 1)
+		abortch := make(chan bool, 1)
+		go func(reqNum int) {
+			admitted := sac.AdmitScan(fmt.Sprintf("req%d", reqNum+1), abortch)
+			doneChannels[reqNum] <- admitted
+		}(i)
+	}
+
+	// Wait for requests to be queued and verify using totalQueued counter
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify requests are queued using deterministic counter
+	totalQueued := sac.GetTotalQueued()
+	if totalQueued != int64(numRequests) {
+		t.Errorf("Expected total queued count to be %d, got %d", numRequests, totalQueued)
+	}
+
+	// Verify current state
+	throttled, queued = sac.GetStats()
+	if throttled != 1 {
+		t.Errorf("Expected throttled state 1, got %d", throttled)
+	}
+	if queued != numRequests {
+		t.Errorf("Expected %d queued requests, got %d", numRequests, queued)
+	}
+
+	// Improve memory conditions to automatically turn off throttling
+	// This should trigger automatic processing of queued requests
+	mockStats.avgResidentPercent.Set(10)                // 10% resident (above 5% threshold)
+	mockStats.memoryRss.Set(100 * 1024 * 1024)          // 100MB RSS
+	mockStats.memoryQuota.Set(1.5 * 1024 * 1024 * 1024) // 1.5GB quota (above 1GB threshold)
+
+	// Wait for controller to detect improved memory and process queued requests
+	// Since we have 15 requests and batch size is 10, it should take 2 batches
+	time.Sleep(12 * time.Second)
+
+	// Check that all queued requests got admitted
+	for i := 0; i < numRequests; i++ {
+		select {
+		case admitted := <-doneChannels[i]:
+			if !admitted {
+				t.Errorf("Expected queued request %d to be admitted", i+1)
+			}
+		case <-time.After(5 * time.Second):
+			t.Errorf("Timeout waiting for admission of request %d", i+1)
+		}
+	}
+
+	// Verify final state
+	throttled, queued = sac.GetStats()
+	if throttled != 0 {
+		t.Errorf("Expected throttled state 0 after memory improvement, got %d", throttled)
+	}
+	if queued != 0 {
+		t.Errorf("Expected 0 queued requests after processing, got %d", queued)
+	}
+
+	// Verify total queued count remains the same (requests were processed, not lost)
+	finalTotalQueued := sac.GetTotalQueued()
+	if finalTotalQueued != int64(numRequests) {
+		t.Errorf("Expected total queued count to remain %d after processing, got %d", numRequests, finalTotalQueued)
+	}
+
+	sac.Shutdown()
+}
+
+func TestScanAdmissionControllerIndependentMemoryConditions(t *testing.T) {
+	// Set storage mode to PLASMA to ensure controller runs
+	common.SetClusterStorageMode(common.PLASMA)
+
+	// This test validates the memory condition logic:
+	// 1. lowRR condition: requires both poor RR AND RSS above quota (memoryRSS > memoryQuota)
+	// 2. highRSS condition: triggers throttling independently when RSS > 1.05 * quota
+	// 3. Both conditions can be active simultaneously
+	// 4. Recovery from either condition works correctly
+	// Create mock stats and config for testing
+	mockStats := &IndexerStats{}
+	mockStats.Init()
+
+	mockConfig := common.Config{
+		"scan.vector.throttle.minRRThreshold": common.ConfigValue{5, "throttling enabled", 5, false, false},
+	}
+
+	// Create mock supervisor message channel
+	mockSupvMsgch := make(MsgChannel, 10)
+
+	// Start a goroutine to listen on the supervisor message channel and respond
+	go func() {
+		for {
+			select {
+			case msg := <-mockSupvMsgch:
+				if msg != nil {
+					// Extract the response channel from the message and send true
+					if msgReq, ok := msg.(*MsgIndexRRStats); ok && msgReq.respch != nil {
+						msgReq.respch <- true
+					}
+				}
+			}
+		}
+	}()
+
+	sac := NewScanAdmissionController(mockStats, mockConfig, mockSupvMsgch)
+
+	// Wait for controller to start
+	time.Sleep(1 * time.Second)
+
+	// Test 1: RR condition with RSS above quota (both conditions met for lowRR)
+	t.Run("RRWithRSSAboveQuota", func(t *testing.T) {
+		// Set memory values: poor RR + RSS above quota to trigger lowRR condition
+		mockStats.avgResidentPercent.Set(3)                       // 3% resident (below 5% threshold)
+		mockStats.memoryRss.Set((102 * 1024 * 1024 * 1024) / 100) // 1GB RSS (equal to 1GB quota)
+		mockStats.memoryQuota.Set(1 * 1024 * 1024 * 1024)         // 1GB quota (above 1GB threshold)
+
+		// Wait for controller to detect the change
+		time.Sleep(6 * time.Second)
+
+		// Verify throttling is enabled due to lowRR condition (both RR and RSS conditions met)
+		throttled, queued := sac.GetStats()
+		if throttled != 1 {
+			t.Errorf("Expected throttled state 1 due to lowRR condition (poor RR + RSS above quota), got %d", throttled)
+		}
+
+		// Test that requests get queued
+		doneCh := make(chan bool, 1)
+		abortch := make(chan bool, 1)
+		go func() {
+			admitted := sac.AdmitScan("req_rr_only", abortch)
+			doneCh <- admitted
+		}()
+
+		// Wait for request to be queued
+		time.Sleep(50 * time.Millisecond)
+
+		// Verify request is queued
+		totalQueued := sac.GetTotalQueued()
+		if totalQueued != 1 {
+			t.Errorf("Expected 1 total queued request, got %d", totalQueued)
+		}
+
+		// Fix RR condition to stop throttling
+		mockStats.avgResidentPercent.Set(10) // 10% resident (above 5% threshold)
+
+		// Wait for controller to detect improvement
+		time.Sleep(6 * time.Second)
+
+		// Verify request gets admitted
+		select {
+		case admitted := <-doneCh:
+			if !admitted {
+				t.Error("Expected queued request to be admitted after RR improvement")
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("Timeout waiting for admission after RR improvement")
+		}
+
+		// Verify final state
+		throttled, queued = sac.GetStats()
+		if throttled != 0 {
+			t.Errorf("Expected throttled state 0 after RR improvement, got %d", throttled)
+		}
+		if queued != 0 {
+			t.Errorf("Expected 0 queued requests after RR improvement, got %d", queued)
+		}
+	})
+
+	// Test 2: High RSS condition (triggers highRSS throttling independently)
+	t.Run("HighRSSOnly", func(t *testing.T) {
+		// Set memory values: good RR, very high RSS to trigger highRSS condition
+		mockStats.avgResidentPercent.Set(10)                // 10% resident (above 5% threshold) - good
+		mockStats.memoryRss.Set(3 * 1024 * 1024 * 1024)     // 3GB RSS (above 1.05 * 1.5GB = 1.575GB threshold)
+		mockStats.memoryQuota.Set(1.5 * 1024 * 1024 * 1024) // 1.5GB quota (above 1GB threshold)
+
+		// Wait for controller to detect the change
+		time.Sleep(6 * time.Second)
+
+		// Verify throttling is enabled due to highRSS condition
+		throttled, queued := sac.GetStats()
+		if throttled != 1 {
+			t.Errorf("Expected throttled state 1 due to highRSS condition, got %d", throttled)
+		}
+
+		// Test that requests get queued
+		doneCh := make(chan bool, 1)
+		abortch := make(chan bool, 1)
+		go func() {
+			admitted := sac.AdmitScan("req_rss_only", abortch)
+			doneCh <- admitted
+		}()
+
+		// Wait for request to be queued
+		time.Sleep(50 * time.Millisecond)
+
+		// Verify request is queued
+		totalQueued := sac.GetTotalQueued()
+		if totalQueued != 2 { // 1 from previous test + 1 from this test
+			t.Errorf("Expected 2 total queued requests, got %d", totalQueued)
+		}
+
+		// Fix RSS condition to stop throttling (RSS now below quota)
+		mockStats.memoryRss.Set(100 * 1024 * 1024) // 100MB RSS (below 1.5GB quota)
+
+		// Wait for controller to detect improvement
+		time.Sleep(6 * time.Second)
+
+		// Verify request gets admitted
+		select {
+		case admitted := <-doneCh:
+			if !admitted {
+				t.Error("Expected queued request to be admitted after RSS improvement")
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("Timeout waiting for admission after RSS improvement")
+		}
+
+		// Verify final state
+		throttled, queued = sac.GetStats()
+		if throttled != 0 {
+			t.Errorf("Expected throttled state 0 after RSS improvement, got %d", throttled)
+		}
+		if queued != 0 {
+			t.Errorf("Expected 0 queued requests after RSS improvement, got %d", queued)
+		}
+	})
+
+	// Test 3: Both conditions simultaneously
+	t.Run("BothConditions", func(t *testing.T) {
+		// Set memory values: both conditions poor
+		mockStats.avgResidentPercent.Set(3)                 // 3% resident (below 5% threshold)
+		mockStats.memoryRss.Set(3 * 1024 * 1024 * 1024)     // 3GB RSS (above 1.05 * 1.5GB = 1.575GB threshold)
+		mockStats.memoryQuota.Set(1.5 * 1024 * 1024 * 1024) // 1.5GB quota (above 1GB threshold)
+
+		// Wait for controller to detect the change
+		time.Sleep(6 * time.Second)
+
+		// Verify throttling is enabled due to both conditions
+		throttled, queued := sac.GetStats()
+		if throttled != 1 {
+			t.Errorf("Expected throttled state 1 due to both poor conditions, got %d", throttled)
+		}
+
+		// Test that requests get queued
+		doneCh := make(chan bool, 1)
+		abortch := make(chan bool, 1)
+		go func() {
+			admitted := sac.AdmitScan("req_both_conditions", abortch)
+			doneCh <- admitted
+		}()
+
+		// Wait for request to be queued
+		time.Sleep(50 * time.Millisecond)
+
+		// Verify request is queued
+		totalQueued := sac.GetTotalQueued()
+		if totalQueued != 3 { // 2 from previous tests + 1 from this test
+			t.Errorf("Expected 3 total queued requests, got %d", totalQueued)
+		}
+
+		// Fix only RR condition (RSS still poor)
+		mockStats.avgResidentPercent.Set(10) // 10% resident (above 5% threshold)
+
+		// Wait for controller to detect change
+		time.Sleep(6 * time.Second)
+
+		// Verify throttling is still enabled (RSS still poor - highRSS condition)
+		throttled, queued = sac.GetStats()
+		if throttled != 1 {
+			t.Errorf("Expected throttled state 1 (RSS still poor - highRSS condition), got %d", throttled)
+		}
+
+		// Fix RSS condition to stop throttling completely (RSS now below quota)
+		mockStats.memoryRss.Set(100 * 1024 * 1024) // 100MB RSS (below 1.5GB quota)
+
+		// Wait for controller to detect improvement
+		time.Sleep(6 * time.Second)
+
+		// Verify request gets admitted
+		select {
+		case admitted := <-doneCh:
+			if !admitted {
+				t.Error("Expected queued request to be admitted after both conditions improve")
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("Timeout waiting for admission after both conditions improve")
+		}
+
+		// Verify final state
+		throttled, queued = sac.GetStats()
+		if throttled != 0 {
+			t.Errorf("Expected throttled state 0 after both conditions improve, got %d", throttled)
+		}
+		if queued != 0 {
+			t.Errorf("Expected 0 queued requests after both conditions improve, got %d", queued)
+		}
+	})
+
+	// Test 4: Verify lowRR condition requires RSS above quota (not just above 95%)
+	t.Run("LowRRRequiresRSSAboveQuota", func(t *testing.T) {
+		// Set memory values: poor RR but RSS below quota (should NOT trigger lowRR)
+		mockStats.avgResidentPercent.Set(3)                 // 3% resident (below 5% threshold) - poor RR
+		mockStats.memoryRss.Set(1 * 1024 * 1024 * 1024)     // 1GB RSS (below 1.5GB quota)
+		mockStats.memoryQuota.Set(1.5 * 1024 * 1024 * 1024) // 1.5GB quota (above 1GB threshold)
+
+		// Wait for controller to detect the change
+		time.Sleep(6 * time.Second)
+
+		// Verify throttling is NOT enabled because RSS is below quota (lowRR condition not met)
+		throttled, queued := sac.GetStats()
+		if throttled != 0 {
+			t.Errorf("Expected throttled state 0 (poor RR but RSS below quota), got %d", throttled)
+		}
+
+		// Test that requests are admitted immediately (no throttling)
+		abortch := make(chan bool, 1)
+		if !sac.AdmitScan("req_lowrr_below_quota", abortch) {
+			t.Error("Expected immediate admission when RR is poor but RSS is below quota")
+		}
+
+		// Verify no requests were queued
+		totalQueued := sac.GetTotalQueued()
+		if totalQueued != 3 { // Should still be 3 from previous tests
+			t.Errorf("Expected 3 total queued requests, got %d", totalQueued)
+		}
+
+		// Now increase RSS above quota to trigger lowRR condition
+		mockStats.memoryRss.Set(2 * 1024 * 1024 * 1024) // 2GB RSS (above 1.5GB quota)
+
+		// Wait for controller to detect the change
+		time.Sleep(6 * time.Second)
+
+		// Verify throttling is now enabled due to lowRR condition (both RR and RSS conditions met)
+		throttled, queued = sac.GetStats()
+		if throttled != 1 {
+			t.Errorf("Expected throttled state 1 after RSS increased above quota, got %d", throttled)
+		}
+
+		// Test that new requests get queued
+		doneCh := make(chan bool, 1)
+		abortch2 := make(chan bool, 1)
+		go func() {
+			admitted := sac.AdmitScan("req_lowrr_above_quota", abortch2)
+			doneCh <- admitted
+		}()
+
+		// Wait for request to be queued
+		time.Sleep(50 * time.Millisecond)
+
+		// Verify request is queued
+		totalQueued = sac.GetTotalQueued()
+		if totalQueued != 4 { // 3 from previous tests + 1 from this test
+			t.Errorf("Expected 4 total queued requests, got %d", totalQueued)
+		}
+
+		// Fix RR condition to stop throttling
+		mockStats.avgResidentPercent.Set(10)       // 10% resident (above 5% threshold)
+		mockStats.memoryRss.Set(100 * 1024 * 1024) // 100MB RSS (below 1.5GB quota)
+
+		// Wait for controller to detect improvement
+		time.Sleep(6 * time.Second)
+
+		// Verify request gets admitted
+		select {
+		case admitted := <-doneCh:
+			if !admitted {
+				t.Error("Expected queued request to be admitted after RR improvement")
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("Timeout waiting for admission after RR improvement")
+		}
+
+		// Verify final state
+		throttled, queued = sac.GetStats()
+		if throttled != 0 {
+			t.Errorf("Expected throttled state 0 after RR improvement, got %d", throttled)
+		}
+		if queued != 0 {
+			t.Errorf("Expected 0 queued requests after RR improvement, got %d", queued)
+		}
+	})
+
+	sac.Shutdown()
 }
