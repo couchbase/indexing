@@ -2810,6 +2810,16 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 			inst.RState = rebalState
 			idx.indexInstMap[tgtInstId] = inst
 
+			// Update index maps with this index
+			msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+			msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{inst})
+			// update index map in storage manager so that the "checkForLostPartitions" that index
+			// service performs will not ignore the newly moved instance
+			if err := idx.sendMessageToWorker(msgUpdateIndexInstMap, idx.storageMgrCmdCh, "StorageMgr"); err != nil {
+				logging.Errorf("Indexer::updateRStateOrMergePartition error observed when updating "+
+					"RState of inst: %v, err: %v", inst.InstId, err) // Log error but do not act on it yet
+			}
+
 			instIds := []common.IndexInstId{tgtInstId}
 			idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, false, nil, respch)
 
