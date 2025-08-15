@@ -659,6 +659,10 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 				index.ActualResidentPercent = residentPercent.(float64)
 			}
 		}
+		//consider resident ratio in range [0.0, 1.0) as 0.0 %
+		if index.ActualResidentPercent < 1.0 {
+			index.ActualResidentPercent = 0.0
+		}
 
 		// data_size is the total key size of index, including back index.
 		// data_size for MOI is 0.
