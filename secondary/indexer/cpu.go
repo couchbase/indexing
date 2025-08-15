@@ -64,7 +64,7 @@ func StartCpuCollector() error {
 func (c *cpuCollector) runCollectStats() {
 
 	//ticker := time.NewTicker(time.Second * 60)
-	ticker := time.NewTicker(time.Second * 30)
+	ticker := time.NewTicker(time.Second * 5)
 	defer ticker.Stop()
 
 	count := 0

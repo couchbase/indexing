@@ -3683,6 +3683,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.scan.vector.throttle.minRRThreshold": ConfigValue{
+		5,
+		"Minimum node level resident percent below which vector scan will be throttled. Set 0 to disable.",
+		5,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.planner.timeout": ConfigValue{
 		300,
 		"timeout (sec) on planner",

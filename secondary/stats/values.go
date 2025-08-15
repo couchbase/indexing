@@ -18,6 +18,7 @@ const (
 	N1QLStorageStatsFilter = 0x20 // only used for storage stats
 	SummaryFilter          = 0x40
 	SmartBatchingFilter    = 0x80
+	IndexRRStatsFilter     = 0x100 //internal filter used by scan admission controller
 )
 
 // END FILTERS =====================================================================================

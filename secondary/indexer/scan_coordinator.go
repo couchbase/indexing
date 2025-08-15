@@ -25,6 +25,7 @@ import (
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
+	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	"github.com/golang/protobuf/proto"
 )
@@ -81,6 +82,9 @@ type scanCoordinator struct {
 
 	//maintains bucket->bucketStateEnum mapping for pause state
 	bucketPauseState map[string]bucketStateEnum
+
+	// Scan admission controller for vector index requests
+	scanAdmissionController *ScanAdmissionController
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -112,6 +116,9 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	s.initRollbackInProgress()
 	s.lastSnapshot.Init()
 	s.bucketNameNumVBucketsMapHolder.Init()
+
+	// Initialize scan admission controller for vector index requests
+	s.scanAdmissionController = NewScanAdmissionController(stats, config, supvMsgch)
 
 	addr := net.JoinHostPort("", config["scanPort"].String())
 	queryportCfg := config.SectionConfig("queryport.", true)
@@ -159,6 +166,12 @@ loop:
 			if ok {
 				if cmd.GetMsgType() == SCAN_COORD_SHUTDOWN {
 					logging.Infof("ScanCoordinator: Shutting Down")
+
+					// Shutdown scan admission controller
+					if s.scanAdmissionController != nil {
+						s.scanAdmissionController.Shutdown()
+					}
+
 					s.serv.Close()
 					for i := 0; i < len(s.snapshotReqCh); i++ {
 						close(s.snapshotReqCh[i])
@@ -488,6 +501,15 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 		}()
 
 		if req.IsVectorIndex() {
+			// Admit scan request based on current throttle state
+			if !s.scanAdmissionController.AdmitScan(req.RequestId, donech) {
+				if err == nil {
+					err = fmt.Errorf("Failed to admit vector index scan request")
+				}
+				s.tryRespondWithError(w, req, err)
+				return
+			}
+
 			reserveErr := s.reserveReaders(req, donech)
 			defer s.releaseReaders(req)
 
@@ -1264,6 +1286,12 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 	st := s.serv.Statistics()
 	stats.numConnections.Set(st.Connections)
 
+	// Add scan admission controller stats
+	if s.scanAdmissionController != nil {
+		_, queued := s.scanAdmissionController.GetStats()
+		stats.vectorScanQueued.Set(int64(queued))
+	}
+
 	// Compute counts asynchronously and reply to stats request
 	go func() {
 		var netScanned int64
@@ -1382,6 +1410,12 @@ func (s *scanCoordinator) handleUpdateIndexPartnMap(cmd Message) {
 func (s *scanCoordinator) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 	s.config.Store(cfgUpdate.GetConfig())
+
+	// Update scan admission controller configuration
+	if s.scanAdmissionController != nil {
+		s.scanAdmissionController.SetConfig(cfgUpdate.GetConfig())
+	}
+
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -1931,4 +1965,366 @@ func makePartitionIds(ids []uint64) []common.PartitionId {
 	}
 
 	return result
+}
+
+// ScanAdmissionController manages scan admission based on runtime memory stats
+type ScanAdmissionController struct {
+	scanThrottleOn int32 // atomic flag: 0 = allow scans, 1 = throttle scans
+	requestQueue   chan *ScanAdmissionRequest
+	shutdownCh     chan struct{}
+
+	minRRThreshold  int32 // atomic: minimum RR threshold to start throttling
+	safeRRThreshold int32 // atomic: safe RR threshold to stop throttling
+
+	totalQueued int64 // atomic counter for total requests that were ever queued
+
+	minQuotaThreshold int64 // minimum Quota threshold to start throttling
+
+	stats  IndexerStatsHolder
+	config common.ConfigHolder
+
+	supvMsgch MsgChannel
+
+	newVectorScanSeen atomic.Bool // boolean value set to true when a new
+	// vector scan is seen, resets every controller cycle
+}
+
+// ScanAdmissionRequest represents a request for scan admission
+type ScanAdmissionRequest struct {
+	requestId string
+	doneCh    chan bool
+	aborted   atomic.Bool // Track if request was aborted
+}
+
+// NewScanAdmissionController creates a new scan admission controller
+func NewScanAdmissionController(stats *IndexerStats, config common.Config,
+	supvMsgch MsgChannel) *ScanAdmissionController {
+
+	sac := &ScanAdmissionController{
+		scanThrottleOn: 0,                                      // Start with scans allowed
+		requestQueue:   make(chan *ScanAdmissionRequest, 1000), // Buffer for queued requests
+		shutdownCh:     make(chan struct{}),
+	}
+
+	sac.stats.Set(stats)
+	sac.config.Store(config)
+	sac.supvMsgch = supvMsgch
+
+	// Set initial threshold values using atomic operations
+	atomic.StoreInt32(&sac.minRRThreshold, int32(config["scan.vector.throttle.minRRThreshold"].Int()))
+
+	// wait for RR to reach safeRRThreshold to stop throttling to avoid ping pong at minRRThreshold
+	atomic.StoreInt32(&sac.safeRRThreshold, atomic.LoadInt32(&sac.minRRThreshold)+1)
+
+	sac.minQuotaThreshold = 1024 * 1024 * 1024 // 1GB (storage memtuner works above this threshold)
+
+	// Start the background controller
+	go sac.runController()
+
+	return sac
+}
+
+// AdmitScan attempts to admit a scan request based on current throttle state
+// Returns true if admission is successful, false only on shutdown
+// Note: This method is lock-free for performance. Queue processing is handled
+// in SetThrottleState when throttling is turned off.
+func (sac *ScanAdmissionController) AdmitScan(requestId string, abortch chan bool) bool {
+
+	// Set the newVectorScanSeen flag to true to indicate that a new vector scan is seen
+	sac.newVectorScanSeen.Store(true)
+
+	// Check if scans are currently allowed
+	if atomic.LoadInt32(&sac.scanThrottleOn) == 0 {
+		// Scans are allowed, admit immediately
+		logging.Debugf("ScanAdmissionController: Immediate admission for request %s", requestId)
+		return true
+	}
+
+	// Scans are throttled, queue the request and wait
+	req := &ScanAdmissionRequest{
+		requestId: requestId,
+		doneCh:    make(chan bool, 1),
+		aborted:   atomic.Bool{},
+	}
+
+	// Add to queue (will block if queue is full, ensuring no request is lost)
+	select {
+	case sac.requestQueue <- req:
+		atomic.AddInt64(&sac.totalQueued, 1)
+		logging.Debugf("ScanAdmissionController: Queued request %s for admission", requestId)
+	case <-abortch:
+		logging.Debugf("ScanAdmissionController: Aborting request %s", requestId)
+		return false
+	}
+
+	// Wait for admission
+	select {
+	case admitted := <-req.doneCh:
+		return admitted
+	case <-sac.shutdownCh:
+		return false
+	case <-abortch:
+		// Mark request as aborted
+		logging.Debugf("ScanAdmissionController: Aborting request %s", requestId)
+		req.aborted.Store(true)
+		return false
+	}
+}
+
+// processQueuedRequests processes queued requests when throttling is turned off
+// processAll: if true, processes ALL requests; if false, processes up to 10 requests per batch
+func (sac *ScanAdmissionController) processQueuedRequests(processAll bool) {
+	const maxRequestsPerBatch = 25
+	processedCount := 0
+
+	if processAll {
+		// Process ALL requests in the queue (for shutdown scenarios)
+		for {
+			select {
+			case req := <-sac.requestQueue:
+				// Check if request was aborted
+				if req.aborted.Load() {
+					logging.Debugf("ScanAdmissionController: Skipping aborted request %s", req.requestId)
+					continue
+				}
+
+				// Notify the waiting request that it's admitted
+				select {
+				case req.doneCh <- true:
+					processedCount++
+					logging.Debugf("ScanAdmissionController: Admitted queued request %s (%d total)",
+						req.requestId, processedCount)
+					time.Sleep(100 * time.Millisecond)
+				default:
+					// Request channel is closed or full, skip
+					logging.Debugf("ScanAdmissionController: Skipping request %s (channel closed/full)", req.requestId)
+				}
+			default:
+				// No more requests in queue
+				if processedCount > 0 {
+					logging.Infof("ScanAdmissionController: Processed ALL %d queued requests", processedCount)
+				}
+				return
+			}
+		}
+	} else {
+		// Process up to maxRequestsPerBatch requests (for normal operation)
+		for processedCount < maxRequestsPerBatch {
+			select {
+			case req := <-sac.requestQueue:
+				// Check if request was aborted
+				if req.aborted.Load() {
+					logging.Debugf("ScanAdmissionController: Skipping aborted request %s", req.requestId)
+					continue
+				}
+
+				// Notify the waiting request that it's admitted
+				select {
+				case req.doneCh <- true:
+					logging.Debugf("ScanAdmissionController: Admitted queued request %s (%d/%d)",
+						req.requestId, processedCount+1, maxRequestsPerBatch)
+					processedCount++
+					time.Sleep(100 * time.Millisecond)
+				default:
+					// Request channel is closed or full, skip
+					logging.Debugf("ScanAdmissionController: Skipping request %d (channel closed/full)", req.requestId)
+				}
+			default:
+				// No more requests in queue
+				if processedCount > 0 {
+					logging.Debugf("ScanAdmissionController: Processed %d queued requests in this batch", processedCount)
+				}
+				return
+			}
+		}
+
+		// Log if we processed the full batch
+		if processedCount > 0 {
+			logging.Debugf("ScanAdmissionController: Processed %d queued requests in this batch", processedCount)
+		}
+	}
+}
+
+// runController is a background goroutine that monitors memory stats and controls throttling
+func (sac *ScanAdmissionController) runController() {
+
+	logging.Infof("ScanAdmissionController: Starting controller")
+
+	// If storage mode is not PLASMA, do not run the controller
+	if common.GetClusterStorageMode() != common.PLASMA {
+		logging.Infof("ScanAdmissionController: Storage mode is not PLASMA, stopping controller")
+		return
+	}
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+
+			// Check if throttling is disabled
+			if atomic.LoadInt32(&sac.minRRThreshold) == 0 {
+				// If throttling is currently on, turn it off
+				if atomic.LoadInt32(&sac.scanThrottleOn) == 1 {
+					logging.Debugf("ScanAdmissionController: Throttling disabled by config (minRRThreshold=0), turning off throttle")
+					sac.SetThrottleState(false)
+				}
+
+				// Wait for any in-flight requests to complete their queuing
+				time.Sleep(3 * time.Second)
+
+				// Process any remaining queued requests before stopping the controller
+				logging.Infof("ScanAdmissionController: Processing %d remaining queued requests before stopping controller", len(sac.requestQueue))
+				sac.processQueuedRequests(true) // Process ALL requests when stopping
+
+				// Stop the controller when throttling is disabled to save CPU
+				logging.Debugf("ScanAdmissionController: Throttling disabled, stopping controller to save CPU")
+				return
+			}
+
+			stats := sac.stats.Get()
+			memoryQuota := stats.memoryQuota.Value()
+
+			if memoryQuota < sac.minQuotaThreshold {
+				logging.Debugf("ScanAdmissionController: Memory quota below threshold (%d), skipping memory check", sac.minQuotaThreshold)
+				continue
+			}
+
+			currThrottleState := atomic.LoadInt32(&sac.scanThrottleOn)
+			// If new vector scan seen or throttling is on, refresh stats
+			needsStatsRefresh := sac.newVectorScanSeen.Load() || currThrottleState == 1
+
+			if needsStatsRefresh {
+				replych := make(chan bool)
+				statReq := &MsgIndexRRStats{respch: replych, consumerFilter: statsMgmt.IndexRRStatsFilter}
+				sac.supvMsgch <- statReq
+
+				<-replych //wait for stats to be refreshed
+			}
+
+			//reset the newVectorScanSeen flag
+			sac.newVectorScanSeen.Store(false)
+
+			stats = sac.stats.Get()
+			memoryQuota = stats.memoryQuota.Value()
+
+			memoryRSS := stats.memoryRss.Value()
+			nodeRR := stats.avgResidentPercent.Value()
+
+			logging.Debugf("ScanAdmissionController: Memory check ticker - nodeRR: %d, memoryRSS: %d, memoryQuota: %d", nodeRR, memoryRSS, memoryQuota)
+
+			//if RR is below minRRThreshold(main check), and memoryRSS is greater than memoryQuota, set throttle state to true
+			lowRR := nodeRR < int64(atomic.LoadInt32(&sac.minRRThreshold)) && int64(memoryRSS) > memoryQuota
+			highRSS := int64(memoryRSS) > int64(1.05*float64(memoryQuota)) // hard stop if over quota by 5%
+
+			safeRR := nodeRR > int64(atomic.LoadInt32(&sac.safeRRThreshold)) // wait for RR to reach safeRRThreshold to stop throttling to avoid ping pong at minRRThreshold
+			safeRSS := int64(memoryRSS) <= memoryQuota                       // resume if under quota
+
+			if lowRR || highRSS {
+				if currThrottleState == 0 {
+					logging.Infof("ScanAdmissionController: Setting throttle state to true, nodeRR: %d, memoryRSS: %d", nodeRR, memoryRSS)
+				}
+				sac.SetThrottleState(true)
+			} else if safeRR || safeRSS {
+				if currThrottleState == 1 {
+					logging.Infof("ScanAdmissionController: Setting throttle state to false, nodeRR: %d, memoryRSS: %d", nodeRR, memoryRSS)
+				}
+				sac.SetThrottleState(false)
+			}
+
+		case <-sac.shutdownCh:
+			return
+		}
+	}
+}
+
+// SetConfig sets the configuration for the scan admission controller
+func (sac *ScanAdmissionController) SetConfig(config common.Config) {
+	oldMinRRThreshold := atomic.LoadInt32(&sac.minRRThreshold)
+	sac.config.Store(config)
+
+	// Update threshold values using atomic operations
+	newMinRRThreshold := int32(config["scan.vector.throttle.minRRThreshold"].Int())
+	atomic.StoreInt32(&sac.minRRThreshold, newMinRRThreshold)
+	atomic.StoreInt32(&sac.safeRRThreshold, newMinRRThreshold+1) // wait for RR to reach safeRRThreshold to stop throttling to avoid ping pong at minRRThreshold
+
+	// If minRRThreshold is set to 0, and controller is running,
+	// it will turn off throttling immediately. If controller is not running,
+	// then nothing is required.
+
+	// If throttling was previously disabled (oldMinRRThreshold == 0) and is now enabled,
+	// restart the controller
+	if oldMinRRThreshold == 0 {
+		logging.Infof("ScanAdmissionController: Configuration updated - throttling enabled (minRRThreshold=%d), restarting controller", newMinRRThreshold)
+		go sac.runController()
+	} else {
+		logging.Infof("ScanAdmissionController: Configuration updated - minRRThreshold=%d, safeRRThreshold=%d", newMinRRThreshold, newMinRRThreshold+1)
+	}
+
+}
+
+// SetThrottleState sets the scan throttle state and processes queued requests if throttling is turned off
+func (sac *ScanAdmissionController) SetThrottleState(throttleOn bool) {
+	oldState := atomic.LoadInt32(&sac.scanThrottleOn)
+	var newState int32
+	if throttleOn {
+		newState = 1
+	} else {
+		newState = 0
+	}
+
+	// If throttling is being turned off, always process queued requests
+	if newState == 0 {
+		// Process all queued requests first
+		logging.Debugf("ScanAdmissionController: Throttling turned off, processing queued requests")
+		sac.processQueuedRequests(false) // Process in batches for normal operation
+
+		// Now set the new state
+		atomic.StoreInt32(&sac.scanThrottleOn, newState)
+	} else {
+		// For other state changes, just update the state
+		atomic.StoreInt32(&sac.scanThrottleOn, newState)
+	}
+
+	logging.Debugf("ScanAdmissionController: Throttle state changed from %d to %d", oldState, newState)
+}
+
+// GetStats returns current statistics about the scan admission controller
+func (sac *ScanAdmissionController) GetStats() (throttled, queued int) {
+	throttleState := atomic.LoadInt32(&sac.scanThrottleOn)
+	queueLength := len(sac.requestQueue)
+
+	return int(throttleState), queueLength
+}
+
+// GetTotalQueued returns the total number of requests that were ever queued
+func (sac *ScanAdmissionController) GetTotalQueued() int64 {
+	return atomic.LoadInt64(&sac.totalQueued)
+}
+
+// Shutdown gracefully shuts down the scan admission controller
+func (sac *ScanAdmissionController) Shutdown() {
+	close(sac.shutdownCh)
+
+	// Notify all queued requests that they won't be processed
+	// Drain the channel and notify waiting requests
+	for {
+		select {
+		case req := <-sac.requestQueue:
+			// Check if request was aborted
+			if req.aborted.Load() {
+				logging.Debugf("ScanAdmissionController: Skipping aborted request %s during shutdown", req.requestId)
+				continue
+			}
+
+			select {
+			case req.doneCh <- false:
+			default:
+			}
+		default:
+			// Channel is empty
+			return
+		}
+	}
 }

@@ -3153,6 +3153,10 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 		return mdb.handleN1QLStorageStatistics()
 	}
 
+	if consumerFilter == statsMgmt.IndexRRStatsFilter {
+		return mdb.handleIndexRRStats()
+	}
+
 	var sts StorageStatistics
 
 	sts.LastResetTime = mdb.lastResetTime
@@ -3401,6 +3405,33 @@ func (mdb *plasmaSlice) handleN1QLStorageStatistics() (StorageStatistics, error)
 	sts.InternalDataMap = make(map[string]interface{})
 	sts.InternalDataMap["MainStore"] = internalDataMap
 	return sts, nil
+}
+
+func (mdb *plasmaSlice) handleIndexRRStats() (StorageStatistics, error) {
+
+	var numRecsMem, numRecsDisk int64
+
+	pStats := mdb.mainstore.GetPreparedStats()
+
+	numRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees + pStats.NumRecordCompressed
+	numRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
+
+	var bsNumRecsMem, bsNumRecsDisk int64
+
+	if !mdb.isPrimary {
+		pStats := mdb.backstore.GetPreparedStats()
+		bsNumRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
+		bsNumRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees + pStats.NumRecordCompressed
+	}
+
+	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
+	mdb.idxStats.combinedResidentPercent.Set(common.ComputePercentFloat((numRecsMem + bsNumRecsMem), (numRecsDisk + bsNumRecsDisk)))
+	mdb.idxStats.numRecsInMem.Set(numRecsMem)
+	mdb.idxStats.numRecsOnDisk.Set(numRecsDisk)
+	mdb.idxStats.bsNumRecsInMem.Set(bsNumRecsMem)
+	mdb.idxStats.bsNumRecsOnDisk.Set(bsNumRecsDisk)
+
+	return StorageStatistics{}, nil
 }
 
 // These configs are meant for MemTuner and need to be updated for both plasma and bhive
