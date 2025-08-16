@@ -708,10 +708,8 @@ func (s *scanCoordinator) handleVectorScanRequest(req *ScanRequest, w ScanRespon
 
 	if err != nil {
 		status := fmt.Sprintf("(error = %s)", err)
-		logging.LazyVerbose(func() string {
-			return fmt.Sprintf("%s RESPONSE rows:%d, scanned:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
-				req.LogPrefix, scanPipeline.RowsReturned(), scanPipeline.RowsScanned(), waitTime, scanTime, status, req.RequestId)
-		})
+		logging.Errorf("%s RESPONSE rows:%d, scanned:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
+			req.LogPrefix, scanPipeline.RowsReturned(), scanPipeline.RowsScanned(), waitTime, scanTime, status, req.RequestId)
 		s.updateErrStats(req, err)
 		if strings.Contains(err.Error(), "Collatejson decode error") {
 			errCount := atomic.AddUint32(&s.numDecodeErrors, 1)
@@ -1649,31 +1647,17 @@ func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 
 func (s *scanCoordinator) reserveReaders(r *ScanRequest, doneCh chan bool) error {
 
-	pmap, ok := s.indexPartnMap[r.IndexInst.InstId]
-	if !ok {
-		return fmt.Errorf("instanceid: %v err: %v", r.IndexInst.InstId, ErrNotMyIndex)
-	}
-
-	for _, partnId := range r.PartitionIds {
-		if _, ok := pmap[partnId]; !ok {
-			return fmt.Errorf("partitionid: %v err: %v", partnId, ErrNotMyPartition)
-		}
-	}
-
-	r.releaseReaderList = make([]Slice, len(r.PartitionIds))
 	var sb strings.Builder
 	// Reserve readers for each partition should be done sequentially else it can happen that
 	// two scan requests can reserve readers of a partition and wait for readers of another
 	// partition acquired by other scan request causing deadlock
-	for _, partnId := range r.PartitionIds {
-		if partition, ok := pmap[partnId]; ok {
-			slice := partition.Sc.GetSliceById(0)
-			e := slice.ReserveReaders(r.readersPerPartition, doneCh)
-			if e == nil {
-				r.releaseReaderList = append(r.releaseReaderList, slice)
-			} else {
-				sb.WriteString(fmt.Sprintf("partitionid: %v err: %v ", partnId, e))
-			}
+	for i, slice := range r.partitionIdSlices {
+		e := slice.ReserveReaders(r.readersPerPartition, doneCh)
+		if e != nil {
+			// Remove current slice from partitionIdSlices as we are not able to reserve readers for it
+			// Keep only slices for which we need to release readers at a later stage
+			r.partitionIdSlices[i] = nil
+			sb.WriteString(fmt.Sprintf("partitionid: %v err: %v ", r.PartitionIds[i], e))
 		}
 	}
 
@@ -1685,11 +1669,7 @@ func (s *scanCoordinator) reserveReaders(r *ScanRequest, doneCh chan bool) error
 }
 
 func (s *scanCoordinator) releaseReaders(r *ScanRequest) {
-	if r.releaseReaderList == nil {
-		return
-	}
-
-	for _, slice := range r.releaseReaderList {
+	for _, slice := range r.partitionIdSlices {
 		if slice != nil {
 			slice.ReleaseReaders(r.readersPerPartition)
 		}
@@ -1731,7 +1711,7 @@ func (s *scanCoordinator) fillCodebookMap(r *ScanRequest) (cbErr error) {
 // be returned in the same order as partitionIds.
 func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common.PartitionId,
 	user string, skipReadMetering bool, ctxsPerPartition int, getCtxs bool) (
-	*common.IndexInst, []IndexReaderContext, error) {
+	*common.IndexInst, []IndexReaderContext, []Slice, error) {
 
 	hasIndex := false
 	isPartition := false
@@ -1745,8 +1725,10 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common
 	instIdList := s.indexDefnMap[common.IndexDefnId(defnID)]
 
 	var ctx []IndexReaderContext
+	var partitionIdSlices []Slice
 	if getCtxs {
 		ctx = make([]IndexReaderContext, len(partitionIds)*ctxsPerPartition)
+		partitionIdSlices = make([]Slice, len(partitionIds))
 	}
 
 	for _, instId := range instIdList {
@@ -1764,12 +1746,14 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common
 				for i, partnId := range partitionIds {
 					if partition, ok := pmap[partnId]; ok {
 						if getCtxs {
+							slice := partition.Sc.GetSliceById(0)
+							partitionIdSlices[i] = slice
 							for j := 0; j < ctxsPerPartition; j++ {
 								ctxUser := user
 								if user == "" {
 									ctxUser = fmt.Sprintf("%v_%v", partnId, j)
 								}
-								ctx[i*ctxsPerPartition+j] = partition.Sc.GetSliceById(0).GetReaderContext(ctxUser, skipReadMetering)
+								ctx[i*ctxsPerPartition+j] = slice.GetReaderContext(ctxUser, skipReadMetering)
 							}
 						} else {
 							// A no-op since the purpose of getCtxs = false is to get the
@@ -1782,7 +1766,7 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common
 				}
 
 				if found {
-					return &inst, ctx, nil
+					return &inst, ctx, partitionIdSlices, nil
 				}
 			}
 		}
@@ -1791,11 +1775,11 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common
 	if hasIndex {
 		if isPartition {
 			if content, err := json.Marshal(&missing); err == nil {
-				return nil, nil, fmt.Errorf("%v:%v", ErrNotMyPartition, string(content))
+				return nil, nil, nil, fmt.Errorf("%v:%v", ErrNotMyPartition, string(content))
 			}
-			return nil, nil, ErrNotMyPartition
+			return nil, nil, nil, ErrNotMyPartition
 		} else {
-			return nil, nil, ErrNotMyIndex
+			return nil, nil, nil, ErrNotMyIndex
 		}
 	}
 
@@ -1803,10 +1787,10 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common
 		// Since madhatter, scanning of warmed up index during indexer bootstrap
 		// is allowed. If indexer is in bootstrap and index is not found, it implies
 		// index is not warmed up yet. Return IndexNotReady error.
-		return nil, nil, common.ErrIndexNotReady
+		return nil, nil, nil, common.ErrIndexNotReady
 	}
 
-	return nil, nil, common.ErrIndexNotFound
+	return nil, nil, nil, common.ErrIndexNotFound
 }
 
 func (s *scanCoordinator) updateLastSnapshotMap() {

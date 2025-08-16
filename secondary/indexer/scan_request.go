@@ -163,7 +163,7 @@ type ScanRequest struct {
 	inlineFilterExpr     expression.Expression
 	includeColumnFilters []Filter
 
-	releaseReaderList []Slice
+	partitionIdSlices []Slice
 }
 
 type IndexKeyOrder struct {
@@ -815,7 +815,7 @@ func (r *ScanRequest) setReaderCtxMap() {
 		diff := r.readersPerPartition - r.perPartnScanParallelism
 		r.readersPerPartition = r.perPartnScanParallelism
 
-		for _, slice := range r.releaseReaderList {
+		for _, slice := range r.partitionIdSlices {
 			if slice != nil {
 				slice.ReleaseReaders(diff)
 			}
@@ -1824,7 +1824,7 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 	stats := r.sco.stats.Get()
 
 	if r.isVectorScan {
-		indexInst, _, localErr = r.sco.findIndexInstance(r.DefnID, r.PartitionIds,
+		indexInst, _, _, localErr = r.sco.findIndexInstance(r.DefnID, r.PartitionIds,
 			r.User, r.SkipReadMetering, 0, false)
 		if localErr != nil {
 			return
@@ -1835,7 +1835,7 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 			return
 		}
 	}
-	indexInst, r.Ctxs, localErr = r.sco.findIndexInstance(r.DefnID, r.PartitionIds,
+	indexInst, r.Ctxs, r.partitionIdSlices, localErr = r.sco.findIndexInstance(r.DefnID, r.PartitionIds,
 		r.User, r.SkipReadMetering, r.readersPerPartition, true)
 
 	if localErr == nil {

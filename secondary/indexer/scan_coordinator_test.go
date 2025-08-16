@@ -580,7 +580,7 @@ func Test_scanCoordinator_findIndexInstance(t *testing.T) {
 				indexDefnMap:  tt.indexDefnMap,
 			}
 			s.setIndexerState(tt.indexerState)
-			got, got1, err := s.findIndexInstance(tt.defnID, tt.partnIds, tt.user, tt.skipReadMetering, tt.ctxsPerPartition, true)
+			got, got1, _, err := s.findIndexInstance(tt.defnID, tt.partnIds, tt.user, tt.skipReadMetering, tt.ctxsPerPartition, true)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("scanCoordinator.findIndexInstance() error = %v, wantErr %v", err, tt.wantErr)
 				return
