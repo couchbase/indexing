@@ -2244,9 +2244,9 @@ func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.Transfe
 				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")
 				for ttid, tt := range buildTokens {
 					if id == tt.IndexInst.InstId {
-						l.Infof("%v Error due to not enough qualifying docs. error: %v. Skipping. ttid %v, new state %v", method, errStr, ttid, c.TransferTokenCommit)
-						tt.State = c.TransferTokenCommit
-						setTransferTokenInMetakv(ttid, tt)
+						l.Infof("%v Error due to not enough qualifying docs. error: %v. Skipping build. ttid %v",
+							method, errStr, ttid)
+						r.destTokenToMergeOrReadyLOCKED(ttid, tt)
 						break
 					}
 				}
@@ -2430,8 +2430,8 @@ func (r *Rebalancer) buildAcceptedIndexesBatch(buildTokens map[string]*common.Tr
 				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")
 				for ttid, tt := range buildTokens {
 					if id == tt.IndexInst.InstId {
-						l.Infof("%v Error due to not enough qualifying docs. error: %v. Skipping. ttid %v, new state %v", method, errStr, ttid, c.TransferTokenCommit)
-						tt.State = c.TransferTokenCommit
+						l.Infof("%v Error due to not enough qualifying docs. error: %v. Skipping build. ttid %v", method, errStr, ttid)
+						tt.IsPendingReady = true
 						setTransferTokenInMetakv(ttid, tt)
 						break
 					}
@@ -2517,9 +2517,9 @@ loop:
 
 					if indexState == c.INDEX_STATE_READY && err != "" &&
 						common.IsVectorTrainingError(err) {
-						logging.Infof("%v skipping ttid:%v, new state:%v err:%v", _waitForIndexBuild, ttid, c.TransferTokenCommit, err)
-						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
-						setTransferTokenInMetakv(ttid, tt)
+						logging.Infof("%v index %v has training err:%v. skipping for ttid %v",
+							_waitForIndexBuild, tt.InstId, err, ttid)
+						r.destTokenToMergeOrReadyLOCKED(ttid, tt)
 
 						continue
 					}
@@ -2699,8 +2699,9 @@ loop:
 					indexState, err := getIndexStatusFromMeta(tt, localMeta)
 					if indexState == c.INDEX_STATE_READY && err != "" &&
 						common.IsVectorTrainingError(err) {
-						logging.Infof("%v skipping ttid:%v, new state:%v err:%v", _waitForIndexBuildBatch, ttid, c.TransferTokenCommit, err)
-						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
+						logging.Infof("%v index %v has training err:%v. skipping for ttid %v",
+							_waitForIndexBuildBatch, tt.InstId, err, ttid)
+						tt.IsPendingReady = true // skip forward instead of failing rebalance
 						setTransferTokenInMetakv(ttid, tt)
 						continue
 					}
@@ -2713,7 +2714,7 @@ loop:
 							return
 						}
 						l.Infof("%v Could not get index status; bucket/scope/collection likely dropped."+
-							" Skipping. indexState %v, err %v, ttid %v, new state %v.", _waitForIndexBuildBatch, indexState, err, ttid, c.TransferTokenCommit)
+							" Skipping. indexState %v, err %v, ttid %v", _waitForIndexBuildBatch, indexState, err, ttid)
 						tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
 						setTransferTokenInMetakv(ttid, tt)
 					} else if err != "" {
