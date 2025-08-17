@@ -128,6 +128,7 @@ func createNewAlternateShardIDGenerator() func() (*c.AlternateShardId, error) {
 var op strings.Builder
 
 func TestMain(m *testing.M) {
+	rand.Seed(time.Now().UnixNano())
 	op = strings.Builder{}
 	logging.SetLogWriter(&op)
 	logging.SetLogLevel(logging.Warn)
@@ -3359,6 +3360,8 @@ func TestMultiNode_Pass3(t *testing.T) {
 	var numReps = rand.Intn(5)
 	var idxCreations = testShardCapacity * minPartitionsPerShard * uint64(rand.Intn(5))
 
+	t.Logf("Using random values numReps %v, idxCreations %v", numReps, idxCreations)
+
 	var ciplist = []createIdxParam{
 		{count: 1, isPrimary: true, numReplicas: numReps},
 		{count: 1, numReplicas: numReps},
@@ -3434,6 +3437,8 @@ func TestMultiNode_RandomLayoutTests(t *testing.T) {
 		}
 		return nil
 	}).Run()
+
+	t.Logf("Using random values numReps %v, numIndexesPerCat %v, numPartitions %v", numReps, numIndexesPerCat, numPartitions)
 
 	var numPartitionsCreated = 0
 
