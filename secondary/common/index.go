@@ -557,6 +557,14 @@ func (idx IndexInst) IsProxy() bool {
 	return idx.RealInstId != 0
 }
 
+// If pendingBuild and !PendingDelete, then instance state will be set to initial (shard rebalance)
+// and active (dcp rebalance) by planner
+func (idx *IndexInst) IsPendingBuild() bool {
+	return (idx.Defn.InstStateAtRebal == INDEX_STATE_CREATED ||
+		idx.Defn.InstStateAtRebal == INDEX_STATE_READY) &&
+		(idx.State == INDEX_STATE_ACTIVE || idx.State == INDEX_STATE_INITIAL)
+}
+
 func (idx IndexInst) String() string {
 
 	str := "\n"
