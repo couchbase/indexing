@@ -4105,6 +4105,9 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 			}
 		}
 
+		inst := idx.indexInstMap[instIdList[0]]
+		collectionId := inst.Defn.CollectionId
+
 		// Check if Initial Build is already running for this index's keyspace. Indexer does not support multiple
 		// builds on the same keyspace because the keyspaceId is used as a key to stream maps.
 		if ok := idx.checkDuplicateInitialBuildRequest(keyspaceId, instIdList, clientCh, errMap); !ok {
@@ -4135,6 +4138,19 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 
 		//all indexes get built using INIT_STREAM
 		var buildStream common.StreamId = common.INIT_STREAM
+
+		idx.cinfoProviderLock.RLock()
+		clusterVer := idx.cinfoProvider.ClusterVersion()
+		idx.cinfoProviderLock.RUnlock()
+
+		cluster := idx.config["clusterAddr"].String()
+		reqcid := idx.makeCollectionIdForStreamRequest(buildStream, keyspaceId, collectionId, clusterVer)
+
+		reqCtx := &c.MetadataRequestContext{ReqSource: c.DDLRequestSourceShardRebalance}
+		// In the batch of indexes that are getting built, check if there
+		// is any vector index that requires training. If so, compute centroids
+		// and initiate training for all those indexes
+		instIdList = idx.checkAndInitiateTraining(instIdList, cluster, keyspaceId, reqcid, errMap, reqCtx)
 
 		if len(instIdList) != 0 {
 			keyspaceIdIndexList[keyspaceId] = instIdList
@@ -14499,16 +14515,23 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 
 func (idx *indexer) retryableBuildAfterTraining(toBuildInstIds []common.IndexInstId, keyspaceId string, reqCtx *common.MetadataRequestContext) {
 
-	isDCPRebalorResume := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+	isRebalOrResume := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance ||
 		reqCtx.ReqSource == common.DDLRequestSourceResume)
 
 	getBuildIndexResponse := func(idxInstList []common.IndexInstId) map[common.IndexInstId]error {
+
+		mType := MsgType(CLUST_MGR_BUILD_INDEX_DDL)
+		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance ||
+			reqCtx.ReqSource == common.DDLRequestSourceResume {
+			mType = MsgType(CLUST_MGR_BUILD_RECOVERED_INDEXES)
+		}
 
 		logging.Infof("Indexer::retryableBuildAfterTraining Starting build for instances: %v, keyspaceId: %v", idxInstList, keyspaceId)
 
 		respCh := make(MsgChannel)
 		idx.adminRecvCh <- &MsgBuildIndex{
-			mType:            CLUST_MGR_BUILD_INDEX_DDL,
+			mType:            mType,
 			indexInstList:    idxInstList,
 			respCh:           respCh,
 			bucketList:       []string{keyspaceId},
@@ -14563,14 +14586,14 @@ func (idx *indexer) retryableBuildAfterTraining(toBuildInstIds []common.IndexIns
 
 			// If it is a non rebalance or resume scenario, after the first build request
 			// the builder will take care of retries
-			if !isDCPRebalorResume {
+			if !isRebalOrResume {
 				return
 			}
 
 			toBuildInstIds = make([]common.IndexInstId, 0)
 
 			for instId, err := range errMap {
-				if !idx.isTransientErrorForVectorBuild(err, isDCPRebalorResume) {
+				if !idx.isTransientErrorForVectorBuild(err, isRebalOrResume) {
 					logging.Errorf("Indexer::retryableBuildAfterTraining For InstId:%v encountered err: %v", instId, err.Error())
 					idx.internalRecvCh <- &MsgBulkUpdateIndexError{
 						instIds: []common.IndexInstId{instId},
@@ -14582,7 +14605,7 @@ func (idx *indexer) retryableBuildAfterTraining(toBuildInstIds []common.IndexIns
 			}
 		}
 
-		doRetry = isDCPRebalorResume && len(toBuildInstIds) != 0
+		doRetry = isRebalOrResume && len(toBuildInstIds) != 0
 	}
 }
 
