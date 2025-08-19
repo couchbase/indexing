@@ -400,6 +400,7 @@ func (r *Rebalancer) initRebalAsync() {
 					cpuProfile := cfg["planner.cpuProfile"].Bool()
 					minIterPerTemp := cfg["planner.internal.minIterPerTemp"].Int()
 					maxIterPerTemp := cfg["planner.internal.maxIterPerTemp"].Int()
+					maxReplanRetry := cfg["planner.internal.maxReplanRetries"].Int()
 					binSize := common.GetBinSize(cfg)
 
 					//user setting redistribute_indexes overrides the internal setting
@@ -421,12 +422,16 @@ func (r *Rebalancer) initRebalAsync() {
 					} else {
 						r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.topologyChange,
 							r.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
-							minIterPerTemp, maxIterPerTemp, binSize, false, false)
+							minIterPerTemp, maxIterPerTemp, binSize, maxReplanRetry, false, false)
 
 						r.resetAlternateShardIds()
 					}
 					if err != nil {
-						l.Errorf("Rebalancer::initRebalAsync Planner Error %v", err)
+						errorStr := fmt.Sprintf("Rebalancer::initRebalAsync Planner Error %v", err)
+						if r.rebalToken != nil {
+							errorStr = fmt.Sprintf("%v for RebalId: %v", errorStr, r.rebalToken.RebalId)
+						}
+						l.Errorf("%v", errorStr)
 						go r.finishRebalance(err)
 						return
 					}

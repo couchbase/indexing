@@ -343,6 +343,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					maxIterPerTemp := cfg["planner.internal.maxIterPerTemp"].Int()
 					binSize := common.GetBinSize(cfg)
 					useShardDealer := cfg["planner.use_shard_dealer"].Bool()
+					maxReplanRetry := cfg["planner.internal.maxReplanRetries"].Int()
 
 					//user setting redistribute_indexes overrides the internal setting
 					//onEjectOnly. onEjectOnly is not expected to be used in production
@@ -355,7 +356,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 
 					sr.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *sr.topologyChange,
 						sr.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
-						minIterPerTemp, maxIterPerTemp, binSize, true, useShardDealer)
+						minIterPerTemp, maxIterPerTemp, binSize, maxReplanRetry, true, useShardDealer)
 
 				} else { //
 					sr.transferTokens, _, err = planner.ExecuteTenantAwareRebalance(cfg["clusterAddr"].String(),
@@ -363,7 +364,11 @@ func (sr *ShardRebalancer) initRebalAsync() {
 				}
 
 				if err != nil {
-					l.Errorf("ShardRebalancer::initRebalAsync Planner Error %v", err)
+					errorStr := fmt.Sprintf("ShardRebalancer::initRebalAsync Planner Error %v", err)
+					if sr.rebalToken != nil {
+						errorStr = fmt.Sprintf("%v for RebalId: %v", errorStr, sr.rebalToken.RebalId)
+					}
+					l.Errorf("%v", errorStr)
 					go sr.finishRebalance(err)
 					return
 				}

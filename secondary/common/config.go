@@ -3743,6 +3743,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.planner.internal.maxReplanRetries": ConfigValue{
+		1000,
+		"Maximum number of tries the planner replans the entire placement. If set to zero, planner will" +
+			"indefinitely retry till it finds a valid plan",
+		1000,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.planner.useGreedyPlanner": ConfigValue{
 		true,
 		"Attempt to use greedy planner (instead of simulated annealing planner) for index creation, for faster placement.",

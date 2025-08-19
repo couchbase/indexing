@@ -78,7 +78,8 @@ type RunConfig struct {
 	// for with "nodes" clause)
 	Override bool
 
-	binSize uint64
+	binSize        uint64
+	maxReplanRetry int
 
 	// enable shard dealer for shard distribution
 	UseShardDealer bool
@@ -191,18 +192,18 @@ type TenantUsage struct {
 
 func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool,
 	disableReplicaRepair bool, threshold float64, timeout int, cpuProfile bool, minIterPerTemp int,
-	maxIterPerTemp int, binSize uint64, enableShardAffinity, useShardDealer bool) (
+	maxIterPerTemp int, binSize uint64, maxReplanRetry int, enableShardAffinity, useShardDealer bool) (
 	map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn,
 	error) {
 	runtime := time.Now()
 	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair,
-		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, binSize, enableShardAffinity, useShardDealer, &runtime)
+		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, binSize, maxReplanRetry, enableShardAffinity, useShardDealer, &runtime)
 }
 
 func ExecuteRebalanceInternal(clusterUrl string,
 	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool,
 	disableReplicaRepair bool, timeout int, threshold float64, cpuProfile bool, minIterPerTemp, maxIterPerTemp int,
-	binSize uint64, enableShardAffinity, useShardDealer bool, runtime *time.Time) (
+	binSize uint64, maxReplanRetry int, enableShardAffinity, useShardDealer bool, runtime *time.Time) (
 	map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn,
 	error) {
 
@@ -251,6 +252,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.EnableShardAffinity = enableShardAffinity
 	config.binSize = binSize
 	config.UseShardDealer = useShardDealer
+	config.maxReplanRetry = maxReplanRetry
 
 	p, _, hostToIndexToRemove, err := executeRebal(config, CommandRebalance, plan, nil, deleteNodes, true)
 	if p != nil && detail {
@@ -2069,7 +2071,7 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 
 	p, _, _, err := executeRebal(config, CommandRebalance, plan, indexSpecs, deletedNodes, false)
 
-	if detail {
+	if p != nil && detail {
 		logging.Infof("************ Indexer Layout *************")
 		p.PrintLayout()
 		logging.Infof("****************************************")
@@ -2102,7 +2104,7 @@ func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
 
 	p, _, _, err := executeRebal(config, CommandSwap, plan, nil, deletedNodes, false)
 
-	if detail {
+	if p != nil && detail {
 		logging.Infof("************ Indexer Layout *************")
 		p.PrintLayout()
 		logging.Infof("****************************************")
@@ -2668,6 +2670,12 @@ func setExcludeInForNonEmptyNodes(s *Solution) {
 func rebalance(command CommandType, config *RunConfig, plan *Plan,
 	indexes []*IndexUsage, deletedNodes []string, isInternal bool, retryCount int) (
 	*SAPlanner, *RunStats, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+
+	// config.maxReplanRetry == 0 means that there is no upper limit.
+	// Will indefinitely retry till a valid layout is found.
+	if config.maxReplanRetry != 0 && retryCount > config.maxReplanRetry {
+		return nil, nil, nil, fmt.Errorf("rebalance:: Max retry count %v exceeded", config.maxReplanRetry)
+	}
 
 	var constraint ConstraintMethod
 	var sizing SizingMethod
@@ -3842,6 +3850,7 @@ func DefaultRunConfig() *RunConfig {
 		AllowDDLDuringScaleup: false,
 		binSize:               common.DEFAULT_BIN_SIZE, // 2.5G
 		UseShardDealer:        false,
+		maxReplanRetry:        0,
 	}
 }
 
