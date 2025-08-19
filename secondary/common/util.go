@@ -2311,3 +2311,71 @@ func GetStorageDirs(cfg Config, se StorageEngine) (string, string) {
 	}
 	return baseDir, engineDir
 }
+
+
+func ToString(v interface{}) (string, error) {
+	switch val := v.(type) {
+	case string:
+		return val, nil
+	case float64:
+		return strconv.FormatFloat(val, 'f', -1, 64), nil
+	case float32:
+		return strconv.FormatFloat(float64(val), 'f', -1, 32), nil
+	case int:
+		return strconv.Itoa(val), nil
+	case int64:
+		return strconv.FormatInt(val, 10), nil
+	case uint64:
+		return strconv.FormatUint(val, 10), nil
+	case int32:
+		return strconv.FormatInt(int64(val), 10), nil
+	case uint32:
+		return strconv.FormatUint(uint64(val), 10), nil
+	case int16:
+		return strconv.FormatInt(int64(val), 10), nil
+	case uint16:
+		return strconv.FormatUint(uint64(val), 10), nil
+	case int8:
+		return strconv.FormatInt(int64(val), 10), nil
+	case uint8:
+		return strconv.FormatUint(uint64(val), 10), nil
+	default:
+		return "", fmt.Errorf("unsupported type %T for string", v)
+	}
+}
+
+func ToFloat64(v interface{}) (float64, error) {
+	switch val := v.(type) {
+	case float64:
+		return val, nil
+	case float32:
+		return float64(val), nil
+	case int:
+		return float64(val), nil
+	case int64:
+		return float64(val), nil
+	case uint64:
+		return float64(val), nil
+	case int32:
+		return float64(val), nil
+	case uint32:
+		return float64(val), nil
+	case int16:
+		return float64(val), nil
+	case uint16:
+		return float64(val), nil
+	case int8:
+		return float64(val), nil
+	case uint8:
+		return float64(val), nil
+	case string:
+		f, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse string '%s' as float64: %v", val, err)
+		}
+		return f, nil
+	default:
+		return 0, fmt.Errorf("unsupported type %T for float64", v)
+	}
+}
+
