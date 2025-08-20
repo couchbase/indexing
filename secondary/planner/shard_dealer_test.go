@@ -128,6 +128,7 @@ func createNewAlternateShardIDGenerator() func() (*c.AlternateShardId, error) {
 var op strings.Builder
 
 func TestMain(m *testing.M) {
+	rand.Seed(time.Now().UnixNano())
 	op = strings.Builder{}
 	logging.SetLogWriter(&op)
 	logging.SetLogLevel(logging.Warn)
@@ -3359,6 +3360,8 @@ func TestMultiNode_Pass3(t *testing.T) {
 	var numReps = rand.Intn(5)
 	var idxCreations = testShardCapacity * minPartitionsPerShard * uint64(rand.Intn(5))
 
+	t.Logf("Using random values numReps %v, idxCreations %v", numReps, idxCreations)
+
 	var ciplist = []createIdxParam{
 		{count: 1, isPrimary: true, numReplicas: numReps},
 		{count: 1, numReplicas: numReps},
@@ -3435,10 +3438,14 @@ func TestMultiNode_RandomLayoutTests(t *testing.T) {
 		return nil
 	}).Run()
 
+	t.Logf("Using random values numReps %v, numIndexesPerCat %v, numPartitions %v", numReps, numIndexesPerCat, numPartitions)
+
 	var numPartitionsCreated = 0
 
 	var ciplist = make([]createIdxParam, 0, 4*numIndexesPerCat)
 
+	start := time.Now()
+	initCompare := 1 * time.Second
 	for numPartitionsCreated < int(testShardCapacity)*numReps {
 		count := uint64(rand.Intn(numIndexesPerCat))
 		replicas := rand.Intn(numReps)
@@ -3450,7 +3457,10 @@ func TestMultiNode_RandomLayoutTests(t *testing.T) {
 			numPartns:   partitions,
 		}
 
-		var coinToss = rand.Intn(2) == 0
+		flip1 := rand.Intn(2) == 0
+		flip2 := rand.Intn(2) == 0
+
+		var coinToss = flip1 && flip2
 		if coinToss {
 			insertCip := cip.clone()
 			insertCip.isPrimary = true
@@ -3458,14 +3468,12 @@ func TestMultiNode_RandomLayoutTests(t *testing.T) {
 			numPartitionsCreated += int(count) * (replicas + 1) * partitions
 		}
 
-		coinToss = rand.Intn(2) == 0
 		if coinToss {
 			insertCip := cip.clone()
 			ciplist = append(ciplist, *insertCip)
 			numPartitionsCreated += int(count) * (replicas + 1) * partitions
 		}
 
-		coinToss = rand.Intn(2) == 0
 		if coinToss {
 			insertCip := cip.clone()
 			insertCip.isVector = true
@@ -3473,12 +3481,17 @@ func TestMultiNode_RandomLayoutTests(t *testing.T) {
 			numPartitionsCreated += int(count) * (replicas + 1) * partitions
 		}
 
-		coinToss = rand.Intn(2) == 0
 		if coinToss {
 			insertCip := cip.clone()
 			insertCip.isBhive = true
 			ciplist = append(ciplist, *insertCip)
 			numPartitionsCreated += int(count) * (replicas + 1) * partitions
+		}
+
+		elapsed := time.Since(start)
+		if elapsed > initCompare {
+			t.Logf("elapsed time to create cipList - %v", elapsed.String())
+			initCompare += 1 * time.Second
 		}
 	}
 

@@ -2691,7 +2691,7 @@ loop:
 					}
 
 					continue
-				} else if err != "" {
+				} else if err != "" && !c.IsVectorTrainingError(err) {
 					l.Errorf("ShardRebalancer::waitForIndexState Error Fetching Index Status %v %v", sr.localaddr, err)
 					retryCount++
 
@@ -2748,6 +2748,19 @@ loop:
 					instId := tt.InstIds[i]
 					realInstId := tt.RealInstIds[i]
 
+					finishSuccess := func() {
+						delete(processedInsts, instId)
+						// remove realInstId irrespective of merge as the instance is processed
+						delete(processedInsts, realInstId)
+
+						if tt.IsEmptyNodeBatch {
+							l.Infof("ShardRebalancer::waitForIndexState Skip changing RState for instId: %v, realInstId: %v, ttid: %v "+
+								"as empty node batching is enabled for this token", instId, realInstId, ttid)
+						} else {
+							sr.destTokenToMergeOrReady(instId, realInstId, ttid, tt, &partnMergeWaitGroup)
+						}
+					}
+
 					if !isInstProcessed(instId, realInstId, processedInsts) {
 						continue
 					}
@@ -2763,17 +2776,29 @@ loop:
 
 					var instKey common.IndexInstId
 					var indexState c.IndexState
+					var trainingError string
+
 					if _, ok := indexStateMap[instId]; ok {
 						indexState = indexStateMap[instId]
 						instKey = instId
+						trainingError = errMap[instId]
 					} else {
 						indexState = indexStateMap[realInstId]
 						instKey = realInstId
+						trainingError = errMap[realInstId]
 					}
 
 					if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
 						l.Infof("ShardRebalancer::waitForIndexState Index state is nil or deleted for instId %v. Retrying...", instId)
 						delete(processedInsts, instKey) // consider the index build done
+						continue
+					}
+
+					if indexState == c.INDEX_STATE_READY && trainingError != "" &&
+						common.IsVectorTrainingError(trainingError) {
+						l.Infof("ShardRebalancer::waitForIndexState Skipping index build for instId %v, realInstId %v, ttid %v, error %v",
+							instId, realInstId, ttid, trainingError)
+						finishSuccess()
 						continue
 					}
 
@@ -2833,16 +2858,9 @@ loop:
 
 					if indexState == c.INDEX_STATE_ACTIVE && bhiveGraphReady &&
 						remainingBuildTime < maxRemainingBuildTime {
-						delete(processedInsts, instKey)
-						// remove realInstId irrespective of merge as the instance is processed
-						delete(processedInsts, realInstId)
 
-						if tt.IsEmptyNodeBatch {
-							l.Infof("ShardRebalancer::waitForIndexState Skip changing RState for instId: %v, realInstId: %v, ttid: %v "+
-								"as empty node batching is enabled for this token", instId, realInstId, ttid)
-						} else {
-							sr.destTokenToMergeOrReady(instId, realInstId, ttid, tt, &partnMergeWaitGroup)
-						}
+						finishSuccess()
+
 					}
 				}
 

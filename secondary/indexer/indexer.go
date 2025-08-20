@@ -13477,16 +13477,6 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 			errMap[instId] = err
 		}
 		return validVecInsts, 0
-	} else if itemsCount == 0 {
-		logging.Errorf("Indexer::computeCentroids items_count is 0 "+
-			"for keyspaceId: %v, reqcid: %v",
-			keyspaceId, reqcid)
-		err = errors.New(common.ERR_TRAINING + common.INVALID_ITEMS_COUNT + fmt.Sprintf("computeCentroids items_count is 0 for keyspaceId: %v",
-			keyspaceId))
-		for _, instId := range vecInstIdList {
-			errMap[instId] = err
-		}
-		return validVecInsts, 0
 	}
 
 	for _, instId := range vecInstIdList {
@@ -13867,6 +13857,46 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	// attempt for sharing on partitions of definition including replicas
 	indexDefnCodebookMap := make(map[common.IndexDefnId][]byte)
 
+	// Set codebook for partitions to be merged from codebook of real instance slice.
+	isDCPRebalorResume := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceResume)
+
+	if isDCPRebalorResume {
+		// during shard rebalance when we issue build command for a vector index, it can happen that
+		// the real instance is not yet trained and the new incoming partition is trained or vice
+		// versa. In such case, this loop ensures that the codebook of the trained instance is used
+		// for all partitions if it is not already set; this only sets the defnCodebookMap for the
+		// index defn; it is done this way so that the next iteration for training can find the
+		// codebook for the real instance/proxy instance irrespective of the order in which who
+		// gets picked for training first; (for eg without this loop, if real instance got picked
+		// first and attempted training it could fail due to not enough qualifying docs but with
+		// this, we ensure that codebook will always be set for the index defn and re-used)
+		for _, idxInst := range vectorInsts {
+			instId := idxInst.InstId
+
+			var codebook, realInstCodebook []byte
+
+			defnCodebook := getDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId)
+
+			if defnCodebook == nil {
+				partnInstMap := indexPartnMap[instId]
+				codebook, _, _ = getInstCodebookIfExists(partnInstMap)
+
+				if idxInst.RealInstId != 0 {
+					realPartnInstMap := indexPartnMap[idxInst.RealInstId]
+					realInstCodebook, _, _ = getInstCodebookIfExists(realPartnInstMap)
+				}
+			}
+
+			if codebook == nil && realInstCodebook != nil {
+				setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, realInstCodebook)
+			} else if codebook != nil && realInstCodebook == nil {
+				setDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId, codebook)
+			}
+		}
+	}
+
 	for i, idxInst := range vectorInsts {
 		_, storeEngineDir := c.GetStorageDirs(config, c.GetStorageEngineForIndexDefn(&idxInst.Defn))
 		instId := idxInst.InstId
@@ -13874,9 +13904,6 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 		// Check for using already created codebook of other instances of definition
 		defnCodebook := getDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId)
-
-		// Set codebook for partitions to be merged from codebook of real instance slice.
-		isDCPRebalorResume := (reqCtx.ReqSource == common.DDLRequestSourceRebalance || reqCtx.ReqSource == common.DDLRequestSourceResume)
 
 		if idxInst.RealInstId != 0 && isDCPRebalorResume && defnCodebook == nil {
 			realPartnInstMap := indexPartnMap[idxInst.RealInstId]

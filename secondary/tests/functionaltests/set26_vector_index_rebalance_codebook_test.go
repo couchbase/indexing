@@ -147,6 +147,7 @@ func TestVectorIndexDCPRebalance(t *testing.T) {
 	})
 
 	t.Run("TestFailedTraining", func(subt *testing.T) {
+		t.Skipf("Skipping TestFailedTraining as training error should not fail rebalances")
 		log.Println("*********Setup cluster*********")
 		setupCluster(subt)
 		var err error
