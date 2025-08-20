@@ -562,7 +562,7 @@ func (idx IndexInst) IsProxy() bool {
 func (idx *IndexInst) IsPendingBuild() bool {
 	return (idx.Defn.InstStateAtRebal == INDEX_STATE_CREATED ||
 		idx.Defn.InstStateAtRebal == INDEX_STATE_READY) &&
-		(idx.State == INDEX_STATE_ACTIVE || idx.State == INDEX_STATE_INITIAL)
+		(idx.State == INDEX_STATE_INITIAL || idx.State == INDEX_STATE_ACTIVE)
 }
 
 func (idx IndexInst) String() string {

@@ -11019,7 +11019,11 @@ func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.I
 				return instIdList, false
 			}
 		} else if isShardRebalanceBuild {
-			if index.State == common.INDEX_STATE_RECOVERED {
+			if index.State == common.INDEX_STATE_RECOVERED ||
+				index.State == common.INDEX_STATE_READY ||
+				index.State == common.INDEX_STATE_CREATED {
+				// If a build request is received for index in CREATED/READY state, consider
+				// the index for build
 				newList = append(newList, instId)
 				count++
 			} else {
