@@ -718,7 +718,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 	// Return fatal error with higher priority.
 	if mErr != nil && plasma.IsFatalError(mErr) {
 		logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v "+
-			"fatal error occured: %v", slice.Id, slice.idxInstId, mErr)
+			"fatal error occured: %v", slice.Id(), slice.idxInstId, mErr)
 
 		if !slice.newBorn && plasma.IsErrorRecoveryInstPathNotFound(mErr) {
 			return errStoragePathNotFound
@@ -728,7 +728,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 
 	if bErr != nil && plasma.IsFatalError(bErr) {
 		logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v "+
-			"fatal error occured: %v", slice.Id, slice.idxInstId, bErr)
+			"fatal error occured: %v", slice.Id(), slice.idxInstId, bErr)
 
 		if !slice.newBorn && plasma.IsErrorRecoveryInstPathNotFound(bErr) {
 			return errStoragePathNotFound
@@ -1247,7 +1247,7 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
 		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta, szConf)
 	if err != nil {
 		logging.Errorf("plasmaSlice::insertSecIndex Slice Id %v IndexInstId %v PartitionId %v "+
-			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+			"Skipping docid:%s (%v)", mdb.Id(), mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		return ndel
 	}
@@ -1702,7 +1702,7 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 		quantizedCode, centroidId, err = mdb.getQuantizedCodeForVector(vec, mdb.codeSize, mdb.quantizedCodeBuf[workerId])
 		if err != nil {
 			logging.Errorf("plasmaSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
-				"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+				"Skipping docid:%s (%v)", mdb.Id(), mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 			atomic.AddInt32(&mdb.numKeysSkipped, 1)
 			panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
 		}
@@ -1732,7 +1732,7 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 	mainIndexEntry, err := NewSecondaryIndexEntry(key, docid, false, 1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], meta, szConf)
 	if err != nil {
 		logging.Errorf("plasmaSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
-			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+			"Skipping docid:%s (%v)", mdb.Id(), mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
 	}

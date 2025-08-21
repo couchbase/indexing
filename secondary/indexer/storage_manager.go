@@ -3332,7 +3332,7 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 					if doLog || logging.IsEnabled(logging.Verbose) {
 						logging.Infof("storageMgr::handleGetTimestampedItemsCount Skip processing inst: %v, partn: %v due to one of the following being true. "+
 							"snapC.deleted: %v, state: %v, rstate: %v, stream: %v, arrayIndex: %v",
-							snapC.deleted, indexInst.State, indexInst.Stream, indexInst.Defn.IsArrayIndex, indexInst.RState)
+							instId, indexInst.Pc, snapC.deleted, indexInst.State, indexInst.RState, indexInst.Stream, indexInst.Defn.IsArrayIndex)
 					}
 					return
 				}

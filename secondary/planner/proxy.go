@@ -694,7 +694,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			index.ActualMemUsage = index.ActualMemStats
 			totalIndexMemUsed += index.ActualMemUsage
 		} else {
-			if canGetStats{
+			if canGetStats {
 				err := fmt.Errorf("memory_used is not available for index %v", indexStr)
 				return err
 			}
@@ -724,7 +724,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		if diskUsed, ok := GetIndexStat(index, "disk_size", statsMap, true, clusterVersion); ok {
 			index.ActualDiskSize = uint64(diskUsed.(float64))
 		} else {
-			if canGetStats{
+			if canGetStats {
 				err := fmt.Errorf("disk_size is not available for index %v", indexStr)
 				return err
 			}
@@ -804,7 +804,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		if avgMutationRate, ok := GetIndexStat(index, "avg_mutation_rate", statsMap, true, clusterVersion); ok {
 			index.MutationRate = uint64(avgMutationRate.(float64))
 		} else {
-			if canGetStats{
+			if canGetStats {
 				err := fmt.Errorf("avg_mutation_rate is not available for index %v", indexStr)
 				return err
 			}
@@ -857,7 +857,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		if msRecsOnDisk, ok := GetIndexStat(index, "recs_on_disk", statsMap, true, clusterVersion); ok {
 			index.TotalRecords = uint64(msRecsOnDisk.(float64))
 		} else {
-			if canGetStats{
+			if canGetStats {
 				err := fmt.Errorf("recs_on_disk is not available for index %v", indexStr)
 				return err
 			}
@@ -868,7 +868,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			if bsRecsOnDisk, ok := GetIndexStat(index, "backstore_recs_on_disk", statsMap, true, clusterVersion); ok {
 				index.TotalRecords += uint64(bsRecsOnDisk.(float64))
 			} else {
-				if canGetStats{
+				if canGetStats {
 					err := fmt.Errorf("backstore_recs_on_disk is not available for index %v", indexStr)
 					return err
 				}
@@ -880,7 +880,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		if msRecsInMem, ok := GetIndexStat(index, "recs_in_mem", statsMap, true, clusterVersion); ok {
 			index.ActualRecsInMem = uint64(msRecsInMem.(float64))
 		} else {
-			if canGetStats{
+			if canGetStats {
 				err := fmt.Errorf("recs_in_mem is not available for index %v", indexStr)
 				return err
 			}
@@ -892,7 +892,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			if bsRecsInMem, ok := GetIndexStat(index, "backstore_recs_in_mem", statsMap, true, clusterVersion); ok {
 				index.ActualRecsInMem += uint64(bsRecsInMem.(float64))
 			} else {
-				if canGetStats{
+				if canGetStats {
 					err := fmt.Errorf("backstore_recs_in_mem is not available for index %v", indexStr)
 					return err
 				}
@@ -2134,7 +2134,7 @@ func validateShardIds(index *IndexUsage) bool {
 	if err != nil || msAltId.IsNil() {
 		logging.Errorf("GroupIndexes:validateShardIds Error in parsing alternateShardId for index defnId: %v, "+
 			"replicaId: %v, partnId: %v, mainstore alternateShardId: %v, err: %v",
-			index.DefnId, index.Instance.ReplicaId, index.PartnId, index.AlternateShardIds[0])
+			index.DefnId, index.Instance.ReplicaId, index.PartnId, index.AlternateShardIds[0], err)
 
 		return false
 	}
@@ -2145,7 +2145,7 @@ func validateShardIds(index *IndexUsage) bool {
 		if err != nil || bsAltId.IsNil() {
 			logging.Errorf("GroupIndexes: Error in parsing alternateShardId for index defnId: %v, "+
 				"replicaId: %v, partnId: %v, backstore alternateShardId: %v, err: %v",
-				index.DefnId, index.Instance.ReplicaId, index.PartnId, index.AlternateShardIds[1])
+				index.DefnId, index.Instance.ReplicaId, index.PartnId, index.AlternateShardIds[1], err)
 
 			return false
 		}

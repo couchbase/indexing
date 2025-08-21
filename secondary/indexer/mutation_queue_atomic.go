@@ -225,8 +225,8 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno uint64,
 					if q.isDestroyed.Load() {
 						logging.Infof("Indexer::MutationQueue Dequeue Aborted as "+
 							"mutation is nil and queue is destroyed for keyspaceId: %v. "+
-							"Last Dequeue %v Head Seqno %v.", seqno,
-							q.keyspaceId, vbucket, dequeueSeq)
+							"vbucket: %v Last Dequeue %v Head Seqno %v.",
+							q.keyspaceId, vbucket, dequeueSeq, seqno)
 						atomic.AddInt64(q.memUsed, -memReleased)
 						close(datach) // close datach and return as if normal flush is done
 						return

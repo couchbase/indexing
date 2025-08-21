@@ -2464,7 +2464,7 @@ func (sr *ShardRebalancer) postRecoverIndexReq(indexDefn common.IndexDefn, ttid 
 		if response.Error != "" {
 			if isMissingBSC(response.Error) || isIndexDeletedDuringRebal(response.Error) {
 				logging.Infof("ShardRebalancer::postRecoverIndexReq scope/collection/index is "+
-					"deleted during rebalance. Skipping the indexDefnId: %v from further processing. "+
+					"deleted during rebalance. Skipping the index from further processing. "+
 					"indexDefnId: %v, Error: %v", indexDefn.DefnId, response.Error)
 				return true, nil
 			}
@@ -2575,7 +2575,7 @@ func (sr *ShardRebalancer) postCreateIndexReq(indexDefn common.IndexDefn, ttid s
 		if response.Error != "" {
 			if isMissingBSC(response.Error) || isIndexDeletedDuringRebal(response.Error) {
 				logging.Infof("ShardRebalancer::postCreateIndexReq scope/collection/index is "+
-					"deleted during rebalance. Skipping the indexDefnId: %v from further processing. "+
+					"deleted during rebalance. Skipping the index from further processing. "+
 					"indexDefnId: %v, Error: %v", indexDefn.DefnId, response.Error)
 				return true, nil
 			}

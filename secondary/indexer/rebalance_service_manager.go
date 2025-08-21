@@ -3990,7 +3990,7 @@ func (m *RebalanceServiceManager) registerMoveIndexTokenInMetakv(token *Rebalanc
 	} else { // The token in metakv is different from the caller's version and the caller is trying to update it.
 		// Ignore the update as the caller's version of the token might have been deleted
 		l.Infof("RebalanceServiceManager::registerMoveIndexTokenInMetakv Move token: %v is probably deleted "+
-			"from metakv. found: %v, rtoken: %v", found, rtoken)
+			"from metakv. found: %v, rtoken: %v", token, found, rtoken)
 	}
 
 	return nil

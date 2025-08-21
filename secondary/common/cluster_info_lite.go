@@ -1272,7 +1272,7 @@ func (cicm *clusterInfoCacheLiteManager) handlePerBucketCollectionManifest(
 	for notif := range ch {
 		b := (notif.Msg).(*couchbase.Bucket)
 		newBucket := false
-		logging.Tracef("handlePerBucketCollectionManifest: got %v for bucket", notif, b.Name)
+		logging.Tracef("handlePerBucketCollectionManifest: got %v for bucket %v", notif, b.Name)
 
 		oci, err := cicm.cicl.getCollnInfo(bucketName)
 		if err == ErrBucketNotFound {

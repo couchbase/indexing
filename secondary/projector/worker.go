@@ -747,7 +747,8 @@ func (worker *VbucketWorker) broadcast2Endpoints(data interface{}, runFinCh chan
 				}
 				commands := dkvs.Kv.Commands
 				if len(commands) == 1 && (commands[0] == c.Snapshot || commands[0] == c.StreamEnd) {
-					logging.Warnf("%v ##%x endpoint(%q).Send failed to send message: %v", worker.logPrefix, worker.opaque, dkvs.Kv.GetDebugInfo())
+					logging.Warnf("%v ##%x endpoint(%q).Send failed to send message: %v",
+						worker.logPrefix, worker.opaque, raddr, dkvs.Kv.GetDebugInfo())
 				}
 				return
 			}

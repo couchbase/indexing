@@ -118,13 +118,13 @@ type IndexStatus struct {
 	WhereExpr  string   `json:"where,omitempty"`
 	IndexType  string   `json:"indexType,omitempty"`
 	// Vector-index specific metadata
-	IsVectorIndex      bool                     `json:"isVectorIndex,omitempty"`
-	VectorPos          int                      `json:"vectorPos"`
-	Include            []string                 `json:"include,omitempty"`
-	With               map[string]interface{}   `json:"with,omitempty"`
+	IsVectorIndex bool                   `json:"isVectorIndex,omitempty"`
+	VectorPos     int                    `json:"vectorPos"`
+	Include       []string               `json:"include,omitempty"`
+	With          map[string]interface{} `json:"with,omitempty"`
 
-	Status     string   `json:"status,omitempty"`
-	Definition string   `json:"definition"`
+	Status     string `json:"status,omitempty"`
+	Definition string `json:"definition"`
 
 	// Hosts in non-consolidated results has only one entry giving the host:index_http_port of the
 	// node this IndexStatus is about. In consolidated results it lists all nodes holding any
@@ -456,7 +456,7 @@ func (m *requestHandlerContext) doRecoverIndex(w http.ResponseWriter, r *http.Re
 	if logging.IsEnabled(logging.Debug) {
 		logging.Debugf(
 			"RequestHandler::doRecoverIndex: calling IndexManager to create index %v:%v:%v:%v",
-			method, indexDefn.Bucket, indexDefn.Scope, indexDefn.Collection, indexDefn.Name)
+			indexDefn.Bucket, indexDefn.Scope, indexDefn.Collection, indexDefn.Name)
 	}
 	if err := m.mgr.HandleRecoverIndexDDL(&indexDefn); err == nil {
 		// No error, return success
@@ -1171,7 +1171,6 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 						addHost(defn.DefnId, mgmtAddr, defnToHostMap)
 						isInstanceDeferred[common.IndexInstId(instance.InstId)] = defn.Deferred
 						defn.NumPartitions = instance.NumPartitions
-
 
 						status := IndexStatus{
 							DefnId:            defn.DefnId,

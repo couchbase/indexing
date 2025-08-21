@@ -11,15 +11,16 @@ package manager
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sync"
+	"time"
+
 	common "github.com/couchbase/gometa/common"
 	message "github.com/couchbase/gometa/message"
 	protocol "github.com/couchbase/gometa/protocol"
 	r "github.com/couchbase/gometa/repository"
 	co "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"path/filepath"
-	"sync"
-	"time"
 )
 
 /////////////////////////////////////////////////////////////////////////////
@@ -77,9 +78,7 @@ func NewCoordinator(repo *MetadataRepo, idxMgr *IndexManager, basepath string) *
 	return coordinator
 }
 
-//
 // Run Coordinator
-//
 func (s *Coordinator) Run(config string) {
 
 	repeat := true
@@ -96,9 +95,7 @@ func (s *Coordinator) Run(config string) {
 	}
 }
 
-//
 // Terminate the Coordinator
-//
 func (s *Coordinator) Terminate() {
 
 	defer func() {
@@ -131,9 +128,7 @@ func (s *Coordinator) Terminate() {
 	}
 }
 
-//
 // Check if server is terminated
-//
 func (s *Coordinator) IsDone() bool {
 
 	s.state.mutex.Lock()
@@ -142,12 +137,10 @@ func (s *Coordinator) IsDone() bool {
 	return s.state.done
 }
 
-//
 // Handle a new request.  This function will block until the request is being processed
 // (by returning true) or until the request is being interrupted (by returning false).
 // If request is interrupted, then the request may still be processed by some other
 // nodes.  So the outcome of the request is unknown when this function returns false.
-//
 func (s *Coordinator) NewRequest(opCode uint32, key string, content []byte) bool {
 
 	uuid, err := co.NewUUID()
@@ -177,9 +170,7 @@ func (s *Coordinator) NewRequest(opCode uint32, key string, content []byte) bool
 // Main Control Loop
 /////////////////////////////////////////////////////////////////////////////
 
-//
 // Run the server until it stop.  Will not attempt to re-run.
-//
 func (c *Coordinator) runOnce(config string) int {
 
 	logging.Debugf("Coordinator.runOnce() : Start Running Coordinator")
@@ -234,9 +225,7 @@ func (c *Coordinator) runOnce(config string) int {
 // Bootstrap and cleanup
 /////////////////////////////////////////////////////////////////////////////
 
-//
 // Bootstrp
-//
 func (s *Coordinator) bootstrap(config string) (err error) {
 
 	s.state.mutex.Lock()
@@ -295,9 +284,7 @@ func (s *Coordinator) bootstrap(config string) (err error) {
 	return nil
 }
 
-//
 // Cleanup internal state upon exit
-//
 func (s *Coordinator) cleanupState() {
 
 	// tell that coordinator is no longer ready
@@ -390,9 +377,7 @@ func (s *Coordinator) waitForReady() {
 //  Election
 /////////////////////////////////////////////////////////////////////////////
 
-//
 // run election
-//
 func (s *Coordinator) runElection() (leader string, err error) {
 
 	host := s.getHostUDPAddr()
@@ -425,9 +410,7 @@ func (s *Coordinator) runElection() (leader string, err error) {
 //  Run Leader/Follower protocol
 /////////////////////////////////////////////////////////////////////////////
 
-//
 // run server (as leader or follower)
-//
 func (s *Coordinator) runProtocol(leader string) (err error) {
 
 	host := s.getHostUDPAddr()
@@ -461,9 +444,7 @@ func (s *Coordinator) runProtocol(leader string) (err error) {
 // CoordinatorState
 /////////////////////////////////////////////////////////////////////////////
 
-//
 // Create a new CoordinatorState
-//
 func newCoordinatorState() *CoordinatorState {
 
 	incomings := make(chan *protocol.RequestHandle, common.MAX_PROPOSALS)
@@ -590,10 +571,10 @@ func (c *Coordinator) LogProposal(proposal protocol.ProposalMsg) error {
 		switch common.OpCode(proposal.GetOpCode()) {
 		case OPCODE_ADD_IDX_DEFN:
 			success := c.createIndex(proposal.GetKey(), proposal.GetContent())
-			logging.Debugf("Coordinator.LogProposal(): (createIndex) success = %s", success)
+			logging.Debugf("Coordinator.LogProposal(): (createIndex) success = %v", success)
 		case OPCODE_DEL_IDX_DEFN:
 			success := c.deleteIndex(proposal.GetKey())
-			logging.Debugf("Coordinator.LogProposal(): (deleteIndex) success = %s", success)
+			logging.Debugf("Coordinator.LogProposal(): (deleteIndex) success = %v", success)
 		}
 	}
 
@@ -625,7 +606,7 @@ func (c *Coordinator) GetNextTxnId() common.Txnid {
 	return c.txn.GetNextTxnId()
 }
 
-//  TODO : Quorum should be based on active participants
+// TODO : Quorum should be based on active participants
 func (c *Coordinator) HasQuorum(count int) bool {
 	ensembleSz := c.GetEnsembleSize()
 	return count > int(ensembleSz/2)
@@ -652,9 +633,7 @@ func (c *Coordinator) CleanupOnError() {
 	// no-op.  Coorindator will cleanup itself in runOnce()
 }
 
-//
 // Update the request upon new proposal.
-//
 func (c *Coordinator) updateRequestOnNewProposal(proposal protocol.ProposalMsg) {
 
 	fid := proposal.GetFid()
@@ -704,9 +683,7 @@ func (c *Coordinator) updateRequestOnRespond(fid string, reqId uint64, err strin
 	}
 }
 
-//
 // Update the request upon new commit
-//
 func (c *Coordinator) updateRequestOnCommit(txnid common.Txnid) {
 
 	c.state.mutex.Lock()
@@ -753,11 +730,9 @@ func (c *Coordinator) getPeerUDPAddr() []string {
 //  Metadata Operations
 /////////////////////////////////////////////////////////////////////////////
 
-//
 // Handle create Index request in the dictionary.  If this function
 // returns true, it means createIndex request completes successfully.
 // If this function returns false, then the result is unknown.
-//
 func (c *Coordinator) createIndex(key string, content []byte) bool {
 
 	defn, err := co.UnmarshallIndexDefn(content)
@@ -775,11 +750,9 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 	return true
 }
 
-//
 // Handle delete Index request in the dictionary.  If this function
 // returns true, it means deleteIndex request completes successfully.
 // If this function returns false, then the result is unknown.
-//
 func (c *Coordinator) deleteIndex(key string) bool {
 
 	id, err := indexDefnId(key)

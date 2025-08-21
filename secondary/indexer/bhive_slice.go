@@ -1201,7 +1201,7 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 	if err != nil {
 		logging.Errorf("bhiveSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
 			"Skipping docid:%s  due to error in computing centroidId and quantized code.  Error: %v",
-			mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+			mdb.Id(), mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
 	}
@@ -2445,7 +2445,7 @@ func (mdb *bhiveSlice) restore(o SnapshotInfo) error {
 	atomic.StoreUint64(&mdb.docSeqno, info.DocSeqno)
 
 	logging.Infof("bhiveSlice::Rollback Slice Id %v IndexInstId %v PartitionId %v DocSeqno %v",
-		mdb.Id, mdb.idxInstId, mdb.idxPartnId, atomic.LoadUint64(&mdb.docSeqno))
+		mdb.Id(), mdb.idxInstId, mdb.idxPartnId, atomic.LoadUint64(&mdb.docSeqno))
 
 	return nil
 }

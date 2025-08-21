@@ -628,7 +628,7 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 	exist, _ := c.GetIndexDefnById(id)
 	if exist == nil {
 		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil,
-			fmt.Sprintf("Index Definition '%s' does not exist", id))
+			fmt.Sprintf("Index Definition '%v' does not exist", id))
 	}
 
 	lookupName := indexDefnKeyById(id)
@@ -650,7 +650,7 @@ func (c *MetadataRepo) UpdateIndex(defn *common.IndexDefn) error {
 	exist, _ := c.GetIndexDefnById(defn.DefnId)
 	if exist == nil {
 		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil,
-			fmt.Sprintf("Index Definition '%s' does not exist", defn.DefnId))
+			fmt.Sprintf("Index Definition '%v' does not exist", defn.DefnId))
 	}
 
 	defn = (*defn).Clone()

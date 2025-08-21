@@ -2344,13 +2344,13 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 
 			defnId, ok := inst2DefnMap[instId]
 			if !ok {
-				logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.")
+				logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.", instId)
 				continue
 			}
 
 			defn, err := m.repo.GetIndexDefnById(defnId)
 			if err != nil || defn == nil {
-				logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.")
+				logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.", instId)
 				continue
 			}
 
@@ -5537,7 +5537,7 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 					defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
 			} else if logMsg {
 				logging.Warnf("builder: No index instances found for definition (%v, %v, %v, %v). Queuing index "+
-					" to retry list for further processing as rebalance is in progress", defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
+					" to retry list for further processing as rebalance is in progress", defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 			}
 			continue
 		}
