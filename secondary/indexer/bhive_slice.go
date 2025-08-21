@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -3172,12 +3173,12 @@ func (s *bhiveSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch Stop
 // VECTOR_TODO: Add support for multi scan count. Till then panic
 func (s *bhiveSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	scan Scan, distinct bool, stopch StopChannel) (uint64, error) {
-	panic("bhiveSnapshot::MultiScanCount - Currently not supported")
+	return 0, errors.New("bhiveSnapshot::MultiScanCount - Currently not supported")
 }
 
 // VECTOR_TODO: All can be implemented using KeyIterator by scanning the entire storage
 func (s *bhiveSnapshot) All(IndexReaderContext, EntryCallback, FinishCallback) error {
-	panic("bhiveSnapshot::All - Currently not supported")
+	return errors.New("bhiveSnapshot::All - Currently not supported")
 }
 
 func (s *bhiveSnapshot) DecodeMeta(meta []byte) (uint64, uint64, []byte) {
