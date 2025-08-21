@@ -1657,7 +1657,7 @@ func (s *scanCoordinator) reserveReaders(r *ScanRequest, doneCh chan bool) error
 			// Remove current slice from partitionIdSlices as we are not able to reserve readers for it
 			// Keep only slices for which we need to release readers at a later stage
 			r.partitionIdSlices[i] = nil
-			sb.WriteString(fmt.Sprintf("partitionid: %v err: %v ", r.PartitionIds[i], e))
+			sb.WriteString(fmt.Sprintf("partitionid: %v reserveReaders-err: %v ", r.PartitionIds[i], e))
 		}
 	}
 
