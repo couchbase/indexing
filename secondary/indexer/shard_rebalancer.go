@@ -4809,8 +4809,9 @@ func getCodebookPaths(tt *c.TransferToken) (codebookPaths []string) {
 
 	for _, idxInst := range tt.IndexInsts {
 		// Don't consider deferred indexes
-		if idxInst.Defn.Deferred && (idxInst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
-			idxInst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
+		if (idxInst.Defn.Deferred || common.IsVectorTrainingError(idxInst.Error)) &&
+			(idxInst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+				idxInst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
 			continue
 		}
 

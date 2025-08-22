@@ -1067,8 +1067,9 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 
 	for _, inst := range vectorIndexInsts {
 		// Don't consider deferred indexes
-		if inst.Defn.Deferred && (inst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
-			inst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
+		if (inst.Defn.Deferred || common.IsVectorTrainingError(inst.Error)) &&
+			(inst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+				inst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
 			continue
 		}
 		if _, ok := codebookMap[inst.InstId]; !ok {
@@ -1120,8 +1121,9 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 		defer close(codebookRestoreDoneCh)
 
 		for _, vectorIdxInst := range vectorIndexInsts {
-			if vectorIdxInst.Defn.Deferred && (vectorIdxInst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
-				vectorIdxInst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
+			if (vectorIdxInst.Defn.Deferred || common.IsVectorTrainingError(vectorIdxInst.Error)) &&
+				(vectorIdxInst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+					vectorIdxInst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
 				continue
 			}
 			for _, partnId := range vectorIdxInst.Defn.Partitions {
