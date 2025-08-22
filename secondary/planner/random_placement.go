@@ -52,18 +52,18 @@ func newRandomPlacement(indexes []*IndexUsage, allowSwap bool, swapDeletedOnly b
 	p := &RandomPlacement{
 		rs:              rand.New(rand.NewSource(time.Now().UnixNano())),
 		indexes:         make(map[*IndexUsage]bool),
-		eligibles:       make([]*IndexUsage, len(indexes)),
+		eligibles:       make([]*IndexUsage, 0, len(indexes)),
 		optionals:       nil,
 		allowSwap:       allowSwap,
 		swapDeletedOnly: swapDeletedOnly,
 	}
 
 	// index to be balanced
-	for i, index := range indexes {
+	for _, index := range indexes {
 		if !index.PendingDelete {
 			p.indexes[index] = true
 			index.eligible = true
-			p.eligibles[i] = index
+			p.eligibles = append(p.eligibles, index)
 		}
 	}
 
