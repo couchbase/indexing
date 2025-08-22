@@ -1252,7 +1252,7 @@ func (m *DDLServiceMgr) handleClusterStorageMode(httpAddrMap map[string]string, 
 			if !common.IsValidIndexType(inst.StorageMode) {
 				logging.Errorf("DDLServiceMgr: unable to change storage mode to %v after rebalance.  Invalid storage type for index %v (%v, %v, %v, %v)",
 					inst.StorageMode, index.Definition.Name, index.Definition.Bucket, index.Definition.Scope,
-					index.Definition.Collection)
+					index.Definition.Collection, index.Definition.ReplicaId)
 				return
 			}
 
@@ -2273,11 +2273,11 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 	setShardDealerConfig(s, config)
 
 	maxVectorDimension := int32(config["vector.max_dimension"].Int())
-    if maxVectorDimension > 0 {
-        atomic.StoreInt32(&s.maxVectorDimension, maxVectorDimension)
-    } else {
-        logging.Errorf("DDLServiceMgr: invalid setting value for maxDimension=%v", maxVectorDimension)
-    }
+	if maxVectorDimension > 0 {
+		atomic.StoreInt32(&s.maxVectorDimension, maxVectorDimension)
+	} else {
+		logging.Errorf("DDLServiceMgr: invalid setting value for maxDimension=%v", maxVectorDimension)
+	}
 }
 
 func (s *ddlSettings) UseShardDealer() bool {

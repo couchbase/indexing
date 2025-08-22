@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -1200,7 +1201,7 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 	if err != nil {
 		logging.Errorf("bhiveSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
 			"Skipping docid:%s  due to error in computing centroidId and quantized code.  Error: %v",
-			mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+			mdb.Id(), mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
 	}
@@ -2444,7 +2445,7 @@ func (mdb *bhiveSlice) restore(o SnapshotInfo) error {
 	atomic.StoreUint64(&mdb.docSeqno, info.DocSeqno)
 
 	logging.Infof("bhiveSlice::Rollback Slice Id %v IndexInstId %v PartitionId %v DocSeqno %v",
-		mdb.Id, mdb.idxInstId, mdb.idxPartnId, atomic.LoadUint64(&mdb.docSeqno))
+		mdb.Id(), mdb.idxInstId, mdb.idxPartnId, atomic.LoadUint64(&mdb.docSeqno))
 
 	return nil
 }
@@ -3172,12 +3173,12 @@ func (s *bhiveSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch Stop
 // VECTOR_TODO: Add support for multi scan count. Till then panic
 func (s *bhiveSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	scan Scan, distinct bool, stopch StopChannel) (uint64, error) {
-	panic("bhiveSnapshot::MultiScanCount - Currently not supported")
+	return 0, errors.New("bhiveSnapshot::MultiScanCount - Currently not supported")
 }
 
 // VECTOR_TODO: All can be implemented using KeyIterator by scanning the entire storage
 func (s *bhiveSnapshot) All(IndexReaderContext, EntryCallback, FinishCallback) error {
-	panic("bhiveSnapshot::All - Currently not supported")
+	return errors.New("bhiveSnapshot::All - Currently not supported")
 }
 
 func (s *bhiveSnapshot) DecodeMeta(meta []byte) (uint64, uint64, []byte) {

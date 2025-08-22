@@ -2287,7 +2287,7 @@ func (feed *Feed) topicResponse() (*protobuf.TopicResponse, error) {
 		} else {
 			// Ideally, this condition should never be executed
 			logging.Fatalf("%v ##%x actTss is nil for keyspaceId: %v, feed.actTss: %s",
-				feed.logPrefix, feed.opaque, getTssAsStr(feed.actTss))
+				feed.logPrefix, feed.opaque, keyspaceId, getTssAsStr(feed.actTss))
 			err = errNilTimestamp
 		}
 
@@ -2299,7 +2299,8 @@ func (feed *Feed) topicResponse() (*protobuf.TopicResponse, error) {
 		} else if rollTs == nil {
 			// Ideally, this condition should never be executed
 			logging.Fatalf("%v ##%x rollTs is nil for keyspaceId: %v, feed.actTss: %s, feed.rollTss: %s",
-				feed.logPrefix, feed.opaque, getTssAsStr(feed.actTss), getTssAsStr(feed.rollTss))
+				feed.logPrefix, feed.opaque, keyspaceId,
+				getTssAsStr(feed.actTss), getTssAsStr(feed.rollTss))
 			err = errNilTimestamp
 		} else {
 			ys = append(ys, rollTs.Clone())

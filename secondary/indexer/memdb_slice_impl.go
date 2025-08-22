@@ -606,7 +606,7 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int, me
 		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta, szConf)
 	if err != nil {
 		logging.Errorf("MemDBSlice::insertSecIndex Slice Id %v IndexInstId %v PartitionId %v "+
-			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+			"Skipping docid:%s (%v)", mdb.Id(), mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		return mdb.deleteSecIndex(docid, workerId)
 	}
@@ -753,7 +753,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 				oldKeyCount[i], nil, mdb.encodeBuf[workerId][:0], false, nil, szConf)
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v PartitionId %v "+
-					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+					"Skipping docid:%s (%v)", mdb.Id(), mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 				atomic.AddInt32(&mdb.numKeysSkipped, 1)
 				return emptyList()
 			}
@@ -790,7 +790,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 				newKeyCount[i], nil, mdb.encodeBuf[workerId][:0], meta, szConf)
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v PartitionId %v "+
-					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+					"Skipping docid:%s (%v)", mdb.Id(), mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 				atomic.AddInt32(&mdb.numKeysSkipped, 1)
 				return emptyList()
 			}
@@ -808,7 +808,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 				// Found a duplicate key
 				logging.Warnf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v PartitionId %v "+
 					"Found duplicate key while inserting into mainstore: docid[%s] key[%s] entry[%s]",
-					mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), logging.TagStrUD(key),
+					mdb.Id(), mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), logging.TagStrUD(key),
 					logging.TagStrUD(entry))
 			}
 		}

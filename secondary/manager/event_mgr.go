@@ -9,8 +9,9 @@ package manager
 
 import (
 	"fmt"
-	"github.com/couchbase/indexing/secondary/logging"
 	"sync"
+
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 ///////////////////////////////////////////////////////
@@ -41,9 +42,7 @@ type notifier struct {
 // Package Local Function
 ///////////////////////////////////////////////////////
 
-//
 // Create a new event manager
-//
 func newEventManager() (*eventManager, error) {
 
 	r := &eventManager{isClosed: false,
@@ -51,9 +50,7 @@ func newEventManager() (*eventManager, error) {
 	return r, nil
 }
 
-//
 // Terminate the eventManager
-//
 func (e *eventManager) close() {
 
 	defer func() {
@@ -78,9 +75,7 @@ func (e *eventManager) close() {
 	}
 }
 
-//
 // Register a new event listener
-//
 func (e *eventManager) register(id string, evtType EventType) (<-chan interface{}, error) {
 
 	e.mutex.Lock()
@@ -95,7 +90,7 @@ func (e *eventManager) register(id string, evtType EventType) (<-chan interface{
 	for _, notifier := range notifiers {
 		if notifier.id == id {
 			return nil, NewError(ERROR_EVT_DUPLICATE_NOTIFIER, NORMAL, EVENT_MANAGER, nil,
-				fmt.Sprintf("Notifier %d already registered", id))
+				fmt.Sprintf("Notifier %v already registered", id))
 		}
 	}
 
@@ -106,9 +101,7 @@ func (e *eventManager) register(id string, evtType EventType) (<-chan interface{
 	return notifier.notifications, nil
 }
 
-//
 // De-register a event listener
-//
 func (e *eventManager) unregister(id string, evtType EventType) {
 
 	e.mutex.Lock()
@@ -130,9 +123,7 @@ func (e *eventManager) unregister(id string, evtType EventType) {
 	}
 }
 
-//
 // Notify
-//
 func (e *eventManager) notify(evtType EventType, obj interface{}) {
 
 	e.mutex.Lock()

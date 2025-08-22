@@ -1057,7 +1057,7 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 		srcRoot = filepath.Join(plasma.RPCRootDir, getCodebookRootDir(meta))
 	default:
 		// the function should never come here
-		logging.Errorf("ShardTransferManager::processCodebookRestore received an unsupported taskType for codebook restore", taskType)
+		logging.Errorf("ShardTransferManager::processCodebookRestore received an unsupported taskType %v for codebook restore", taskType)
 		return
 	}
 

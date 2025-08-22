@@ -72,7 +72,8 @@ func GetSettingsConfig(cfg Config) (Config, error) {
 func SetupSettingsNotifier(callb func(Config), cancelCh chan struct{}) {
 	metaKvCb := func(kve metakv.KVEntry) error {
 		if kve.Path == IndexingSettingsMetaPath || kve.Path == IndexingSettingsShardAffinityMetaPath {
-			logging.Infof("New settings received on path: %v, value: \n%s", string(kve.Value))
+			logging.Infof("New settings received on path: %v, value: \n%s",
+				(kve.Path), string(kve.Value))
 			config := SystemConfig.FilterConfig(".settings.")
 			if kve.Path == IndexingSettingsShardAffinityMetaPath {
 				config = SystemConfig.Get("indexer.default.enable_shard_affinity")

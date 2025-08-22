@@ -52,9 +52,7 @@ func init() {
 	}
 }
 
-//
 // Get schedIndexCreator singleton
-//
 func getSchedIndexCreator() *schedIndexCreator {
 	gSchedIndexCreatorLck.RLock()
 	defer gSchedIndexCreatorLck.RUnlock()
@@ -62,9 +60,7 @@ func getSchedIndexCreator() *schedIndexCreator {
 	return gSchedIndexCreator
 }
 
-//
 // Set schedIndexCreator singleton
-//
 func setSchedIndexCreator(sic *schedIndexCreator) {
 	gSchedIndexCreatorLck.Lock()
 	gSchedIndexCreator = sic
@@ -75,20 +71,21 @@ func setSchedIndexCreator(sic *schedIndexCreator) {
 // Data Types
 /////////////////////////////////////////////////////////////////////
 
-//
 // Scheduled index creator (schedIndexCreator), checks up on the scheduled
 // create tokens and tries to create index with the help of metadata provider.
-// 1. If the index creation succeeds, scheduled create token is deleted.
-// 2. If the index creation fails, the index creation will be retried, based
-//    on the reason for failure.
-// 3. The retry count is tracked in memory and after the retry limit is reached
-//    the stop schedule create token will be posted with last error.
+//  1. If the index creation succeeds, scheduled create token is deleted.
+//  2. If the index creation fails, the index creation will be retried, based
+//     on the reason for failure.
+//  3. The retry count is tracked in memory and after the retry limit is reached
+//     the stop schedule create token will be posted with last error.
+//
 // 3.1. Once the stop schedule create token is posted, the index creation will
-//      not be retried again (until indexer restarts). The schedule create token
-//      will NOT be deleted. Failed index will continue to show on UI (in Error
-//      state), until the user explicitly deletes the failed index.
-// 4. Similar to DDL service manager, scheduled index creator observes mutual
-//    exclusion with rebalance operation.
+//
+//		not be retried again (until indexer restarts). The schedule create token
+//		will NOT be deleted. Failed index will continue to show on UI (in Error
+//		state), until the user explicitly deletes the failed index.
+//	 4. Similar to DDL service manager, scheduled index creator observes mutual
+//	    exclusion with rebalance operation.
 type schedIndexCreator struct {
 	indexerId    common.IndexerId
 	config       common.ConfigHolder
@@ -116,13 +113,11 @@ type schedIndexCreator struct {
 	cinfoProviderLock sync.Mutex
 }
 
-//
 // scheduledIndex type holds information about one index that is scheduled
 // for background creation. This information contains the (1) token and
 // (2) information related to failed attempts to create this index.
 // The scheduledIndexes are maintained as a heap, so the struct implements
 // properties required by golang contanier/heap implementation.
-//
 type scheduledIndex struct {
 	token *mc.ScheduleCreateToken
 	state *scheduledIndexState
@@ -132,20 +127,16 @@ type scheduledIndex struct {
 	index    int
 }
 
-//
 // scheduledIndexState maintains the information about the failed attempts
 // at the time of creating the index.
-//
 type scheduledIndexState struct {
 	lastError   error // Error returned by the last creation attempt.
 	retryCount  int   // Number of attempts failed by retryable errors.
 	nRetryCount int   // Number of attempts failed by non retryable errors.
 }
 
-//
 // Schedule token monitor checks if there are any new indexes that are
 // scheduled for creation.
-//
 type schedTokenMonitor struct {
 	creator         *schedIndexCreator
 	commandListener *mc.CommandListener
@@ -155,10 +146,8 @@ type schedTokenMonitor struct {
 	indexerId       common.IndexerId
 }
 
-//
 // schedIndexQueue is used as a priority queue where the indexes are processed
 // in fist-come-first-served manner, based on the creation time of the request.
-//
 type schedIndexQueue []*scheduledIndex
 
 ///////////////////////////////////////////////////////////////////
@@ -758,11 +747,9 @@ func (m *schedIndexCreator) stopTokenCleaner() {
 	}
 }
 
-//
 // orphanTokenMover is used to transfer the ownership of the orphan tokens.
 // Orphan tokens could get created due to node failover. orphanTokenMover is
 // responsible for not letting any tokens remain orphan for a long time.
-//
 func (m *schedIndexCreator) orphanTokenMover() {
 	// Sleep for some time before starting.
 	time.Sleep(time.Duration(SCHED_PROCESS_INIT_INTERVAL) * time.Second)
@@ -852,14 +839,12 @@ func (m *schedIndexCreator) orphanTokenMover() {
 
 }
 
-//
 // keyspaceMonitor is responsible to cleanup of schedule tokens
 // which failed during creation.
 //
 // When indexes scheduled for creation get KeyspaceDeletedErrors, the schedule
 // create token will be dropped for those indexes. But the indexes which are
 // already errored (i.e. exhaused all the retries), may never get cleaned up.
-//
 func (m *schedIndexCreator) keyspaceMonitor() {
 	// Sleep for some time before starting.
 	time.Sleep(time.Duration(SCHED_PROCESS_INIT_INTERVAL) * time.Second)
@@ -905,7 +890,7 @@ func (m *schedIndexCreator) keyspaceMonitor() {
 				}
 
 				if schedToken == nil {
-					logging.Debugf("schedIndexCreator:keyspaceMonitor GetScheduleCreateToken returned nil token for %v", err, stopToken.DefnId)
+					logging.Debugf("schedIndexCreator:keyspaceMonitor GetScheduleCreateToken returned nil token for %v", stopToken.DefnId)
 					continue
 				}
 
