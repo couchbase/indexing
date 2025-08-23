@@ -2400,6 +2400,16 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 
 func (m *LifecycleMgr) isValidInstStateForBuild(defn *common.IndexDefn, inst IndexInstDistribution, isShardRebalanceBuild bool) bool {
 	if isShardRebalanceBuild {
+
+		// indexes with pendingBuild (or) instances in error state on the shard can be in states CREATED/READY.
+		// In such a case, consider those instances for build as well as the entire defn is getting built
+		if inst.State == uint32(common.INDEX_STATE_CREATED) || inst.State == uint32(common.INDEX_STATE_READY) {
+			logging.Infof("LifecycleMgr.handleBuildIndexes: build request received for instance %v (%v, %v, %v, %v, %v). "+
+				"Accepting the build request as instance is in state: %v", inst.InstId,
+				defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId, inst.State)
+			return true
+		}
+
 		if inst.State != uint32(common.INDEX_STATE_RECOVERED) {
 			logging.Warnf("LifecycleMgr.handleBuildIndexes: index instance %v (%v, %v, %v, %v, %v) is not in recovered state. Inst state: %v. Skip this index.",
 				inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId, inst.State)

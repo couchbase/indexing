@@ -1931,7 +1931,7 @@ func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map
 
 func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn,
 	ttid string, tt *c.TransferToken, isDeferred, pendingCreate bool,
-	recoveryListener chan c.IndexInstId) (bool, error) {
+	pendingBuild bool, recoveryListener chan c.IndexInstId) (bool, error) {
 
 	// TODO: Use ShardIds for desintaion when changing the shardIds
 	if len(defn.ShardIdsForDest) == 0 {
@@ -1988,7 +1988,9 @@ func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn,
 			return false, err
 		}
 
-		sr.destTokenToMergeOrReady(defn.InstId, defn.RealInstId, ttid, tt, &partnMergeWaitGroup)
+		if !pendingBuild {
+			sr.destTokenToMergeOrReady(defn.InstId, defn.RealInstId, ttid, tt, &partnMergeWaitGroup)
+		}
 
 		// Wait for the deferred partition index merge to happen
 		// This is essentially a no-op for non-partitioned indexes
@@ -2138,7 +2140,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				(defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
 					defn.InstStateAtRebal == c.INDEX_STATE_READY)
 
-			if skip, err := sr.createDeferredIndex(&defn, ttid, tt, isDeferred, false, nil); err != nil {
+			if skip, err := sr.createDeferredIndex(&defn, ttid, tt, isDeferred, false, false, nil); err != nil {
 				setErrInTransferToken(err)
 				return
 			} else if skip {
@@ -2225,7 +2227,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	// DDL service manager will take care of building the indexes after
 	// rebalance is done
 	for _, defn := range pendingCreateDefnList {
-		if skip, err := sr.createDeferredIndex(defn, ttid, tt, false, true, nil); err != nil {
+		if skip, err := sr.createDeferredIndex(defn, ttid, tt, false, true, false, nil); err != nil {
 			setErrInTransferToken(err)
 			return
 		} else if skip {
@@ -2315,6 +2317,20 @@ func (sr *ShardRebalancer) startShardRecoveryNonServerless(ttid string, tt *c.Tr
 
 	recoveryListener := make(chan c.IndexInstId, 2*len(tt.IndexInsts))
 
+	getPendingBuildForDefn := func(defn c.IndexDefn, log bool) bool {
+		var inst c.IndexInst
+		for i := range tt.IndexInsts {
+			if tt.InstIds[i] == defn.InstId {
+				if tt.IndexInsts[i].IsPendingBuild() {
+					logging.Infof("ShardRebalancer::startShardRecovery Instance is pending build. IndexDefnId: %v IndexInstId: %v "+
+						"InstStateAtRebal: %v InstState: %v", defn.DefnId, defn.InstId, defn.InstStateAtRebal, inst.State)
+					return true
+				}
+			}
+		}
+		return false
+	}
+
 	// Group index definitions for each collection
 	groupedDefns := groupInstsPerColl(tt)
 	for _, defns := range groupedDefns {
@@ -2323,7 +2339,12 @@ func (sr *ShardRebalancer) startShardRecoveryNonServerless(ttid string, tt *c.Tr
 			isDeferred := defn.Deferred && (defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
 				defn.InstStateAtRebal == c.INDEX_STATE_READY)
 
-			if skip, err := sr.createDeferredIndex(&defn, ttid, tt, isDeferred, false, recoveryListener); err != nil {
+			pendingBuild := false
+			if isDeferred {
+				pendingBuild = getPendingBuildForDefn(defn, true)
+			}
+
+			if skip, err := sr.createDeferredIndex(&defn, ttid, tt, isDeferred, false, pendingBuild, recoveryListener); err != nil {
 				setErrInTransferToken(err)
 				return
 			} else if skip {
@@ -2365,7 +2386,12 @@ func (sr *ShardRebalancer) startShardRecoveryNonServerless(ttid string, tt *c.Tr
 			isDeferred := defn.Deferred && (defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
 				defn.InstStateAtRebal == c.INDEX_STATE_READY)
 
-			if !isDeferred {
+			pendingBuild := false
+			if isDeferred {
+				pendingBuild = getPendingBuildForDefn(defn, false)
+			}
+
+			if !isDeferred || pendingBuild {
 
 				if defn.RealInstId != 0 {
 					nonDeferredInsts[defn.RealInstId] = true
@@ -3650,7 +3676,8 @@ loop:
 					} else if err != "" {
 						// If index build is scheduled but it could not proceed, then
 						// ignore the error and proceed to drop the index
-						if strings.Contains(err, common.ErrTransientError.Error()) {
+						if strings.Contains(err, common.ErrTransientError.Error()) ||
+							common.IsBuildErrAfterTraining(err) || common.IsVectorTrainingError(err) {
 							logging.Infof("ShardRebalancer::dropShardsWhenIdle Ignoring err: %v for inst: %v and "+
 								"proceeding to drop the index", err, instKey)
 							// Continue to drop the index
@@ -4809,8 +4836,9 @@ func getCodebookPaths(tt *c.TransferToken) (codebookPaths []string) {
 
 	for _, idxInst := range tt.IndexInsts {
 		// Don't consider deferred indexes
-		if idxInst.Defn.Deferred && (idxInst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
-			idxInst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
+		if (idxInst.Defn.Deferred || common.IsVectorTrainingError(idxInst.Error)) &&
+			(idxInst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+				idxInst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
 			continue
 		}
 

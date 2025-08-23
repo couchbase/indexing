@@ -253,6 +253,9 @@ type indexer struct {
 	instRebalPhase      map[c.IndexInstId]map[c.PartitionId]common.RebalancePhase
 	slicePendingClosure map[c.IndexInstId]map[c.PartitionId][]Slice
 
+	// map of realInstances that are in deferred state at the time of rebalance
+	deferredRealInsts map[c.IndexInstId]bool
+
 	//maintains bucket->bucketStateEnum mapping for pause state
 	bucketPauseState map[string]bucketStateEnum
 
@@ -3773,6 +3776,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	clientCh := msg.(*MsgBuildIndex).GetRespCh()
 	bucketList := msg.(*MsgBuildIndex).GetBucketList()
 	isEmptyNodeBatch := msg.(*MsgBuildIndex).IsEmptyNodeBatch()
+	reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
 
 	logging.Infof("Indexer::handleBuildIndex %v isEmptyNodeBatch %v", instIdList, isEmptyNodeBatch)
 
@@ -3786,6 +3790,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		if clientCh != nil {
 			clientCh <- &MsgSuccess{}
 		}
+		return
 	}
 
 	is := idx.getIndexerState()
@@ -3804,7 +3809,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		return
 	}
 
-	reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
 		if idx.canAllowDDLDuringRebalance() {
 			logging.Infof("Indexer::handleBuildIndex Allowing DDL during rebalance for "+
@@ -10788,6 +10792,13 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 			}
 
 			idx.instRebalPhase = make(map[common.IndexInstId]map[c.PartitionId]common.RebalancePhase)
+			idx.deferredRealInsts = make(map[c.IndexInstId]bool)
+			for _, inst := range idx.indexInstMap {
+				if inst.Defn.Deferred && inst.RealInstId == 0 && // deferred and real instance that is not built
+					(inst.State == common.INDEX_STATE_CREATED || inst.State == common.INDEX_STATE_READY) {
+					idx.deferredRealInsts[inst.InstId] = true
+				}
+			}
 
 			idx.slicePendingClosure = make(map[common.IndexInstId]map[c.PartitionId][]Slice)
 			idx.droppedIndexesDuringRebal = make(map[common.IndexInstId]bool) // reset the book-keeping
@@ -10908,8 +10919,14 @@ func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId, reqCtx *co
 		idxInst := idx.indexInstMap[instId]
 		if (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
 			reqCtx.ReqSource == common.DDLRequestSourceShardRebalance) && idxInst.Version != 0 {
-			idxInst.RState = common.REBAL_PENDING
-			logging.Infof("bulkUpdateRState: Index instance %v rstate moved to PENDING", instId)
+
+			if _, ok := idx.deferredRealInsts[instId]; !ok {
+				idxInst.RState = common.REBAL_PENDING
+				logging.Infof("bulkUpdateRState: Index instance %v rstate moved to PENDING", instId)
+			} else {
+				logging.Infof("bulkUpdateRState: Skipping state update for index instance %v as this is a real instance "+
+					"on the node before rebalance with RState: %v", instId, idxInst.RState)
+			}
 		} else {
 			idxInst.RState = common.REBAL_ACTIVE
 			logging.Infof("bulkUpdateRState: Index instance %v rstate moved to ACTIVE", instId)
@@ -11002,7 +11019,11 @@ func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.I
 				return instIdList, false
 			}
 		} else if isShardRebalanceBuild {
-			if index.State == common.INDEX_STATE_RECOVERED {
+			if index.State == common.INDEX_STATE_RECOVERED ||
+				index.State == common.INDEX_STATE_READY ||
+				index.State == common.INDEX_STATE_CREATED {
+				// If a build request is received for index in CREATED/READY state, consider
+				// the index for build
 				newList = append(newList, instId)
 				count++
 			} else {
@@ -13038,6 +13059,7 @@ func (idx *indexer) clearRebalancePhase(newRebal bool) {
 	logging.Infof("Indexer:clearRebalancePhase Clearing book-keeping on rebalance done")
 	idx.globalRebalPhase = common.RebalanceNotRunning
 	idx.instRebalPhase = nil
+	idx.deferredRealInsts = nil
 
 	// At the start of a new rebalance request, if there are slices left over
 	// in idx.slicePendingClosure, it is a bug in indexer book-keeping. Log fatal
