@@ -1036,6 +1036,9 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 						dataSize = dataSize * 3
 					}
 				}
+				if bhiveEstMinRatio, ok := config["indexer.planner.internal.bhive.estMinResidentRatio"]; ok && isBhive {
+					minRatio = bhiveEstMinRatio.Float64()
+				}
 				index.ActualMemMin = uint64(float64(dataSize)*minRatio) + index.ActualCodebookMemUsage
 			}
 		}

@@ -3727,6 +3727,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.planner.internal.bhive.estMinResidentRatio": ConfigValue{
+		0.02,
+		"minimum resident ratio used only for planner estimating the memory usage for bhive at very low" +
+			"resident ratio.",
+		0.02,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.planner.internal.maxIterPerTemp": ConfigValue{
 		20000,
 		"Maximum number of iterations - per temperature - to be used by simulated annealing index planner. " +
