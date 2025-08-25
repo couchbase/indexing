@@ -191,6 +191,7 @@ const (
 	INDEX_STATS_DONE
 	INDEX_STATS_BROADCAST
 	INDEX_BOOTSTRAP_STATS_UPDATE
+	INDEX_RR_STATS
 
 	STATS_RESET
 	STATS_PERSISTER_START
@@ -2097,6 +2098,23 @@ func (m *MsgShardStatsRequest) GetReplyChannel() chan map[string]*common.ShardSt
 	return m.respch
 }
 
+type MsgIndexRRStats struct {
+	respch         chan bool
+	consumerFilter uint64
+}
+
+func (m *MsgIndexRRStats) GetMsgType() MsgType {
+	return INDEX_RR_STATS
+}
+
+func (m *MsgIndexRRStats) GetReplyChannel() chan bool {
+	return m.respch
+}
+
+func (m *MsgIndexRRStats) GetFilter() uint64 {
+	return m.consumerFilter
+}
+
 type MsgIndexCompact struct {
 	instId    common.IndexInstId
 	partnId   common.PartitionId
@@ -3810,6 +3828,8 @@ func (m MsgType) String() string {
 		return "INDEX_STATS_BROADCAST"
 	case INDEX_BOOTSTRAP_STATS_UPDATE:
 		return "INDEX_BOOTSTRAP_STATS_UPDATE"
+	case INDEX_RR_STATS:
+		return "INDEX_RR_STATS"
 
 	case STATS_RESET:
 		return "STATS_RESET"

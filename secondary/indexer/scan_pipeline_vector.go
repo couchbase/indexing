@@ -303,37 +303,8 @@ func (w *ScanWorker) getBufferInitBatchSize() int {
 
 func (w *ScanWorker) setSenderBatchSize() {
 
-	batchSize := w.config["scan.vector.scanworker_batch_size"].Int()
-	largeBatchSize := w.config["scan.vector.scanworker_large_batch_size"].Int()
-
-	qtype := w.r.IndexInst.Defn.VectorMeta.Quantizer.Type
-	if qtype == c.SQ {
-		w.senderBatchSize = batchSize
-		return
-	}
-
-	//use regular batch size for bhive, as it doesn't
-	//benefit from larger batch size
-	if w.r.isBhiveScan {
-		w.senderBatchSize = batchSize
-		return
-	}
-
-	//Use a large batch size for PQ for a single centroid scan.
-	//Such scans reuse the distance table and large batch size reduces the
-	//overheads associated with each batch processing as less number of
-	//such calls need to be made to the faiss library.
-	if w.currJob.scan.MultiCentroid ||
-		w.r.IndexInst.Defn.VectorMeta.Quantizer.FastScan {
-		w.senderBatchSize = batchSize
-		return
-	}
-
-	if qtype == c.PQ {
-		w.senderBatchSize = largeBatchSize
-	} else {
-		w.senderBatchSize = batchSize
-	}
+	//use the same batch size for sender as the buffer size
+	w.senderBatchSize = w.getBufferInitBatchSize()
 
 }
 

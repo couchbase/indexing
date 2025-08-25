@@ -2567,6 +2567,10 @@ func (mdb *bhiveSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 		return mdb.handleN1QLStorageStatistics()
 	}
 
+	if consumerFilter == statsMgmt.IndexRRStatsFilter {
+		return mdb.handleIndexRRStats()
+	}
+
 	var sts StorageStatistics
 
 	var internalData []string
@@ -2704,6 +2708,25 @@ func (mdb *bhiveSlice) handleN1QLStorageStatistics() (StorageStatistics, error) 
 	sts.InternalDataMap = make(map[string]interface{})
 	sts.InternalDataMap["MainStore"] = internalDataMap
 	return sts, nil
+}
+
+func (mdb *bhiveSlice) handleIndexRRStats() (StorageStatistics, error) {
+
+	var numRecsMem, numRecsDisk int64
+
+	mStats := mdb.mainstore.GetPreparedStats()
+
+	numRecsMem += int64(mStats.RecInMem)
+	numRecsDisk += int64(mStats.RecOnDisk)
+
+	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
+	mdb.idxStats.combinedResidentPercent.Set(common.ComputePercentFloat(numRecsMem, numRecsDisk))
+	mdb.idxStats.numRecsInMem.Set(numRecsMem)
+	mdb.idxStats.numRecsOnDisk.Set(numRecsDisk)
+	mdb.idxStats.bsNumRecsInMem.Set(0)  // back index does not contribute to resident ratio
+	mdb.idxStats.bsNumRecsOnDisk.Set(0) // back index does not contribute to resident ratio
+
+	return StorageStatistics{}, nil
 }
 
 func (mdb *bhiveSlice) GetTenantDiskSize() (int64, error) {

@@ -332,6 +332,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case SHARD_STORAGE_STATS:
 		s.handleShardStorageStats(cmd)
 
+	case INDEX_RR_STATS:
+		s.handleGetRRStats(cmd)
+
 	case STORAGE_INDEX_MERGE_SNAPSHOT:
 		s.handleIndexMergeSnapshot(cmd)
 
@@ -1895,6 +1898,49 @@ func (s *storageMgr) handleStats(cmd Message) {
 	}()
 }
 
+func (s *storageMgr) handleGetRRStats(cmd Message) {
+	s.supvCmdch <- &MsgSuccess{}
+
+	go func() {
+		s.statsLock.Lock()
+		defer s.statsLock.Unlock()
+
+		req := cmd.(*MsgIndexRRStats)
+		replych := req.GetReplyChannel()
+		filter := req.GetFilter()
+		storageStats := s.getIndexRRStats(filter)
+
+		var numStorageInstances, totalRecsInMem, totalRecsOnDisk int64
+
+		stats := s.stats.Get()
+		indexInstMap := s.indexInstMap.Get()
+		for _, st := range storageStats {
+			inst := indexInstMap[st.InstId]
+			if inst.State == common.INDEX_STATE_DELETED {
+				continue
+			}
+
+			numStorageInstances++
+			idxStats := stats.GetPartitionStats(st.InstId, st.PartnId)
+			if idxStats != nil {
+				//compute node level stats
+				totalRecsInMem += idxStats.numRecsInMem.Value()
+				totalRecsInMem += idxStats.bsNumRecsInMem.Value()
+				totalRecsOnDisk += idxStats.numRecsOnDisk.Value()
+				totalRecsOnDisk += idxStats.bsNumRecsOnDisk.Value()
+			}
+		}
+
+		if numStorageInstances > 0 {
+			stats.avgResidentPercent.Set(common.ComputePercent(totalRecsInMem, totalRecsOnDisk))
+		} else {
+			stats.avgResidentPercent.Set(0)
+		}
+
+		replych <- true
+	}()
+}
+
 func (s *storageMgr) handleShardStorageStats(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 
@@ -2181,6 +2227,62 @@ func (s *storageMgr) getShardStats() map[string]*common.ShardStats {
 	populateShardStats(false)
 
 	return out
+}
+
+func (s *storageMgr) getIndexRRStats(consumerFilter uint64) []IndexStorageStats {
+	var stats []IndexStorageStats
+	var err error
+
+	indexInstMap := s.indexInstMap.Get()
+	indexPartnMap := s.indexPartnMap.Get()
+	for idxInstId, partnMap := range indexPartnMap {
+
+		inst, ok := indexInstMap[idxInstId]
+		//skip deleted indexes
+		if !ok || inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+
+		for _, partnInst := range partnMap {
+			var hasStats = false
+
+			slices := partnInst.Sc.GetAllSlices()
+			for _, slice := range slices {
+
+				// Increment the ref count before gathering stats. This is to ensure that
+				// the instance is not deleted in the middle of gathering stats.
+				if !slice.CheckAndIncrRef() {
+					continue
+				}
+
+				//calling Statistics updates the RR related stats in the global index
+				//stats object.
+				_, err = slice.Statistics(consumerFilter)
+				slice.DecrRef()
+
+				if err != nil {
+					break
+				}
+
+				hasStats = true
+			}
+
+			if hasStats && err == nil {
+				stat := IndexStorageStats{
+					InstId:     idxInstId,
+					PartnId:    partnInst.Defn.GetPartitionId(),
+					Name:       inst.Defn.Name,
+					Bucket:     inst.Defn.Bucket,
+					Scope:      inst.Defn.Scope,
+					Collection: inst.Defn.Collection,
+				}
+
+				stats = append(stats, stat)
+			}
+		}
+	}
+
+	return stats
 }
 
 func (s *storageMgr) handleRecoveryDone() {

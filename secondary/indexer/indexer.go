@@ -1610,7 +1610,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		//fwd the message to kv_sender
 		idx.sendMsgToKVSender(msg)
 
-	case STORAGE_STATS, SHARD_STORAGE_STATS:
+	case STORAGE_STATS, SHARD_STORAGE_STATS, INDEX_RR_STATS:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 

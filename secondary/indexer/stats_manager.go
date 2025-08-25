@@ -350,6 +350,9 @@ type IndexStats struct {
 	cbTrainDuration stats.Int64Val
 
 	graphBuildProgress stats.Int64Val
+
+	// Vector scan admission stats
+	vectorScanQueued stats.Int64Val
 }
 
 type IndexerStatsHolder struct {
@@ -946,6 +949,9 @@ type IndexerStats struct {
 
 	totalCodebookMemUsage stats.Int64Val
 
+	// Vector scan admission stats
+	vectorScanQueued stats.Int64Val
+
 	// Plasma shard version
 	ShardCompatVersion stats.Int64Val
 
@@ -1015,6 +1021,8 @@ func (s *IndexerStats) Init() {
 	s.totalRawDataSize.Init()
 	s.totalMutationQueueSize.Init()
 	s.totalCodebookMemUsage.Init()
+
+	s.vectorScanQueued.Init()
 
 	s.SetPlannerFilters()
 	s.SetSmartBatchingFilters()
@@ -1436,6 +1444,7 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	is.PopulateCorruptedIndexes(statMap)
 
 	statMap.AddStatValueFiltered("total_codebook_mem_usage", &is.totalCodebookMemUsage)
+	statMap.AddStatValueFiltered("vector_scan_queued", &is.vectorScanQueued)
 }
 
 func (is *IndexerStats) PopulateCorruptedIndexes(statMap *StatsMap) {
