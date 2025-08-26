@@ -4857,6 +4857,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.vector.max_cpu_training": ConfigValue{
+		50,
+		"Percent of total CPU that can be used for vector index training",
+		50,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another

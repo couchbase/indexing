@@ -49,3 +49,14 @@ func GetThrottleDelay() int64 {
 func SetOMPThreadLimit(maxThreads int) {
 	//no-op
 }
+
+// SetOpenBLASThreads sets the number of OpenBLAS threads.
+func SetOpenBLASThreads(n int) {
+	//no-op
+}
+
+// GetOpenBLASThreads returns the current OpenBLAS thread cap (or 0 if unavailable).
+func GetOpenBLASThreads() int {
+	//no-op
+	return 0
+}

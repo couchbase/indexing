@@ -75,7 +75,6 @@ func init() {
 	os.Setenv("OMP_THREAD_LIMIT", strconv.Itoa(gomaxprocs/2))
 	faiss.SetOMPThreads(defaultOMPThreads)
 	os.Setenv("OMP_WAIT_POLICY", defaultWaitPolicy)
-	os.Setenv("OPENBLAS_NUM_THREADS", strconv.Itoa(1))
 }
 
 type Token interface {
@@ -113,6 +112,17 @@ func initShardedSemaphore(numShards int, capacityPerShard int64) {
 func SetOMPThreadLimit(maxThreads int) {
 	os.Setenv("OMP_THREAD_LIMIT", strconv.Itoa(maxThreads))
 }
+
+// SetOpenBLASThreads sets the number of OpenBLAS threads.
+func SetOpenBLASThreads(n int) {
+	SetOpenBLASThreadsInternal(n)
+}
+
+// GetOpenBLASThreads returns the current OpenBLAS thread cap (or 0 if unavailable).
+func GetOpenBLASThreads() int {
+    return GetOpenBLASThreadsInternal()
+}
+
 
 // SetConcurrency sets the global maximum number of concurrent codebook operations
 func SetConcurrency(maxConcurrent int64) {
@@ -309,3 +319,4 @@ func (s *shardedSem) Acquire() *shardedToken {
 
 	return &shardedToken{token: s.shards[idx].Acquire()}
 }
+

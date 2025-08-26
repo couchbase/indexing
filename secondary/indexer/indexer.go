@@ -882,6 +882,14 @@ func (idx *indexer) initFromConfig() {
 	maxParallelTraining := idx.config["vector.max_parallel_training"].Int()
 	codebook.SetTrainingConcurrency(maxParallelTraining)
 	logging.Infof("Indexer: Vector Max Training set to %v\n", maxParallelTraining)
+
+	maxVectorCPUTraining := idx.config["vector.max_cpu_training"].Int()
+	allocatedVectorCores = int64((maxVectorCPUTraining * numCores) / 100)
+	if allocatedVectorCores == 0 {
+		allocatedVectorCores = 1
+	}
+	codebook.SetOpenBLASThreads(int(allocatedVectorCores))
+	logging.Infof("Indexer: Vector Max Training CPU set to %v\n", allocatedVectorCores)
 }
 
 func GetHTTPMux() *http.ServeMux {
@@ -1979,6 +1987,14 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	maxParallelTraining := newConfig["vector.max_parallel_training"].Int()
 	codebook.SetTrainingConcurrency(maxParallelTraining)
 	logging.Infof("Indexer: Vector Max Training set to %v\n", maxParallelTraining)
+
+	maxVectorCPUTraining := idx.config["vector.max_cpu_training"].Int()
+	allocatedVectorCores = int64((maxVectorCPUTraining * numCores) / 100)
+	if allocatedVectorCores == 0 {
+		allocatedVectorCores = 1
+	}
+	codebook.SetOpenBLASThreads(int(allocatedVectorCores))
+	logging.Infof("Indexer: Vector Max Training CPU set to %v\n", allocatedVectorCores)
 
 	idx.config = newConfig
 
