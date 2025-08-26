@@ -274,7 +274,7 @@ type indexer struct {
 	// Contains the instanceIds which are dropped while
 	// training is in progress
 	muDropTraining          sync.Mutex
-	dropInstsDuringTraining map[c.IndexInstId]MsgChannel
+	dropInstsDuringTraining map[c.IndexInstId]bool
 
 	refreshTimestampedCountStatsCh chan Message
 }
@@ -393,7 +393,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 		droppedIndexesDuringRebal:      make(map[common.IndexInstId]bool),
 		dropCleanupPending:             make(map[common.IndexInstId][]Slice),
-		dropInstsDuringTraining:        make(map[common.IndexInstId]MsgChannel),
+		dropInstsDuringTraining:        make(map[common.IndexInstId]bool),
 		refreshTimestampedCountStatsCh: make(chan Message, 1),
 	}
 
@@ -4452,29 +4452,26 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	idx.stats.RemoveIndexStats(indexInst)
 
 	if indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+		messageStr := fmt.Sprintf("InstId: %v building with vector insts under training " + 
+		"actual drop will happen after training is complete",indexInstId)
+
 		if indexInst.Defn.IsVectorIndex {
-			logging.Infof("Indexer::handleDropIndex Deferring drop for instId: %v as training is in progress",
-				indexInstId)
-		} else {
-			logging.Infof("Indexer::handleDropIndex Deferring drop for instId: %v as it is being built with vector insts under training",
-				indexInstId)
+			messageStr = fmt.Sprintf("InstId: %v training is in progress " +
+			"actual drop will happen after training is complete",indexInstId)
+		}
+		logging.Infof("Indexer::handleDropIndex %v", messageStr)
+
+		// Add to the drop instance during training map so that index
+		// will be dropped after training is done
+		idx.updateDropInstsDuringTrainingMap(indexInstId)
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEX_TRAINING_IN_PROGRESS,
+					severity: NORMAL,
+					cause:    errors.New(messageStr),
+					category: INDEXER}}
 		}
 
-		if reqCtx.ReqSource != common.DDLRequestSourceUser {
-			// Add to the drop instance during training map so that index
-			// will be dropped after training is done
-			idx.updateDropInstsDuringTrainingMap(indexInstId, nil)
-			if clientCh != nil {
-				clientCh <- &MsgError{
-					err: Error{code: ERROR_INDEX_TRAINING_IN_PROGRESS,
-						severity: NORMAL,
-						cause:    ErrTrainingInProgress,
-						category: INDEXER}}
-			}
-		} else {
-			// For user initiated drop, the caller will wait for drop to finish
-			idx.updateDropInstsDuringTrainingMap(indexInstId, clientCh)
-		}
 		resp = &MsgSuccess{}
 		return
 	}
@@ -5649,7 +5646,7 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 		if indexInst, ok := idx.indexInstMap[instId]; ok {
 			if indexInst.Defn.IsVectorIndex && indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
 				deletedVectInstIds = append(deletedVectInstIds, instId)
-				idx.updateDropInstsDuringTrainingMap(instId, nil)
+				idx.updateDropInstsDuringTrainingMap(instId)
 			}
 		}
 	}
@@ -14013,7 +14010,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 			// The instance is dropped while other partitions of the instance
 			// are being trained. Skip processing the instance further
-			if clientCh, ok := idx.isInstanceDroppedDuringTraining(instId); ok {
+			if dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
 
 				logging.Infof("Indexer::initiateTraining Observed that inst: %v is dropped during training. "+
 					"Skip further processing", instId)
@@ -14022,7 +14019,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 				idx.internalRecvCh <- &MsgIndexTrainingDone{
 					keyspaceId: keyspaceId,
-					dropMap:    map[c.IndexInstId]MsgChannel{instId: clientCh},
+					dropMap:    map[c.IndexInstId]bool{instId: true},
 				}
 				continue
 			}
@@ -14327,7 +14324,7 @@ func (idx *indexer) handleTrainingAndCheckForDrop(keyspaceId string,
 				continue
 			}
 
-			if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
+			if dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
 				droppedInsts[instId] = true
 
 				logging.Infof("Indexer::handleTrainingAndCheckForDrop Observed that inst: %v is dropped during training. "+
@@ -14335,7 +14332,7 @@ func (idx *indexer) handleTrainingAndCheckForDrop(keyspaceId string,
 
 				idx.internalRecvCh <- &MsgIndexTrainingDone{
 					keyspaceId: keyspaceId,
-					dropMap:    map[c.IndexInstId]MsgChannel{instId: clientCh},
+					dropMap:    map[c.IndexInstId]bool{instId: true},
 				}
 			}
 		}
@@ -14376,7 +14373,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	instTrainDurMap := msg.GetTrainDur()
 
 	if dropMap == nil {
-		dropMap = make(map[c.IndexInstId]MsgChannel)
+		dropMap = make(map[c.IndexInstId]bool)
 	}
 
 	if len(successMap) > 0 || len(errMap) > 0 {
@@ -14395,8 +14392,8 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	for instId := range successMap {
 
 		// Instance was dropped and not yet deleted.
-		if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
-			dropMap[instId] = clientCh
+		if dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
+			dropMap[instId] = true
 			logging.Infof("Indexer::handleIndexTrainingDone: index with inst id %v was dropped. deleting the same",
 				instId)
 			continue
@@ -14450,8 +14447,8 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	for instId, partnErrMap := range errMap {
 
 		// Instance was dropped and not yet deleted.
-		if clientCh, dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
-			dropMap[instId] = clientCh
+		if dropped := idx.isInstanceDroppedDuringTraining(instId); dropped {
+			dropMap[instId] = true
 			logging.Infof("Indexer::handleIndexTrainingDone: errored index with inst id %v was dropped. deleting the same",
 				instId)
 			continue
@@ -14511,10 +14508,10 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	// As instances in training phase will be in state CREATED/READY,
 	// it is sufficient to cleanup index data without bothering about
 	// the streams
-	for instId, clientCh := range dropMap {
+	for instId := range dropMap {
 		indexInst, exists := idx.indexInstMap[instId]
 		if exists {
-			idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh, nil)
+			idx.cleanupIndexData([]common.IndexInst{indexInst}, nil, nil)
 			logging.Infof("Indexer::handleIndexTrainingDone Cleanup Successful for "+
 				"Index that is dropped during training phase %v", indexInst)
 		} else {
@@ -14523,12 +14520,6 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		}
 
 		idx.removeFromDropInstsDuringTrainingMap(instId)
-
-		// Channel can be nil for INDEXER_KEYSPACE_NOT_FOUND case.
-		// For CLUST_MGR_DROP_INDEX_DDL, wait is there until response written to clientCh
-		if clientCh != nil {
-			clientCh <- &MsgSuccess{}
-		}
 	}
 
 	if len(allInsts) > 0 {
@@ -14741,25 +14732,11 @@ func (idx *indexer) removeResidualFile(path string) error {
 	return iowrap.Os_RemoveAll(path) // Remove file if any
 }
 
-func (idx *indexer) updateDropInstsDuringTrainingMap(instId common.IndexInstId, clientCh MsgChannel) {
+func (idx *indexer) updateDropInstsDuringTrainingMap(instId common.IndexInstId) {
 	idx.muDropTraining.Lock()
 	defer idx.muDropTraining.Unlock()
 
-	if _, ok := idx.dropInstsDuringTraining[instId]; !ok {
-		idx.dropInstsDuringTraining[instId] = clientCh
-	} else {
-		errStr := "Index Drop Already In Progress."
-
-		logging.Errorf("Index Drop Already In Progress for instId: %v", instId)
-		if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{code: ERROR_INDEX_DROP_IN_PROGRESS,
-					severity: FATAL,
-					cause:    errors.New(errStr),
-					category: INDEXER}}
-
-		}
-	}
+	idx.dropInstsDuringTraining[instId] = true
 }
 
 func (idx *indexer) removeFromDropInstsDuringTrainingMap(instId common.IndexInstId) {
@@ -14769,12 +14746,12 @@ func (idx *indexer) removeFromDropInstsDuringTrainingMap(instId common.IndexInst
 	delete(idx.dropInstsDuringTraining, instId)
 }
 
-func (idx *indexer) isInstanceDroppedDuringTraining(instId common.IndexInstId) (MsgChannel, bool) {
+func (idx *indexer) isInstanceDroppedDuringTraining(instId common.IndexInstId) bool {
 	idx.muDropTraining.Lock()
 	defer idx.muDropTraining.Unlock()
 
-	clientCh, ok := idx.dropInstsDuringTraining[instId]
-	return clientCh, ok
+	_, found := idx.dropInstsDuringTraining[instId]
+	return found
 }
 
 func (idx *indexer) handleBhiveGraphReady(cmd Message) {
