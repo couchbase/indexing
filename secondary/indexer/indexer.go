@@ -4109,6 +4109,10 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 			}
 		}
 
+		if len(instIdList) == 0 {
+			continue
+		}
+
 		inst := idx.indexInstMap[instIdList[0]]
 		collectionId := inst.Defn.CollectionId
 
@@ -11019,7 +11023,13 @@ func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.I
 				return instIdList, false
 			}
 		} else if isShardRebalanceBuild {
-			if index.State == common.INDEX_STATE_RECOVERED ||
+			if index.TrainingPhase == common.TRAINING_IN_PROGRESS {
+				// During rebalance, it is possible that both vector and non-vector indexes are built
+				// at the same time. Skip building non-vector indexes if training is in progress as
+				// indexer will take care of building the instances after training is done
+				logging.Infof("Index training is already in progress for inst %v. TrainingPhase: %v.", instId, index.TrainingPhase)
+				skipCount++
+			} else if index.State == common.INDEX_STATE_RECOVERED ||
 				index.State == common.INDEX_STATE_READY ||
 				index.State == common.INDEX_STATE_CREATED {
 				// If a build request is received for index in CREATED/READY state, consider
