@@ -14532,7 +14532,19 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	}
 
 	if len(allInsts) > 0 {
-		err := idx.updateMetaInfoForIndexList(allInsts, false, false, true, false, false, false, true, false, nil, true, nil, nil)
+		err := idx.updateMetaInfoForIndexList(allInsts,
+			false, /* updateState */
+			false, /* updateStream */
+			true,  /* updateError */
+			false, /* updateBuildTs */
+			false, /* updateRState */
+			true,  /* syncUpdate */
+			false, /* updatePartitions */
+			false, /* updateVersion */
+			nil,   /* partnShardIdMap */
+			true,  /* updateTrainingPhase */
+			nil,   /* bhiveGraphStatusMap */
+			nil)   /* respCh */
 		common.CrashOnError(err)
 	}
 
