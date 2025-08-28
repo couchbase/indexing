@@ -14386,6 +14386,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 
 	toBuildInstIds := make([]common.IndexInstId, 0)
 	allInsts := make([]common.IndexInstId, 0)
+	updateStateInsts := make([]common.IndexInstId, 0)
 	skippedInsts := make([]common.IndexInstId, 0)
 	// Set isTrained to true for all successful instances
 	// For failed instances, set isTrained to false
@@ -14497,11 +14498,23 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 				inst.Nlist[partnId] = 0 // Reset nlist per partition Id
 			}
 			inst.Error = errStr
-
 		}
 
-		idx.indexInstMap[instId] = inst
-		allInsts = append(allInsts, instId)
+		// For shard rebalance requests, reset the index state so that the index
+		// can be moved to READY state if all the partitions have failed only on training
+		updateState := (reqCtx.ReqSource == common.DDLRequestSourceShardRebalance && inst.State == common.INDEX_STATE_RECOVERED)
+		for _, err := range partnErrMap {
+			updateState = updateState && common.IsVectorTrainingError(err.Error())
+		}
+
+		if updateState {
+			inst.State = common.INDEX_STATE_READY
+			idx.indexInstMap[instId] = inst
+			updateStateInsts = append(updateStateInsts, instId)
+		} else {
+			idx.indexInstMap[instId] = inst
+			allInsts = append(allInsts, instId)
+		}
 	}
 
 	// Cleanup the indexes that have been dropped during training phase
@@ -14520,6 +14533,30 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		}
 
 		idx.removeFromDropInstsDuringTrainingMap(instId)
+	}
+
+	if len(updateStateInsts) > 0 {
+		logging.Infof("Indexer::handleIndexTrainingDone - Updating inst state, error and training phase for instIds: %v", updateStateInsts)
+		err := idx.updateMetaInfoForIndexList(updateStateInsts,
+			true,  /* updateState */
+			false, /* updateStream */
+			true,  /* updateError */
+			false, /* updateBuildTs */
+			false, /* updateRState */
+			true,  /* syncUpdate */
+			false, /* updatePartitions */
+			false, /* updateVersion */
+			nil,   /* partnShardIdMap */
+			true,  /* updateTrainingPhase */
+			nil,   /* bhiveGraphStatusMap */
+			nil)   /* respCh */
+		common.CrashOnError(err)
+	}
+
+	for _, instId := range updateStateInsts {
+		idxInst := idx.indexInstMap[instId]
+		idxInst.State = common.INDEX_STATE_CREATED
+		idx.indexInstMap[instId] = idxInst
 	}
 
 	if len(allInsts) > 0 {
