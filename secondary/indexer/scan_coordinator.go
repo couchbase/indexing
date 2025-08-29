@@ -1720,20 +1720,11 @@ func (s *scanCoordinator) releaseReaders(r *ScanRequest) {
 func (s *scanCoordinator) fillCodebookMap(r *ScanRequest) (cbErr error) {
 	r.codebookMap = make(map[common.PartitionId]codebook.Codebook)
 
-	pmap, ok := s.indexPartnMap[r.IndexInst.InstId]
-	if !ok {
-		return fmt.Errorf("instanceid: %v err: %v", r.IndexInst.InstId, ErrNotMyIndex)
-	}
-
-	for _, partnId := range r.PartitionIds {
-		if partition, ok := pmap[partnId]; ok {
-			slice := partition.Sc.GetSliceById(0)
-			r.codebookMap[partnId], cbErr = slice.GetCodebook()
-			if cbErr != nil {
-				return fmt.Errorf("partitionid: %v err: %v", partnId, cbErr)
-			}
-		} else {
-			return fmt.Errorf("partitionid: %v err: %v", partnId, ErrNotMyPartition)
+	for i, slice := range r.partitionIdSlices {
+		partnId := r.PartitionIds[i]
+		r.codebookMap[partnId], cbErr = slice.GetCodebook()
+		if cbErr != nil {
+			return fmt.Errorf("partitionid: %v err: %v", partnId, cbErr)
 		}
 	}
 

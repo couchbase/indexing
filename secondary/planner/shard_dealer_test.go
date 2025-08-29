@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -2631,7 +2632,7 @@ func TestMultNode_NoReplicas(t *testing.T) {
 		nil,
 	)
 
-	numNodes := rand.Intn(int(minShardsPerNode))
+	numNodes := nonZeroRandIntn(int(minShardsPerNode))
 
 	var cips = []createIdxParam{
 		{count: minShardsPerNode, isPrimary: true},
@@ -2742,7 +2743,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 		)
 
 		var cips = []createIdxParam{
-			{count: minShardsPerNode, isPrimary: true, numReplicas: int(rand.Intn(6))},
+			{count: minShardsPerNode, isPrimary: true, numReplicas: int(nonZeroRandIntn(6))},
 		}
 
 		var cluster = createDummyIndexerNodes(0, cips...)
@@ -2830,7 +2831,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 
 		var highReplicaCount int
 		c.NewRetryHelper(10, 0, 1, func(_ int, _ error) error {
-			highReplicaCount = rand.Intn(10)
+			highReplicaCount = nonZeroRandIntn(10)
 			if highReplicaCount == 0 {
 				return fmt.Errorf("highReplicaCount is 0")
 			}
@@ -2839,7 +2840,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 
 		var cips = []createIdxParam{
 			{count: minShardsPerNode / 4, isPrimary: true, numReplicas: highReplicaCount},
-			{count: minShardsPerNode/2 - (minShardsPerNode / 4), numReplicas: rand.Intn(highReplicaCount)},
+			{count: minShardsPerNode/2 - (minShardsPerNode / 4), numReplicas: nonZeroRandIntn(highReplicaCount)},
 		}
 
 		var cluster = createDummyIndexerNodes(0, cips...)
@@ -2924,7 +2925,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 
 		var highReplicaCount int
 		c.NewRetryHelper(10, 0, 1, func(_ int, _ error) error {
-			highReplicaCount = rand.Intn(10)
+			highReplicaCount = nonZeroRandIntn(10)
 			if highReplicaCount == 0 {
 				return fmt.Errorf("highReplicaCount is 0")
 			}
@@ -2933,7 +2934,7 @@ func TestMultiNode_Pass0(t *testing.T) {
 
 		var cips = []createIdxParam{
 			{count: 1, isPrimary: true, numReplicas: highReplicaCount, numPartns: int(minShardsPerNode / 4)},
-			{count: 1, numReplicas: rand.Intn(highReplicaCount), numPartns: int(minShardsPerNode/2 - minShardsPerNode/4)},
+			{count: 1, numReplicas: nonZeroRandIntn(highReplicaCount), numPartns: int(minShardsPerNode/2 - minShardsPerNode/4)},
 		}
 
 		var cluster = createDummyIndexerNodes(0, cips...)
@@ -3043,7 +3044,7 @@ func TestMultiNode_Pass1(t *testing.T) {
 		t0.Parallel()
 
 		var cips = []createIdxParam{
-			{count: minPartitionsPerShard * minShardsPerNode, isPrimary: true, numReplicas: rand.Intn(6)},
+			{count: minPartitionsPerShard * minShardsPerNode, isPrimary: true, numReplicas: nonZeroRandIntn(6)},
 		}
 
 		var cluster = createDummyIndexerNodes(0, cips...)
@@ -3118,7 +3119,7 @@ func TestMultiNode_Pass1(t *testing.T) {
 	t.Run("PrimaryAndSecondary", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var highReplicaCount = rand.Intn(10)
+		var highReplicaCount = nonZeroRandIntn(10)
 		var numPrimIdxs = minShardsPerNode / 4
 		var cips = []createIdxParam{
 			{count: numPrimIdxs, isPrimary: true, numReplicas: highReplicaCount},
@@ -3183,7 +3184,7 @@ func TestMultiNode_Pass1(t *testing.T) {
 	t.Run("PartitionedIndexes", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var highReplicaCount = rand.Intn(10)
+		var highReplicaCount = nonZeroRandIntn(10)
 		var numPrimIdxs = minShardsPerNode / 4
 		var cips = []createIdxParam{
 			{count: 1, isPrimary: true, numReplicas: highReplicaCount, numPartns: int(numPrimIdxs)},
@@ -3252,7 +3253,7 @@ func TestMultiNode_Pass2(t *testing.T) {
 		t0.Parallel()
 
 		var cips = []createIdxParam{
-			{count: minPartitionsPerShard*minShardsPerNode + 1, isPrimary: true, numReplicas: rand.Intn(6)},
+			{count: minPartitionsPerShard*minShardsPerNode + 1, isPrimary: true, numReplicas: nonZeroRandIntn(6)},
 		}
 		var cluster = createDummyIndexerNodes(0, cips...)
 		var dealer = getTestShardDealer(
@@ -3296,7 +3297,7 @@ func TestMultiNode_Pass2(t *testing.T) {
 	t.Run("MixCategoryIndexes", func(t0 *testing.T) {
 		t0.Parallel()
 
-		var numReps = rand.Intn(10)
+		var numReps = nonZeroRandIntn(10)
 
 		var ciplist = []createIdxParam{
 			{count: minShardsPerNode/2 + 1, isPrimary: true, numReplicas: numReps},
@@ -3357,8 +3358,8 @@ func TestMultiNode_Pass3(t *testing.T) {
 
 	var testShardCapacity uint64 = 200
 
-	var numReps = rand.Intn(5)
-	var idxCreations = testShardCapacity * minPartitionsPerShard * uint64(rand.Intn(5))
+	var numReps = nonZeroRandIntn(5)
+	var idxCreations = testShardCapacity * minPartitionsPerShard * uint64(nonZeroRandIntn(5))
 
 	t.Logf("Using random values numReps %v, idxCreations %v", numReps, idxCreations)
 
@@ -3414,6 +3415,21 @@ func TestMultiNode_Pass3(t *testing.T) {
 	)
 }
 
+func nonZeroRandIntn(n int) int {
+	res := 0
+	err := c.NewRetryHelper(10, time.Nanosecond, 1, func(_ int, _ error) error {
+		res = rand.Intn(n)
+		if res == 0 {
+			return errors.New("fail")
+		}
+		return nil
+	}).Run()
+	if err != nil {
+		return 1
+	}
+	return res
+}
+
 func TestMultiNode_RandomLayoutTests(t *testing.T) {
 	// t.Parallel()
 
@@ -3423,13 +3439,13 @@ func TestMultiNode_RandomLayoutTests(t *testing.T) {
 
 	c.NewRetryHelper(10, 0, 1, func(_ int, _ error) error {
 		if numReps == 0 {
-			numReps = rand.Intn(7)
+			numReps = nonZeroRandIntn(7)
 		}
 		if numIndexesPerCat == 0 {
-			numIndexesPerCat = rand.Intn(10)
+			numIndexesPerCat = nonZeroRandIntn(10)
 		}
 		if numPartitions == 0 {
-			numPartitions = rand.Intn(int(minPartitionsPerShard) * 3)
+			numPartitions = nonZeroRandIntn(int(minPartitionsPerShard) * 3)
 		}
 
 		if numReps == 0 || numIndexesPerCat == 0 || numPartitions == 0 {
@@ -3447,9 +3463,9 @@ func TestMultiNode_RandomLayoutTests(t *testing.T) {
 	start := time.Now()
 	initCompare := 1 * time.Second
 	for numPartitionsCreated < int(testShardCapacity)*numReps {
-		count := uint64(rand.Intn(numIndexesPerCat))
-		replicas := rand.Intn(numReps)
-		partitions := rand.Intn(numPartitions)
+		count := uint64(nonZeroRandIntn(numIndexesPerCat))
+		replicas := nonZeroRandIntn(numReps)
+		partitions := nonZeroRandIntn(numPartitions)
 
 		var cip = createIdxParam{
 			count:       count,
@@ -3490,9 +3506,14 @@ func TestMultiNode_RandomLayoutTests(t *testing.T) {
 
 		elapsed := time.Since(start)
 		if elapsed > initCompare {
-			t.Logf("elapsed time to create cipList - %v", elapsed.String())
+			t.Logf("elapsed time to create cipList - %v; len(%v)",
+				elapsed.String(), numPartitionsCreated)
 			initCompare += 1 * time.Second
 		}
+	}
+	elapsed := time.Since(start)
+	if elapsed > 5*time.Second {
+		t.Logf("[WARN] time to generate random list is too high - %v", elapsed.String())
 	}
 
 	var cluster = createDummyIndexerNodes(numReps, ciplist...)

@@ -3390,7 +3390,7 @@ type MsgIndexTrainingDone struct {
 	errMap       map[common.IndexInstId]map[common.PartitionId]error
 	successMap   map[common.IndexInstId]bool
 	droppedInsts map[common.IndexInstId]bool
-	dropMap      map[common.IndexInstId]MsgChannel
+	dropMap      map[common.IndexInstId]bool
 	reqCtx       *c.MetadataRequestContext
 	respCh       MsgChannel
 
@@ -3414,7 +3414,7 @@ func (m *MsgIndexTrainingDone) GetSuccessMap() map[common.IndexInstId]bool {
 	return m.successMap
 }
 
-func (m *MsgIndexTrainingDone) GetDropMap() map[common.IndexInstId]MsgChannel {
+func (m *MsgIndexTrainingDone) GetDropMap() map[common.IndexInstId]bool {
 	return m.dropMap
 }
 
