@@ -4452,12 +4452,12 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	idx.stats.RemoveIndexStats(indexInst)
 
 	if indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
-		messageStr := fmt.Sprintf("InstId: %v building with vector insts under training " + 
-		"actual drop will happen after training is complete",indexInstId)
+		messageStr := fmt.Sprintf("InstId: %v building with vector insts under training "+
+			"actual drop will happen after training is complete", indexInstId)
 
 		if indexInst.Defn.IsVectorIndex {
-			messageStr = fmt.Sprintf("InstId: %v training is in progress " +
-			"actual drop will happen after training is complete",indexInstId)
+			messageStr = fmt.Sprintf("InstId: %v training is in progress "+
+				"actual drop will happen after training is complete", indexInstId)
 		}
 		logging.Infof("Indexer::handleDropIndex %v", messageStr)
 
@@ -11033,6 +11033,12 @@ func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.I
 				// the index for build
 				newList = append(newList, instId)
 				count++
+			} else if index.State == common.INDEX_STATE_INITIAL ||
+				index.State == common.INDEX_STATE_CATCHUP ||
+				index.State == common.INDEX_STATE_ACTIVE {
+				logging.Infof("Index build is already in progress for inst %v. TrainingPhase: %v. Skip from further processing",
+					instId, index.TrainingPhase)
+				skipCount++
 			} else {
 				errStr := fmt.Sprintf("Invalid Index State %v for %v In Build Request. "+
 					"Expected INDEX_STATE_RECOVERED", index.State, instId)
