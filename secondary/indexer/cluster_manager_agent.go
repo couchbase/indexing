@@ -217,7 +217,8 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 	for _, index := range indexList {
 		updatedState := common.INDEX_STATE_NIL
 		updatedStream := common.NIL_STREAM
-		updatedError := ""
+		updateErr := false
+		errStr := ""
 		updatedRState := common.REBAL_NIL
 		updatedPartitions := []uint64(nil)
 		updatedVersions := []int(nil)
@@ -235,7 +236,8 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 			updatedStream = index.Stream
 		}
 		if updatedFields.err {
-			updatedError = index.Error
+			updateErr = true
+			errStr = index.Error
 		}
 		if updatedFields.rstate {
 			updatedRState = index.RState
@@ -268,14 +270,14 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		if syncUpdate {
 			go func() {
 				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
-					index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
+					index.Defn.DefnId, index.InstId, updatedState, updatedStream, updateErr, errStr, updatedBuildTs,
 					updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds,
 					updatedTrainingPhase, numCentroidsPerPartn, updatedBhiveGraphStatus)
 				respCh <- err
 			}()
 		} else {
 			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
-				index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
+				index.Defn.DefnId, index.InstId, updatedState, updatedStream, updateErr, errStr, updatedBuildTs,
 				updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds,
 				updatedTrainingPhase, numCentroidsPerPartn, updatedBhiveGraphStatus)
 		}
