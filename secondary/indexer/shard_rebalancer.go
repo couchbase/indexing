@@ -1421,12 +1421,23 @@ loop:
 
 				// No errors are observed during shard transfer. Change the state of
 				// the transfer token and update metaKV
-				sr.mu.Lock()
-				defer sr.mu.Unlock()
+				func() {
+					sr.mu.Lock()
+					defer sr.mu.Unlock()
 
-				tt.ShardTransferTokenState = c.ShardTokenRestoreShard
-				tt.ShardPaths = shardPaths
-				setTransferTokenInMetakv(ttid, tt)
+					tt.ShardTransferTokenState = c.ShardTokenRestoreShard
+					tt.ShardPaths = shardPaths
+					setTransferTokenInMetakv(ttid, tt)
+				}()
+
+				// In rare cases, it is possible for the source to miss the transfer token
+				// transition to Restore and Recover phases while the destination moves the
+				// token to Ready phase. If rebalance cancel happens during this window, then
+				// source node is expected to drop the indexes but the transfer phase won't be
+				// updated. This causes a hang in rebalance. To avoid such cases, update the
+				// transfer phase as soon as transfer is done i.e. without waiting for source
+				// to observe state transition
+				sr.updateInstsTransferPhase(ttid, tt, c.RebalanceTransferDone)
 				return
 			}
 

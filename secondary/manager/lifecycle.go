@@ -139,6 +139,7 @@ type topologyChange struct {
 	InstId      uint64   `json:"instId,omitempty"`
 	State       uint32   `json:"state,omitempty"`
 	StreamId    uint32   `json:"steamId,omitempty"`
+	UpdateErr   bool     `json:"updateErr,omitempty"`
 	Error       string   `json:"error,omitempty"`
 	BuildTime   []uint64 `json:"buildTime,omitempty"`
 	RState      uint32   `json:"rState,omitempty"`
@@ -2462,7 +2463,7 @@ func (m *LifecycleMgr) setScheduleFlagAndUpdateErr(defn *common.IndexDefn, inst 
 
 	if updateErr {
 		err := m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
-			common.NIL_STREAM, errStr, nil, inst.RState, nil, nil, -1, nil, inst.TrainingPhase, nil, nil)
+			common.NIL_STREAM, true, errStr, nil, inst.RState, nil, nil, -1, nil, inst.TrainingPhase, nil, nil)
 		if err != nil {
 			logging.Infof("LifecycleMgr::handleBuildIndexes: Failed to persist error in index instance (%v, %v, %v, %v, %v).",
 				defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
@@ -2671,7 +2672,7 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 	// update the index instance
 	if err := m.UpdateIndexInstance(change.Bucket, change.Scope, change.Collection,
 		common.IndexDefnId(change.DefnId), common.IndexInstId(change.InstId),
-		common.IndexState(change.State), common.StreamId(change.StreamId), change.Error,
+		common.IndexState(change.State), common.StreamId(change.StreamId), change.UpdateErr, change.Error,
 		change.BuildTime, change.RState, change.Partitions, change.Versions,
 		change.InstVersion, change.ShardIdMap, change.TrainingPhase,
 		change.NumCentroidsPerPartn, change.BhiveGraphStatusMap); err != nil {
@@ -4187,7 +4188,7 @@ func (m *LifecycleMgr) canRetryCreateError(err error) bool {
 
 func (m *LifecycleMgr) UpdateIndexInstance(bucket, scope, collection string,
 	defnId common.IndexDefnId, instId common.IndexInstId, state common.IndexState,
-	streamId common.StreamId, errStr string, buildTime []uint64, rState uint32,
+	streamId common.StreamId, updateErr bool, errStr string, buildTime []uint64, rState uint32,
 	partitions []uint64, versions []int, version int, partnShardIdMap common.PartnShardIdMap,
 	trainingPhase common.TrainingPhase, numCentroidsPerPartn map[common.PartitionId]int,
 	bhiveGraphStatusMap map[common.PartitionId]bool) error {
@@ -4240,7 +4241,9 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket, scope, collection string,
 		changed = topology.UpdateStreamForIndexInst(defnId, instId, common.StreamId(streamId)) || changed
 	}
 
-	changed = topology.SetErrorForIndexInst(defnId, instId, errStr) || changed
+	if updateErr {
+		changed = topology.SetErrorForIndexInst(defnId, instId, errStr) || changed
+	}
 
 	changed = topology.UpdateStorageModeForIndexInst(defnId, instId, string(defn.Using)) || changed
 
