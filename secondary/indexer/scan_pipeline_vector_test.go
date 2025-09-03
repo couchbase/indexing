@@ -408,7 +408,7 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 		}()
 
 		if stopPreWait {
-			wp.Stop()
+			wp.Stop("TestVectorPipelineWorkerPool.stopPreWait")
 		}
 
 		wpErr := wp.Wait()
@@ -419,7 +419,7 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 		}
 
 		if stopPostWait {
-			wp.Stop()
+			wp.Stop("TestVectorPipelineWorkerPool.stopPostWait")
 		}
 
 		if stopPostWait || testErr != nil {
@@ -439,7 +439,7 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 				t.Fatal(wpErr)
 			}
 
-			wp.Stop()
+			wp.Stop("TestVectorPipelineWorkerPool.stopPostWait")
 			wp.StopOutCh()
 
 			logging.Infof("Waiting for recv channel to get closed 2")
@@ -632,7 +632,7 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 			defer close(fioDone)
 			err = fio.Wait()
 			if err != nil {
-				wp.Stop()
+				wp.Stop("TestVectorPipelineMergeOperator.Wait")
 			}
 		}()
 
@@ -664,7 +664,7 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 			return
 		}
 
-		wp.Stop()
+		wp.Stop("TestVectorPipelineMergeOperator.stopPostWait")
 		wp.StopOutCh()
 		logging.Infof("WorkerPool Stopped")
 		<-fioDone
