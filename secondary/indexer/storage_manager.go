@@ -93,7 +93,8 @@ type storageMgr struct {
 	// used to send a signal to the quota distributor
 	// - sending true in the channel will cause the go routine to stop
 	// - sending false in the channel will force a memory quota distribution
-	quotaDistCh chan bool
+	quotaDistCh    chan bool
+	isTunerStarted bool
 
 	lastCodebokMemLogTime uint64
 
@@ -192,7 +193,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 
 	// start plasma's storage mem tuner
 	if config["plasma.UseQuotaTuner"].Bool() {
-		plasma.RunMemQuotaTuner(
+		s.isTunerStarted = plasma.RunMemQuotaTuner(
 			s.quotaDistCh,
 			s.getStorageQuota,
 			s.getStorageTunerConfig,
@@ -201,8 +202,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	}
 
 	// trigger initial set quota and distribution
-	s.quotaDistCh <- false
-	<-s.quotaDistCh
+	s.signalStorageTuner(false)
 
 	return s, &MsgSuccess{}
 
@@ -230,8 +230,7 @@ loop:
 					}
 
 					// shutdown storage mem tuner
-					s.quotaDistCh <- true
-					<-s.quotaDistCh
+					s.signalStorageTuner(true)
 
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
@@ -1613,8 +1612,7 @@ func (s *storageMgr) notifyIndexCreate(oldIndexInstMap common.IndexInstMap) {
 			}
 		}
 
-		s.quotaDistCh <- false
-		<-s.quotaDistCh
+		s.signalStorageTuner(false)
 	}
 }
 
@@ -2307,8 +2305,7 @@ func (s *storageMgr) handleConfigUpdate(cmd Message) {
 			oldConfig["settings.percentage_memory_quota"].Uint64()) {
 
 		// memory quota setting has changed, need to redistribute
-		s.quotaDistCh <- false
-		<-s.quotaDistCh
+		s.signalStorageTuner(false)
 	}
 
 	isShardAffinityEnabled := common.CanMaintanShardAffinity(s.config)
@@ -3212,6 +3209,16 @@ func (sm *storageMgr) handlePersistanceStatus(msg Message) {
 		}
 		respCh <- false
 	}()
+}
+
+func (s *storageMgr) signalStorageTuner(stopTuner bool) {
+	// storage tuner is started only for enterprise edition, so
+	// skip signalling if tuner is not started.
+
+	if s.isTunerStarted {
+		s.quotaDistCh <- stopTuner
+		<-s.quotaDistCh
+	}
 }
 
 // Used by storage to periodically get the quota
