@@ -760,6 +760,12 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 
 func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 
+	// Dont wait till row is added to the batch when stopCh is closed.
+	// This is to avoid blocking the scan pipeline when stopCh is closed.
+	if w.currJob.rowsScanned%SCAN_SHUTDOWN_ERROR_BATCHSIZE == 0 && w.workerStopped() {
+		return ErrScanWorkerStopped
+	}
+
 	if w.currJob.rowsScanned%SCAN_ROLLBACK_ERROR_BATCHSIZE == 0 && w.r.hasRollback != nil && w.r.hasRollback.Load() == true {
 		return ErrIndexRollback
 	}
@@ -871,6 +877,12 @@ func (w *ScanWorker) setCoverForIncludeExprs(docid []byte, explodedIncludeValues
 // includeColumn fields will be extraced from the decoded meta
 func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 
+	// Dont wait till row is added to the batch when stopCh is closed.
+	// This is to avoid blocking the scan pipeline when stopCh is closed.
+	if (w.currJob.rowsFiltered+w.currJob.rowsScanned)%SCAN_SHUTDOWN_ERROR_BATCHSIZE == 0 && w.workerStopped() {
+		return false, ErrScanWorkerStopped
+	}
+
 	if !w.r.isBhiveScan {
 		return false, errors.New("Include column filtering is only supported with BHIVE indexes")
 	}
@@ -907,6 +919,12 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 }
 
 func (w *ScanWorker) inlineFilterCb2(meta []byte, docid []byte) (bool, error) {
+
+	// Dont wait till row is added to the batch when stopCh is closed.
+	// This is to avoid blocking the scan pipeline when stopCh is closed.
+	if (w.currJob.rowsFiltered+w.currJob.rowsScanned)%SCAN_SHUTDOWN_ERROR_BATCHSIZE == 0 && w.workerStopped() {
+		return false, ErrScanWorkerStopped
+	}
 
 	if !w.r.isBhiveScan {
 		return false, errors.New("Include column filtering is only supported with BHIVE indexes")
@@ -953,6 +971,12 @@ func (w *ScanWorker) inlineFilterCb2(meta []byte, docid []byte) (bool, error) {
 }
 
 func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
+
+	// Dont wait till row is added to the batch when stopCh is closed.
+	// This is to avoid blocking the scan pipeline when stopCh is closed.
+	if (w.currJob.rowsFiltered+w.currJob.rowsScanned)%SCAN_SHUTDOWN_ERROR_BATCHSIZE == 0 && w.workerStopped() {
+		return ErrScanWorkerStopped
+	}
 
 	if w.currJob.rowsScanned%SCAN_ROLLBACK_ERROR_BATCHSIZE == 0 && w.r.hasRollback != nil && w.r.hasRollback.Load() == true {
 		return ErrIndexRollback
@@ -1064,6 +1088,15 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	}
 
 	return nil
+}
+
+func (w *ScanWorker) workerStopped() bool {
+	select {
+	case <-w.stopCh:
+		return true
+	default:
+		return false
+	}
 }
 
 func (w *ScanWorker) reverseCollate(entry []byte) ([]byte, error) {
@@ -1303,7 +1336,7 @@ func (wp *WorkerPool) Submit(job *ScanJob) error {
 	case err := <-wp.errCh:
 		wp.jobsWg.Add(-1) // Job not submitted so revert the added delta
 		logging.Verbosef("%v Submit: got error: %v", wp.logPrefix, err)
-		wp.Stop()
+		wp.Stop("WorkerPool.Submit")
 		return err
 	}
 	return nil
@@ -1322,7 +1355,7 @@ func (wp *WorkerPool) Wait() error {
 	case err := <-wp.errCh: // If any worker errors out
 		if err != nil {
 			logging.Verbosef("%v Wait: got error: %v", wp.logPrefix, err)
-			wp.Stop()
+			wp.Stop("WorkerPool.Wait")
 			<-doneCh         // Wait for running jobs to stop
 			wp.sendLastRow() // Indicate downstream of early closure
 			return err
@@ -1354,8 +1387,9 @@ func (wp *WorkerPool) sendLastRow() {
 
 // Stop signals all workers to stop. Use Wait to wait till submitted jobs are done.
 // Stop will halt the workers
-func (wp *WorkerPool) Stop() {
+func (wp *WorkerPool) Stop(logPrefix string) {
 	wp.stopOnce.Do(func() {
+		logging.Verbosef("%v WorkerPool - stopping from %v", wp.logPrefix, logPrefix)
 		close(wp.stopCh)
 	})
 }
@@ -1854,6 +1888,20 @@ type IndexScanSource2 struct {
 	p  *ScanPipeline
 
 	parllelCIDScans int
+
+	wpLock sync.Mutex
+	wp     *WorkerPool
+}
+
+func (s *IndexScanSource2) Shutdown(err error) {
+	s.wpLock.Lock()
+	defer s.wpLock.Unlock()
+	s.ItemWriter.Shutdown(err)
+	if s.wp != nil {
+		s.wp.Stop("IndexScanSource2.Shutdown")
+		s.wp = nil
+	}
+	logging.Verbosef("%v %v IndexScanSource2 - shutdown with error %v", s.p.req.LogPrefix, s.p.req.RequestId, err)
 }
 
 func (s *IndexScanSource2) Routine() error {
@@ -1923,7 +1971,7 @@ func (s *IndexScanSource2) Routine() error {
 	// Spawn Merge Operator
 	fanIn, err := NewMergeOperator(wpOutCh, s.p.req, writeItemAddStat)
 	if err != nil { // Stop worker pool and return
-		wp.Stop() // Stop the workers
+		wp.Stop("IndexScanSource2.Routine NewMergeOperator") // Stop the workers
 		s.CloseWithError(err)
 		return err
 	}
@@ -1989,13 +2037,28 @@ func (s *IndexScanSource2) Routine() error {
 		s.p.rowsReranked += fanIn.rowsReranked
 	}()
 
+	err = func() error {
+		s.wpLock.Lock()
+		defer s.wpLock.Unlock()
+		if err := s.HasShutdown(); err != nil {
+			return err
+		}
+		s.wp = wp
+		return nil
+	}()
+	if err != nil {
+		wp.Stop("IndexScanSource2.Routine HasShutdown")
+		s.CloseWithError(err)
+		return err
+	}
+
 	doneCh := make(chan struct{})
 	var wpErr, fanInErr error
 	go func() {
 		defer func() {
-			wp.Stop()      // Stop the workers in non error cases, no-op on error
-			wp.StopOutCh() // Close downstream channel, even in error case
-			close(doneCh)  // Indicate finish of this goroutine
+			wp.Stop("IndexScanSource2.Routine Done") // Stop the workers in non error cases, no-op on error
+			wp.StopOutCh()                           // Close downstream channel, even in error case
+			close(doneCh)                            // Indicate finish of this goroutine
 		}()
 		stopped := false
 		for i := 0; i <= maxBatchId; i++ {
@@ -2006,7 +2069,7 @@ func (s *IndexScanSource2) Routine() error {
 					break
 				}
 			}
-			if mergeSort {
+			if !stopped && mergeSort {
 				wp.MergeSorter()
 			}
 			wpErr = wp.Wait()
@@ -2019,7 +2082,7 @@ func (s *IndexScanSource2) Routine() error {
 	// Wait for Merge Operator to terminate it will happen either when we stopped worker pool
 	fanInErr = fanIn.Wait()
 	if fanInErr != nil { // If there is an error in FanIn stop worker pool
-		wp.Stop()
+		wp.Stop("IndexScanSource2.Routine Merger Error")
 		<-doneCh
 		s.CloseWithError(fanInErr)
 		return fanInErr
@@ -2030,6 +2093,12 @@ func (s *IndexScanSource2) Routine() error {
 	if wpErr != nil {
 		s.CloseWithError(wpErr)
 		return wpErr
+	}
+
+	if err = s.HasShutdown(); err != nil {
+		logging.Verbosef("%v %v IndexScanSource2.Routine - error %v while checking shutdown", s.p.req.LogPrefix, s.p.req.RequestId, err)
+		s.CloseWithError(err)
+		return err
 	}
 
 	return nil
