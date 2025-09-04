@@ -3021,8 +3021,13 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 
 			inst := tt.IndexInsts[index]
 			defn := inst.Defn
-			if defn.Deferred && (defn.InstStateAtRebal == common.INDEX_STATE_CREATED || defn.InstStateAtRebal == common.INDEX_STATE_READY) {
-				logging.Infof("ShardRebalancer::updateRStateToActive Returning as inst is deferred, instId: %v, realInstId: %v", tt.InstIds[index], tt.RealInstIds[index])
+
+			isDeferred := defn.Deferred && (defn.InstStateAtRebal == common.INDEX_STATE_CREATED || defn.InstStateAtRebal == common.INDEX_STATE_READY)
+			pendingBuild := tt.IndexInsts[index].IsPendingBuild()
+
+			if isDeferred && !pendingBuild {
+				logging.Infof("ShardRebalancer::updateRStateToActive Returning as inst is deferred and no pending build, instId: %v, realInstId: %v",
+					tt.InstIds[index], tt.RealInstIds[index])
 				return // For deferred indexes, RState is already changed. Hence, return
 			}
 			// merge only if instance is not dropped during rebalance

@@ -1435,9 +1435,9 @@ func restGetStatsFromIndexerNodes(statURLs []string, targetInstIDs []uint64) (
 
 	var res = make([][]StorageStats, 0, len(targetInstIDs))
 
-	bodyBuf := bytes.NewBuffer(instBytes)
 	for _, statURL := range statURLs {
 
+		bodyBuf := bytes.NewBuffer(instBytes)
 		resp, err := postWithAuth(statURL, "application/json", bodyBuf, time.Duration(10)*time.Second)
 		if err != nil {
 			return nil, err
