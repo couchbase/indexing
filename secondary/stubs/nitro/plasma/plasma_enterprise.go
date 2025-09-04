@@ -65,6 +65,9 @@ func RunMemQuotaTuner(
 	getAssignedQuota func() int64,
 	getConfig func() MemTunerConfig,
 	getDistStats func() MemTunerDistStats,
-) {
+) bool {
+
 	ee.RunMemQuotaTuner(quotaDistCh, getAssignedQuota, getConfig, getDistStats)
+
+	return true
 }

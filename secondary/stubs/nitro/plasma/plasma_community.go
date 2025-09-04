@@ -55,7 +55,8 @@ func RunMemQuotaTuner(
 	_ func() int64,
 	_ func() MemTunerConfig,
 	_ func() MemTunerDistStats,
-) {
+) bool {
+	return false
 }
 
 func (d *StubType) HandleHttp(w http.ResponseWriter, r *http.Request) {
