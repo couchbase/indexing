@@ -169,7 +169,6 @@ type ScanRequest struct {
 type IndexKeyOrder struct {
 	vectorDistOnly  bool
 	vectorDistDesc  bool
-	inIndexOrder    bool
 	posInIndexOrder int
 	keyPos          []int32
 	desc            []bool
@@ -179,20 +178,7 @@ func (io *IndexKeyOrder) IsSortKeyNeeded() bool {
 	if io.vectorDistOnly {
 		return false
 	}
-	// if io.inIndexOrder {
-	// 	return false
-	// }
 	return true
-}
-
-func (io *IndexKeyOrder) IsDistAdditionNeeded() bool {
-	if io.vectorDistOnly {
-		return false
-	}
-	if io.inIndexOrder {
-		return true
-	}
-	return false
 }
 
 func (io *IndexKeyOrder) IsOrderAscending() bool {
@@ -562,8 +548,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			r.projectVectorDist = r.ProjectVectorDist()
 			r.setRerankLimits(req.GetIndexVector())
 			protoIndexOrder := req.GetIndexOrder()
-			if r.indexOrder, err = validateIndexOrder(protoIndexOrder,
-				r.IndexInst.Defn.Desc, r.vectorPos); err != nil {
+			if r.indexOrder, err = validateIndexOrder(protoIndexOrder, r.vectorPos); err != nil {
 				return
 			}
 		} else {
@@ -1861,8 +1846,7 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 	return
 }
 
-func validateIndexOrder(protoIndexOrder *protobuf.IndexKeyOrder, indexDesc []bool,
-	vectorKeyPos int) (*IndexKeyOrder, error) {
+func validateIndexOrder(protoIndexOrder *protobuf.IndexKeyOrder, vectorKeyPos int) (*IndexKeyOrder, error) {
 	if protoIndexOrder == nil {
 		return nil, nil
 	}
@@ -1893,26 +1877,6 @@ func validateIndexOrder(protoIndexOrder *protobuf.IndexKeyOrder, indexDesc []boo
 		}
 	}
 
-	// For orderby to be in index order it should start from 0th key in index and
-	// should be strictly increasing till the vector pos
-	outOfIndexOrder := false
-	// There should be ordering on all keys till vector key possition
-	if len(indexOrder.keyPos) < vectorKeyPos+1 {
-		outOfIndexOrder = true
-	} else if indexOrder.keyPos[0] == 0 && indexOrder.desc[0] == indexDesc[0] {
-		prevKp := int32(0)
-		for i := 1; i < len(indexOrder.keyPos); i++ {
-			currkp := indexOrder.keyPos[i]
-			if currkp != prevKp+1 || indexOrder.desc[i] != indexDesc[currkp] {
-				outOfIndexOrder = true
-				break
-			}
-			prevKp = currkp
-		}
-	} else {
-		outOfIndexOrder = true
-	}
-	indexOrder.inIndexOrder = !outOfIndexOrder
 	return indexOrder, nil
 }
 
