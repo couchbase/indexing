@@ -9938,7 +9938,7 @@ func (idx *indexer) updateTopologyOnShardIdChange(indexInst *common.IndexInst, p
 			"different from currShardIds: %v for index inst: %v. Updating topology with new shardIds",
 			persistedShardIdMap, partnShardIdMap, indexInst.InstId)
 
-		respCh := make(chan error)
+		respCh := make(chan error, 1)
 		idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, false, false, false, false, false, true, true, false, partnShardIdMap, false, nil, respCh)
 	}
 }
@@ -14565,7 +14565,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 			true,  /* updateError */
 			false, /* updateBuildTs */
 			false, /* updateRState */
-			true,  /* syncUpdate */
+			false, /* syncUpdate */
 			false, /* updatePartitions */
 			false, /* updateVersion */
 			nil,   /* partnShardIdMap */
@@ -14588,7 +14588,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 			true,  /* updateError */
 			false, /* updateBuildTs */
 			false, /* updateRState */
-			true,  /* syncUpdate */
+			false, /* syncUpdate */
 			false, /* updatePartitions */
 			false, /* updateVersion */
 			nil,   /* partnShardIdMap */
