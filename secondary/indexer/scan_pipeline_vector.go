@@ -1683,8 +1683,8 @@ func (fio *MergeOperator) rerankOnRow(row *Row, ctx IndexReaderContext, buf []by
 
 	buf, err = snap.Snapshot().FetchValue(ctx, row.storeId, row.recordId, row.cid, buf)
 	if err != nil {
-		logging.Errorf("%v observed error while fetching value for storeId: %v recordId: %v, cid: %s, partnId: %v, err: %v",
-			fio.logPrefix, row.storeId, row.recordId, row.cid, row.partnId, err)
+		logging.Errorf("%v observed error while fetching value for instId: %v storeId: %v recordId: %v, cid: %s, partnId: %v, err: %v",
+			fio.logPrefix, snap.Snapshot().IndexInstId(), row.storeId, row.recordId, bhiveCentroidId(row.cid), row.partnId, err)
 		return err
 	}
 
@@ -1693,8 +1693,8 @@ func (fio *MergeOperator) rerankOnRow(row *Row, ctx IndexReaderContext, buf []by
 	dists := make([]float32, 1)
 	err = fio.req.codebookMap[c.PartitionId(partnId)].ComputeDistance(fio.req.queryVector, value, dists)
 	if err != nil {
-		logging.Errorf("%v observed error while computing distance for storeId: %v recordId: %v, cid: %s, partnId: %v, err: %v",
-			fio.logPrefix, row.storeId, row.recordId, row.cid, row.partnId, err)
+		logging.Errorf("%v observed error while computing distance for instId: %v storeId: %v recordId: %v, cid: %s, partnId: %v, err: %v",
+			fio.logPrefix, snap.Snapshot().IndexInstId(), row.storeId, row.recordId, bhiveCentroidId(row.cid), row.partnId, err)
 		return err
 	}
 
