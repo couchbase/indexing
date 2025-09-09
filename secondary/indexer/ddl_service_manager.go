@@ -929,7 +929,8 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 							buildMap[defn.DefnId] = true
 						}
 
-						if index != nil && index.Error != "" && common.IsVectorTrainingErrorQualifyingDocs(index.Error) {
+						if index != nil && index.Error != "" && common.IsVectorTrainingErrorQualifyingDocs(index.Error) &&
+							indexerId2 == m.indexerId {
 							errorMap[defn.DefnId] = true
 						}
 					}
