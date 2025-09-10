@@ -5805,9 +5805,27 @@ func (idx *indexer) cleanupIndexDataForCollectionDrop(streamId common.StreamId,
 
 	bucketUUID := idx.indexInstMap[deletedInstIds[0]].Defn.BucketUUID // to-be-deleted info needed below
 	deletedInsts := idx.getInsts(deletedInstIds)
-	idx.cleanupIndexData(deletedInsts, nil, nil)
 
-	// Skip instances with NIL_STREAM
+	instsToBeDeleted := make([]c.IndexInst, 0)
+	deletedVectInstIds := make([]c.IndexInstId, 0)
+	for _, instId := range deletedInstIds {
+		if indexInst, ok := idx.indexInstMap[instId]; ok {
+			if indexInst.Defn.IsVectorIndex && indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+				deletedVectInstIds = append(deletedVectInstIds, instId)
+				idx.updateDropInstsDuringTrainingMap(instId)
+			} else {
+				instsToBeDeleted = append(instsToBeDeleted, indexInst)
+			}
+		}
+	}
+	if len(deletedVectInstIds) > 0 {
+		logging.Infof("Indexer::cleanupIndexDataForCollectionDrop updated drop for instances: %v as training is in progress.", deletedVectInstIds)
+	}
+
+	idx.cleanupIndexData(instsToBeDeleted, nil, nil)
+
+	// Skip instances with NIL_STREAM. Vector instances which are undergoing training
+	// will also be in NIL_STREAM
 	indexesWithStream := make([]common.IndexInst, 0)
 	for _, index := range deletedInsts {
 		if index.Stream == streamId {
