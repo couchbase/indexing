@@ -5657,17 +5657,20 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 		common.CrashOnError(err)
 	}
 
+	instsToBeDeleted := make([]c.IndexInst, 0)
 	deletedVectInstIds := make([]c.IndexInstId, 0)
 	for _, instId := range deletedInstIds {
 		if indexInst, ok := idx.indexInstMap[instId]; ok {
 			if indexInst.Defn.IsVectorIndex && indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
 				deletedVectInstIds = append(deletedVectInstIds, instId)
 				idx.updateDropInstsDuringTrainingMap(instId)
+			} else {
+				instsToBeDeleted = append(instsToBeDeleted, indexInst)
 			}
 		}
 	}
 	if len(deletedVectInstIds) > 0 {
-		logging.Infof("Indexer::handleKeyspaceNotFound updated drop for instances: %v as training is in progress", deletedVectInstIds)
+		logging.Infof("Indexer::handleKeyspaceNotFound updated drop for instances: %v as training is in progress.", deletedVectInstIds)
 	}
 
 	// If there is a pending collection drop at this point, it means
@@ -5675,7 +5678,7 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 	// be cleaned-up once flush is done
 	if val, ok := idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId]; !ok || val == false {
 		idx.stopKeyspaceIdStream(streamId, keyspaceId, true)
-		idx.cleanupIndexData(deletedInsts, nil, nil)
+		idx.cleanupIndexData(instsToBeDeleted, nil, nil)
 		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 
 		logging.Infof("Indexer::handleKeyspaceNotFound %v %v %v",
