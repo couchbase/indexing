@@ -15082,7 +15082,7 @@ func (idx *indexer) checkForLostPartitions(sortedIndexInfo []*IndexInfo) {
 	for defnId, replicaIdMap := range actualInstPartnMap {
 		for replicaId, partnIdMap := range replicaIdMap {
 			if len(partnIdMap) != expectedInstPartnMap[defnId] {
-				logging.Fatalf("Indexer::checkForLostPartitions defnId: %v, replicaId: %v has only %v(%v) partitions "+
+				logging.Warnf("Indexer::checkForLostPartitions defnId: %v, replicaId: %v has only %v(%v) partitions "+
 					"while it is expected to have %v partitions", defnId, replicaId, len(partnIdMap),
 					partnIdMap, expectedInstPartnMap[defnId])
 			}
