@@ -5657,17 +5657,20 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 		common.CrashOnError(err)
 	}
 
+	instsToBeDeleted := make([]c.IndexInst, 0)
 	deletedVectInstIds := make([]c.IndexInstId, 0)
 	for _, instId := range deletedInstIds {
 		if indexInst, ok := idx.indexInstMap[instId]; ok {
 			if indexInst.Defn.IsVectorIndex && indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
 				deletedVectInstIds = append(deletedVectInstIds, instId)
 				idx.updateDropInstsDuringTrainingMap(instId)
+			} else {
+				instsToBeDeleted = append(instsToBeDeleted, indexInst)
 			}
 		}
 	}
 	if len(deletedVectInstIds) > 0 {
-		logging.Infof("Indexer::handleKeyspaceNotFound updated drop for instances: %v as training is in progress", deletedVectInstIds)
+		logging.Infof("Indexer::handleKeyspaceNotFound updated drop for instances: %v as training is in progress.", deletedVectInstIds)
 	}
 
 	// If there is a pending collection drop at this point, it means
@@ -5675,7 +5678,7 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 	// be cleaned-up once flush is done
 	if val, ok := idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId]; !ok || val == false {
 		idx.stopKeyspaceIdStream(streamId, keyspaceId, true)
-		idx.cleanupIndexData(deletedInsts, nil, nil)
+		idx.cleanupIndexData(instsToBeDeleted, nil, nil)
 		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 
 		logging.Infof("Indexer::handleKeyspaceNotFound %v %v %v",
@@ -5802,9 +5805,27 @@ func (idx *indexer) cleanupIndexDataForCollectionDrop(streamId common.StreamId,
 
 	bucketUUID := idx.indexInstMap[deletedInstIds[0]].Defn.BucketUUID // to-be-deleted info needed below
 	deletedInsts := idx.getInsts(deletedInstIds)
-	idx.cleanupIndexData(deletedInsts, nil, nil)
 
-	// Skip instances with NIL_STREAM
+	instsToBeDeleted := make([]c.IndexInst, 0)
+	deletedVectInstIds := make([]c.IndexInstId, 0)
+	for _, instId := range deletedInstIds {
+		if indexInst, ok := idx.indexInstMap[instId]; ok {
+			if indexInst.Defn.IsVectorIndex && indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+				deletedVectInstIds = append(deletedVectInstIds, instId)
+				idx.updateDropInstsDuringTrainingMap(instId)
+			} else {
+				instsToBeDeleted = append(instsToBeDeleted, indexInst)
+			}
+		}
+	}
+	if len(deletedVectInstIds) > 0 {
+		logging.Infof("Indexer::cleanupIndexDataForCollectionDrop updated drop for instances: %v as training is in progress.", deletedVectInstIds)
+	}
+
+	idx.cleanupIndexData(instsToBeDeleted, nil, nil)
+
+	// Skip instances with NIL_STREAM. Vector instances which are undergoing training
+	// will also be in NIL_STREAM
 	indexesWithStream := make([]common.IndexInst, 0)
 	for _, index := range deletedInsts {
 		if index.Stream == streamId {
@@ -9938,7 +9959,7 @@ func (idx *indexer) updateTopologyOnShardIdChange(indexInst *common.IndexInst, p
 			"different from currShardIds: %v for index inst: %v. Updating topology with new shardIds",
 			persistedShardIdMap, partnShardIdMap, indexInst.InstId)
 
-		respCh := make(chan error)
+		respCh := make(chan error, 1)
 		idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, false, false, false, false, false, true, true, false, partnShardIdMap, false, nil, respCh)
 	}
 }
@@ -14565,7 +14586,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 			true,  /* updateError */
 			false, /* updateBuildTs */
 			false, /* updateRState */
-			true,  /* syncUpdate */
+			false, /* syncUpdate */
 			false, /* updatePartitions */
 			false, /* updateVersion */
 			nil,   /* partnShardIdMap */
@@ -14588,7 +14609,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 			true,  /* updateError */
 			false, /* updateBuildTs */
 			false, /* updateRState */
-			true,  /* syncUpdate */
+			false, /* syncUpdate */
 			false, /* updatePartitions */
 			false, /* updateVersion */
 			nil,   /* partnShardIdMap */
