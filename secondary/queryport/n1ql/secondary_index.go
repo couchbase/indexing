@@ -1048,14 +1048,15 @@ type secondaryIndex struct {
 	indexStatsHolder *mclient.IndexStatsHolder
 
 	// Vector index related metadata
-	isCompositeVector  bool
-	vectorDistanceType datastore.IndexDistanceType
-	vectorDimension    int
-	nprobes            int
-	vectorDescription  string
-	vectorTrainList    int
-	numCentroids       int
-	numPartition       int
+	isCompositeVector    bool
+	vectorDistanceType   datastore.IndexDistanceType
+	vectorUserSimilarity string
+	vectorDimension      int
+	nprobes              int
+	vectorDescription    string
+	vectorTrainList      int
+	numCentroids         int
+	numPartition         int
 
 	isBhive           bool
 	rerankFactor      int
@@ -1143,6 +1144,9 @@ func newSecondaryIndexFromMetaData(
 		} else {
 			si.vectorDistanceType = val
 		}
+		// Also have the user-specified similarity as a field, as it needs to be returned in
+		// with clause(as opposed to distance metric we use internally)
+		si.vectorUserSimilarity = strings.ToLower(string(indexDefn.VectorMeta.Similarity))
 		si.vectorDimension = indexDefn.VectorMeta.Dimension
 		si.vectorDescription = indexDefn.VectorMeta.Quantizer.String()
 		si.vectorTrainList = indexDefn.VectorMeta.TrainList
@@ -1274,7 +1278,7 @@ func (si *secondaryIndex) With() map[string]interface{} {
 
 	if si.isCompositeVector || si.isBhive {
 		withClause["dimension"] = si.vectorDimension
-		withClause["similarity"] = si.vectorDistanceType
+		withClause["similarity"] = si.vectorUserSimilarity
 		withClause["scan_nprobes"] = si.nprobes
 		withClause["description"] = si.vectorDescription
 		if si.vectorTrainList != 0 {
