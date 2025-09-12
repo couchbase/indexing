@@ -949,9 +949,27 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 	if d1.IsVectorIndex != d2.IsVectorIndex {
 		return false
 	} else if d1.IsVectorIndex {
-		return d1.VectorMeta.IsEquivalent(d2.VectorMeta)
+		// test if vector meta and include columns both match
+		return d1.VectorMeta.IsEquivalent(d2.VectorMeta) &&
+			areIncludeColumnsEqual(d1.Include, d2.Include)
 	}
 
+	return true
+}
+
+func areIncludeColumnsEqual(cols1, cols2 []string) bool {
+	if len(cols1) != len(cols2) {
+		return false
+	}
+	var col1map = make(map[string]bool, len(cols1))
+	for _, col1 := range cols1 {
+		col1map[col1] = true
+	}
+	for _, col2 := range cols2 {
+		if !col1map[col2] {
+			return false
+		}
+	}
 	return true
 }
 
