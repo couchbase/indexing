@@ -1102,8 +1102,11 @@ func (m *RebalanceServiceManager) cleanupOrphanTokens(change service.TopologyCha
 		if !ownerAlive {
 			l.Infof("RebalanceServiceManager::cleanupOrphanTokens Cleaning Up Token Owner %v %v %v", ownerId, ttid, tt)
 			if tt.IsShardTransferToken() {
-				// Initiate cleanup for tranfer token
-				return m.cleanupOrphanShardTransferToken(ttid, tt)
+				// Initiate cleanup for transfer token
+				// If any error is encountered return and don't proceed cleaning up other tokens.
+				if err := m.cleanupOrphanShardTransferToken(ttid, tt); err != nil {
+					return err
+				}
 			} else {
 				err := retriedMetakvDel(RebalanceMetakvDir + ttid)
 				if err != nil {
