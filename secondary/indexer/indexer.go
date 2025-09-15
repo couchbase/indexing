@@ -13925,6 +13925,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 		idx.internalRecvCh <- &MsgIndexTrainingDone{
 			keyspaceId: keyspaceId,
+			reqCtx:     reqCtx,
 			successMap: successMap,
 			errMap:     errMap,
 		}
