@@ -236,11 +236,17 @@ func (m *RestoreContext) convertStorageMode() error {
 		for j := range meta.IndexDefinitions {
 			defn := &meta.IndexDefinitions[j]
 			defn.Using = "gsi"
+			if common.GetStorageMode() != common.NOT_SET {
+				defn.Using = common.IndexType(common.GetStorageMode().String())
+			}
 		}
 	}
 
 	for _, token := range m.image.SchedTokens {
 		token.Definition.Using = "gsi"
+		if common.GetStorageMode() != common.NOT_SET {
+			token.Definition.Using = common.IndexType(common.GetStorageMode().String())
+		}
 	}
 
 	return nil
@@ -1643,7 +1649,7 @@ func prepareIndexSpec(defn *common.IndexDefn) *planner.IndexSpec {
 	spec.Replica = uint64(defn.NumReplica) + 1
 	spec.RetainDeletedXATTR = defn.RetainDeletedXATTR
 	spec.ExprType = string(defn.ExprType)
-
+	spec.Using = string(defn.Using)
 	spec.NumDoc = defn.NumDoc
 	spec.DocKeySize = defn.DocKeySize
 	spec.SecKeySize = defn.SecKeySize
