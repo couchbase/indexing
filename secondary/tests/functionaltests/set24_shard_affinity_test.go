@@ -1304,6 +1304,7 @@ init:
 		for j, indexerID := range indexerIDs {
 			repID := (j + 1) % 2
 			clone := defn.Clone()
+			clone.NumPartitions = defn.NumPartitions
 			clone.ReplicaId = repID
 			clone.InstId = c.IndexInstId(time.Now().UnixNano())
 			clone.Partitions = []c.PartitionId{0}
@@ -1346,6 +1347,7 @@ init:
 	defnID2 := baseDefnID
 	defn2 := defn1.Clone()
 	defn2.DefnId = defnID2
+	defn2.NumPartitions = defn1.NumPartitions
 	defn2.Partitions = []c.PartitionId{0}
 	defn2.InstId = c.IndexInstId(time.Now().UnixNano())
 	defn2.Nodes = []string{indexerIDs[1]}
