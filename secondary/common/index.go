@@ -587,6 +587,10 @@ func (idx IndexInst) String() string {
 		str += fmt.Sprintf("\tRealInstId: %v\n", idx.RealInstId)
 	}
 	str += fmt.Sprintf("\tPartitionContainer: %v", idx.Pc)
+	if idx.Defn.IsVectorIndex {
+		str += fmt.Sprintf("\n\tTrainingPhase: %v\n", idx.TrainingPhase)
+		str += fmt.Sprintf("\tError: %v\n", idx.Error)
+	}
 	return str
 
 }

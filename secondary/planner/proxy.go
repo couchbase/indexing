@@ -424,6 +424,8 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 					Version:   int(version),
 					RState:    common.RebalanceState(inst.RState),
 					Pc:        pc,
+
+					TrainingPhase: inst.TrainingPhase,
 				}
 
 				logging.Debugf("Create Index usage %v %v %v %v %v %v %v",

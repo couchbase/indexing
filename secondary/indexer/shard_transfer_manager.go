@@ -1067,7 +1067,7 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 
 	for _, inst := range vectorIndexInsts {
 		// Don't consider deferred indexes
-		if (inst.Defn.Deferred || common.IsVectorTrainingError(inst.Error)) &&
+		if (inst.Defn.Deferred || inst.TrainingPhase != c.TRAINING_COMPLETED) &&
 			(inst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
 				inst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
 			continue
@@ -1121,7 +1121,7 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 		defer close(codebookRestoreDoneCh)
 
 		for _, vectorIdxInst := range vectorIndexInsts {
-			if (vectorIdxInst.Defn.Deferred || common.IsVectorTrainingError(vectorIdxInst.Error)) &&
+			if (vectorIdxInst.Defn.Deferred || vectorIdxInst.TrainingPhase != c.TRAINING_COMPLETED) &&
 				(vectorIdxInst.Defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
 					vectorIdxInst.Defn.InstStateAtRebal == c.INDEX_STATE_READY) {
 				continue
