@@ -2741,12 +2741,19 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 	// Ungroup indexes to idenfify the placement of index with required replicaId
 	planner.UngroupIndexes(solution)
 
+	// build alternate shardIds for the index defnition
+	alternateShardIds := make(map[c.PartitionId][]string)
+
 	// build the layout and index definitions
 	definitions := make(map[c.IndexerId][]c.IndexDefn)
 	layout := make(map[int]map[c.IndexerId][]c.PartitionId)
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
 			if index.DefnId == defn.DefnId {
+				if _, ok := alternateShardIds[index.PartnId]; !ok && len(index.AlternateShardIds) > 0 {
+					alternateShardIds[index.PartnId] = index.AlternateShardIds
+				}
+
 				if _, ok := layout[index.Instance.ReplicaId]; !ok {
 					layout[index.Instance.ReplicaId] = make(map[c.IndexerId][]c.PartitionId)
 				}
@@ -2760,19 +2767,6 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 					temp.NumPartitions = uint32(index.Instance.Pc.GetNumPartitions())
 					temp.AlternateShardIds = make(map[c.PartitionId][]string)
 
-					// Populate new alternate shardIds based on the replicaId of the index
-					for partnId, alternateShardIds := range defn.AlternateShardIds {
-						alternateShardId, _ := c.ParseAlternateId(alternateShardIds[0])
-						alternateShardId.ReplicaId = uint8(index.Instance.ReplicaId)
-						if temp.IsPrimary {
-							temp.AlternateShardIds[partnId] = []string{alternateShardId.String()}
-						} else {
-							msAltId := alternateShardId.String()
-							alternateShardId.GroupId = 1
-							bsAltId := alternateShardId.String()
-							temp.AlternateShardIds[partnId] = []string{msAltId, bsAltId}
-						}
-					}
 					definitions[c.IndexerId(indexer.IndexerId)] = append(definitions[c.IndexerId(indexer.IndexerId)], temp)
 				}
 
@@ -2796,6 +2790,23 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 				if defns[i].ReplicaId == replicaId {
 					defns[i].Partitions = partitions
 					defns[i].Versions = make([]int, len(partitions))
+
+					// Populate new alternate shardIds based on the replicaId of the index
+					// and the partitions for the definition
+					for _, partnId := range partitions {
+						if altIds, ok := alternateShardIds[partnId]; ok {
+							alternateShardId, _ := c.ParseAlternateId(altIds[0])
+							alternateShardId.ReplicaId = uint8(defns[i].ReplicaId)
+							if defns[i].IsPrimary {
+								defns[i].AlternateShardIds[partnId] = []string{alternateShardId.String()}
+							} else {
+								msAltId := alternateShardId.String()
+								alternateShardId.GroupId = 1
+								bsAltId := alternateShardId.String()
+								defns[i].AlternateShardIds[partnId] = []string{msAltId, bsAltId}
+							}
+						}
+					}
 				}
 			}
 		}
