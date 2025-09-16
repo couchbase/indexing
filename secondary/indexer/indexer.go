@@ -7251,10 +7251,15 @@ func (idx *indexer) checkDDLInProgress() (bool, []string, bool) {
 	inProgressIndexNames := make([]string, 0, len(idx.indexInstMap))
 	for _, index := range idx.indexInstMap {
 
+		if index.Defn.IsVectorIndex && index.TrainingPhase == common.TRAINING_IN_PROGRESS {
+			ddlInProgress = true
+			inProgressIndexNames = append(inProgressIndexNames, index.Defn.FullyQualifiedName())
+		}
+
 		if index.State == common.INDEX_STATE_INITIAL ||
 			index.State == common.INDEX_STATE_CATCHUP {
 			ddlInProgress = true
-			inProgressIndexNames = append(inProgressIndexNames, index.Defn.Bucket+":"+index.Defn.Name)
+			inProgressIndexNames = append(inProgressIndexNames, index.Defn.FullyQualifiedName())
 		}
 	}
 

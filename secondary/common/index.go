@@ -530,6 +530,14 @@ func (idx *IndexDefn) KeyspaceId(streamId StreamId) string {
 
 }
 
+func (idxDefn *IndexDefn) FullyQualifiedName() string {
+	if idxDefn.Scope == "" && idxDefn.Collection == "" {
+		return strings.Join([]string{idxDefn.Bucket, idxDefn.Name}, ":")
+	} else {
+		return strings.Join([]string{idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name}, ":")
+	}
+}
+
 func (defn *IndexDefn) GetVectorKeyPosExploded() (vectorPos int) {
 	for posn, isVectorKey := range defn.HasVectorAttr {
 		if isVectorKey {
