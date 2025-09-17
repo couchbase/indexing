@@ -1259,7 +1259,7 @@ func (wp *WorkerPool) Init() {
 
 	for i := 0; i < wp.numWorkers; i++ {
 		if wp.mergeSort {
-			wp.recvChList[i] = make(chan *Row, 50)
+			wp.recvChList[i] = make(chan *Row)
 			outCh = wp.recvChList[i]
 		}
 
