@@ -530,6 +530,14 @@ func (idx *IndexDefn) KeyspaceId(streamId StreamId) string {
 
 }
 
+func (idxDefn *IndexDefn) FullyQualifiedName() string {
+	if idxDefn.Scope == "" && idxDefn.Collection == "" {
+		return strings.Join([]string{idxDefn.Bucket, idxDefn.Name}, ":")
+	} else {
+		return strings.Join([]string{idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name}, ":")
+	}
+}
+
 func (defn *IndexDefn) GetVectorKeyPosExploded() (vectorPos int) {
 	for posn, isVectorKey := range defn.HasVectorAttr {
 		if isVectorKey {
@@ -579,6 +587,10 @@ func (idx IndexInst) String() string {
 		str += fmt.Sprintf("\tRealInstId: %v\n", idx.RealInstId)
 	}
 	str += fmt.Sprintf("\tPartitionContainer: %v", idx.Pc)
+	if idx.Defn.IsVectorIndex {
+		str += fmt.Sprintf("\n\tTrainingPhase: %v\n", idx.TrainingPhase)
+		str += fmt.Sprintf("\tError: %v\n", idx.Error)
+	}
 	return str
 
 }

@@ -1900,13 +1900,21 @@ func (m *RebalanceServiceManager) updateRStateForShardToken(ttid string, tt *c.T
 
 		go func(idx int) {
 			defer wg.Done()
-			defn := tt.IndexInsts[idx].Defn
+			idxInst := tt.IndexInsts[idx]
+			defn := idxInst.Defn
+			pendingBuild := idxInst.IsPendingBuild()
 
-			if defn.Deferred && (defn.InstStateAtRebal == common.INDEX_STATE_CREATED || defn.InstStateAtRebal == common.INDEX_STATE_READY) {
-				logging.Infof("RebalanceServiceManager::updateRStateForShardToken Returning as inst is deferred, instId: %v, realInstId: %v", tt.InstIds[idx], tt.RealInstIds[idx])
-				return // For deferred indexes, RState is already changed. Hence, return
+			if defn.Deferred {
+				if !pendingBuild && (defn.InstStateAtRebal == common.INDEX_STATE_CREATED || defn.InstStateAtRebal == common.INDEX_STATE_READY) {
+					logging.Infof("RebalanceServiceManager::updateRStateForShardToken Returning as inst is deferred, pendingBuild is false. "+
+						"instId: %v, realInstId: %v", tt.InstIds[idx], tt.RealInstIds[idx])
+					return // For deferred indexes, RState is already changed. Hence, return
+				} else {
+					// pending build instances or instances whose InstStateAtRebal != CREATED/READY needs proper merge
+				}
 			}
-
+			logging.Infof("RebalanceServiceManager::updateRStateForShardToken merging/updatingRState for proxy inst: %v with realInst: %v",
+				tt.InstIds[idx], tt.RealInstIds[idx])
 			if err := m.destTokenToMergeOrReadyForInst(tt.InstIds[idx], tt.RealInstIds[idx], ttid); err != nil {
 				errList.Lock()
 				errList.list = append(errList.list, err)
