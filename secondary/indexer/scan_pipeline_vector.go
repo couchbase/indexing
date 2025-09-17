@@ -2009,6 +2009,29 @@ func (s *IndexScanSource2) Routine() error {
 	}
 	defer fanIn.Close()
 
+	// We have scans as map[paritionId]scanListId -> scanList where scanListId can be centroidId
+	// Need to generate batches of jobs so that we can run them in parallel on R readersPerPartition
+	// We only have R readers reserved for each partition so we need to ensure that we are not running
+	// more than R readers per partition at any point of time
+	// Say we have P partitions, C centroids and S scan ranges in scan list
+	// Like PartitionId(1) -> CentroidId(5) -> []Scan{
+	// 				[Low: [242,"USA","0000005"] High: [242,"USA","0000005"]],
+	// 				[Low: [242,"UK","0000005"] High:[242,"UK","0000005"]],
+	// 				[Low: [242,"CANADA","0000005"]High:[242,"CANADA","0000005"]]}
+	//
+	// perPartnScanParallelism gives inherent parallelism in the scan ranges generatedfor each partition
+	// For above example we will have perPartnScanParallelism will be 1 * 3 i.e. C * S
+	// It can happen that we have ranges spanning across multiple centroids then scanListId will be
+	// some random number
+	// Like PartitionId(1) -> CentroidId(0) -> []Scan{[Low: [242,"USA"] High: [242,"CANADA"]]}
+	//
+	// readersPerPartition is min(perPartnScanParallelism, nprobes, numCentroids)
+	// It will be set to 1 when merge sort is needed. Its needed when we are scanning multiple partitions
+	// and not using heap
+	//
+	// numBatchesPerScan is the number of batches needed to distribute perPartnScanParallelism scans
+	// acorss readersPerPartition readers
+
 	// Make ScanJobs and schedule them on the WorkerPool
 	// * readersPerPartition should be launched in parallel
 	// * Run one scan on all partitions and then launch next one
@@ -2018,17 +2041,23 @@ func (s *IndexScanSource2) Routine() error {
 		numBatchesPerScan += 1
 	}
 
-	// Assigning BatchId to scan jobs in every paritition every batch will
-	// have at max readersPerPartition * numPartitions number of jobs all the jobs
-	// in the batch can be run in parallel. We have only readersPerPartition number
-	// of readers for every partition so only that many readers can run in parallel
-	// in one batch. We will be running the jobs batch wise one batch after other
-
-	// VECTOR_TODO: Fix this scheduling algorithm. Here we must wait for slowest
+	// VECTOR_TODO:
+	// Fix this scheduling algorithm. Here we must wait for slowest
 	// scan in every batch to finish. If not all batches are equally sized this is
 	// not optimal. We will to have schedule every job independently and hold semaphore
 	// on number of readers per parition to ensure only a fixed number of scans per
 	// partition are running in parallel at any point of time.
+
+	// BatchId generation logic:
+	// * We need batchIds to be strictly increasing
+	// * Each batchId can have at most readersPerPartition number of jobs for a give partition
+	//   as we have only reserved that many readers per partition
+	// * Each batchId can have at most numPartitionsScanned * readersPerPartiton number of jobs
+	//   as our worker pool has only that many workers
+	// * Currently we scheudle batches onto worker pools one after another
+
+	// Note: Current batchId generation logic can have holes in the batchId ranges but it meets
+	// all the requirements mentioned above
 	jobMap := make(map[int][]*ScanJob, 0)
 	maxBatchId := 0
 	for _, pid := range s.p.req.PartitionIds {
@@ -2054,8 +2083,13 @@ func (s *IndexScanSource2) Routine() error {
 
 	defer func() {
 		for i := 0; i <= maxBatchId; i++ {
-			for _, job := range jobMap[i] {
-				logging.Verbosef("%v decode %v, dist %v, cnt %v, scanned %v", job.logPrefix,
+			// Skip if batchId is not present in the job map
+			jobList, ok := jobMap[i]
+			if !ok {
+				continue
+			}
+			for _, job := range jobList {
+				logging.Verbosef("%v[%v] IndexScanSource2.Routine - decode %v, dist %v, cnt %v, scanned %v", s.p.req.LogPrefix, s.p.req.RequestId,
 					job.decodeDur, job.distCmpDur, job.decodeCnt, job.rowsScanned)
 				s.p.rowsScanned += job.rowsScanned
 				s.p.rowsFiltered += job.rowsFiltered
@@ -2094,7 +2128,11 @@ func (s *IndexScanSource2) Routine() error {
 		}()
 		stopped := false
 		for i := 0; i <= maxBatchId; i++ {
-			for _, job := range jobMap[i] {
+			jobList, ok := jobMap[i]
+			if !ok {
+				continue
+			}
+			for _, job := range jobList {
 				wpErr := wp.Submit(job)
 				if wpErr != nil {
 					stopped = true
