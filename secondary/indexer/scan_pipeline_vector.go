@@ -1312,13 +1312,17 @@ func (wp *WorkerPool) doMergeSort() {
 			continue
 		}
 
-		newRow, ok := <-activeChList[smallestRow.workerId]
-		if ok {
-			if newRow.last {
-				receivedLast[newRow.workerId] = true
-				continue
+		select {
+		case <-wp.stopCh:
+			return
+		case newRow, ok := <-activeChList[smallestRow.workerId]:
+			if ok {
+				if newRow.last {
+					receivedLast[newRow.workerId] = true
+					continue
+				}
+				wp.mergeHeap.Push(newRow)
 			}
-			wp.mergeHeap.Push(newRow)
 		}
 	}
 }
