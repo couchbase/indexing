@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,8 +52,9 @@ type ScanJob struct {
 	distCmpDur int64
 	distCmpCnt int64
 
-	logPrefix string
-	startTime time.Time
+	logPrefix   string
+	debugString string
+	startTime   time.Time
 }
 
 func NewScanJob(r *ScanRequest, batch int, pid common.PartitionId, cid int64, scan Scan, snap SliceSnapshot,
@@ -67,8 +69,9 @@ func NewScanJob(r *ScanRequest, batch int, pid common.PartitionId, cid int64, sc
 		codebook: cb,
 	}
 	j.coarseSize = r.getVectorCoarseSize()
-	j.logPrefix = fmt.Sprintf("%v[%v]ScanJob Batch(%v) Partn(%v) Centroid(%v) Scan[%s-%s]", r.LogPrefix, r.RequestId,
-		j.batch, j.pid, j.cid, logging.TagUD(j.scan.Low), logging.TagUD(j.scan.High))
+	j.logPrefix = fmt.Sprintf("%v[%v]ScanJob", r.LogPrefix, r.RequestId)
+	j.debugString = fmt.Sprintf("Batch(%v) Partn(%v) Centroid(%v) Scan[%s-%s]", j.batch, j.pid, j.cid,
+		logging.TagUD(j.scan.Low), logging.TagUD(j.scan.High))
 	j.doneCh = make(chan<- struct{})
 	return j
 }
@@ -81,8 +84,8 @@ func (j *ScanJob) SetStartTime() {
 
 func (j *ScanJob) PrintStats() {
 	getDebugStr := func() string {
-		s := fmt.Sprintf("%v stats rowsScanned: %v, rowsReturned: %v, rowsFiltered: %v",
-			j.logPrefix, j.rowsScanned, j.rowsReturned, j.rowsFiltered)
+		s := fmt.Sprintf("%v %v stats rowsScanned: %v, rowsReturned: %v, rowsFiltered: %v",
+			j.logPrefix, j.debugString, j.rowsScanned, j.rowsReturned, j.rowsFiltered)
 		if logging.IsEnabled(logging.Timing) {
 			s += fmt.Sprintf(" timeTaken: %v", time.Since(j.startTime))
 		}
@@ -384,8 +387,8 @@ func (w *ScanWorker) Scanner() {
 			}
 			w.currJob = job
 			w.currJob.SetStartTime()
-			logging.Tracef("%v received job: %+v", w.logPrefix, job)
-			defer logging.Tracef("%v done with job: %+v", w.logPrefix, job)
+			logging.Tracef("%v received job: %v", w.logPrefix, job.debugString)
+			defer logging.Tracef("%v done with job: %v", w.logPrefix, job.debugString)
 		}
 
 		w.senderCh = make(chan *Row, w.senderChSize)
@@ -1933,13 +1936,13 @@ func (s *IndexScanSource2) Shutdown(err error) {
 		s.wp.Stop("IndexScanSource2.Shutdown")
 		s.wp = nil
 	}
-	logging.Verbosef("%v %v IndexScanSource2 - shutdown with error %v", s.p.req.LogPrefix, s.p.req.RequestId, err)
+	logging.Verbosef("%v[%v] IndexScanSource2 - shutdown with error %v", s.p.req.LogPrefix, s.p.req.RequestId, err)
 }
 
 func (s *IndexScanSource2) Routine() error {
 	defer func() {
 		if r := recover(); r != nil {
-			logging.Fatalf("IndexScanSource2 - panic %v detected while processing %s", r, s.p.req)
+			logging.Fatalf("%v[%v] IndexScanSource2 - panic %v detected while processing %s", s.p.req.LogPrefix, s.p.req.RequestId, r, s.p.req)
 			logging.Fatalf("%s", logging.StackTraceAll())
 			panic(r)
 		}
@@ -2081,6 +2084,21 @@ func (s *IndexScanSource2) Routine() error {
 		}
 	}
 
+	// Log number of jobs and batches
+	logging.LazyVerbose(func() string {
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%v[%v] IndexScanSource2.Routine - len(jobMap): %v, maxBatchId: %v perPartnScanParallelism: %v and readersPerPartition: %v\n",
+			s.p.req.LogPrefix, s.p.req.RequestId, len(jobMap), maxBatchId, s.p.req.perPartnScanParallelism, readersPerPartition)
+
+		for batchId := 0; batchId <= maxBatchId; batchId++ {
+			for jobIndex, job := range jobMap[batchId] {
+				fmt.Fprintf(&sb, "%v[%v] IndexScanSource2.Routine - batch id: %v, job index: %v, job: %s\n",
+					s.p.req.LogPrefix, s.p.req.RequestId, batchId, jobIndex, job.debugString)
+			}
+		}
+		return sb.String()
+	})
+
 	defer func() {
 		for i := 0; i <= maxBatchId; i++ {
 			// Skip if batchId is not present in the job map
@@ -2166,7 +2184,7 @@ func (s *IndexScanSource2) Routine() error {
 	}
 
 	if err = s.HasShutdown(); err != nil {
-		logging.Verbosef("%v %v IndexScanSource2.Routine - error %v while checking shutdown", s.p.req.LogPrefix, s.p.req.RequestId, err)
+		logging.Verbosef("%v[%v] IndexScanSource2.Routine - error %v while checking shutdown", s.p.req.LogPrefix, s.p.req.RequestId, err)
 		s.CloseWithError(err)
 		return err
 	}
