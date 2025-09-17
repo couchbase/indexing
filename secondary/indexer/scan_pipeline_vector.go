@@ -1285,7 +1285,9 @@ func (wp *WorkerPool) doMergeSort() {
 
 	receivedLast := make([]bool, len(wp.recvChList))
 
-	// Populate heap from the all channels
+	// Populate heap from output channels of all the workers for the first time
+	// w1 -> [1, 2, 8], w2 -> [3, 4, 9], w3 -> [5, 6, 7]
+	// heap -> [1, 3, 5]
 	activeChList := make(map[int]chan *Row, len(wp.recvChList))
 	for _, recvCh := range wp.recvChList {
 		var r *Row
@@ -1293,11 +1295,35 @@ func (wp *WorkerPool) doMergeSort() {
 		case <-wp.stopCh:
 			return
 		case r = <-recvCh:
+			if r.last {
+				receivedLast[r.workerId] = true
+				continue
+			}
 		}
 		wp.mergeHeap.Push(r)
 		activeChList[r.workerId] = recvCh
 	}
 
+	// Get the smallest element, send it and then populate heap with next
+	// element from worker with smallest element
+	// w1 -> [2, 8], w2 -> [4, 9], w3 -> [6, 7]
+	// Send 1 from heap
+	// heap -> [3, 5]
+	// Get another element from w1 (as 1 was from w1) and put it in heap
+	// heap -> [2, 3, 5]
+	// w1 -> [8], w2 -> [4, 9], w3 -> [6, 7]
+	// Send 2 from heap
+	// heap -> [3,5]
+	// Get another element from w1 (as 2 was from w1) and put it in heap
+	// heap -> [3, 5, 8]
+	// Send 3 from heap
+	// heap -> [5, 8]
+	// Get another element from w2 (as 3 was from w2) and put it in heap
+	// heap -> [4, 5, 8]
+	// w1 -> [8], w2 -> [9], w3 -> [6, 7]
+	// Send 4 from heap
+	// heap -> [5, 8]
+	// so on and so forth
 	for wp.mergeHeap.Len() > 0 {
 		// Flush the min element into sendCh
 		smallestRow := wp.mergeHeap.Pop()
@@ -1308,6 +1334,8 @@ func (wp *WorkerPool) doMergeSort() {
 		case wp.sendCh <- smallestRow:
 		}
 
+		// If we got the last element from a worker, skip it and dont
+		// fetch next element from that worker
 		if receivedLast[smallestRow.workerId] {
 			continue
 		}
