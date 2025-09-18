@@ -3780,6 +3780,10 @@ loop:
 						l.Errorf("ShardRebalancer::dropShardsWhenIdle: Index is in async recovery, defn: %v, url: %v, err: %v",
 							defn, url, response.Error)
 						continue
+					} else if isIndexUnderTraining(response.Error) {
+						l.Errorf("ShardRebalancer::dropShardsWhenIdle Index is in training. defn %v, url: %v, err: %v",
+							defn, url, response.Error)
+						continue
 					} else if !isMissingBSC(response.Error) &&
 						!isIndexDeletedDuringRebal(response.Error) &&
 						!isIndexNotFoundRebal(response.Error) {
@@ -4754,6 +4758,11 @@ func isIndexDeletedDuringRebal(errMsg string) bool {
 
 func isIndexInAsyncRecovery(errMsg string) bool {
 	return errMsg == common.ErrIndexInAsyncRecovery.Error()
+}
+
+func isIndexUnderTraining(errMsg string) bool {
+	errMsg = strings.ToLower(errMsg)
+	return strings.Contains(errMsg, "training is in progress")
 }
 
 func isBuildAlreadyInProgress(errMsg string) bool {

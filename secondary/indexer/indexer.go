@@ -3447,6 +3447,25 @@ func (idx *indexer) handlePrunePartition(msg Message) (resp Message) {
 
 	if inst, ok := idx.indexInstMap[instId]; ok {
 
+		if inst.TrainingPhase == c.TRAINING_IN_PROGRESS {
+			messageStr := fmt.Sprintf("InstId: %v training is in progress "+
+				"retry drop later", instId)
+
+			l.Infof("PrunePartition %v", messageStr)
+
+			if respch != nil {
+				respch <- &MsgError{
+					err: Error{code: ERROR_INDEX_TRAINING_IN_PROGRESS,
+						severity: NORMAL,
+						cause:    errors.New(messageStr),
+						category: INDEXER},
+				}
+			}
+
+			resp = &MsgSuccess{}
+			return
+		}
+
 		spec := pruneSpec{
 			instId:     instId,
 			partitions: partitions,
