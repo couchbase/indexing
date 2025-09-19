@@ -30,6 +30,7 @@ import (
 	"github.com/couchbase/indexing/secondary/planner"
 	"github.com/couchbase/indexing/secondary/security"
 	"github.com/couchbase/indexing/secondary/testcode"
+	"golang.org/x/sync/errgroup"
 )
 
 var ErrRebalanceCancel = errors.New("Shard rebalance cancel received")
@@ -1982,7 +1983,7 @@ func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn,
 	// wait for index state to move to Ready phase
 	if isDeferred || pendingCreate {
 
-		var partnMergeWaitGroup sync.WaitGroup
+		partnMergeWaitErrGroup := new(errgroup.Group)
 		deferredInsts := make(map[common.IndexInstId]bool)
 		if defn.RealInstId != 0 {
 			deferredInsts[defn.RealInstId] = true
@@ -2000,12 +2001,15 @@ func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn,
 		}
 
 		if !pendingBuild {
-			sr.destTokenToMergeOrReady(defn.InstId, defn.RealInstId, ttid, tt, &partnMergeWaitGroup)
+			sr.destTokenToMergeOrReady(defn.InstId, defn.RealInstId, ttid, tt, partnMergeWaitErrGroup)
 		}
 
 		// Wait for the deferred partition index merge to happen
 		// This is essentially a no-op for non-partitioned indexes
-		partnMergeWaitGroup.Wait()
+		// Return error is any partition encounters an error
+		if err := partnMergeWaitErrGroup.Wait(); err != nil {
+			return false, err
+		}
 	}
 	return false, nil
 }
@@ -2642,7 +2646,7 @@ func (sr *ShardRebalancer) waitForIndexState(expectedState c.IndexState,
 	// to signal the completion of go-routines waiting for
 	// partitioned index merge. waitForIndexState will always wait
 	// for partitioned index merge to finish before proceeding futher
-	var partnMergeWaitGroup sync.WaitGroup
+	partnMergeWaitErrGroup := new(errgroup.Group)
 
 	retryInterval := time.Duration(1)
 	retryCount := 0
@@ -2794,7 +2798,7 @@ loop:
 							l.Infof("ShardRebalancer::waitForIndexState Skip changing RState for instId: %v, realInstId: %v, ttid: %v "+
 								"as empty node batching is enabled for this token", instId, realInstId, ttid)
 						} else {
-							sr.destTokenToMergeOrReady(instId, realInstId, ttid, tt, &partnMergeWaitGroup)
+							sr.destTokenToMergeOrReady(instId, realInstId, ttid, tt, partnMergeWaitErrGroup)
 						}
 					}
 
@@ -2902,9 +2906,12 @@ loop:
 				}
 
 				// Wait for merge of partitioned indexes (or) RState update to finish before returning
-				partnMergeWaitGroup.Wait()
+				// if any one of the partition encounters an error, it signifies that either the rebalance
+				// got cancelled or done. Return the error
+				if err := partnMergeWaitErrGroup.Wait(); err != nil {
+					return err
+				}
 
-				// If all indexes are built, defnIdMap will have no entries
 				if len(processedInsts) == 0 {
 					l.Infof("ShardRebalancer::waitForIndexState All indexes are active and "+
 						"caught up for token: %v. Returning from waitForIndexState", ttid)
@@ -2923,7 +2930,7 @@ loop:
 }
 
 func (sr *ShardRebalancer) destTokenToMergeOrReady(instId c.IndexInstId,
-	realInstId c.IndexInstId, ttid string, tt *c.TransferToken, partnMergeWaitGroup *sync.WaitGroup) {
+	realInstId c.IndexInstId, ttid string, tt *c.TransferToken, partnMergeWaitGroup *errgroup.Group) {
 
 	// There is no proxy (no merge needed)
 	if realInstId == 0 {
@@ -2943,10 +2950,8 @@ func (sr *ShardRebalancer) destTokenToMergeOrReady(instId c.IndexInstId,
 	} else {
 		// There is a proxy (merge needed). The proxy partitions need to be move
 		// to the real index instance before Token can move to Ready state.
-		partnMergeWaitGroup.Add(1)
 
-		go func(ttid string, tt *c.TransferToken) {
-			defer partnMergeWaitGroup.Done()
+		partnMergeWaitGroup.Go(func() error {
 
 			ticker := time.NewTicker(time.Duration(5) * time.Minute)
 			defer ticker.Stop()
@@ -2967,10 +2972,10 @@ func (sr *ShardRebalancer) destTokenToMergeOrReady(instId c.IndexInstId,
 				select {
 				case <-sr.cancel:
 					l.Infof("ShardRebalancer::destTokenToMergeOrReady rebalance cancel Received")
-					return
+					return ErrRebalanceCancel
 				case <-sr.done:
 					l.Infof("ShardRebalancer::destTokenToMergeOrReady rebalance done Received")
-					return
+					return ErrRebalanceDone
 				case <-ticker.C:
 					l.Infof("ShardRebalancer::destTokenToMergeOrReady waiting for partition merge "+
 						"to finish for index instance: %v, realInst: %v", instId, realInstId)
@@ -2993,8 +2998,8 @@ func (sr *ShardRebalancer) destTokenToMergeOrReady(instId c.IndexInstId,
 			// to active state, ShardRebalancer will check the state of partitioned
 			// indexes and move the token state to ShardTokenReady if all the
 			// partitioned indexes move to RState: REBAL_MERGED
-		}(ttid, tt)
-
+			return nil
+		})
 	}
 }
 
@@ -3007,7 +3012,8 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 
 	logging.Infof("ShardRebalancer::updateRStateToActive Updating RState of indexes in transfer token: %v", ttid)
 
-	var partnMergeWaitGroup, wg sync.WaitGroup
+	var wg sync.WaitGroup
+	partnMergeWaitErrGroup := new(errgroup.Group)
 	for i := range tt.IndexInsts {
 		wg.Add(1)
 		// Change RState in go-routines so that all indexes in the token gets a chance to merge
@@ -3032,7 +3038,7 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 			}
 			// merge only if instance is not dropped during rebalance
 			if sr.isInstDroppedDuringRebal(tt.InstIds[index], tt.RealInstIds[index]) == false {
-				sr.destTokenToMergeOrReady(tt.InstIds[index], tt.RealInstIds[index], ttid, tt, &partnMergeWaitGroup)
+				sr.destTokenToMergeOrReady(tt.InstIds[index], tt.RealInstIds[index], ttid, tt, partnMergeWaitErrGroup)
 			} else {
 				logging.Infof("ShardRebalancer::updateRStateToActive Skip updating RState for instId: %v, realInstId: %v, ttid: %v",
 					tt.InstIds[index], tt.RealInstIds[index], ttid)
@@ -3044,7 +3050,12 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 	wg.Wait()
 
 	// Wait for actual partition merge to finish
-	partnMergeWaitGroup.Wait()
+	if err := partnMergeWaitErrGroup.Wait(); err != nil {
+		logging.Errorf("ShardRebalancer::updateRStateToActive error during partition merge for ttid: %v, err: %v", ttid, err)
+		sr.setTransferTokenError(ttid, tt, err.Error())
+		return
+	}
+
 	logging.Infof("ShardRebalancer::updateRStateToActive Done with partition merge for ttid: %v", ttid)
 
 	// For a partitioned index, it is possible that real instace is in one token and proxy instance
@@ -3136,7 +3147,7 @@ func (sr *ShardRebalancer) updateRStateOfDCPTokens() {
 		return
 	}
 
-	var partnMergeWaitGroup sync.WaitGroup
+	partnMergeWaitErrGroup := new(errgroup.Group)
 	// Step-2: Change Rstate of each of the DCP tokens
 	for dcpTokenId, dcpToken := range dcpTokens {
 
@@ -3150,9 +3161,19 @@ func (sr *ShardRebalancer) updateRStateOfDCPTokens() {
 			continue
 		}
 
-		sr.destTokenToMergeOrReady(dcpToken.InstId, dcpToken.RealInstId, dcpTokenId, dcpToken, &partnMergeWaitGroup)
+		sr.destTokenToMergeOrReady(dcpToken.InstId, dcpToken.RealInstId, dcpTokenId, dcpToken, partnMergeWaitErrGroup)
 	}
-	partnMergeWaitGroup.Wait()
+	if err = partnMergeWaitErrGroup.Wait(); err != nil {
+		// error is encountered for atleast one token. Mark error in the DCP tokens.
+		logging.Errorf("ShardRebalancer::updateRStateOfDCPTokens Erroe during partition merge for DCP tokens, err: %v", err)
+		for dcpTokenId, dcpToken := range dcpTokens {
+			sr.setTransferTokenError(dcpTokenId, dcpToken, err.Error())
+			// setting error in one of the DCP token is enough for the Rebalancer
+			// to handle the error and not proceed further
+			break
+		}
+		return
+	}
 
 	for dcpTokenId, dcpToken := range dcpTokens {
 		// At this point, index is merged & RState of the index is changed.
