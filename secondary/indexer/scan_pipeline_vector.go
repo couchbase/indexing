@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,8 +52,9 @@ type ScanJob struct {
 	distCmpDur int64
 	distCmpCnt int64
 
-	logPrefix string
-	startTime time.Time
+	logPrefix   string
+	debugString string
+	startTime   time.Time
 }
 
 func NewScanJob(r *ScanRequest, batch int, pid common.PartitionId, cid int64, scan Scan, snap SliceSnapshot,
@@ -67,8 +69,9 @@ func NewScanJob(r *ScanRequest, batch int, pid common.PartitionId, cid int64, sc
 		codebook: cb,
 	}
 	j.coarseSize = r.getVectorCoarseSize()
-	j.logPrefix = fmt.Sprintf("%v[%v]ScanJob Batch(%v) Partn(%v) Centroid(%v) Scan[%s-%s]", r.LogPrefix, r.RequestId,
-		j.batch, j.pid, j.cid, logging.TagUD(j.scan.Low), logging.TagUD(j.scan.High))
+	j.logPrefix = fmt.Sprintf("%v[%v]ScanJob", r.LogPrefix, r.RequestId)
+	j.debugString = fmt.Sprintf("Batch(%v) Partn(%v) Centroid(%v) Scan[%s-%s]", j.batch, j.pid, j.cid,
+		logging.TagUD(j.scan.Low), logging.TagUD(j.scan.High))
 	j.doneCh = make(chan<- struct{})
 	return j
 }
@@ -81,8 +84,8 @@ func (j *ScanJob) SetStartTime() {
 
 func (j *ScanJob) PrintStats() {
 	getDebugStr := func() string {
-		s := fmt.Sprintf("%v stats rowsScanned: %v, rowsReturned: %v, rowsFiltered: %v",
-			j.logPrefix, j.rowsScanned, j.rowsReturned, j.rowsFiltered)
+		s := fmt.Sprintf("%v %v stats rowsScanned: %v, rowsReturned: %v, rowsFiltered: %v",
+			j.logPrefix, j.debugString, j.rowsScanned, j.rowsReturned, j.rowsFiltered)
 		if logging.IsEnabled(logging.Timing) {
 			s += fmt.Sprintf(" timeTaken: %v", time.Since(j.startTime))
 		}
@@ -384,8 +387,8 @@ func (w *ScanWorker) Scanner() {
 			}
 			w.currJob = job
 			w.currJob.SetStartTime()
-			logging.Tracef("%v received job: %+v", w.logPrefix, job)
-			defer logging.Tracef("%v done with job: %+v", w.logPrefix, job)
+			logging.Tracef("%v received job: %v", w.logPrefix, job.debugString)
+			defer logging.Tracef("%v done with job: %v", w.logPrefix, job.debugString)
 		}
 
 		w.senderCh = make(chan *Row, w.senderChSize)
@@ -1259,7 +1262,7 @@ func (wp *WorkerPool) Init() {
 
 	for i := 0; i < wp.numWorkers; i++ {
 		if wp.mergeSort {
-			wp.recvChList[i] = make(chan *Row, 50)
+			wp.recvChList[i] = make(chan *Row)
 			outCh = wp.recvChList[i]
 		}
 
@@ -1285,7 +1288,9 @@ func (wp *WorkerPool) doMergeSort() {
 
 	receivedLast := make([]bool, len(wp.recvChList))
 
-	// Populate heap from the all channels
+	// Populate heap from output channels of all the workers for the first time
+	// w1 -> [1, 2, 8], w2 -> [3, 4, 9], w3 -> [5, 6, 7]
+	// heap -> [1, 3, 5]
 	activeChList := make(map[int]chan *Row, len(wp.recvChList))
 	for _, recvCh := range wp.recvChList {
 		var r *Row
@@ -1293,11 +1298,35 @@ func (wp *WorkerPool) doMergeSort() {
 		case <-wp.stopCh:
 			return
 		case r = <-recvCh:
+			if r.last {
+				receivedLast[r.workerId] = true
+				continue
+			}
 		}
 		wp.mergeHeap.Push(r)
 		activeChList[r.workerId] = recvCh
 	}
 
+	// Get the smallest element, send it and then populate heap with next
+	// element from worker with smallest element
+	// w1 -> [2, 8], w2 -> [4, 9], w3 -> [6, 7]
+	// Send 1 from heap
+	// heap -> [3, 5]
+	// Get another element from w1 (as 1 was from w1) and put it in heap
+	// heap -> [2, 3, 5]
+	// w1 -> [8], w2 -> [4, 9], w3 -> [6, 7]
+	// Send 2 from heap
+	// heap -> [3,5]
+	// Get another element from w1 (as 2 was from w1) and put it in heap
+	// heap -> [3, 5, 8]
+	// Send 3 from heap
+	// heap -> [5, 8]
+	// Get another element from w2 (as 3 was from w2) and put it in heap
+	// heap -> [4, 5, 8]
+	// w1 -> [8], w2 -> [9], w3 -> [6, 7]
+	// Send 4 from heap
+	// heap -> [5, 8]
+	// so on and so forth
 	for wp.mergeHeap.Len() > 0 {
 		// Flush the min element into sendCh
 		smallestRow := wp.mergeHeap.Pop()
@@ -1308,17 +1337,23 @@ func (wp *WorkerPool) doMergeSort() {
 		case wp.sendCh <- smallestRow:
 		}
 
+		// If we got the last element from a worker, skip it and dont
+		// fetch next element from that worker
 		if receivedLast[smallestRow.workerId] {
 			continue
 		}
 
-		newRow, ok := <-activeChList[smallestRow.workerId]
-		if ok {
-			if newRow.last {
-				receivedLast[newRow.workerId] = true
-				continue
+		select {
+		case <-wp.stopCh:
+			return
+		case newRow, ok := <-activeChList[smallestRow.workerId]:
+			if ok {
+				if newRow.last {
+					receivedLast[newRow.workerId] = true
+					continue
+				}
+				wp.mergeHeap.Push(newRow)
 			}
-			wp.mergeHeap.Push(newRow)
 		}
 	}
 }
@@ -1901,13 +1936,13 @@ func (s *IndexScanSource2) Shutdown(err error) {
 		s.wp.Stop("IndexScanSource2.Shutdown")
 		s.wp = nil
 	}
-	logging.Verbosef("%v %v IndexScanSource2 - shutdown with error %v", s.p.req.LogPrefix, s.p.req.RequestId, err)
+	logging.Verbosef("%v[%v] IndexScanSource2 - shutdown with error %v", s.p.req.LogPrefix, s.p.req.RequestId, err)
 }
 
 func (s *IndexScanSource2) Routine() error {
 	defer func() {
 		if r := recover(); r != nil {
-			logging.Fatalf("IndexScanSource2 - panic %v detected while processing %s", r, s.p.req)
+			logging.Fatalf("%v[%v] IndexScanSource2 - panic %v detected while processing %s", s.p.req.LogPrefix, s.p.req.RequestId, r, s.p.req)
 			logging.Fatalf("%s", logging.StackTraceAll())
 			panic(r)
 		}
@@ -1977,6 +2012,29 @@ func (s *IndexScanSource2) Routine() error {
 	}
 	defer fanIn.Close()
 
+	// We have scans as map[paritionId]scanListId -> scanList where scanListId can be centroidId
+	// Need to generate batches of jobs so that we can run them in parallel on R readersPerPartition
+	// We only have R readers reserved for each partition so we need to ensure that we are not running
+	// more than R readers per partition at any point of time
+	// Say we have P partitions, C centroids and S scan ranges in scan list
+	// Like PartitionId(1) -> CentroidId(5) -> []Scan{
+	// 				[Low: [242,"USA","0000005"] High: [242,"USA","0000005"]],
+	// 				[Low: [242,"UK","0000005"] High:[242,"UK","0000005"]],
+	// 				[Low: [242,"CANADA","0000005"]High:[242,"CANADA","0000005"]]}
+	//
+	// perPartnScanParallelism gives inherent parallelism in the scan ranges generatedfor each partition
+	// For above example we will have perPartnScanParallelism will be 1 * 3 i.e. C * S
+	// It can happen that we have ranges spanning across multiple centroids then scanListId will be
+	// some random number
+	// Like PartitionId(1) -> CentroidId(0) -> []Scan{[Low: [242,"USA"] High: [242,"CANADA"]]}
+	//
+	// readersPerPartition is min(perPartnScanParallelism, nprobes, numCentroids)
+	// It will be set to 1 when merge sort is needed. Its needed when we are scanning multiple partitions
+	// and not using heap
+	//
+	// numBatchesPerScan is the number of batches needed to distribute perPartnScanParallelism scans
+	// acorss readersPerPartition readers
+
 	// Make ScanJobs and schedule them on the WorkerPool
 	// * readersPerPartition should be launched in parallel
 	// * Run one scan on all partitions and then launch next one
@@ -1986,17 +2044,23 @@ func (s *IndexScanSource2) Routine() error {
 		numBatchesPerScan += 1
 	}
 
-	// Assigning BatchId to scan jobs in every paritition every batch will
-	// have at max readersPerPartition * numPartitions number of jobs all the jobs
-	// in the batch can be run in parallel. We have only readersPerPartition number
-	// of readers for every partition so only that many readers can run in parallel
-	// in one batch. We will be running the jobs batch wise one batch after other
-
-	// VECTOR_TODO: Fix this scheduling algorithm. Here we must wait for slowest
+	// VECTOR_TODO:
+	// Fix this scheduling algorithm. Here we must wait for slowest
 	// scan in every batch to finish. If not all batches are equally sized this is
 	// not optimal. We will to have schedule every job independently and hold semaphore
 	// on number of readers per parition to ensure only a fixed number of scans per
 	// partition are running in parallel at any point of time.
+
+	// BatchId generation logic:
+	// * We need batchIds to be strictly increasing
+	// * Each batchId can have at most readersPerPartition number of jobs for a give partition
+	//   as we have only reserved that many readers per partition
+	// * Each batchId can have at most numPartitionsScanned * readersPerPartiton number of jobs
+	//   as our worker pool has only that many workers
+	// * Currently we scheudle batches onto worker pools one after another
+
+	// Note: Current batchId generation logic can have holes in the batchId ranges but it meets
+	// all the requirements mentioned above
 	jobMap := make(map[int][]*ScanJob, 0)
 	maxBatchId := 0
 	for _, pid := range s.p.req.PartitionIds {
@@ -2020,10 +2084,30 @@ func (s *IndexScanSource2) Routine() error {
 		}
 	}
 
+	// Log number of jobs and batches
+	logging.LazyVerbose(func() string {
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%v[%v] IndexScanSource2.Routine - len(jobMap): %v, maxBatchId: %v perPartnScanParallelism: %v and readersPerPartition: %v\n",
+			s.p.req.LogPrefix, s.p.req.RequestId, len(jobMap), maxBatchId, s.p.req.perPartnScanParallelism, readersPerPartition)
+
+		for batchId := 0; batchId <= maxBatchId; batchId++ {
+			for jobIndex, job := range jobMap[batchId] {
+				fmt.Fprintf(&sb, "%v[%v] IndexScanSource2.Routine - batch id: %v, job index: %v, job: %s\n",
+					s.p.req.LogPrefix, s.p.req.RequestId, batchId, jobIndex, job.debugString)
+			}
+		}
+		return sb.String()
+	})
+
 	defer func() {
 		for i := 0; i <= maxBatchId; i++ {
-			for _, job := range jobMap[i] {
-				logging.Verbosef("%v decode %v, dist %v, cnt %v, scanned %v", job.logPrefix,
+			// Skip if batchId is not present in the job map
+			jobList, ok := jobMap[i]
+			if !ok {
+				continue
+			}
+			for _, job := range jobList {
+				logging.Verbosef("%v[%v] IndexScanSource2.Routine - decode %v, dist %v, cnt %v, scanned %v", s.p.req.LogPrefix, s.p.req.RequestId,
 					job.decodeDur, job.distCmpDur, job.decodeCnt, job.rowsScanned)
 				s.p.rowsScanned += job.rowsScanned
 				s.p.rowsFiltered += job.rowsFiltered
@@ -2062,7 +2146,11 @@ func (s *IndexScanSource2) Routine() error {
 		}()
 		stopped := false
 		for i := 0; i <= maxBatchId; i++ {
-			for _, job := range jobMap[i] {
+			jobList, ok := jobMap[i]
+			if !ok {
+				continue
+			}
+			for _, job := range jobList {
 				wpErr := wp.Submit(job)
 				if wpErr != nil {
 					stopped = true
@@ -2096,7 +2184,7 @@ func (s *IndexScanSource2) Routine() error {
 	}
 
 	if err = s.HasShutdown(); err != nil {
-		logging.Verbosef("%v %v IndexScanSource2.Routine - error %v while checking shutdown", s.p.req.LogPrefix, s.p.req.RequestId, err)
+		logging.Verbosef("%v[%v] IndexScanSource2.Routine - error %v while checking shutdown", s.p.req.LogPrefix, s.p.req.RequestId, err)
 		s.CloseWithError(err)
 		return err
 	}
