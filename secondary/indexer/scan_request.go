@@ -916,6 +916,18 @@ func (r *ScanRequest) Done() {
 	if r.Timeout != nil {
 		r.Timeout.Stop()
 	}
+
+	r.cleanup()
+}
+
+func (r *ScanRequest) cleanup() {
+	r.queryVector = nil
+	r.protoScans = nil
+	r.indexOrder = nil
+
+	r.codebookMap = nil
+	r.centroidMap = nil
+	r.vectorScans = nil
 }
 
 func (r *ScanRequest) isNil(k []byte, emptyArrAsNil bool) bool {
