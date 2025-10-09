@@ -1690,7 +1690,7 @@ func addPartnInfoToProtoInst(cfg c.Config, cip c.ClusterInfoProvider,
 				partIds[i] = uint64(p.GetPartitionId())
 			}
 
-			if protoInst.KeyPartn == nil {
+			if protoInst.KeyPartn == nil || len(protoInst.KeyPartn.Partitions) == 0 {
 				protoInst.KeyPartn = protobuf.NewKeyPartition(uint64(indexInst.Pc.GetNumPartitions()), endpoints, partIds)
 			} else {
 				protoInst.KeyPartn.AddPartitions(partIds)
