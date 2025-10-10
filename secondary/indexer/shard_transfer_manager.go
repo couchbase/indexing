@@ -1540,10 +1540,15 @@ func (stm *ShardTransferManager) handleRestoreAndUnlockShards(cmd Message) {
 
 		if shardRefCount.lockedForRecovery {
 			logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating RestoreShardDone for shardId: %v", shardId)
+			var err error
 			if shardType == c.PLASMA_SHARD {
-				plasma.RestoreShardDone(plasma.ShardId(shardId))
+				err = plasma.RestoreShardDone(plasma.ShardId(shardId))
 			} else if shardType == c.BHIVE_SHARD {
-				bhive.RestoreShardDone(plasma.ShardId(shardId))
+				err = bhive.RestoreShardDone(plasma.ShardId(shardId))
+			}
+			if err != nil {
+				logging.Warnf("ShardTransferManager::handleRestoreAndUnlockShards Err in RestoreShardDone for shardId: %v"+
+					"of shard type:%v, err:%v", shardId, shardType, err)
 			}
 		}
 
