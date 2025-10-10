@@ -872,10 +872,14 @@ func (stm *ShardTransferManager) handleRestoreShardDone(cmd Message) {
 
 	logging.Infof("ShardTransferManager::handleRestoreShardDone Initiating RestoreShardDone for shards: %v", shardIds)
 	start := time.Now()
+	errmap := make(map[c.ShardId]error)
 	for _, shardId := range shardIds {
-		plasma.RestoreShardDone(plasma.ShardId(shardId))
+		if err := plasma.RestoreShardDone(plasma.ShardId(shardId)); err != nil {
+			errmap[shardId] = err
+		}
 	}
-	logging.Infof("ShardTransferManager::handleRestoreShardDone Finished RestoreShardDone for shards: %v, elapsed: %v", shardIds, time.Since(start))
+	logging.Infof("ShardTransferManager::handleRestoreShardDone Finished RestoreShardDone for shards: %v, "+
+		"errmap: %v, elapsed: %v", shardIds, errmap, time.Since(start))
 	respCh <- true
 }
 
@@ -911,7 +915,10 @@ func (stm *ShardTransferManager) handleRestoreAndUnlockShards(cmd Message) {
 
 		if shardRefCount.lockedForRecovery {
 			logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating RestoreShardDone for shardId: %v", shardId)
-			plasma.RestoreShardDone(plasma.ShardId(shardId))
+			if err := plasma.RestoreShardDone(plasma.ShardId(shardId)); err != nil {
+				logging.Warnf("ShardTransferManager::handleRestoreAndUnlockShards Err in RestoreShardDone for shardId: %v,"+
+					" err:%v", shardId, err)
+			}
 		}
 
 		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating unlock for shardId: %v, refCount: %v", shardId, shardRefCount.refCount)
