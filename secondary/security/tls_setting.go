@@ -19,6 +19,7 @@ import (
 
 	"github.com/couchbase/cbauth"
 	cbtls "github.com/couchbase/goutils/tls"
+	"github.com/couchbase/indexing/secondary/goextended/syncx"
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 )
@@ -128,7 +129,7 @@ type SecurityContext struct {
 }
 
 var pSecurityContext *SecurityContext
-var pContextInitializer sync.Once
+var pContextInitializer syncx.OnceOnSuccess
 
 func init() {
 	pSecurityContext = &SecurityContext{
@@ -152,11 +153,11 @@ func init() {
 func InitSecurityContext(logger ConsoleLogger, localhost, srvrCertFile, srvrKeyFile, caFile,
 	clientCertFile, clientKeyFile string, encryptLocalHost bool) (err error) {
 
-	pContextInitializer.Do(func() {
+	pContextInitializer.Do(func() error {
 		var ips map[string]bool
 		ips, err = buildLocalAddr(localhost)
 		if err != nil {
-			return
+			return err
 		}
 
 		pSecurityContext = &SecurityContext{
@@ -180,6 +181,7 @@ func InitSecurityContext(logger ConsoleLogger, localhost, srvrCertFile, srvrKeyF
 
 		pSecurityContext.encryptPortRev.Store(0)
 
+		return nil
 	})
 
 	return
@@ -193,11 +195,11 @@ func WaitForSecurityCtxInit() {
 
 func InitSecurityContextForClient(logger ConsoleLogger, localhost string, certFile, keyFile, caFile string, encryptLocalHost bool) (err error) {
 
-	pContextInitializer.Do(func() {
+	pContextInitializer.Do(func() error {
 		var ips map[string]bool
 		ips, err = buildLocalAddr(localhost)
 		if err != nil {
-			return
+			return err
 		}
 
 		pSecurityContext.logger = logger
@@ -206,6 +208,8 @@ func InitSecurityContextForClient(logger ConsoleLogger, localhost string, certFi
 		pSecurityContext.caFile = caFile
 		pSecurityContext.encryptLocalHost = encryptLocalHost
 		pSecurityContext.localhosts = ips
+
+		return nil
 	})
 
 	return
