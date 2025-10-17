@@ -1485,17 +1485,24 @@ func (stm *ShardTransferManager) handleRestoreShardDone(cmd Message) {
 	var shardType c.ShardType
 	logging.Infof("ShardTransferManager::handleRestoreShardDone Initiating RestoreShardDone for shards: %v", shardIds)
 	start := time.Now()
+	errmap := make(map[c.ShardId]error)
 	for _, shardId := range shardIds {
 
 		shardType = stm.shardTypeMapper.GetShardType(shardId)
 		if shardType == c.PLASMA_SHARD {
-			plasma.RestoreShardDone(plasma.ShardId(shardId))
+			err := plasma.RestoreShardDone(plasma.ShardId(shardId))
+			if err != nil {
+				errmap[shardId] = err
+			}
 		} else if shardType == c.BHIVE_SHARD {
-			bhive.RestoreShardDone(plasma.ShardId(shardId))
+			err := bhive.RestoreShardDone(plasma.ShardId(shardId))
+			if err != nil {
+				errmap[shardId] = err
+			}
 		}
 	}
 	logging.Infof("ShardTransferManager::handleRestoreShardDone Finished RestoreShardDone for shards: %v of "+
-		"shard type:%v, elapsed: %v", shardIds, shardType, time.Since(start))
+		"shard type:%v, errmap:%v, elapsed: %v", shardIds, shardType, errmap, time.Since(start))
 	respCh <- true
 }
 

@@ -50,18 +50,11 @@ var METRICS_PREFIX = "index_"
 
 var PARTN_METRICS_PREFIX = METRICS_PREFIX + "partn_"
 
-// 0-2ms, 2ms-5ms, 5ms-10ms, 10ms-20ms, 20ms-30ms, 30ms-50ms, 50ms-100ms, 100ms-Inf
-var latencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100}
-
 // 0-2ms, 2ms-5ms, 5ms-10ms, 10ms-20ms, 20ms-30ms, 30ms-50ms, 50ms-100ms, 100ms-1000ms,
-// 1000ms-5000ms, 5000ms-10000ms, 10000ms-Inf
-var snapLatencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100, 1000, 5000, 10000}
-
-// end-end scan request latency
-// 0-2ms, 2ms-5ms, 5ms-10ms, 10ms-20ms, 20ms-30ms, 30ms-50ms, 50ms-100ms, 100ms-1000ms,
-// 1000ms-5000ms, 5000ms-10000ms, 10000ms-50000ms, 50000ms-Inf
-var scanReqLatencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100, 1000, 5000, 10000, 50000}
-
+// 1000ms-5000ms, 5000ms-10000ms, 10000ms-30000ms, 30000ms-60000ms, 60000ms-120000ms, 120000ms-Inf
+// 2 min coverage
+// Common latency distribution for flush, snapshot, and scan request latencies
+var latencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100, 1000, 5000, 10000, 30000, 60000, 120000}
 var isJemallocProfilingActive int64
 
 func init() {
@@ -107,7 +100,7 @@ func (s *KeyspaceStats) Init(keyspaceId string) {
 	s.numNonAlignTS.Init()
 	s.avgDcpSnapSize.Init()
 	s.flushLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
-	s.snapLatDist.InitLatency(snapLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
+	s.snapLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.lastSnapDone.Init()
 	s.numForceInMemSnap.Init()
 	s.throttleLat.Init()
@@ -615,10 +608,10 @@ func (s *IndexStats) Init() {
 	s.keySizeDist.Init()
 	s.arrKeySizeDist.Init()
 
-	s.scanReqInitLatDist.InitLatency(scanReqLatencyDist, prettyTimeToString)
-	s.scanReqWaitLatDist.InitLatency(scanReqLatencyDist, prettyTimeToString)
-	s.scanReqLatDist.InitLatency(scanReqLatencyDist, prettyTimeToString)
-	s.snapGenLatDist.InitLatency(snapLatencyDist, prettyTimeToString)
+	s.scanReqInitLatDist.InitLatency(latencyDist, prettyTimeToString)
+	s.scanReqWaitLatDist.InitLatency(latencyDist, prettyTimeToString)
+	s.scanReqLatDist.InitLatency(latencyDist, prettyTimeToString)
+	s.snapGenLatDist.InitLatency(latencyDist, prettyTimeToString)
 
 	s.partitions = make(map[common.PartitionId]*IndexStats)
 
