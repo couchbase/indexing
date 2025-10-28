@@ -2880,6 +2880,12 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 
 		PopulateSiblingIndexForReplicaRepair(solution, config.binSize)
 	}
+	if config.Detail {
+		updatedSolution := planner.GetResult()
+		logging.Infof("******************** Rebalance Summary *********************")
+		updatedSolution.PrintRebalanceSummary(solution)
+		logging.Infof("*************************************************************")
+	}
 
 	return planner, s, indexDefnsToRemove, nil
 }
