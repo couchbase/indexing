@@ -7281,6 +7281,28 @@ func (idx *indexer) checkDDLInProgress() (bool, []string, bool) {
 			ddlInProgress = true
 			inProgressIndexNames = append(inProgressIndexNames, index.Defn.FullyQualifiedName())
 		}
+
+		// Bhive: graph not yet ready => treat as DDL-in-progress
+		if index.Defn.IsBhive() && index.State == common.INDEX_STATE_ACTIVE {
+			numPartn := len(idx.indexPartnMap[index.InstId])
+
+			graphReadyForAllPartn := true
+
+			if len(index.BhiveGraphStatus) < numPartn {
+				graphReadyForAllPartn = false
+			} else {
+				for _, ready := range index.BhiveGraphStatus {
+					if !ready {
+						graphReadyForAllPartn = false
+						break
+					}
+				}
+			}
+			if !graphReadyForAllPartn {
+				ddlInProgress = true
+				inProgressIndexNames = append(inProgressIndexNames, index.Defn.FullyQualifiedName())
+			}
+		}
 	}
 
 	dropCleanupPending := idx.checkDropCleanupPending()
