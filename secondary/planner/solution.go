@@ -681,6 +681,137 @@ func (s *Solution) PrintCompactLayout() {
 	}
 }
 
+// PrintRebalanceSummary analyzes and logs the changes between the
+// initial solution and the updated solution,
+// during a rebalance operation. It categorizes index movements
+// into three types:
+// 1. Repaired indexes: repaired indexes that didn't exist in the initial solution
+// 2. Moved indexes: existing indexes that were relocated to different nodes
+// 3. Lost replicas: index replicas that existed in the initial solution
+// but are missing in the final solution
+func (s *Solution) PrintRebalanceSummary(initialSolution *Solution) {
+
+	tempFinalSolution := s.clone()
+	UngroupIndexes(tempFinalSolution)
+
+	tempInitialSolution := initialSolution.clone()
+	UngroupIndexes(tempInitialSolution)
+
+	totalRepaired := 0
+	totalMoved := 0
+	totalLost := 0
+
+	// Helper function to extract mainstore and backstore
+	getMainstoreBackstore := func(index *IndexUsage) (string, string) {
+		mainstore := "N/A"
+		backstore := "N/A"
+		if len(index.AlternateShardIds) > 0 {
+			mainstore = index.AlternateShardIds[0]
+		}
+		if len(index.AlternateShardIds) > 1 {
+			backstore = index.AlternateShardIds[1]
+		}
+		return mainstore, backstore
+	}
+
+	// Build a map of replicas in the final solution for comparison
+	type ReplicaKey struct {
+		DefnId    common.IndexDefnId
+		PartnId   common.PartitionId
+		ReplicaId int
+	}
+	finalReplicas := make(map[ReplicaKey]bool)
+
+	for _, indexer := range tempFinalSolution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.Instance != nil {
+				key := ReplicaKey{
+					DefnId:    index.DefnId,
+					PartnId:   index.PartnId,
+					ReplicaId: index.Instance.ReplicaId,
+				}
+				finalReplicas[key] = true
+			}
+		}
+	}
+	// Log Repaired and Moved indexes
+	logging.Infof("******************** Index Movements *********************")
+	for _, indexer := range tempFinalSolution.Placement {
+		for _, index := range indexer.Indexes {
+			isRepaired := index.initialNode == nil
+			isMoved := !isRepaired && index.initialNode.NodeId != indexer.NodeId
+
+			// log Repaired or Moved indexes
+			if isRepaired || isMoved {
+
+				replicaId := "N/A"
+				if index.Instance != nil {
+					replicaId = fmt.Sprintf("%d", index.Instance.ReplicaId)
+				}
+
+				shardId := "N/A"
+				if len(index.ShardIds) > 0 {
+					shardId = fmt.Sprintf("%d", index.ShardIds[0])
+				}
+
+				status := "Repaired"
+				sourceNode := "N/A"
+				if isMoved {
+					status = "Moved"
+					sourceNode = index.initialNode.NodeId
+				}
+
+				mainstore, backstore := getMainstoreBackstore(index)
+				logging.Infof("  Index: name=%v, bucket=%v, scope=%v, collection=%v",
+					index.GetDisplayName(), index.Bucket, index.Scope, index.Collection)
+				logging.Infof("  ReplicaId=%v, PartitionId=%v, ShardId=%v, Mainstore=%v, Backstore=%v",
+					replicaId, index.PartnId, shardId, mainstore, backstore)
+				logging.Infof("  Status=%v, Src=%v, Dest=%v",
+					status, sourceNode, indexer.NodeId)
+				logging.Infof("------------------------------------------------------------------------------------------------------------------")
+
+				if isRepaired {
+					totalRepaired++
+				} else {
+					totalMoved++
+				}
+			}
+		}
+	}
+	// Log lost replicas
+	logging.Infof("******************** Lost Replicas ********************")
+	for _, indexer := range tempInitialSolution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.Instance != nil {
+				key := ReplicaKey{
+					DefnId:    index.DefnId,
+					PartnId:   index.PartnId,
+					ReplicaId: index.Instance.ReplicaId,
+				}
+				if !finalReplicas[key] {
+					// This replica was lost during rebalance
+					replicaId := fmt.Sprintf("%d", index.Instance.ReplicaId)
+					shardId := "N/A"
+					if len(index.ShardIds) > 0 {
+						shardId = fmt.Sprintf("%d", index.ShardIds[0])
+					}
+
+					logging.Infof("  Lost Replica: name=%v, bucket=%v, scope=%v, collection=%v",
+						index.GetDisplayName(), index.Bucket, index.Scope, index.Collection)
+					logging.Infof("  ReplicaId=%v, PartitionId=%v, ShardId=%v",
+						replicaId, index.PartnId, shardId)
+					logging.Infof("  Src=%v", indexer.NodeId)
+					logging.Infof("------------------------------------------------------------------------------------------------------------------")
+
+					totalLost++
+				}
+			}
+		}
+	}
+	logging.Infof("Rebalance Summary: total repaired indexes=%d, total moved indexes=%d, "+
+		"total lost replicas=%d", totalRepaired, totalMoved, totalLost)
+}
+
 // Compute statistics on memory usage
 func (s *Solution) ComputeMemUsage() (float64, float64) {
 

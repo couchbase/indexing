@@ -96,6 +96,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "		override cluster index memory quota setting")
 	fmt.Fprintln(os.Stderr, "	-cpuQuota int")
 	fmt.Fprintln(os.Stderr, "		override cluster index cpu quota setting")
+	fmt.Fprintln(os.Stderr, "	-layout")
+	fmt.Fprintln(os.Stderr, "		print detailed index layout and rebalance summary")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr,
 		`cbindexplan is a planning recommendation tool for index placement.  Given a set of indexes, the tool
@@ -181,7 +183,7 @@ var gEnableShardAffinity bool
 
 func init() {
 	flag.BoolVar(&gHelp, "help", false, "print usage")
-	flag.BoolVar(&gDetail, "layout", false, "print index layout plan to console after planning")
+	flag.BoolVar(&gDetail, "layout", false, "print detailed index layout and rebalance summary")
 	flag.StringVar(&gLogLevel, "logLevel", "INFO", "log level")
 	flag.StringVar(&gOutput, "output", "", "save index layout plan to a file after planning")
 	flag.StringVar(&gGenStmt, "ddl", "", "generate DDL statement after planning for new/moved indexes")
@@ -309,8 +311,17 @@ func main() {
 		if gGenStmt != "" {
 			logging.Fatalf("Invalid argument: option 'ddl' is not supported for rebalancing.")
 		}
-
-		_, err := planner.ExecuteRebalanceWithOptions(plan, nil, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, nil, binSize, gEnableShardAffinity, false)
+		var deletedNodes []string
+		if gEjectedNode != "" {
+			ejectedNodes := strings.Split(gEjectedNode, ",")
+			for _, node := range ejectedNodes {
+				node = strings.TrimSpace(node)
+				if node != "" {
+					deletedNodes = append(deletedNodes, node)
+				}
+			}
+		}
+		_, err := planner.ExecuteRebalanceWithOptions(plan, nil, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, deletedNodes, binSize, gEnableShardAffinity, false)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return

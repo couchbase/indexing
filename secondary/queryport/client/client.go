@@ -26,6 +26,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging/systemevent"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/goextended/syncx"
 	"github.com/couchbase/indexing/secondary/logging"
 	mclient "github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/security"
@@ -394,7 +395,7 @@ type GsiAccessor interface {
 }
 
 var useMetadataProvider = true
-var pInitOnce sync.Once
+var pInitOnceRetyOnErr syncx.OnceOnSuccess
 
 // IndexerService returns the status of the indexer node
 // as observed by the GsiClient.
@@ -2188,18 +2189,18 @@ func getScanError(errMap map[common.PartitionId]map[uint64]error) error {
 }
 
 func (c *GsiClient) initSecurityContext(encryptLocalHost bool) (err error) {
-
-	pInitOnce.Do(func() {
+	pInitOnceRetyOnErr.Do(func() error {
 		logger := func(err error) { common.Console(c.cluster, err.Error()) }
 		if err = security.InitSecurityContextForClient(logger, c.cluster, "", "", "", encryptLocalHost); err != nil {
-			return
+			return err
 		}
 
 		if err = common.RefreshSecurityContextOnTopology(c.cluster); err != nil {
-			return
+			return err
 		}
 
 		go common.MonitorServiceForPortChanges(c.cluster)
+		return nil
 	})
 
 	return
