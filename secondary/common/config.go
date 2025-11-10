@@ -1292,6 +1292,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.skiplist.usePaddedSkiplistNodes": ConfigValue{
+		true,
+		"Enable node padding to avoid split lock in skiplists",
+		true,
+		false, // mutable
+		false, // case-interface
+	},
 	"indexer.plasma.disablePersistence": ConfigValue{
 		false,
 		"Disable persistence",
