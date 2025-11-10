@@ -528,6 +528,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 			mode = plasma.DirectIO
 		}
 		cfg.IOMode = mode
+		cfg.UsePaddedNode = slice.sysconf["plasma.skiplist.usePaddedSkiplistNodes"].Bool()
 
 		//
 		// 2. "Fork" main and back configs into two separate objects
