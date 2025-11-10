@@ -700,19 +700,8 @@ func (s *Solution) PrintRebalanceSummary(initialSolution *Solution) {
 	totalRepaired := 0
 	totalMoved := 0
 	totalLost := 0
-
-	// Helper function to extract mainstore and backstore
-	getMainstoreBackstore := func(index *IndexUsage) (string, string) {
-		mainstore := "N/A"
-		backstore := "N/A"
-		if len(index.AlternateShardIds) > 0 {
-			mainstore = index.AlternateShardIds[0]
-		}
-		if len(index.AlternateShardIds) > 1 {
-			backstore = index.AlternateShardIds[1]
-		}
-		return mainstore, backstore
-	}
+	totalDataMoved := uint64(0)
+	totalDataLost := uint64(0)
 
 	// Build a map of replicas in the final solution for comparison
 	type ReplicaKey struct {
@@ -734,9 +723,11 @@ func (s *Solution) PrintRebalanceSummary(initialSolution *Solution) {
 			}
 		}
 	}
-	// Log Repaired and Moved indexes
-	logging.Infof("******************** Index Movements *********************")
+
+	logging.Infof("********************************* Index Movements (partition--level) *************************************")
+	logging.Infof("")
 	for _, indexer := range tempFinalSolution.Placement {
+
 		for _, index := range indexer.Indexes {
 			isRepaired := index.initialNode == nil
 			isMoved := !isRepaired && index.initialNode.NodeId != indexer.NodeId
@@ -749,37 +740,36 @@ func (s *Solution) PrintRebalanceSummary(initialSolution *Solution) {
 					replicaId = fmt.Sprintf("%d", index.Instance.ReplicaId)
 				}
 
-				shardId := "N/A"
-				if len(index.ShardIds) > 0 {
-					shardId = fmt.Sprintf("%d", index.ShardIds[0])
-				}
-
 				status := "Repaired"
 				sourceNode := "N/A"
+				dataSize := uint64(0)
 				if isMoved {
 					status = "Moved"
 					sourceNode = index.initialNode.NodeId
+					dataSize = index.GetDataSize(tempFinalSolution.UseLiveData())
 				}
 
-				mainstore, backstore := getMainstoreBackstore(index)
-				logging.Infof("  Index: name=%v, bucket=%v, scope=%v, collection=%v",
-					index.GetDisplayName(), index.Bucket, index.Scope, index.Collection)
-				logging.Infof("  ReplicaId=%v, PartitionId=%v, ShardId=%v, Mainstore=%v, Backstore=%v",
-					replicaId, index.PartnId, shardId, mainstore, backstore)
-				logging.Infof("  Status=%v, Src=%v, Dest=%v",
-					status, sourceNode, indexer.NodeId)
-				logging.Infof("------------------------------------------------------------------------------------------------------------------")
+				logging.Infof("\tIndex: name=%v, bucket=%v, scope=%v, collection=%v, defnId=%v, instId=%v",
+					index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, index.DefnId, index.InstId)
+				logging.Infof("\tReplicaId=%v, PartitionId=%v, ShardIds=%v, AlternateShardIds=%v",
+					replicaId, index.PartnId, index.ShardIds, index.AlternateShardIds)
+				logging.Infof("\tStatus=%v, Src=%v, Dest=%v, DataSize=%v (%s)",
+					status, sourceNode, indexer.NodeId, dataSize, formatMemoryStr(dataSize))
+				logging.Infof("---------------------------------------------------------------------------------------------------------")
+				logging.Infof("")
 
 				if isRepaired {
 					totalRepaired++
 				} else {
 					totalMoved++
+					totalDataMoved += dataSize
 				}
 			}
 		}
 	}
-	// Log lost replicas
-	logging.Infof("******************** Lost Replicas ********************")
+
+	logging.Infof("********************************* Unrepaired Replicas (partition-level) *************************************")
+	logging.Infof("")
 	for _, indexer := range tempInitialSolution.Placement {
 		for _, index := range indexer.Indexes {
 			if index.Instance != nil {
@@ -791,28 +781,38 @@ func (s *Solution) PrintRebalanceSummary(initialSolution *Solution) {
 				if !finalReplicas[key] {
 					// This replica was lost during rebalance
 					replicaId := fmt.Sprintf("%d", index.Instance.ReplicaId)
-					shardId := "N/A"
-					if len(index.ShardIds) > 0 {
-						shardId = fmt.Sprintf("%d", index.ShardIds[0])
-					}
+					dataSize := index.GetDataSize(tempInitialSolution.UseLiveData())
 
-					logging.Infof("  Lost Replica: name=%v, bucket=%v, scope=%v, collection=%v",
-						index.GetDisplayName(), index.Bucket, index.Scope, index.Collection)
-					logging.Infof("  ReplicaId=%v, PartitionId=%v, ShardId=%v",
-						replicaId, index.PartnId, shardId)
-					logging.Infof("  Src=%v", indexer.NodeId)
-					logging.Infof("------------------------------------------------------------------------------------------------------------------")
+					logging.Infof("\tUnrepaired Replica: name=%v, bucket=%v, scope=%v, collection=%v, defnId=%v, instId=%v",
+						index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, index.DefnId, index.InstId)
+					logging.Infof("\tReplicaId=%v, PartitionId=%v, ShardIds=%v, AlternateShardIds=%v",
+						replicaId, index.PartnId, index.ShardIds, index.AlternateShardIds)
+					logging.Infof("\tSrc=%v, DataSize=%v (%s)",
+						indexer.NodeId, dataSize, formatMemoryStr(dataSize))
+					logging.Infof("--------------------------------------------------------------------------------------------------------")
+					logging.Infof("")
 
 					totalLost++
+					totalDataLost += dataSize
 				}
 			}
 		}
 	}
-	logging.Infof("Rebalance Summary: total repaired indexes=%d, total moved indexes=%d, "+
-		"total lost replicas=%d", totalRepaired, totalMoved, totalLost)
+
+	logging.Infof("*****************************************************************************************")
+	logging.Infof("                               REBALANCE SUMMARY                                         ")
+	logging.Infof("*****************************************************************************************")
+	logging.Infof("")
+	logging.Infof("  Total repaired replicas  (partition-count)                 : %d", totalRepaired)
+	logging.Infof("  Total moved replicas  (partition-count)                  : %d", totalMoved)
+	logging.Infof("  Total unrepaired replicas  (partition-count)               : %d", totalLost)
+	logging.Infof("  Total data-size of moved replicas  (partition-count)       : %d bytes (%s)", totalDataMoved, formatMemoryStr(totalDataMoved))
+	logging.Infof("  Total data-size of unrepaired replicas  (partition-count)  : %d bytes (%s)", totalDataLost, formatMemoryStr(totalDataLost))
+	logging.Infof("")
+	logging.Infof("*****************************************************************************************")
 }
 
-// Compute statistics on memory usage
+// compute statistics on memory usage
 func (s *Solution) ComputeMemUsage() (float64, float64) {
 
 	// Compute mean memory usage
