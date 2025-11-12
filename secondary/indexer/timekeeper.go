@@ -1293,8 +1293,8 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 			tk.ss.clearKVPendingTs(streamId, keyspaceId, vbno)
 			tk.ss.clearKVRollbackTs(streamId, keyspaceId, vbno)
 
-			// Set status to REPAIR_SHUTDOWN_VB as shutdown is not required
-			tk.ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][vbno] = REPAIR_SHUTDOWN_VB
+			// If STREAM_SUCCESS is followed by STREAM_FAIL for a vbucket from two different projectors, shutdown will be required.
+			tk.ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][vbno] = REPAIR_RESTART_VB
 			tk.ss.setLastRepairTime(streamId, keyspaceId, vbno)
 
 			// set needsRepair to true so that indexer will trigger repair immediately

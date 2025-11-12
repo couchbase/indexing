@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/couchbase/goutils/logging"
+	c "github.com/couchbase/indexing/secondary/common"
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
 )
 
@@ -80,7 +81,7 @@ func randomString(n uint32, low string, high string) []interface{} {
 	if lowLen <= 16 && highLen <= 16 {
 		if lowInt, err := strconv.ParseInt(low, 16, 64); err == nil {
 			if highInt, err := strconv.ParseInt(high, 16, 64); err == nil {
-				if (highInt < lowInt ){
+				if highInt < lowInt {
 					highInt, lowInt = lowInt, highInt
 				}
 				randomInt := rand.Intn(int(highInt - lowInt + 1)) // diff between lowInt and highInt inclusive of both values
@@ -173,10 +174,28 @@ func randomScans(n uint32, scans qclient.Scans) qclient.Scans {
 		filters := make([]*qclient.CompositeElementFilter, len(scan_cpy.Filter))
 
 		for index, filter := range scan_cpy.Filter {
-			low := randomString(n, filter.Low.(string), filter.High.(string))
-			temp_filter := qclient.CompositeElementFilter{}
-			temp_filter = *filter
+			// Convert to string for randomString function (which requires string)
+			lowString, err := c.ToString(filter.Low)
+			if err != nil {
+				logging.Errorf("randomScans: failed to convert Low to string: %v,"+
+					"keeping original", err)
+				filters[index] = filter
+				continue
+			}
+
+			highString, err := c.ToString(filter.High)
+			if err != nil {
+				logging.Errorf("randomScans: failed to convert High to string: %v,"+
+					"keeping original", err)
+				filters[index] = filter
+				continue
+			}
+
+			low := randomString(n, lowString, highString)
+
+			temp_filter := *filter
 			temp_filter.Low = low[0]
+			temp_filter.High = highString
 			filters[index] = &temp_filter
 		}
 		scan_cpy.Filter = filters

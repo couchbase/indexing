@@ -129,9 +129,9 @@ func main() {
 	res.Rows = totalRows
 	res.Duration = dur.Seconds() - res.WarmupDuration
 
-	rate := int(float64(totalRows) / res.Duration)
+	rate := float64(totalRows) / res.Duration
 
-	fmt.Printf("Throughput = %d rows/sec\n", rate)
+	fmt.Printf("Throughput = %v rows/sec\n", rate)
 
 	os.Remove(*outfile)
 	err = writeResults(res, *outfile)

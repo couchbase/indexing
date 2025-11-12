@@ -3253,6 +3253,20 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 					// Add partiition to partition map
 					idx.indexPartnMap[target.InstId][partnId] = idx.indexPartnMap[source.InstId][partnId]
 
+					// If this is a Bhive index, migrate BhiveGraphStatus for the merged partition
+					if source.Defn.IsBhive() {
+						if target.BhiveGraphStatus == nil {
+							target.BhiveGraphStatus = make(map[c.PartitionId]bool)
+						}
+						if ready, ok := source.BhiveGraphStatus[partnId]; ok {
+							target.BhiveGraphStatus[partnId] = ready
+						} else {
+							logging.Warnf("MergePartition: No BhiveGraphStatus entry to migrate for"+
+								" source InstId %v, target InstId %v, PartnId %v. This maybe due to training error on source inst.",
+								source.InstId, target.InstId, partnId)
+						}
+					}
+
 					// Add to stats
 					if stats := idx.stats.GetPartitionStats(source.InstId, partnId); stats != nil {
 						idx.stats.SetPartitionStats(target.InstId, partnId, stats)
@@ -3632,6 +3646,12 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 				// Remove stats
 				idx.stats.RemovePartitionStats(inst.InstId, partnId)
 
+				// For Bhive indexes, remove BhiveGraphStatus entry for the pruned partition
+				if inst.Defn.IsBhive() && inst.BhiveGraphStatus != nil {
+					if _, exists := inst.BhiveGraphStatus[partnId]; exists {
+						delete(inst.BhiveGraphStatus, partnId)
+					}
+				}
 			} else {
 				logging.Warnf("PrunePartition.  Index instance %v does not have partition %v. Skip", inst.InstId, partnId)
 			}
@@ -7260,6 +7280,28 @@ func (idx *indexer) checkDDLInProgress() (bool, []string, bool) {
 			index.State == common.INDEX_STATE_CATCHUP {
 			ddlInProgress = true
 			inProgressIndexNames = append(inProgressIndexNames, index.Defn.FullyQualifiedName())
+		}
+
+		// Bhive: graph not yet ready => treat as DDL-in-progress
+		if index.Defn.IsBhive() && index.State == common.INDEX_STATE_ACTIVE {
+			numPartn := len(idx.indexPartnMap[index.InstId])
+
+			graphReadyForAllPartn := true
+
+			if len(index.BhiveGraphStatus) < numPartn {
+				graphReadyForAllPartn = false
+			} else {
+				for _, ready := range index.BhiveGraphStatus {
+					if !ready {
+						graphReadyForAllPartn = false
+						break
+					}
+				}
+			}
+			if !graphReadyForAllPartn {
+				ddlInProgress = true
+				inProgressIndexNames = append(inProgressIndexNames, index.Defn.FullyQualifiedName())
+			}
 		}
 	}
 
