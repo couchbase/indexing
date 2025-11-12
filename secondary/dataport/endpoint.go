@@ -249,6 +249,10 @@ func (endpoint *RouterEndpoint) Ping() bool {
 	return atomic.LoadUint32(&endpoint.done) == 0
 }
 
+func (endpoint *RouterEndpoint) ConnClose() {
+	endpoint.conn.Close()
+}
+
 func (endpoint *RouterEndpoint) initHostportForAuth() error {
 
 	// TODO: Use cluster info lite

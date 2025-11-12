@@ -77,6 +77,10 @@ type RouterEndpoint interface {
 
 	// WaitForExit will block until endpoint exits
 	WaitForExit() error
+
+	// ConnClose will close the connection to the remote address
+	// synchronous call.
+	ConnClose()
 }
 
 // MarshalJSON implements encoding/json.Marshaler{} interface

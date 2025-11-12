@@ -131,6 +131,7 @@ func NewProjector(config c.Config, certFile, keyFile, caFile string) *Projector 
 	logging.Infof("Started new ClusterInfoProvider use_cinfo_lite: %v", useClusterInfoLite)
 
 	go PollForDeletedBucketsV2(p.clusterAddr, c.DEFAULT_POOL, config)
+	go StartMonitoringIndexerNodes(p.clusterAddr, c.DEFAULT_POOL)
 
 	systemStatsCollectionInterval := int64(config["projector.systemStatsCollectionInterval"].Int())
 	memmanager.Init(systemStatsCollectionInterval, sysStats) // Initialize memory manager
@@ -1293,4 +1294,137 @@ func initSystemStatsHandler() (*system.SystemStats, error) {
 	rh := common.NewRetryHelper(int(common.SIGAR_INIT_RETRIES), time.Second*3, 1, fn)
 	err = rh.Run()
 	return stats, err
+}
+
+var gIndexerMonitor IndexerMonitor
+
+type IndexerMonitor struct {
+	sync.Mutex
+	prevIndexerRaddrs   map[string]bool
+	registeredEndpoints map[string]c.RouterEndpoint
+}
+
+func StartMonitoringIndexerNodes(clusterAddr string, pool string) {
+	gIndexerMonitor = IndexerMonitor{
+		prevIndexerRaddrs:   make(map[string]bool),
+		registeredEndpoints: make(map[string]c.RouterEndpoint),
+	}
+
+	go gIndexerMonitor.monitorIndexerNodes(clusterAddr, pool)
+}
+
+func RegisterEndpoint(raddr string, endpoint c.RouterEndpoint) {
+	gIndexerMonitor.Lock()
+	defer gIndexerMonitor.Unlock()
+	gIndexerMonitor.registeredEndpoints[raddr] = endpoint
+	logging.Infof("Projector::RegisterEndpoint, registered endpoint for node: %v", raddr)
+}
+
+func UnregisterEndpoint(raddr string) {
+	gIndexerMonitor.Lock()
+	defer gIndexerMonitor.Unlock()
+	delete(gIndexerMonitor.registeredEndpoints, raddr)
+	logging.Infof("Projector::UnregisterEndpoint, unregistered endpoint for node: %v", raddr)
+}
+
+func CloseAndUnregisterEndpoint(raddr string) {
+	gIndexerMonitor.Lock()
+	defer gIndexerMonitor.Unlock()
+	endpoint, ok := gIndexerMonitor.registeredEndpoints[raddr]
+	if !ok {
+		logging.Infof("Projector::CloseAndUnregisterEndpoint, endpoint not found for node: %v", raddr)
+		return
+	}
+	endpoint.ConnClose()
+	delete(gIndexerMonitor.registeredEndpoints, raddr)
+	logging.Infof("Projector::CloseAndUnregisterEndpoint, closed and unregistered endpoint for node: %v", raddr)
+}
+
+func (gim *IndexerMonitor) monitorIndexerNodes(clusterAddr string, pool string) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("Projector::monitorIndexerNodes crashed: %v\n", r)
+			go gim.monitorIndexerNodes(clusterAddr, pool)
+		}
+	}()
+
+	selfRestart := func() {
+		time.Sleep(5000 * time.Millisecond)
+		go gim.monitorIndexerNodes(clusterAddr, pool)
+	}
+
+	url, err := common.ClusterAuthUrl(clusterAddr)
+	if err != nil {
+		logging.Errorf("Projector::monitorIndexerNodes, error observed while retrieving ClusterAuthUrl, err : %v", err)
+		selfRestart()
+		return
+	}
+
+	scn, err := common.NewServicesChangeNotifier(url, pool, "monitorIndexerNodes")
+	if err != nil {
+		logging.Errorf("Projector::monitorIndexerNodes, error observed while initializing ServicesChangeNotifier, err: %v", err)
+		selfRestart()
+		return
+	}
+	defer scn.Close()
+
+	cinfo, err := common.NewClusterInfoCache(url, pool)
+	if err != nil {
+		logging.Errorf("Projector::monitorIndexerNodes, error observed during the initilization of clusterInfoCache, err : %v", err)
+		selfRestart()
+		return
+	}
+	cinfo.SetUserAgent("monitorIndexerNodes")
+
+	changeInIndexerNodes := func(prev map[string]bool, curr map[string]bool) bool {
+		if len(prev) != len(curr) {
+			return true
+		} else {
+			for raddr, _ := range curr {
+				if _, ok := prev[raddr]; !ok {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	closeInactiveIndexerEndpoints := func(currActiveIndexerRaddrs map[string]bool) {
+		for raddr, _ := range gim.prevIndexerRaddrs {
+			if _, ok := currActiveIndexerRaddrs[raddr]; !ok {
+				CloseAndUnregisterEndpoint(raddr)
+			}
+		}
+	}
+
+	ch := scn.GetNotifyCh()
+	for {
+		select {
+		case notif, ok := <-ch:
+			if !ok {
+				selfRestart()
+				return
+			}
+
+			// Process only PoolChangeNotification as any change to
+			// ClusterMembership is reflected only in PoolChangeNotification
+			if notif.Type != common.PoolChangeNotification {
+				continue
+			}
+
+			if err := cinfo.FetchNodesAndSvsInfoWithLock(); err != nil {
+				logging.Errorf("Projector::monitorIndexerNodes, error observed while Updating cluster info cache, err: %v", err)
+				selfRestart()
+				return
+			}
+
+			currActiveIndexerRaddrs := cinfo.GetActiveIndexerNodesWithPorts(common.INDEX_DATA_MAINT, common.INDEX_DATA_INIT)
+			logging.Verbosef("Projector::monitorIndexerNodes, currActiveIndexerRaddrs: %v prevIndexerRaddrs: %v", currActiveIndexerRaddrs, gim.prevIndexerRaddrs)
+			if changeInIndexerNodes(gim.prevIndexerRaddrs, currActiveIndexerRaddrs) {
+				closeInactiveIndexerEndpoints(currActiveIndexerRaddrs)
+				gim.prevIndexerRaddrs = currActiveIndexerRaddrs
+			}
+		}
+	}
 }
