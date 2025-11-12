@@ -2358,8 +2358,10 @@ func newDCPConnectionName2(keyspaceId, topic string,
 //---- endpoint watcher
 
 func (feed *Feed) watchEndpoint(raddr string, endpoint c.RouterEndpoint) {
+	RegisterEndpoint(raddr, endpoint)
 	err := endpoint.WaitForExit() // <-- will block until endpoint exits.
 	logging.Infof("%v endpoint exited: %v", feed.logPrefix, err)
+	UnregisterEndpoint(raddr)
 	if err := feed.DeleteEndpoint(raddr); err != nil && err != c.ErrorClosed {
 		fmsg := "%v failed DeleteEndpoint(): %v"
 		logging.Errorf(fmsg, feed.logPrefix, err)

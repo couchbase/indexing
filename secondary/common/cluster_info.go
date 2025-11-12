@@ -866,6 +866,23 @@ func (c *ClusterInfoCache) TranslatePort(host, src, dest string) (string, error)
 	return "", nil
 }
 
+func (c *ClusterInfoCache) GetActiveIndexerNodesWithPorts(ports ...string) map[string]bool {
+	nids := c.GetNodeIdsByServiceType(INDEX_HTTP_SERVICE)
+	logging.Infof("ClusterInfoCache::GetActiveIndexerNodesWithPorts, nids: %v ports: %v", nids, ports)
+
+	hostnames := make(map[string]bool)
+	for _, nid := range nids {
+		for _, port := range ports {
+			hn, _ := c.nodesvs[nid].GetHostNameWithPort(port)
+			logging.Infof("ClusterInfoCache::GetActiveIndexerNodesWithPorts, nid: %v port: %v hn: %v", nid, port, hn)
+			if len(hn) != 0 {
+				hostnames[hn] = true
+			}
+		}
+	}
+	return hostnames
+}
+
 func (c *ClusterInfoCache) GetFailedIndexerNodes() (nodes []couchbase.Node) {
 	for _, n := range c.failedNodes {
 		for _, s := range n.Services {
