@@ -345,6 +345,7 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 				op == client.OPCODE_BROADCAST_STATS ||
 				op == client.OPCODE_BOOTSTRAP_STATS_UPDATE ||
 				op == client.OPCODE_REBALANCE_RUNNING ||
+				op == client.OPCODE_REBALANCE_DONE ||
 				op == client.OPCODE_CLIENT_STATS {
 				m.bootstraps <- req
 				return
@@ -356,6 +357,7 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 			op == client.OPCODE_CHECK_TOKEN_EXIST ||
 			op == client.OPCODE_CLIENT_STATS ||
 			op == client.OPCODE_REBALANCE_RUNNING ||
+			op == client.OPCODE_REBALANCE_DONE ||
 			op == client.OPCODE_BROADCAST_STATS ||
 			op == client.OPCODE_BOOTSTRAP_STATS_UPDATE {
 			m.parallels <- req
