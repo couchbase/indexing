@@ -2311,7 +2311,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	partnStats := idx.getPartnStats(&indexInst)
 	//allocate partition/slice
-	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false,
+	partnInstMap, _, partnShardIdMap, _, err := idx.initPartnInstance(indexInst, clientCh, false,
 		shardRebal, ephemeral, numVBuckets, partnStats, idx.stats.memoryQuota.Value(), nil)
 
 	if err != nil {
@@ -2593,7 +2593,7 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 		///////////////////////////////////////////////////////////////////
 
 		//allocate partition/slice
-		partnInstMap, failedPartnInstances, partnShardIdMap, err := idx.initPartnInstance(
+		partnInstMap, failedPartnInstances, partnShardIdMap, _, err := idx.initPartnInstance(
 			indexInst,        // common.IndexInst
 			nil,              // respCh MsgChannel
 			true,             // bootstrapPhase bool
@@ -6791,11 +6791,12 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	ephemeral bool, numVBuckets int, partnStats map[common.PartitionId]*IndexStats,
 	memQuota int64, cancelCh chan bool) (
 	// return values
-	PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
+	PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, map[common.IndexInstId]error, error) {
 
 	//initialize partitionInstMap for this index
 	partnInstMap := make(PartitionInstMap)
 	var failedPartnInstances PartitionInstMap
+	failedPartnInstErrorMap := make(map[common.IndexInstId]error)
 	partnShardIdMap := make(common.PartnShardIdMap)
 
 	//get all partitions for this index
@@ -6838,6 +6839,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 					// if the index is corrupted, we want to backup the index so record the failed
 					// partition
 					failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
+					failedPartnInstErrorMap[indexInst.InstId] = err
 					if !shardRebalance {
 						errStr := fmt.Sprintf("storage corruption for indexInst %v partnDefn %v", indexInst, partnDefn)
 						logging.Errorf("Indexer:: initPartnInstance %v", errStr)
@@ -6848,6 +6850,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 					// to crash loop but we can crash if path is not found in shard rebalance
 					if !shardRebalance {
 						failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
+						failedPartnInstErrorMap[indexInst.InstId] = err
 						errStr := fmt.Sprintf("storage path not found for indexInst %v partnDefn %v", indexInst, partnDefn)
 						logging.Errorf("Indexer:: initPartnInstance %v", errStr)
 						continue
@@ -6867,7 +6870,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 						cause:    err1,
 						category: INDEXER}}
 			}
-			return nil, failedPartnInstances, nil, err1
+			return nil, failedPartnInstances, nil, failedPartnInstErrorMap, err1
 		}
 
 		if shardRebalance {
@@ -6886,7 +6889,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		}
 	}
 
-	return partnInstMap, failedPartnInstances, partnShardIdMap, nil
+	return partnInstMap, failedPartnInstances, partnShardIdMap, failedPartnInstErrorMap, nil
 }
 
 func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
@@ -9631,27 +9634,33 @@ func (idx *indexer) initFromPersistedState() error {
 		var partnInstMap PartitionInstMap
 		var failedPartnInstances PartitionInstMap
 		var partnShardIdMap common.PartnShardIdMap
+		var failedPartnInstErrorMap map[common.IndexInstId]error
 
 		partnStats := idx.getPartnStats(&inst)
 
-		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst,
+		if partnInstMap, failedPartnInstances, partnShardIdMap, failedPartnInstErrorMap, err = idx.initPartnInstance(inst,
 			nil, true, false, ephemeral, numVBuckets, partnStats, idx.stats.memoryQuota.Value(),
 			nil); err != nil {
 			return err
 		}
 
-		// Cleanup all partition instances for which, initPartnInstance has failed due to storage corruption
+		// Cleanup all partition instances for which, initPartnInstance has failed due to storage corruption or path not found
 		for failedPartnId, failedPartnInstance := range failedPartnInstances {
-			logMsg := "Detected storage corruption for index %v, partition id %v. Starting cleanup."
-			common.Console(idx.config["clusterAddr"].String(), logMsg, inst.Defn.Name, failedPartnId)
+			if failedPartnInstErrorMap[inst.InstId] != errStoragePathNotFound && failedPartnInstErrorMap[inst.InstId] != errCodebookPathNotFound {
+				logMsg := "Detected storage corruption for index %v, partition id %v. Starting cleanup."
+				common.Console(idx.config["clusterAddr"].String(), logMsg, inst.Defn.Name, failedPartnId)
+			}
 
 			logging.Infof("Indexer::initFromPersistedState Starting cleanup for %v", failedPartnInstance)
 			// Can this return an error?
 			idx.forceCleanupIndexPartition(&inst, failedPartnId, failedPartnInstance)
 			logging.Infof("Indexer::initFromPersistedState Done cleanup for %v", failedPartnInstance)
 
-			logMsg = "Cleanup done for index %v, partition id %v."
-			common.Console(idx.config["clusterAddr"].String(), logMsg, inst.Defn.Name, failedPartnId)
+			if failedPartnInstErrorMap[inst.InstId] != errStoragePathNotFound && failedPartnInstErrorMap[inst.InstId] != errCodebookPathNotFound {
+				logMsg := "Cleanup done for index %v, partition id %v."
+				common.Console(idx.config["clusterAddr"].String(), logMsg, inst.Defn.Name, failedPartnId)
+			}
+
 		}
 
 		// If there are no partitions left, don't add this index instance to the indexInstMap
