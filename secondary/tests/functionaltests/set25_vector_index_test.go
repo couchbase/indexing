@@ -738,8 +738,8 @@ func testVectorPartnIndexWithAllSIFTQueries(t *testing.T, numReplica, numPartiti
 		FailTestIfError(err, "Error while opening query and ground truth files", t)
 
 		for query, truth, err := sd.GetQueryAndTruth(); err == nil; query, truth, err = sd.GetQueryAndTruth() {
+			wg.Add(1)
 			go func(_query []float32, _truth []uint32) {
-				wg.Add(1)
 				defer wg.Done()
 
 				var sb strings.Builder
@@ -796,7 +796,7 @@ func testVectorPartnIndexWithAllSIFTQueries(t *testing.T, numReplica, numPartiti
 				recall := recallAtR(_truth[0:10], scanResultsExtracted, 10)
 				atomic.AddInt64(&relCount, relevantCount(_truth[0:10], scanResultsExtracted, 10))
 				atomic.AddInt64(&numQueries, 1)
-				log.Printf("Recall: %v query: %v \n Truth: %v \n Results: %v", recall, queryStmt, truth[0:10], scanResultsExtracted)
+				log.Printf("Recall: %v query: %v \n Truth: %v \n Results: %v", recall, queryStmt, _truth[0:10], scanResultsExtracted)
 			}(query, truth)
 		}
 	}
