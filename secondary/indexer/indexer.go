@@ -15263,6 +15263,8 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 	expectedPartnNodeId := make(map[uint64]string)              // defnId -> string
 	expectedReplicaNodeId := make(map[uint64]string)            // defnId -> string
 
+	clusterVersion := common.GetClusterVersion()
+
 	for _, indexInfo := range sortedIndexInfo {
 		indexName := indexInfo.IndexName
 		defnId := indexInfo.DefnId
@@ -15287,12 +15289,7 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 			// exist on both source and destination nodes. Hence, no-op in this case
 		}
 
-		if _, ok := indexDefnToPartns[defnId]; !ok {
-			indexDefnToPartns[defnId] = make(map[int][]*IndexInfo)
-		}
-
 		actualInstPartnMap[defnId][replicaId][partnId] = true
-		indexDefnToPartns[defnId][partnId] = append(indexDefnToPartns[defnId][partnId], indexInfo)
 
 		if val, ok := expectedInstPartnMap[defnId]; !ok {
 			expectedInstPartnMap[defnId] = numPartns
@@ -15302,13 +15299,23 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 				"indexName: %v, defnId: %v. Prev. recorded partns: %v on Node: %v, curr. recorded partns: %v on Node: %v",
 				indexName, defnId, val, expectedPartnNodeId[defnId], numPartns, indexInfo.nodeId)
 		}
-		if val, ok := expectedInstReplicaMap[defnId]; !ok {
-			expectedInstReplicaMap[defnId] = numReplicas
-			expectedReplicaNodeId[defnId] = indexInfo.nodeId
-		} else if val != numReplicas {
-			logging.Fatalf("Indexer::checkForLostPartitionsAndLostReplica Inconsistency in the number of replica reported for "+
-				"indexName: %v, defnId: %v. Prev. recorded replicas: %v on Node: %v, curr. recorded replicas: %v on Node: %v",
-				indexName, defnId, val, expectedReplicaNodeId[defnId], numReplicas, indexInfo.nodeId)
+
+		// if the cluster is fully upgraded to 8.1 then only check for replica loss as older
+		// nodes will not populate this field
+		if clusterVersion >= c.INDEXER_81_VERSION {
+			if _, ok := indexDefnToPartns[defnId]; !ok {
+				indexDefnToPartns[defnId] = make(map[int][]*IndexInfo)
+			}
+			indexDefnToPartns[defnId][partnId] = append(indexDefnToPartns[defnId][partnId], indexInfo)
+
+			if val, ok := expectedInstReplicaMap[defnId]; !ok {
+				expectedInstReplicaMap[defnId] = numReplicas
+				expectedReplicaNodeId[defnId] = indexInfo.nodeId
+			} else if val != numReplicas {
+				logging.Fatalf("Indexer::checkForLostPartitionsAndLostReplica Inconsistency in the number of replica reported for "+
+					"indexName: %v, defnId: %v. Prev. recorded replicas: %v on Node: %v, curr. recorded replicas: %v on Node: %v",
+					indexName, defnId, val, expectedReplicaNodeId[defnId], numReplicas, indexInfo.nodeId)
+			}
 		}
 	}
 
@@ -15322,7 +15329,9 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 		}
 	}
 
-	idx.checkForLostReplicas(expectedInstReplicaMap, indexDefnToPartns, numActiveNodes)
+	if clusterVersion >= c.INDEXER_81_VERSION {
+		idx.checkForLostReplicas(expectedInstReplicaMap, indexDefnToPartns, numActiveNodes)
+	}
 }
 
 func (idx *indexer) checkForLostReplicas(
