@@ -15263,6 +15263,23 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 	expectedPartnNodeId := make(map[uint64]string)              // defnId -> string
 	expectedReplicaNodeId := make(map[uint64]string)            // defnId -> string
 
+	// ignore error, as checking tokens is a best case effort to reduce false positives
+	createCommandTokenMap, _ := mc.FetchIndexDefnToCreateCommandTokensMap()
+	deleteCommandTokenMap, _ := mc.FetchIndexDefnToDeleteCommandTokensMap()
+	dropInstanceCommandTokenMap, _ := mc.FetchIndexDefnToDropInstanceCommandTokenMap()
+	createDeleteOrDropIsPending := func(defnId uint64) bool {
+		if list, ok := createCommandTokenMap[c.IndexDefnId(defnId)]; ok && len(list) > 0 {
+			return true
+		}
+		if list, ok := dropInstanceCommandTokenMap[c.IndexDefnId(defnId)]; ok && len(list) > 0 {
+			return true
+		}
+		if token, ok := deleteCommandTokenMap[c.IndexDefnId(defnId)]; ok && token != nil {
+			return true
+		}
+		return false
+	}
+
 	clusterVersion := common.GetClusterVersion()
 
 	for _, indexInfo := range sortedIndexInfo {
@@ -15320,6 +15337,17 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 	}
 
 	for defnId, replicaIdMap := range actualInstPartnMap {
+		// check for false positives
+		if createDeleteOrDropIsPending(defnId) {
+			logging.Verbosef("Indexer::checkForLostPartitionsAndLostReplica defnId: %v has a create, delete or "+
+				"drop token. Ignoring lost partition and replica check", defnId)
+
+			// remove the Indexes which are undergoing from lost replica
+			// check as well. For clusterVersion < INDEXER_81_VERSION, this is no-op
+			delete(indexDefnToPartns, defnId)
+			continue
+		}
+
 		for replicaId, partnIdMap := range replicaIdMap {
 			if len(partnIdMap) != expectedInstPartnMap[defnId] {
 				logging.Warnf("Indexer::checkForLostPartitions defnId: %v, replicaId: %v has only %v(%v) partitions "+
