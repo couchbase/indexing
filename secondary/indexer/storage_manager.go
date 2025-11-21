@@ -3368,6 +3368,7 @@ type IndexInfo struct {
 	IsArrayIndex  bool   `json:"isArrayIndex"`  // Some validations happen only for non-array indexes
 	ItemsCount    uint64 `json:"itemsCount"`    // total number of items in the snapshot at the recorded timestamp
 	NumPartitions int    `json:"numPartitions"` // maximum number of partitions defined for this index
+	NumReplica    int    `json:"numReplica,omitempty"`
 
 	timestamp []uint64 // Used only for internal processing - not exported
 	nodeId    string   // ID of the node on which the replica partition exists - Used only for internal processing
@@ -3486,6 +3487,7 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 							Bucket:       indexInst.Defn.Bucket,
 							IsArrayIndex: indexInst.Defn.IsArrayIndex,
 							ItemsCount:   count,
+							NumReplica:   indexInst.Defn.GetNumReplica(),
 						}
 
 						if common.IsPartitioned(indexInst.Defn.PartitionScheme) {

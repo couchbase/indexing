@@ -955,6 +955,9 @@ type IndexerStats struct {
 
 	numDivergingReplicaIndexes stats.Int64Val
 	divergingReplicaIndexesMap *MapHolder
+
+	numLostReplicaIndexes stats.Int64Val
+	lostReplicaIndexesMap *MapHolder
 }
 
 func (s *IndexerStats) Init() {
@@ -1040,6 +1043,10 @@ func (s *IndexerStats) Init() {
 	s.numDivergingReplicaIndexes.Init()
 	s.divergingReplicaIndexesMap = &MapHolder{}
 	s.divergingReplicaIndexesMap.Init()
+
+	s.numLostReplicaIndexes.Init()
+	s.lostReplicaIndexesMap = &MapHolder{}
+	s.lostReplicaIndexesMap.Init()
 }
 
 // SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
@@ -1436,6 +1443,9 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("num_diverging_replica_indexes", &is.numDivergingReplicaIndexes)
 	is.PopulateCorruptedIndexes(statMap)
 
+	statMap.AddStatValueFiltered("num_lost_replica_indexes", &is.numLostReplicaIndexes)
+	is.PopulateLostReplicaIndexes(statMap)
+
 	statMap.AddStatValueFiltered("total_codebook_mem_usage", &is.totalCodebookMemUsage)
 	statMap.AddStatValueFiltered("vector_scan_queued", &is.vectorScanQueued)
 }
@@ -1453,6 +1463,26 @@ func (is *IndexerStats) PopulateCorruptedIndexes(statMap *StatsMap) {
 
 	for indexName := range divergingReplicas {
 		statMap.AddStatValueFiltered(indexName+":is_diverging_replica", &val)
+	}
+}
+
+func (is *IndexerStats) PopulateLostReplicaIndexes(statMap *StatsMap) {
+	if is.lostReplicaIndexesMap == nil {
+		return
+	}
+
+	lostReplicaMap := is.lostReplicaIndexesMap.Get()
+
+	var val stats.Int64Val
+	val.Init()
+
+	for indexName, lostReplica := range lostReplicaMap {
+		lostReplicaVal, ok := lostReplica.(int64)
+		if !ok {
+			continue
+		}
+		val.Set(lostReplicaVal)
+		statMap.AddStatValueFiltered(indexName+":num_lost_replicas", &val)
 	}
 }
 

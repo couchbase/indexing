@@ -2833,7 +2833,7 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 			// Update index maps with this index
 			msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 			msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{inst})
-			// update index map in storage manager so that the "checkForLostPartitions" that index
+			// update index map in storage manager so that the "checkForLostPartitionsAndLostReplica" that index
 			// service performs will not ignore the newly moved instance
 			if err := idx.sendMessageToWorker(msgUpdateIndexInstMap, idx.storageMgrCmdCh, "StorageMgr"); err != nil {
 				logging.Errorf("Indexer::updateRStateOrMergePartition error observed when updating "+
@@ -15254,9 +15254,14 @@ func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 // This method compares the total number of partitions present in the clsuter
 // and the number of partitions expected as per the index definition. If logs
 // a fatal message if both mismatch
-func (idx *indexer) checkForLostPartitions(sortedIndexInfo []*IndexInfo) {
+func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*IndexInfo, numActiveNodes int) {
+
 	actualInstPartnMap := make(map[uint64]map[int]map[int]bool) // defnId -> replicaId -> partnId -> true
 	expectedInstPartnMap := make(map[uint64]int)                // defnId -> num_partitions
+	expectedInstReplicaMap := make(map[uint64]int)              // defnId -> num_replicas
+	indexDefnToPartns := make(map[uint64]map[int][]*IndexInfo)  // defnId -> partnID -> []replica
+	expectedPartnNodeId := make(map[uint64]string)              // defnId -> string
+	expectedReplicaNodeId := make(map[uint64]string)            // defnId -> string
 
 	for _, indexInfo := range sortedIndexInfo {
 		indexName := indexInfo.IndexName
@@ -15264,6 +15269,7 @@ func (idx *indexer) checkForLostPartitions(sortedIndexInfo []*IndexInfo) {
 		replicaId := indexInfo.ReplicaID
 		partnId := indexInfo.PartitionID
 		numPartns := indexInfo.NumPartitions
+		numReplicas := indexInfo.NumReplica
 
 		if _, ok := actualInstPartnMap[defnId]; !ok {
 			actualInstPartnMap[defnId] = make(map[int]map[int]bool)
@@ -15281,13 +15287,28 @@ func (idx *indexer) checkForLostPartitions(sortedIndexInfo []*IndexInfo) {
 			// exist on both source and destination nodes. Hence, no-op in this case
 		}
 
+		if _, ok := indexDefnToPartns[defnId]; !ok {
+			indexDefnToPartns[defnId] = make(map[int][]*IndexInfo)
+		}
+
 		actualInstPartnMap[defnId][replicaId][partnId] = true
+		indexDefnToPartns[defnId][partnId] = append(indexDefnToPartns[defnId][partnId], indexInfo)
 
 		if val, ok := expectedInstPartnMap[defnId]; !ok {
 			expectedInstPartnMap[defnId] = numPartns
+			expectedPartnNodeId[defnId] = indexInfo.nodeId
 		} else if val != numPartns {
-			logging.Fatalf("Indexer::checkForLostPartitions Inconsistency in the number of partitions reported for "+
-				"indexName: %v, defnId: %v. Prev. recorded partns: %v, curr. recorded partns: %v", indexName, defnId, val, numPartns)
+			logging.Fatalf("Indexer::checkForLostPartitionsAndLostReplica Inconsistency in the number of partitions reported for "+
+				"indexName: %v, defnId: %v. Prev. recorded partns: %v on Node: %v, curr. recorded partns: %v on Node: %v",
+				indexName, defnId, val, expectedPartnNodeId[defnId], numPartns, indexInfo.nodeId)
+		}
+		if val, ok := expectedInstReplicaMap[defnId]; !ok {
+			expectedInstReplicaMap[defnId] = numReplicas
+			expectedReplicaNodeId[defnId] = indexInfo.nodeId
+		} else if val != numReplicas {
+			logging.Fatalf("Indexer::checkForLostPartitionsAndLostReplica Inconsistency in the number of replica reported for "+
+				"indexName: %v, defnId: %v. Prev. recorded replicas: %v on Node: %v, curr. recorded replicas: %v on Node: %v",
+				indexName, defnId, val, expectedReplicaNodeId[defnId], numReplicas, indexInfo.nodeId)
 		}
 	}
 
@@ -15300,11 +15321,55 @@ func (idx *indexer) checkForLostPartitions(sortedIndexInfo []*IndexInfo) {
 			}
 		}
 	}
+
+	idx.checkForLostReplicas(expectedInstReplicaMap, indexDefnToPartns, numActiveNodes)
 }
 
-func (idx *indexer) resetDivergingReplicaStats() {
+func (idx *indexer) checkForLostReplicas(
+	expectedInstReplicaMap map[uint64]int,
+	indexDefnToPartns map[uint64]map[int][]*IndexInfo,
+	numActiveNodes int) {
+
+	// this should be string(IndexName:PartnId) -> int(num lost replicas)
+	indexesWithLostReplica := make(map[string]interface{})
+
+	for defnId, partnIdMap := range indexDefnToPartns {
+		for partnId, replicaIndexInfo := range partnIdMap {
+			// cases for lost partitions has been handled before
+			if len(replicaIndexInfo) == 0 {
+				// Should not hit into this. Handling edge case
+				continue
+			}
+			// expected replicas are present for this partition
+			if len(replicaIndexInfo) == expectedInstReplicaMap[defnId] {
+				continue
+			}
+
+			key := fmt.Sprintf("%v:%v", replicaIndexInfo[0].IndexName, partnId)
+			indexesWithLostReplica[key] = expectedInstReplicaMap[defnId] - len(replicaIndexInfo)
+
+			presentReplica := make([]int, len(replicaIndexInfo))
+			for _, indexInfo := range replicaIndexInfo {
+				presentReplica = append(presentReplica, indexInfo.ReplicaID)
+			}
+
+			logging.Warnf("Indexer::checkForLostReplica defnId: %v, partnId: %v has only %v(%v) replicas "+
+				"while it is expected to have %v replicas", defnId, partnId, len(presentReplica),
+				presentReplica, expectedInstReplicaMap[defnId])
+		}
+	}
+
+	// Set the number indexes with lost replica
+	idx.stats.numLostReplicaIndexes.Set(int64(len(indexesWithLostReplica)))
+	idx.stats.lostReplicaIndexesMap.Set(indexesWithLostReplica)
+}
+
+func (idx *indexer) resetDivergingReplicaAndLostReplicaStats() {
 	idx.stats.numDivergingReplicaIndexes.Set(0)
 	idx.stats.divergingReplicaIndexesMap.Reset()
+
+	idx.stats.numLostReplicaIndexes.Set(0)
+	idx.stats.lostReplicaIndexesMap.Reset()
 }
 
 func (idx *indexer) getIndexInfoFromTsCounts(tsCounts []*TimestampedCounts) []*IndexInfo {
@@ -15526,16 +15591,16 @@ func (idx *indexer) monitorItemsCount() {
 			idx.checkForItemsCountMismatch(sortedIndexInfo)
 
 			if len(failedIndexerNodes) == 0 && skipLostPartitionsCheck == false {
-				// Step-4: Check for any lost partitions if there are no
-				// failed indexer nodes in the cluster
-				idx.checkForLostPartitions(sortedIndexInfo)
+				// Step-4: Check for any lost partitions and lost replica
+				// if there are no failed indexer nodes in the cluster
+				idx.checkForLostPartitionsAndLostReplica(sortedIndexInfo, len(currActiveIndexerNodes))
 			} else {
 				logging.Infof("Indexer::monitorItemsCount Skipping lost partition check. numFailedOverNodes: %v, "+
 					"skipLostPartitionsCheck: %v", len(failedIndexerNodes), skipLostPartitionsCheck)
 			}
 
 		} else { // RESET any stats that are set on this node
-			idx.resetDivergingReplicaStats()
+			idx.resetDivergingReplicaAndLostReplicaStats()
 		}
 	}
 
@@ -15569,7 +15634,7 @@ func (idx *indexer) monitorItemsCount() {
 
 			// Disable the check for if monitorItemsCountInterval is "0" and reset the stats
 			if monitorItemsCountInterval == 0 {
-				idx.resetDivergingReplicaStats()
+				idx.resetDivergingReplicaAndLostReplicaStats()
 				continue
 			}
 
@@ -15578,7 +15643,7 @@ func (idx *indexer) monitorItemsCount() {
 		case <-ticker.C:
 			// Disable the check for if monitorItemsCountInterval is "0" and reset the stats
 			if monitorItemsCountInterval == 0 {
-				idx.resetDivergingReplicaStats()
+				idx.resetDivergingReplicaAndLostReplicaStats()
 				continue
 			}
 
