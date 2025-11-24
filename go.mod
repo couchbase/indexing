@@ -38,6 +38,8 @@ replace github.com/couchbase/query-ee => ../query-ee
 
 replace github.com/couchbase/regulator => ../regulator
 
+replace github.com/couchbase/gocbcrypto => ../gocbcrypto
+
 require (
 	github.com/couchbase/bhive v0.0.0-00010101000000-000000000000
 	github.com/couchbase/cbauth v0.1.13
@@ -139,7 +141,7 @@ require (
 	golang.org/x/text v0.25.0 // indirect
 	golang.org/x/time v0.8.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250227231956-55c901821b1e // indirect
-	google.golang.org/grpc v1.71.0 // indirect
+	google.golang.org/grpc v1.72.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/couchbase/gocbcore.v7 v7.1.18 // indirect
 	gopkg.in/couchbaselabs/gocbconnstr.v1 v1.0.4 // indirect
