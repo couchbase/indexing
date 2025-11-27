@@ -47,8 +47,8 @@ type RepoRef interface {
 	setMeta(name string, value []byte) error
 	broadcast(name string, value []byte) error
 	deleteMeta(name string) error
-	newIterator() (*repo.RepoIterator, error)
-	newLocalValuesIterator() (*repo.RepoIterator, error)
+	newIterator() (repo.IRepoIterator, error)
+	newLocalValuesIterator() (repo.IRepoIterator, error)
 	registerNotifier(notifier MetadataNotifier)
 	setLocalValue(name string, value string) error
 	getLocalValue(name string) (string, error)
@@ -62,7 +62,7 @@ type RepoRef interface {
 // RemoteRepoRef implements the RepoRef interface for a remote metadata repo.
 type RemoteRepoRef struct {
 	remoteReqAddr string
-	repository    *repo.Repository
+	repository    repo.IRepository
 	watcher       *watcher
 }
 
@@ -211,7 +211,7 @@ func (c *MetadataRepo) GetLocalValue(key string) (string, error) {
 	return c.repo.getLocalValue(key)
 }
 
-func (c *MetadataRepo) GetLocalValuesIterator() (*repo.RepoIterator, error) {
+func (c *MetadataRepo) GetLocalValuesIterator() (repo.IRepoIterator, error) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
@@ -866,11 +866,11 @@ func (c *LocalRepoRef) deleteMeta(name string) error {
 	return nil
 }
 
-func (c *LocalRepoRef) newIterator() (*repo.RepoIterator, error) {
+func (c *LocalRepoRef) newIterator() (repo.IRepoIterator, error) {
 	return c.server.GetIterator("/", "")
 }
 
-func (c *LocalRepoRef) newLocalValuesIterator() (*repo.RepoIterator, error) {
+func (c *LocalRepoRef) newLocalValuesIterator() (repo.IRepoIterator, error) {
 	return c.server.GetServerConfigIterator("/", "")
 }
 
@@ -982,11 +982,11 @@ func newRemoteRepoRef(requestAddr string,
 	return repoRef, nil
 }
 
-func (c *RemoteRepoRef) newIterator() (*repo.RepoIterator, error) {
+func (c *RemoteRepoRef) newIterator() (repo.IRepoIterator, error) {
 	return c.repository.NewIterator(repo.MAIN, "/", "")
 }
 
-func (c *RemoteRepoRef) newLocalValuesIterator() (*repo.RepoIterator, error) {
+func (c *RemoteRepoRef) newLocalValuesIterator() (repo.IRepoIterator, error) {
 	panic("Function not supported")
 }
 
