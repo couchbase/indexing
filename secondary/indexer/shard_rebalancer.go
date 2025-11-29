@@ -1731,11 +1731,6 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		// to facilitate placement of DCP indexes on the shard that is moved as a
 		// part of rebalance.
 		if tt.IsEmptyNodeBatch == false {
-			// Destination will call RestoreShardDone for the shardId involved in the
-			// rebalance as coming here means that rebalance is successful for the
-			// tenant. After RestoreShardDone, the shards will be unlocked
-			restoreShardDone(tt.ShardIds, sr.supvMsgch)
-
 			// Unlock the shards that are locked before initiating recovery
 			unlockShards(tt.ShardIds, sr.supvMsgch)
 		}
@@ -2253,14 +2248,14 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	elapsed := time.Since(start).Seconds()
 	l.Infof("ShardRebalancer::startShardRecovery Finished recovery of all indexes in ttid: %v, elapsed(sec): %v", ttid, elapsed)
 
+	// restore the shard as recovery is complete
+	restoreShardDone(tt.ShardIds, sr.supvMsgch)
+
 	if tt.IsEmptyNodeBatch {
 		tt.IsPendingReady = true
-		// As recovery is complete, restore and unlock the shards. This will facilitate
+		// As recovery is complete, unlock the shards. This will facilitate
 		// the DCP indexes to be placed on the shard (incase of replica-repair) that is
 		// just moved to destination node.
-
-		// restore the shard as recovery is complete
-		restoreShardDone(tt.ShardIds, sr.supvMsgch)
 
 		// Unlock the shards that are locked before initiating recovery
 		unlockShards(tt.ShardIds, sr.supvMsgch)
@@ -2393,6 +2388,9 @@ func (sr *ShardRebalancer) startShardRecoveryNonServerless(ttid string, tt *c.Tr
 		}
 	}
 
+	// call restoreShardDone as recovery is complete. this will cleanup the dead instances
+	restoreShardDone(tt.ShardIds, sr.supvMsgch)
+
 	nonDeferredInsts := make(map[c.IndexInstId]bool)
 	// At this point, indexes belonging to all collections are recovered
 	// Post build reqs to batchBuildReqCh
@@ -2437,11 +2435,10 @@ func (sr *ShardRebalancer) startShardRecoveryNonServerless(ttid string, tt *c.Tr
 	if tt.IsEmptyNodeBatch {
 
 		tt.IsPendingReady = true
-		// As recovery is complete, restore and unlock the shards. This will facilitate
+		// As recovery is complete, unlock the shards. This will facilitate
 		// the DCP indexes to be placed on the shard (incase of replica-repair) that is
 		// just moved to destination node.
 		// restore the shard as recovery is complete
-		restoreShardDone(tt.ShardIds, sr.supvMsgch)
 
 		// Unlock the shards that are locked before initiating recovery
 		unlockShards(tt.ShardIds, sr.supvMsgch)

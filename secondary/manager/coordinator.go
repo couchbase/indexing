@@ -38,7 +38,7 @@ type Coordinator struct {
 	env        *env
 	txn        *common.TxnState
 	config     *r.ServerConfig
-	configRepo *r.Repository
+	configRepo r.IRepository
 	site       *protocol.ElectionSite
 	listener   *common.PeerListener
 	factory    protocol.MsgFactory

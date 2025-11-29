@@ -9,13 +9,14 @@
 package manager
 
 import (
+	"sync"
+
 	"github.com/couchbase/gometa/action"
 	"github.com/couchbase/gometa/common"
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/logging"
-	"sync"
 )
 
 ///////////////////////////////////////////////////////
@@ -27,7 +28,7 @@ type watcher struct {
 	leaderAddr  string
 	watcherAddr string
 	txn         *common.TxnState
-	repo        *repo.Repository
+	repo        repo.IRepository
 	factory     protocol.MsgFactory
 	handler     *action.ServerAction
 	killch      chan bool
@@ -59,7 +60,7 @@ type notificationHandle struct {
 ///////////////////////////////////////////////////////
 
 func startWatcher(mgr *IndexManager,
-	repo *repo.Repository,
+	repo repo.IRepository,
 	leaderAddr string,
 	watcherId string) (s *watcher, err error) {
 
@@ -127,13 +128,11 @@ func (s *watcher) Set(key string, content []byte) error {
 // Private Function : Metadata Observe
 /////////////////////////////////////////////////////////////////////////////
 
-//
 // Observe will first for existence of the local repository in the watcher.
 // If the condition is satisied, then this function will just return.  Otherwise,
 // this function will wait until condition arrives when dictionary notifies the
 // watcher on new metadata update.
 // TODO: Support timeout
-//
 func (s *watcher) observeForAdd(key string) {
 
 	handle := func() *observeHandle {
