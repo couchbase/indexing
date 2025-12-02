@@ -13854,6 +13854,24 @@ func getInstCodebookIfExists(indexPartnMap PartitionInstMap) ([]byte, error, c.P
 	return nil, err, -1
 }
 
+// instHasTrainedCodebook returns true if any slice within the partition map has a
+// trained codebook. This is used to detect indexes that have recovered codebooks
+// from shard transfer and don't need to sample vectors from KV - the existing
+// codebook will be serialized and reused for all slices via InitCodebookFromSerialized.
+func instHasTrainedCodebook(indexPartnMap PartitionInstMap) bool {
+	for _, partnInst := range indexPartnMap {
+		if partnInst.Sc == nil {
+			continue
+		}
+		for _, slice := range partnInst.Sc.GetAllSlices() {
+			if slice != nil && slice.IsTrained() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // [VECTOR_TODO]: Add a worker pool to take care of training
 // It is not a good idea to spawn a go-routine for each build statement
 func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
@@ -13914,6 +13932,83 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 	overSamplePercent := config["vector.over_sample_percent"].Int()
 
+	// Determine request source for skip-sampling logic
+	isRebalOrResume := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceResume)
+
+	// Skip sampling for instances where vectors won't be used in training.
+	// Vectors are only used when: slice.IsTrained()=false AND defnCodebook==nil
+	// Codebook Reuse rules differ by request source:
+	// - Rebalance/Resume: defn-level reuse is driven by real/proxy relationships.
+	//   If a real instance of this defn has a trained codebook, all instances of the defn
+	//   can skip sampling. If current instance is proxy and has a trained codebook, but
+	//   real instance doesn't have a trained codebook, then all instances of the defn can skip.
+	// - User (ALTER): defn-level reuse is driven by active replicas of the same defn.
+	//   If an active replica has a trained codebook, all instances of the defn can skip.
+	//   If any slice of current instance is trained, then all instances of the defn can skip.
+	// Net-net: if current instance has a trained slice then all instances of the defn can skip.
+	defnHasCodebook := make(map[common.IndexDefnId]bool)
+	skipSamplingInstMap := make(map[common.IndexInstId]bool)
+
+	for _, idxInst := range vectorInsts {
+		defnId := idxInst.Defn.DefnId
+
+		if defnHasCodebook[defnId] {
+			continue
+		}
+
+		if instHasTrainedCodebook(indexPartnMap[idxInst.InstId]) {
+			defnHasCodebook[defnId] = true
+			continue
+		}
+
+		// Additional checks based on request source
+		if isRebalOrResume {
+			// Check real instance (if this is a proxy)
+			if idxInst.RealInstId != 0 {
+				if instHasTrainedCodebook(indexPartnMap[idxInst.RealInstId]) {
+					defnHasCodebook[defnId] = true
+				}
+			}
+		} else if reqCtx.ReqSource == common.DDLRequestSourceUser {
+			// Also check other active replicas of same definition (for ALTER INDEX)
+			for instanceId, instance := range indexInstMap {
+				if instanceId == idxInst.InstId {
+					continue
+				}
+				if instance.Defn.DefnId == defnId && instance.State >= c.INDEX_STATE_ACTIVE {
+					if instHasTrainedCodebook(indexPartnMap[instanceId]) {
+						defnHasCodebook[defnId] = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Build skipSamplingInstMap and samplingCandidates in a single loop
+	samplingCandidates := make([]*c.IndexInst, 0, len(vectorInsts))
+
+	for _, idxInst := range vectorInsts {
+		if skipSamplingInstMap[idxInst.InstId] || defnHasCodebook[idxInst.Defn.DefnId] {
+			skipSamplingInstMap[idxInst.InstId] = true
+		} else {
+			samplingCandidates = append(samplingCandidates, idxInst)
+		}
+	}
+
+	if len(skipSamplingInstMap) > 0 {
+		skipInstIds := make([]common.IndexInstId, 0, len(skipSamplingInstMap))
+		for instId := range skipSamplingInstMap {
+			skipInstIds = append(skipInstIds, instId)
+		}
+		logging.Infof("Indexer::initiateTraining skipping sampling for instances with existing codebooks: %v", skipInstIds)
+	}
+
+	// Map to hold sampled vectors by instance ID
+	vectorsByInstId := make(map[common.IndexInstId][]float32, len(samplingCandidates))
+
 	if retry == 0 || initialSampleSize == 0 {
 		// Use first retry maxSampleSize as initialSampleSize because after first retry it can change
 		// as few of indexes can get built in first attempt and will not be
@@ -13957,26 +14052,43 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		}
 	}
 
-	// Retrieve vectors from data service for training
-	vectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, vectorInsts, maxSampleSize, int64(overSamplePercent))
-	if err != nil {
-		logging.Errorf("Indexer::initiateTraining error observed while fetching training data for bucket: %v, scope: %v, coll: %v, cid: %v, err: %v",
-			bucket, scope, collection, cid, err)
-		for _, idxInst := range vectorInsts {
-			instId := idxInst.InstId
-			partnInstMap := indexPartnMap[instId]
-			for partnId := range partnInstMap {
-				updateErrMap(idxInst.InstId, partnId, err)
+	// Retrieve vectors from data service for training - only for instances that need it
+	if len(samplingCandidates) > 0 {
+		sampledVectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, samplingCandidates, maxSampleSize, int64(overSamplePercent))
+		if err != nil {
+			logging.Errorf("Indexer::initiateTraining error observed while fetching training data for bucket: %v, scope: %v, coll: %v, cid: %v, err: %v",
+				bucket, scope, collection, cid, err)
+			// Fail fast for sampling candidates - preserve original behavior for instances that need sampling.
+			// Instances with existing codebooks will continue processing below.
+			for _, idxInst := range samplingCandidates {
+				instId := idxInst.InstId
+				partnInstMap := indexPartnMap[instId]
+				for partnId := range partnInstMap {
+					updateErrMap(idxInst.InstId, partnId, err)
+				}
+			}
+
+			// If there are no instances with existing codebooks, return early (original behavior)
+			if len(skipSamplingInstMap) == 0 {
+				idx.internalRecvCh <- &MsgIndexTrainingDone{
+					keyspaceId: keyspaceId,
+					reqCtx:     reqCtx,
+					successMap: nil, // Set to nil to avoid duplicate reporting in retry scenarios
+					errMap:     errMap,
+				}
+				return
+			}
+			// Otherwise, continue processing - instances with codebooks will proceed through training loop
+			logging.Infof("Indexer::initiateTraining sampling failed but continuing with %v instances that have existing codebooks",
+				len(skipSamplingInstMap))
+		} else {
+			for i, inst := range samplingCandidates {
+				vectorsByInstId[inst.InstId] = sampledVectors[i]
 			}
 		}
-
-		idx.internalRecvCh <- &MsgIndexTrainingDone{
-			keyspaceId: keyspaceId,
-			reqCtx:     reqCtx,
-			successMap: successMap,
-			errMap:     errMap,
-		}
-		return
+	} else if len(vectorInsts) > 0 {
+		logging.Infof("Indexer::initiateTraining skipping vector sampling for keyspaceId: %v; "+
+			"all candidate instances already have recovered codebooks", keyspaceId)
 	}
 
 	delayTraining := idx.config["debug.delayTrainingDuration"].Int()
@@ -13994,11 +14106,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	indexDefnCodebookMap := make(map[common.IndexDefnId][]byte)
 
 	// Set codebook for partitions to be merged from codebook of real instance slice.
-	isDCPRebalorResume := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
-		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance ||
-		reqCtx.ReqSource == common.DDLRequestSourceResume)
-
-	if isDCPRebalorResume {
+	if isRebalOrResume {
 		// during shard rebalance when we issue build command for a vector index, it can happen that
 		// the real instance is not yet trained and the new incoming partition is trained or vice
 		// versa. In such case, this loop ensures that the codebook of the trained instance is used
@@ -14033,15 +14141,21 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		}
 	}
 
-	for i, idxInst := range vectorInsts {
+	for _, idxInst := range vectorInsts {
 		_, storeEngineDir := c.GetStorageDirs(config, c.GetStorageEngineForIndexDefn(&idxInst.Defn))
 		instId := idxInst.InstId
 		partnInstMap := indexPartnMap[instId]
 
+		// Skip instances that already have errors (e.g., from sampling failure)
+		// to preserve the original error and avoid overwriting with "not enough vectors"
+		if _, hasErr := errMap[instId]; hasErr {
+			continue
+		}
+
 		// Check for using already created codebook of other instances of definition
 		defnCodebook := getDefnCodebook(indexDefnCodebookMap, idxInst.Defn.DefnId)
 
-		if idxInst.RealInstId != 0 && isDCPRebalorResume && defnCodebook == nil {
+		if idxInst.RealInstId != 0 && isRebalOrResume && defnCodebook == nil {
 			realPartnInstMap := indexPartnMap[idxInst.RealInstId]
 
 			codebook, err, partnId := getInstCodebookIfExists(realPartnInstMap)
@@ -14122,17 +14236,28 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				if vm.Quantizer.Type == c.PQ {
 					minCentroids = max(1<<vm.Quantizer.Nbits, idxInst.Nlist[partnId])
 				}
-				instVectorsMap[instId] = len(vectors[i]) / vm.Dimension
 
-				if len(vectors[i])/vm.Dimension < minCentroids && defnCodebook == nil {
+				// Get vectors for this instance (will be nil/empty for already trained instances)
+				vectorSamples := vectorsByInstId[instId]
+				vectorFloatCount := len(vectorSamples)
+				vectorCount := 0
+				if vm.Dimension > 0 {
+					vectorCount = vectorFloatCount / vm.Dimension
+				}
+				instVectorsMap[instId] = vectorCount
+
+				// Skip vector count validation only if we actually have a codebook to use.
+				// Note: We check defnCodebook, not skipSamplingInstMap, because if SerializeCodebook
+				// fails after instHasTrainedCodebook returned true, we need to surface the error.
+				if defnCodebook == nil && vectorCount < minCentroids {
 					errStr := c.ERR_TRAINING + fmt.Sprintf("Number of qualifying or valid vectors / dimension = %v/%v = %v  are less than the number "+
-						"of %v centroids. Retry will happen in background.", len(vectors[i]), vm.Dimension, len(vectors[i])/vm.Dimension, minCentroids)
+						"of %v centroids. Retry will happen in background.", vectorFloatCount, vm.Dimension, vectorCount, minCentroids)
 
 					//Add instance for training retry
-					if len(vectors[i]) == 0 {
+					if vectorFloatCount == 0 || vectorCount == 0 {
 						retryTrainingInstRatioMap[instId] = 1
 					} else {
-						retryTrainingInstRatioMap[instId] = int(math.Ceil(float64(minCentroids) / float64(len(vectors[i])/vm.Dimension) * float64(maxSampleSize) / float64(initialSampleSize)))
+						retryTrainingInstRatioMap[instId] = int(math.Ceil(float64(minCentroids) / float64(vectorCount) * float64(maxSampleSize) / float64(initialSampleSize)))
 					}
 
 					logging.Errorf("Indexer::initiateTraining instId: %v, partnId: %v err: %v", instId, partnId, errStr)
@@ -14157,7 +14282,8 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				}
 
 				// Qualifying vectors are less than user provided TrainList, change idx state to err.
-				if len(vectors[i])/vm.Dimension < vm.TrainList {
+				// Skip this check for instances which have trained codebook from defn
+				if defnCodebook == nil && vectorCount < vm.TrainList {
 					errStr := c.ERR_TRAINING + fmt.Sprintf("The number train_list: %v in keyspace: %v "+
 						"is greater than the number of qualifying documents: %v", vm.TrainList, keyspaceId, instVectorsMap[instId])
 					updateErrMap(instId, partnId, errors.New(errStr))
@@ -14193,7 +14319,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 						continue
 					}
 
-					if err := idx.handleTrainingAndCheckForDrop(keyspaceId, instId, slice, vectors[i], droppedInsts, allInsts); err != nil {
+					if err := idx.handleTrainingAndCheckForDrop(keyspaceId, instId, slice, vectorSamples, droppedInsts, allInsts); err != nil {
 						slice.ResetCodebook()
 						logging.Errorf("Indexer::initiateTraining error observed during training phase of "+
 							"codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
@@ -14244,7 +14370,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				}
 
 				// Persist codebook to disk
-				err = idx.persistCodebookToDisk(storeEngineDir, idxInst, partnId, slice.Id(), defnCodebook)
+				err := idx.persistCodebookToDisk(storeEngineDir, idxInst, partnId, slice.Id(), defnCodebook)
 				if err != nil {
 					logging.Errorf("Indexer::initiateTraining error observed while persisting codebook for instId: %v, "+
 						"partnId: %v, err: %v", instId, partnId, err)
