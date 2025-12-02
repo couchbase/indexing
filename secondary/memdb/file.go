@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
+	"sync"
 
-	"github.com/couchbase/indexing/secondary/fdb"
+	"github.com/couchbase/gocbcrypto"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/iowrap"
 )
 
@@ -39,24 +42,42 @@ type FileReader interface {
 	Close() error
 }
 
-func (m *MemDB) newFileWriter(t FileType, path string) FileWriter {
+func (m *MemDB) newFileWriter(t FileType, path string, keyId []byte, cipher string) (FileWriter, error) {
 	var w FileWriter
+	var err error
 	if t == RawdbFile {
 		w = &rawFileWriter{db: m, path: path}
+		if len(keyId) > 0 {
+			var ctx gocbcrypto.EncryptionContext
+			if ctx, err = m.NewEncryptionContext(keyId, cipher); err == nil {
+				w = &rawFileWriterEncrypted{w.(*rawFileWriter), ctx, nil, sync.Once{}}
+			} else {
+				w = nil
+			}
+		}
 	} else if t == ForestdbFile {
 		w = &forestdbFileWriter{db: m, path: path}
+	} else {
+		err = fmt.Errorf("unsupported file type")
 	}
-	return w
+
+	return w, err
 }
 
-func (m *MemDB) newFileReader(t FileType, ver int) FileReader {
+func (m *MemDB) newFileReader(t FileType, ver int, file string) (FileReader, error) {
 	var r FileReader
+	var err error
 	if t == RawdbFile {
 		r = &rawFileReader{db: m, version: ver}
+		var ok bool
+		if ok, err = gocbcrypto.IsFileEncrypted(file); ok {
+			r = &rawFileReaderEncrypted{r.(*rawFileReader), m.GetEncryptionKeyById, nil}
+		}
 	} else if t == ForestdbFile {
 		r = &forestdbFileReader{db: m}
 	}
-	return r
+
+	return r, err
 }
 
 // rawFileWriter implements the FileWriter interface defined above.
@@ -92,6 +113,16 @@ func (f *rawFileWriter) FlushAndClose(sync bool) (reterr error) {
 	}
 	f.w = nil
 
+	err := f.syncAndClose(sync)
+	if reterr == nil {
+		reterr = err
+	}
+
+	return reterr
+}
+
+func (f *rawFileWriter) syncAndClose(sync bool) (reterr error) {
+
 	if f.fd != nil {
 		if sync {
 			err := iowrap.File_Sync(f.fd)
@@ -104,7 +135,10 @@ func (f *rawFileWriter) FlushAndClose(sync bool) (reterr error) {
 			reterr = err
 		}
 	}
-	f.fd = nil
+
+	if reterr == nil {
+		f.fd = nil
+	}
 
 	return reterr
 }
@@ -170,7 +204,7 @@ func (f *rawFileReader) Open(path string) error {
 
 func (f *rawFileReader) ReadItem() (*Item, error) {
 	itm, checksum, err := f.db.DecodeItem(f.version, f.buf, f.r)
-	if itm != nil { // Checksum excludes terminal nil item
+	if itm != nil { // StoreToDisk checksum excludes terminal nil item
 		f.checksum = f.checksum ^ checksum
 	}
 	return itm, err
@@ -298,4 +332,152 @@ func (f *forestdbFileReader) Close() error {
 	f.iter.Close()
 	f.store.Close()
 	return f.file.Close()
+}
+
+// a) it is a buffered writer similar to bufio. user must call Flush before Close
+// b) It should be initialized per file because encryption context is per file.
+// c) If the underlying file is opened and closed more than once, context still
+// should not be reset else it can lead to corruption
+// d) The encryption granularity is 32K.
+type rawFileWriterEncrypted struct {
+	*rawFileWriter
+	ctx       gocbcrypto.EncryptionContext // per file context
+	cw        *gocbcrypto.CryptFileWriter  // buffered writer, overrides rawFileWriter writer
+	firstOpen sync.Once                    // file encryption header
+}
+
+// a) initializes encryption context from the file header
+// b) The decryption granularity is 32K. It should be kept same as writer.
+type rawFileReaderEncrypted struct {
+	*rawFileReader
+	getKey func([]byte) []byte         // use keyId from header to derive encryption key
+	cr     *gocbcrypto.CryptFileReader // buffered reader
+}
+
+// a)encryption context should not be reset on file open
+// b)open should never be retried on first Open error. This is
+// because the encryption header is always written on first open and
+// cannot be recreated if the open fails.
+func (f *rawFileWriterEncrypted) Open() error {
+	var err error
+	defer func() {
+		if err != nil && f.fd != nil {
+			f.fd.Close()
+			f.fd = nil
+		}
+	}()
+
+	f.fd, err = iowrap.Os_OpenFile(f.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0755)
+	if err == nil {
+		if f.buf == nil {
+			f.buf = make([]byte, encodeBufSize)
+		}
+
+		f.cw, err = gocbcrypto.NewCryptFileWriter(f.fd, f.ctx, f.db.encryptChunkSize, false, iowrap.CountDiskFailures)
+		// store file encryption metadata on first open by writer
+		f.firstOpen.Do(func() {
+			if err == nil {
+				_, err = f.cw.WriteHeader()
+			}
+		})
+	}
+
+	return err
+}
+
+// encryption context should not be reset if item terminator
+// is not yet written to the file.
+func (f *rawFileWriterEncrypted) FlushAndClose(sync bool) (reterr error) {
+	if f.cw != nil {
+		reterr = f.cw.Flush()
+		if reterr == nil {
+			f.cw.Reset()
+		}
+	}
+	f.cw = nil
+
+	err := f.syncAndClose(sync)
+	if reterr == nil {
+		reterr = err
+	}
+
+	return reterr
+}
+
+func (f *rawFileWriterEncrypted) WriteItem(itm *Item) error {
+	checksum, err := f.db.EncodeItem(itm, f.buf, f.cw)
+	if err == nil {
+		f.checksum = f.checksum ^ checksum
+	}
+	return err
+}
+
+func (f *rawFileWriterEncrypted) Close(sync bool) (reterr error) {
+	// Open the file if needed
+	if f.fd == nil {
+		reterr = f.Open()
+		if reterr != nil {
+			return reterr
+		}
+	}
+
+	// Write empty item terminator
+	terminator := &Item{}
+	err := f.WriteItem(terminator)
+	if reterr == nil {
+		reterr = err
+	}
+
+	err = f.FlushAndClose(sync)
+	if reterr == nil {
+		reterr = err
+	}
+
+	return reterr
+}
+
+///////////
+// reader
+///////////
+
+// file should be opened and read till completion
+func (f *rawFileReaderEncrypted) Open(path string) error {
+	var err error
+	defer func() {
+		if err != nil && f.fd != nil {
+			f.fd.Close()
+			f.fd = nil
+		}
+	}()
+
+	if f.fd, err = iowrap.Os_Open(path); err == nil {
+		f.buf = make([]byte, encodeBufSize)
+		f.cr, err = gocbcrypto.NewCryptFileReader(f.fd, f.getKey, f.db.encryptChunkSize, false, iowrap.CountDiskFailures)
+	}
+
+	return err
+}
+
+func (f *rawFileReaderEncrypted) ReadItem() (*Item, error) {
+	itm, checksum, err := f.db.DecodeItem(f.version, f.buf, f.cr)
+	if itm != nil { // StoreToDisk checksum excludes terminal nil item
+		f.checksum = f.checksum ^ checksum
+	}
+	return itm, err
+}
+
+func (f *rawFileReaderEncrypted) Close() (err error) {
+	if f.cr != nil {
+		f.cr.Reset()
+	}
+	f.cr = nil
+
+	if f.fd != nil {
+		err = iowrap.File_Close(f.fd)
+	}
+
+	if err == nil {
+		f.fd = nil
+	}
+	return
 }
