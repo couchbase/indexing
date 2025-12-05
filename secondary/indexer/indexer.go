@@ -33,6 +33,7 @@ import (
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	l "github.com/couchbase/indexing/secondary/logging"
 
+	gomr "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -9263,7 +9264,8 @@ func (idx *indexer) bootstrap2() error {
 			}
 			logging.Infof("Indexer::bootstrap Recovered Indexer State %v", val)
 
-		} else if strings.Contains(err.Error(), forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
+		} else if storeErr, ok := err.(*gomr.StoreError); ok &&
+			storeErr.Code() == gomr.ErrResultNotFoundCode {
 			//if there is no IndexerState, nothing to do
 			logging.Infof("Indexer::bootstrap No Previous Indexer State Recovered")
 
@@ -9354,7 +9356,8 @@ func (idx *indexer) recoverRebalanceState() {
 
 	if err == nil {
 		idx.rebalanceRunning = true
-	} else if strings.Contains(err.Error(), forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
+	} else if storeErr, ok := err.(*gomr.StoreError); ok &&
+		storeErr.Code() == gomr.ErrResultNotFoundCode {
 		idx.rebalanceRunning = false
 	} else {
 		logging.Fatalf("Indexer::recoverRebalanceState Error Fetching RebalanceRunning From Local "+
@@ -9381,7 +9384,8 @@ func (idx *indexer) recoverRebalanceState() {
 			common.CrashOnError(err)
 		}
 		idx.rebalanceToken = &rebalToken
-	} else if strings.Contains(err.Error(), forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
+	} else if storeErr, ok := err.(*gomr.StoreError); ok &&
+		storeErr.Code() == gomr.ErrResultNotFoundCode {
 		idx.rebalanceToken = nil
 	} else {
 		logging.Fatalf("Indexer::recoverRebalanceState Error Fetching RebalanceToken From Local "+
@@ -9529,7 +9533,8 @@ func (idx *indexer) genIndexerId() {
 
 		if err == nil {
 			idx.id = val
-		} else if strings.Contains(err.Error(), forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
+		} else if storeErr, ok := err.(*gomr.StoreError); ok &&
+			storeErr.Code() == gomr.ErrResultNotFoundCode {
 			//if there is no IndexerId, generate and store in manager
 
 			//id, err := common.NewUUID()
@@ -10079,7 +10084,7 @@ func (idx *indexer) recoverInstMapFromFile() error {
 
 	//forestdb reports get in a non-existent key as an
 	//error, skip that
-	if err != nil && err != forestdb.FDB_RESULT_KEY_NOT_FOUND {
+	if err != nil && err != forestdb.FDB_RESULT_KEY_NOT_FOUND /*do not replace with storeError*/ {
 		return err
 	}
 
@@ -11998,6 +12003,7 @@ func (idx *indexer) memoryUsed(forceRefresh bool) (uint64, uint64, uint64) {
 		gMemstatCacheLastUpdated = time.Now()
 	}
 
+	// TODO: also add calls from gometa to return BufferCache used
 	mem_used := ms.HeapInuse + ms.HeapIdle - ms.HeapReleased + ms.GCSys + forestdb.BufferCacheUsed()
 
 	mem_storage := uint64(0)

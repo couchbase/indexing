@@ -28,10 +28,10 @@ import (
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
+	gomr "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
-	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
@@ -2168,7 +2168,8 @@ func (m *RebalanceServiceManager) cleanupIndex(indexDefn c.IndexDefn) error {
 		return err
 	}
 	if response.Code == RESP_ERROR {
-		if strings.Contains(response.Error, forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
+		if storeErr, ok := err.(*gomr.StoreError); ok &&
+			storeErr.Code() == gomr.ErrResultNotFoundCode {
 			l.Errorf("RebalanceServiceManager::cleanupIndex Error dropping index %v %v. Ignored.", localaddr+url, response.Error)
 			return nil
 		}

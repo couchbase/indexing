@@ -24,10 +24,10 @@ import (
 	c "github.com/couchbase/gometa/common"
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
+	gomr "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
-	fdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
@@ -2760,7 +2760,8 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 				}
 			}
 		}
-	} else if err != fdb.FDB_RESULT_KEY_NOT_FOUND {
+	} else if storeErr, ok := err.(*gomr.StoreError); !ok ||
+		storeErr.Code() != gomr.ErrResultNotFoundCode {
 		result = err
 	}
 
@@ -2876,7 +2877,8 @@ func (m *LifecycleMgr) handleDeleteCollection(key string, content []byte) error 
 			}
 		}
 
-	} else if err != fdb.FDB_RESULT_KEY_NOT_FOUND {
+	} else if storeErr, ok := err.(*gomr.StoreError); !ok ||
+		storeErr.Code() != gomr.ErrResultNotFoundCode {
 		result = err
 	}
 
@@ -4510,7 +4512,8 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 	srvMap.ClusterVersion = cinfo.GetClusterVersion()
 
 	exclude, err := m.repo.GetLocalValue("excludeNode")
-	if err != nil && !strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+	storeErr, ok := err.(*gomr.StoreError)
+	if err != nil && !(ok && storeErr.Code() == gomr.ErrResultNotFoundCode) {
 		return nil, err
 	}
 	srvMap.ExcludeNode = string(exclude)

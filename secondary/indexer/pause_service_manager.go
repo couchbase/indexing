@@ -25,10 +25,9 @@ import (
 	"time"
 	"unsafe"
 
-	forestdb "github.com/couchbase/indexing/secondary/fdb"
-
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
+	gomr "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -3413,7 +3412,8 @@ func (m *PauseServiceManager) checkRebalanceRunning() (rebalanceRunning bool, er
 	resp := respMsg.(*MsgClustMgrLocal)
 
 	if err = resp.GetError(); err != nil {
-		if strings.Contains(err.Error(), forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
+		if storeErr, ok := err.(*gomr.StoreError); ok &&
+			storeErr.Code() == gomr.ErrResultNotFoundCode {
 			return false, nil
 		}
 

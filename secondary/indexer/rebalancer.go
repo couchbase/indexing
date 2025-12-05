@@ -23,9 +23,9 @@ import (
 
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
+	gomr "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
-	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
@@ -331,7 +331,8 @@ func makeDropIndexRequest(defn *common.IndexDefn, host string, cancel, done chan
 	}
 
 	if response.Code == RESP_ERROR {
-		if strings.Contains(response.Error, forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
+		if storeErr, ok := err.(*gomr.StoreError); ok &&
+			storeErr.Code() == gomr.ErrResultNotFoundCode {
 			l.Errorf("%v::makeDropIndexRequest error dropping index, host %v defnId %v err %v. Ignored.",
 				caller, host, defn.DefnId, response.Error)
 			return nil
