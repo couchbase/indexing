@@ -341,6 +341,10 @@ func DestroySlice_Bhive(storageDir string, path string) error {
 // GetEmptyShardInfo_Bhive - get list of empty bhive shards
 func GetEmptyShardInfo_Bhive() ([]common.ShardId, error) {
 	bhiveShards, err := bhive.GetCurrentEmptyShardsInfo()
+	if errors.Is(err, bhive.ErrStorageNotInitialized) {
+		logging.Warnf("bhiveSlice::GetEmptyShardInfo %v", err.Error())
+		return nil, nil
+	}
 	var gsiShards []common.ShardId
 	for _, shard := range bhiveShards {
 		gsiShards = append(gsiShards, common.ShardId(shard))

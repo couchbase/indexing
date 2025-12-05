@@ -3167,7 +3167,7 @@ func (sm *storageMgr) handleDestroyEmptyShards() {
 	emptyBhiveShards, err := GetEmptyShardInfo_Bhive()
 	if err != nil {
 		logging.Errorf("StorageMgr::handleDestroyEmptyShards Error observed while retrieving empty Bhive shardInfo, err: %v", err)
-	} else {
+	} else if len(emptyBhiveShards) != 0 {
 		logging.Infof("StorageMgr::handleDestroyEmptyShards destroying empty bhive shards: %v", emptyBhiveShards)
 		for _, shardId := range emptyBhiveShards {
 			err := DestroyShard_Bhive(shardId)
