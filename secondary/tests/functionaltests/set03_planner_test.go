@@ -3844,6 +3844,121 @@ func TestPartialShardAffinity_PerformFailoverLightAddNodeWithPartialAffinity(t *
 	}
 }
 
+type shardAffinityStaggeredReplica struct {
+	keepNodesByNodeID []string
+	testId            string
+	comment           string
+	topology          string
+	DeleteNode        int
+	expectedNumInst   map[string]int // defnId -> expected inst in the cluster
+}
+
+var shardAffinityStaggeredReplicaTestCases = []shardAffinityStaggeredReplica{
+	{
+		[]string{"127.0.0.1:9002", "127.0.0.1:9003"},
+		"3_nodes_staggered_3-2-1_replicas.json",
+		"\n\t This tests shard rebalance and movement of shard when there are staggered replicas count. \n" +
+			"\t Node n1 has slot1-r0{ i1 (replica 0), i2 (replica 0), i3 (replica 0)}. \n" +
+			"\t Node n2 has slot1-r1{ i1 (replica 1), i2 (replica 1)}. \n" +
+			"\t Node n3 has slot1-r2{ i1 (replica 2)}.\n" +
+			"\t Existing node n1 is removed\n" +
+			"\t Due to proxies being greater than number of nodes, the planner will try to drop the entire shard\n" +
+			"\t but doing so would lose the index definition for which replica count is less, Hence planner will\n" +
+			"\t will need to break the shard affinity for idx i3 and place the index as a replica repair in the cluster\n",
+		"../testdata/planner/shard_assignment_rebalance/3_nodes_staggered_3-2-1_replicas.json",
+		1,
+		map[string]int{"1111": 2, "2222": 1, "3333": 1},
+	},
+	{
+		[]string{"127.0.0.1:9002", "127.0.0.1:9003"},
+		"3_nodes_staggered_3-1-1_replicas.json",
+		"\n\t This tests shard rebalance and movement of shard when there are staggered replicas count. \n" +
+			"\t Node n1 has slot1-r0{ i1 (replica 0), i2 (replica 0), i3 (replica 0)}. \n" +
+			"\t Node n2 has slot1-r1{ i1 (replica 1)}. \n" +
+			"\t Node n3 has slot1-r2{ i1 (replica 2)}.\n" +
+			"\t Existing node n1 is removed\n" +
+			"\t Due to proxies being greater than number of nodes, the planner will try to drop the entire shard\n" +
+			"\t but doing so would lose the index definition for which replica count is less, Hence planner will\n" +
+			"\t will need to break the shard affinity for idx i2, i3 and place the index as a replica repair in the cluster\n",
+		"../testdata/planner/shard_assignment_rebalance/3_nodes_staggered_3-1-1_replicas.json",
+		1,
+		map[string]int{"1111": 2, "2222": 1, "3333": 1},
+	},
+	{
+		[]string{"127.0.0.1:9003", "127.0.0.1:9004"},
+		"4_nodes_staggered_4-2-1-1_replicas.json",
+		"\n\t This tests shard rebalance and movement of shard when there are staggered replicas count. \n" +
+			"\t Node n1 has slot1-r0{ i1 (replica 0), i2 (replica 0), i3 (replica 0), i4 (replica 0).} \n" +
+			"\t Node n2 has slot1-r1{ i1 (replica 1), i2 (replica 1)}. \n" +
+			"\t Node n3 has slot1-r2{ i1 (replica 2)}\n" +
+			"\t Existing nodes n1 and n2 are removed\n" +
+			"\t Due to proxies being greater than number of nodes, the planner will try to drop the entire shard\n" +
+			"\t but doing so would lose the index definition for which replica count is less, Hence planner will\n" +
+			"\t will need to break the shard affinity for idx i2, i3, i4. For each only 1 instance will kept to\n" +
+			"\t prevent definition loss\n",
+		"../testdata/planner/shard_assignment_rebalance/4_nodes_staggered_4-2-1-1_replicas.json",
+		2,
+		map[string]int{"1111": 2, "2222": 1, "3333": 1, "4444": 1},
+	},
+	{
+		[]string{"127.0.0.1:9001", "127.0.0.1:9003", "127.0.0.1:9004"},
+		"4_nodes_staggered_4-2-1-1_replicas.json negative case",
+		"\n\t Negative case: This tests shard rebalance and movement of shard when there are staggered replicas count. \n" +
+			"\t Node n1 has slot1-r0{ i1 (replica 0), i2 (replica 0), i3 (replica 0), i4 (replica 0).} \n" +
+			"\t Node n2 has slot1-r1{ i1 (replica 1), i2 (replica 1)}. \n" +
+			"\t Node n3 has slot1-r2{ i1 (replica 2)}\n" +
+			"\t Node n3 has slot1-r3{ i1 (replica 3)}\n" +
+			"\t Existing node n2 is removed\n" +
+			"\t Here even though there are more proxies, we will not break any proxies since no\n" +
+			"\t definition loss occurring in the system. The shard will just drop\n",
+		"../testdata/planner/shard_assignment_rebalance/4_nodes_staggered_4-2-1-1_replicas.json",
+		1,
+		map[string]int{"1111": 3, "2222": 1, "3333": 1, "4444": 1},
+	},
+}
+
+func TestShardAffinity_StaggeredReplicas(t *testing.T) {
+
+	for _, testcase := range shardAffinityStaggeredReplicaTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf("==========%v==========", testcase.testId)
+		log.Printf(testcase.comment)
+
+		config := planner.DefaultRunConfig()
+		config.EnableShardAffinity = true
+		config.Resize = false
+		config.EjectOnly = true
+		config.Detail = true
+		config.DeleteNode = testcase.DeleteNode
+
+		s := planner.NewSimulator()
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil,
+			testcase.keepNodesByNodeID, "")
+		FailTestIfError(err, "Error in planner test", t)
+
+		actualIndexCountForDefn := make(map[string]int)
+
+		planner.UngroupIndexes(p.GetResult())
+		for _, indexer := range p.GetResult().Placement {
+			for _, index := range indexer.Indexes {
+				actualIndexCountForDefn[fmt.Sprintf("%v", index.DefnId)] += 1
+			}
+		}
+
+		if compareMaps(testcase.expectedNumInst, actualIndexCountForDefn) == false {
+			logging.SetLogLevel(logging.Info)
+			defer logging.SetLogLevel(logging.Error)
+
+			p.PrintLayout()
+			t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", testcase.expectedNumInst, actualIndexCountForDefn)
+		}
+	}
+}
+
 func compareMaps(expected, actual map[string]int) bool {
 	if len(expected) != len(actual) {
 		return false
