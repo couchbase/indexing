@@ -1,0 +1,151 @@
+version: "2"
+
+run:
+  go: "1.24"
+  timeout: 10m
+  tests: false
+  issues-exit-code: 1
+  modules-download-mode: readonly
+  allow-parallel-runners: true
+  build-tags:
+    - enterprise
+    - "!community"
+    - "jemalloc"
+    - "vectors"
+  relative-path-mode: gomod
+
+issues:
+  max-issues-per-linter: 0 # Unlimited
+  max-same-issues: 0 # Unlimited
+  new: true
+  new-from-merge-base: "master"
+  fix: false
+  whole-files: false
+
+linters:
+  enable:
+    - asciicheck
+    - bodyclose
+    - dogsled
+    - errcheck
+    - govet
+    - ineffassign
+    - lll
+    - misspell
+    - nakedret
+    - nolintlint
+    - prealloc
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - importas
+    - nestif
+    - gocritic
+    - err113
+    - interfacebloat
+    - promlinter
+    - copyloopvar
+    - dupl
+    - forbidigo
+    - gochecksumtype
+    - gocognit
+    - goconst
+    - gocyclo
+    - goheader
+    - mnd
+    - gomodguard
+    - goprintffuncname
+    - gosec
+    - makezero
+    - noctx
+    - nosprintfhostport
+    - rowserrcheck
+    - tagliatelle
+    - usestdlibvars
+    - wastedassign
+    - whitespace
+    - wrapcheck
+    - iface
+  settings:
+    gocyclo:
+      min-complexity: 20
+    lll:
+      line-length: 120
+    unparam:
+      check-exported: true
+    revive:
+      rules:
+        - name: var-naming
+        - name: package-comments
+        - name: exported
+          disabled: true
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    mnd:
+      # Allow common magic numbers
+      ignored-numbers:
+        - "0"
+        - "1"
+        - "2"
+        - "3"
+        - "4"
+        - "5"
+        - "10"
+        - "100"
+        - "1000"
+        - "1024"
+        - "2048"
+        - "4096"
+      ignored-functions:
+        - time.Sleep
+        - time.Duration
+    whitespace:
+      multi-if: true
+      multi-func: true
+    govet:
+      enable-all: true
+      settings:
+        printf:
+          funcs:
+            - fmt.Println
+            - fmt.Printf
+            - fmt.Sprintf
+            - fmt.Errorf
+            - fmt.Errorf
+            - (github.com/couchbase/indexing/secondary/logging).Infof
+            - (github.com/couchbase/indexing/secondary/logging).Warnf
+            - (github.com/couchbase/indexing/secondary/logging).Errorf
+            - (github.com/couchbase/indexing/secondary/logging).Debugf
+            - (github.com/couchbase/indexing/secondary/logging).Tracef
+            - (github.com/couchbase/indexing/secondary/logging).Panicf
+            - (github.com/couchbase/indexing/secondary/logging).Fatalf
+  exclusions:
+    paths:
+      - protobuf
+      - secondary/protobuf
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+    - golines
+  exclusions:
+    paths:
+      - protobuf
+      - secondary/protobuf
+  settings:
+    golines:
+      max-len: 100
+      chain-split-dots: true
+      shorten-comments: true
+      reformat-tags: true
+
+output:
+  formats:
+    text:
+      path: stdout
+      colors: false
+      print-issued-lines: true
+      print-linter-name: true

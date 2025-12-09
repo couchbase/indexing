@@ -48,6 +48,7 @@ export TS="`date +%d.%m.%Y-%H.%M`"
 echo '<html><head></head><body><pre>' > /var/www/gsi-current.html
 chmod a+rx /var/www/gsi-current.html
 dobuild clean 1>>/var/www/gsi-current.html 2>&1; rc=$?
+test $rc -eq 0 && dolint 1>>/var/www/gsi-current.html 2>&1; lint_rc=$?
 test $rc -eq 0 && dotest 1>>/var/www/gsi-current.html 2>&1; rc=$?
 echo '</pre>' >> /var/www/gsi-current.html
 if [ $rc -eq 0 ]; then status=pass; else status=fail; fi

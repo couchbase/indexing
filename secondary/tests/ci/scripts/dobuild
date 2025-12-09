@@ -171,7 +171,7 @@ if [ "$CIBOT" = "true" ]; then
     if [ "$revspec" == "" ]; then continue; fi
     echo "Pulling in <a href='http://review.couchbase.org/#/c/$patch_id'>uncommitted change $patch_id</a> at $revspec"
     git fetch -q ssh://review.couchbase.org/indexing $revspec && git cherry-pick FETCH_HEAD
-    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >>~/gerrit.list
+    test $? -eq 0 && echo "$revspec" | awk -F/ '{print "indexing," $4 "," $5}' >>~/gerrit.list
   done
   autolist="$(ssh review.couchbase.org gerrit query \"project:plasma status:open branch:$BRANCH reviewer:self\" | grep number: | awk '{print $2}' | sort -n)"
   for patch_id in $GERRIT $autolist; do
@@ -180,7 +180,7 @@ if [ "$CIBOT" = "true" ]; then
     if [ "$revspec" == "" ]; then continue; fi
     echo "Pulling in <a href='http://review.couchbase.org/#/c/$patch_id'>uncommitted change $patch_id</a> at $revspec"
     git fetch -q ssh://review.couchbase.org/plasma $revspec && git cherry-pick FETCH_HEAD
-    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >>~/gerrit.list
+    test $? -eq 0 && echo "$revspec" | awk -F/ '{print "plasma," $4 "," $5}' >>~/gerrit.list
   done
 
   autolist="$(ssh review.couchbase.org gerrit query \"project:bhive status:open branch:main reviewer:self\" | grep number: | awk '{print $2}' | sort -n)"
@@ -190,7 +190,7 @@ if [ "$CIBOT" = "true" ]; then
     if [ "$revspec" == "" ]; then continue; fi
     echo "Pulling in <a href='http://review.couchbase.org/#/c/$patch_id'>uncommitted change $patch_id</a> at $revspec"
     git fetch -q ssh://review.couchbase.org/bhive $revspec && git cherry-pick FETCH_HEAD
-    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >>~/gerrit.list
+    test $? -eq 0 && echo "$revspec" | awk -F/ '{print "bhive," $4 "," $5}' >>~/gerrit.list
   done
 
   autolist="$(ssh review.couchbase.org gerrit query \"project:gometa status:open branch:master reviewer:self\" | grep number: | awk '{print $2}' | sort -n)"
@@ -200,7 +200,7 @@ if [ "$CIBOT" = "true" ]; then
     if [ "$revspec" == "" ]; then continue; fi
     echo "Pulling in <a href='http://review.couchbase.org/#/c/$patch_id'>uncommitted change $patch_id</a> at $revspec"
     git fetch -q ssh://review.couchbase.org/gometa $revspec && git cherry-pick FETCH_HEAD
-    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >>~/gerrit.list
+    test $? -eq 0 && echo "$revspec" | awk -F/ '{print "gometa," $4 "," $5}' >>~/gerrit.list
   done
   autolist="$(ssh review.couchbase.org gerrit query \"project:nitro status:open branch:$BRANCH reviewer:self\" | grep number: | awk '{print $2}' | sort -n)"
   for patch_id in $GERRIT $autolist; do
@@ -209,7 +209,7 @@ if [ "$CIBOT" = "true" ]; then
     if [ "$revspec" == "" ]; then continue; fi
     echo "Pulling in <a href='http://review.couchbase.org/#/c/$patch_id'>uncommitted change $patch_id</a> at $revspec"
     git fetch -q ssh://review.couchbase.org/nitro $revspec && git cherry-pick FETCH_HEAD
-    test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >>~/gerrit.list
+    test $? -eq 0 && echo "$revspec" | awk -F/ '{print "nitro," $4 "," $5}' >>~/gerrit.list
   done
 fi
 
