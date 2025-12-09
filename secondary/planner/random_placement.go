@@ -1190,6 +1190,59 @@ func (p *RandomPlacement) findConstrainedNodes(s *Solution, constraint Constrain
 
 }
 
+// It is possible that the Proxy replicas are more than the nodes
+// but an index within a proxy could be accommodated if broken out
+// of the proxy.
+// e.g.
+//
+//	Node n1 has s1-r0{ i1 (replica 0), i2 (replica 0), i3 (replica 0) }
+//	Node n2 has s1-r1{ i1 (replica 1)}.
+//	Node n3 has s1-r2{ i1 (replica 2)}
+//
+// If node n1 is removed, the s1-r0 can't be kept in the cluster, but
+// i2 and i3 will be lost if the entire shard is dropped blindly.
+//
+// This function ensures that if such indexes exist whose definition
+// will be lost if the entire proxy is dropped but can exist out of the
+// proxy, then break the proxy and transfer the index as a replica repair
+func (p *SAPlanner) breakOutOfProxyIfNecessary(s *Solution, indexer *IndexerNode, proxy *IndexUsage) (keepIdx []*IndexUsage) {
+
+	if !proxy.IsShardProxy {
+		return
+	}
+
+	// remove all the individual indexes from the Eligible list
+	p.placement.RemoveEligibleIndex(proxy.GroupedIndexes)
+	for _, index := range proxy.GroupedIndexes {
+		numReplica := s.findNumReplicaWithinProxy(index)
+		// If there are more replicas in the cluster (including the deleteNodes)
+		// don't consider breaking out of the shard affinity
+		if numReplica != 1 {
+			continue
+		}
+		// clone the original and update the initialNode and ShardIds
+		cloned := index.clone()
+		cloned.initialNode = nil       // consider it as replica repair
+		cloned.ShardIds = nil          // reset ShardIds
+		cloned.AlternateShardIds = nil // break it away from the current Alternate Shard Ids
+
+		if cloned.Instance != nil {
+			logging.Infof("Break the index (%v,%v,%v,%v,%v,%v) out of the proxy %v(%v) from ejected node %v",
+				cloned.Bucket, cloned.Scope, cloned.Collection, cloned.Name, cloned.Instance.ReplicaId, cloned.PartnId,
+				proxy.AlternateShardIds, proxy.ShardIds, indexer.NodeId)
+		} else {
+			logging.Infof("Break the index (%v,%v,%v,%v,<nil>,%v) out of the proxy %v(%v) from ejected node %v",
+				cloned.Bucket, cloned.Scope, cloned.Collection, cloned.Name, cloned.PartnId,
+				proxy.AlternateShardIds, proxy.ShardIds, indexer.NodeId)
+		}
+		keepIdx = append(keepIdx, cloned)
+		// make the index as an eligible index
+		p.placement.AddRequiredIndexes([]*IndexUsage{cloned})
+	}
+
+	return keepIdx
+}
+
 // Is this index an eligible index?
 func (p *RandomPlacement) isEligibleIndex(index *IndexUsage) bool {
 

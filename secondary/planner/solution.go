@@ -1089,6 +1089,29 @@ func (s *Solution) findNumReplica(u *IndexUsage) int {
 	return count
 }
 
+// Find the number of replica (including itself).
+func (s *Solution) findNumReplicaWithinProxy(u *IndexUsage) int {
+
+	count := 0
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			if index.IsShardProxy && !u.IsShardProxy {
+				for _, idx := range index.GroupedIndexes {
+					if idx.IsReplica(u) {
+						count++
+					}
+				}
+			} else {
+				if index.IsReplica(u) {
+					count++
+				}
+			}
+		}
+	}
+
+	return count
+}
+
 // Find the missing replica.  Return a list of replicaId
 func (s *Solution) findMissingReplica(u *IndexUsage) map[int]common.IndexInstId {
 

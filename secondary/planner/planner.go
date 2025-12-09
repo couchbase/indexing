@@ -1172,6 +1172,10 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 						index.Bucket, index.Scope, index.Collection, index.Name, index.PartnId, indexer.NodeId)
 				}
 
+				// Check if proxy needs to be broken to prevent individual index definition loss
+				if keepIdx := p.breakOutOfProxyIfNecessary(s, indexer, index); keepIdx != nil {
+					keepCandidates = append(keepCandidates, keepIdx...)
+				}
 				c := []*IndexUsage{index}
 				p.placement.RemoveEligibleIndex(c)
 			}
