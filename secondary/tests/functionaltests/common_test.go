@@ -1479,7 +1479,18 @@ func createWithDeferAndBuild(idxName string, bucket, scope, coll, stmt string, i
 	if coll == "" {
 		coll = c.DEFAULT_COLLECTION
 	}
-	err = secondaryindex.BuildIndexes2([]string{idxName}, bucket, scope, coll, indexManagementAddress, indexActiveTimeout)
+	retryBuildIndex := func(retryAttempt int, lastErr error) error {
+		if retryAttempt > 0 {
+			log.Printf("Retry attempt %d: Got queryport.indexNotFound error, retrying build index", retryAttempt)
+		}
+		return secondaryindex.BuildIndexes2([]string{idxName}, bucket, scope, coll, indexManagementAddress, indexActiveTimeout)
+	}
+
+	retryHelper := c.NewRetryHelper(1, 1*time.Second, 1, retryBuildIndex)
+	err = retryHelper.RunWithConditionalError(func(err error) bool {
+		// Stop retrying if the error is NOT ErrorIndexNotFound
+		return !errors.Is(err, qc.ErrorIndexNotFound)
+	})
 	return err
 }
 

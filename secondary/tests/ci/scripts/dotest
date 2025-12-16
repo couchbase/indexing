@@ -254,15 +254,15 @@ if [[ "$MODE" == *"$phase"* ]]; then
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/collatejson
   GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
+  cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
+  GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v ./... 2>&1 | tee -a $WORKSPACE/test.log
+
+
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
   GOTRACEBACK=crash GOMAXPROCS=16 go test -exec "env LD_LIBRARY_PATH=$WORKSPACE/install/lib" -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   # Run shard dealer tests
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/planner
-
-  # # Step 1: Extract test names
-  # TEST_NAMES=$(grep -E '^func Test[A-Z]' shard_dealer_test.go | grep -v 'TestMain' | sed 's/^func //' | sed 's/(t \*testing\.T) {.*$//' | tr '\n' '|' | sed 's/|$//')
-  # # Step 2: Run the tests
   GOTRACEBACK=crash go test -timeout 10m -v -skip "^TestSimulation$" 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
