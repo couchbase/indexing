@@ -3167,6 +3167,11 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 			return false
 		}
 
+		if source.Defn.IsVectorIndex && source.TrainingPhase == c.TRAINING_IN_PROGRESS {
+			logging.Warnf("MergePartition Source Index Instance: %v is in training phase. Do not merge now.", source.InstId)
+			return false
+		}
+
 		// The target instance can either be
 		// 1) An index instance created due to rebalance
 		// 2) An index instance that is already residing on this node prior to rebalance
@@ -3183,7 +3188,7 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 			if source.Defn.DefnId != target.Defn.DefnId {
 				err := fmt.Errorf("Source Index Instance %v and target index instance %v have different definition (%v != %v)",
 					source.InstId, target.InstId, source.Defn.DefnId, target.Defn.DefnId)
-				logging.Errorf("Merge Partition: %v", err)
+				logging.Errorf("MergePartition: %v", err)
 				if respch != nil {
 					respch <- err
 				}
@@ -3206,7 +3211,7 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 			// by rebalancer clean up.  Once merged, the transfer token is moved to Ready or committed state.   The original index
 			// will be deleted.
 			if target.RState != common.REBAL_ACTIVE {
-				logging.Warnf("Merge Partition: Target Index Instance %v is not in REBAL_ACTIVE. Do not merge now.", target.InstId)
+				logging.Warnf("MergePartition: Target Index Instance %v is not in REBAL_ACTIVE. Do not merge now.", target.InstId)
 				return false
 			}
 
@@ -3217,11 +3222,26 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 				return false
 			}
 
+			if target.Defn.IsVectorIndex && target.TrainingPhase == common.TRAINING_IN_PROGRESS {
+				logging.Warnf("MergePartition: Target Index Instance: %v is in training phase. Do not merge now.", target.InstId)
+				return false
+			}
+
 			// This is to check against merging a deferred index (before build) into an active index, or vice versa.
 			if source.State != target.State {
 				err := fmt.Errorf("Source Index Instance %v and target index instance %v does not have the same state (%v != %v)",
 					source.InstId, target.InstId, source.State, target.State)
 				logging.Errorf("Merge Partition: %v", err)
+				if respch != nil {
+					respch <- err
+				}
+				return true
+			}
+
+			if source.Defn.IsVectorIndex && target.Defn.IsVectorIndex && source.TrainingPhase != target.TrainingPhase {
+				err := fmt.Errorf("Source Index Instance %v and target index instance %v does not have the same training phase (%v != %v)",
+					source.InstId, target.InstId, source.TrainingPhase, target.TrainingPhase)
+				logging.Errorf("MergePartition: %v", err)
 				if respch != nil {
 					respch <- err
 				}
@@ -14681,6 +14701,9 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 			nil)   /* respCh */
 		common.CrashOnError(err)
 	}
+
+	// Merge any pending partitions after updating the training phase
+	idx.mergePartitionForIdleKeyspaceIds()
 
 	if len(toBuildInstIds) > 0 {
 		logging.Infof("Indexer: handleIndexTrainingDone Starting build for instances: %v, keyspaceId: %v", toBuildInstIds, keyspaceId)
