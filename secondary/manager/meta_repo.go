@@ -294,7 +294,8 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 
 	lookupName := indexDefnKeyById(id)
 	data, err := c.getMeta(lookupName)
-	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+	storeErr, ok := err.(*repo.StoreError)
+	if err != nil && ok && storeErr.Code() == repo.ErrResultNotFoundCode {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -353,7 +354,8 @@ func (c *MetadataRepo) GetTopologiesByBucket(bucket string) ([]*IndexTopology, e
 	// keys in the repo and construct topology objects
 	lookupName := globalTopologyKey()
 	globalTopData, err := c.getMeta(lookupName)
-	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+	storeErr, ok := err.(*repo.StoreError)
+	if err != nil && ok && storeErr.Code() == repo.ErrResultNotFoundCode {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -372,7 +374,8 @@ func (c *MetadataRepo) GetTopologiesByBucket(bucket string) ([]*IndexTopology, e
 		if getBucketFromTopologyKey(key) == bucket {
 
 			data, err := c.getMeta(key)
-			if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+			storeErr, ok := err.(*repo.StoreError)
+			if err != nil && ok && storeErr.Code() == repo.ErrResultNotFoundCode {
 				continue
 			} else if err != nil {
 				return nil, err
@@ -405,7 +408,8 @@ func (c *MetadataRepo) GetTopologyByCollection(bucket, scope, collection string)
 	}
 
 	data, err := c.getMeta(lookupName)
-	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+	storeErr, ok := err.(*repo.StoreError)
+	if err != nil && ok && storeErr.Code() == repo.ErrResultNotFoundCode {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -428,7 +432,8 @@ func (c *MetadataRepo) CloneTopologyByCollection(bucket, scope, collection strin
 
 	lookupName := indexTopologyKey(bucket, scope, collection)
 	data, err := c.getMeta(lookupName)
-	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+	storeErr, ok := err.(*repo.StoreError)
+	if err != nil && ok && storeErr.Code() == repo.ErrResultNotFoundCode {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -503,7 +508,8 @@ func (c *MetadataRepo) GetGlobalTopology() (*GlobalTopology, error) {
 
 	lookupName := globalTopologyKey()
 	data, err := c.getMeta(lookupName)
-	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+	storeErr, ok := err.(*repo.StoreError)
+	if err != nil && ok && storeErr.Code() == repo.ErrResultNotFoundCode {
 		return nil, nil
 	} else if err != nil {
 		return nil, err

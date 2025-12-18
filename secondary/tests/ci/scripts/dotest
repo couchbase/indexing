@@ -234,39 +234,39 @@ if [[ "$MODE" == *"$phase"* ]]; then
 
   if [ "$STORAGE" = "memdb" ]; then
       cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb/skiplist
-      GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
       cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb
-      GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   elif [ "$STORAGE" = "plasma" ]; then
       cd $WORKSPACE/goproj/src/github.com/couchbase/nitro/skiplist
-      GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma/zstd
-      GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
       # unit test logs will be in the Server Log logs-<timestamp>.tar.gz at logs-unit-test.log
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
-      GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log | grep 'RUN\|PASS\|FAIL\|github'
+      GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log | grep 'RUN\|PASS\|FAIL\|github'
   fi
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/collatejson
-  GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
-  GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v ./... 2>&1 | tee -a $WORKSPACE/test.log
+  GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v ./... 2>&1 | tee -a $WORKSPACE/test.log
 
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
-  GOTRACEBACK=crash GOMAXPROCS=16 go test -exec "env LD_LIBRARY_PATH=$WORKSPACE/install/lib" -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -exec "env LD_LIBRARY_PATH=$WORKSPACE/install/lib" -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   # Run shard dealer tests
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/planner
-  GOTRACEBACK=crash go test -timeout 10m -v -skip "^TestSimulation$" 2>&1 | tee -a $WORKSPACE/test.log
+  GOTRACEBACK=crash go test -vet=off -timeout 10m -v -skip "^TestSimulation$" 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
-  GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
+  GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
 
   collect_logs
 fi
@@ -295,12 +295,12 @@ if [[ "$MODE" == *"$phase"* ]]; then
     time_limit="8h"
   fi
 
-  go test $test_tags -timeout $time_limit -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql $run_tests_param 2>&1 | tee -a $WORKSPACE/test.log
+  go test -vet=off $test_tags -timeout $time_limit -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql $run_tests_param 2>&1 | tee -a $WORKSPACE/test.log
   echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_1/indexer_functests_pprof.log"
   curl http://$Username:$Password@127.0.0.1:9108/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_1/indexer_functests_pprof.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests
-  go test $test_tags -timeout 8h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql $run_tests_param 2>&1 | tee -a $WORKSPACE/test.log
+  go test -vet=off $test_tags -timeout 8h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql $run_tests_param 2>&1 | tee -a $WORKSPACE/test.log
   echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_1/indexer_largedata_pprof.log"
   curl http://$Username:$Password@127.0.0.1:9108/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_1/indexer_largedata_pprof.log
 
@@ -321,7 +321,7 @@ if [[ "$MODE" == *"$phase"* ]]; then
     echo "</pre><h4>Serverless tests</h4><pre>"
     cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/serverlesstests
 
-    go test -timeout 4h -v -cbconfig ../config/buildtest_plasma.json -useclient n1ql 2>&1 | tee -a $WORKSPACE/test.log
+    go test -vet=off -timeout 4h -v -cbconfig ../config/buildtest_plasma.json -useclient n1ql 2>&1 | tee -a $WORKSPACE/test.log
     echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_1/indexer_serverless_pprof.log"
     curl http://$Username:$Password@127.0.0.1:9108/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_1/indexer_serverless_pprof.log
     echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_2/indexer_serverless_pprof.log"
@@ -350,7 +350,7 @@ if [[ "$MODE" == *"$phase"* ]]; then
   cp $HOME/bin/config/* /opt/build/goproj/src/github.com/couchbase/indexing/secondary/tests/perftests/
   echo "</pre><h4>Performance tests</h4><pre>"
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/perftests
-  go test -timeout 4h -v -cbconfig ../config/buildtest_memdb.json -perftool cbindexperf -numdocs 2000000 2>&1 | tee -a $WORKSPACE/test.log
+  go test -vet=off -timeout 4h -v -cbconfig ../config/buildtest_memdb.json -perftool cbindexperf -numdocs 2000000 2>&1 | tee -a $WORKSPACE/test.log
   collect_logs
   stop_cluster
 fi
