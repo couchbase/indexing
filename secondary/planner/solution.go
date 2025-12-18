@@ -1637,10 +1637,17 @@ func (s *Solution) FindNodesForReplicaRepair(source *IndexUsage, numNewReplica i
 			}
 		}
 
-		result = append(result, shuffleNode(rs, oldNodes)...)
-		result = append(result, shuffleNode(rs, newNodes)...)
-		result = append(result, shuffleNode(rs, deletedNodes)...)
+		// prioritize new nodes first to ensure replicas are placed on new nodes
+		// during scale-up (deletedNodes=0)
 
+		if len(deletedNodes) > 0 {
+			result = append(result, shuffleNode(rs, oldNodes)...)
+			result = append(result, shuffleNode(rs, newNodes)...)
+			result = append(result, shuffleNode(rs, deletedNodes)...)
+		} else {
+			result = append(result, shuffleNode(rs, newNodes)...)
+			result = append(result, shuffleNode(rs, oldNodes)...)
+		}
 		return result
 	}
 
