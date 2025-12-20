@@ -2623,6 +2623,34 @@ var SystemConfig = Config{
 		true,  // mutable
 		false, // case-insensitive
 	},
+	"indexer.timekeeper.mergePhase.maxTimerInterval": ConfigValue{
+		uint64(100), // 100 milliseconds
+		"Maximum timer interval (in milliseconds) for MAINT_STREAM during merge phase. " +
+			"The timer interval escalates from 10ms to 20ms, 50ms, and up to this max value " +
+			"based on elapsed time during merge phase. Setting to 0 disables this feature.",
+		uint64(100),
+		true,  // mutable
+		false, // case-insensitive
+	},
+	"indexer.timekeeper.mergePhase.tsQueueThreshold": ConfigValue{
+		500,
+		"Threshold for timestamp queue length (lenInitTs/lenMaintTs) to trigger merge phase " +
+			"timer interval escalation. If both lenInitTs and lenMaintTs are below this threshold, " +
+			"the timer interval escalation feature is activated. If lenMaintTs exceeds this threshold, " +
+			"the timer is reset to default interval.",
+		500,
+		true,  // mutable
+		false, // case-insensitive
+	},
+	"indexer.timekeeper.maintStream.forcedDelay": ConfigValue{
+		uint64(0),
+		"Forced delay (in milliseconds) to add before sending MsgTKStabilityTS for MAINT_STREAM. " +
+			"This allows manual override to slow down MAINT_STREAM during stream merge. " +
+			"Default is 0 (no delay).",
+		uint64(0),
+		true,  // mutable
+		false, // case-insensitive
+	},
 	"indexer.http.readTimeout": ConfigValue{
 		30,
 		"timeout in seconds, is indexer http server's read timeout",
