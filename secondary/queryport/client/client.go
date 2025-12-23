@@ -616,7 +616,7 @@ func (c *GsiClient) CreateIndex6(
 		"whereExpr:%v secExprs:%v desc:%v hasVectorAttr:%v indexMissingLeadingKey:%v isPrimary:%v scheme:%v " +
 		" partitionKeys:%v with:%v include:%v isBhive:%v - elapsed(%v) err(%v)"
 
-	origSecExprs, _, _, _ := common.GetUnexplodedExprs(secExprs, desc, hasVectorAttr)
+	origSecExprs, _, _, _, _ := common.GetUnexplodedExprs(secExprs, desc, hasVectorAttr, secExprsAttrs)
 	logging.Infof(
 		fmsg, defnID, bucket, scope, collection, name, using, exprType, logging.TagUD(whereExpr),
 		logging.TagUD(origSecExprs), desc, hasVectorAttr, indexMissingLeadingKey, isPrimary, scheme,

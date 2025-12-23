@@ -1111,7 +1111,7 @@ func newSecondaryIndexFromMetaData(
 	}
 
 	if indexDefn.SecExprs != nil {
-		origSecExprs, origDesc, origHasVectorAttr, _ := common.GetUnexplodedExprs(indexDefn.SecExprs, indexDefn.Desc, indexDefn.HasVectorAttr)
+		origSecExprs, origSecExprsAttrs, origDesc, origHasVectorAttr, _ := common.GetUnexplodedExprs(indexDefn.SecExprs, indexDefn.Desc, indexDefn.HasVectorAttr, indexDefn.SecExprsAttrs)
 		exprs := make(expression.Expressions, 0, len(origSecExprs))
 		for _, secExpr := range origSecExprs {
 			expr, _ := parser.Parse(secExpr)
@@ -1120,6 +1120,7 @@ func newSecondaryIndexFromMetaData(
 		si.secExprs = exprs
 		si.desc = origDesc
 		si.vectorAttr = origHasVectorAttr
+		si.secExprsAttrs = origSecExprsAttrs
 	}
 
 	if len(indexDefn.PartitionKeys) != 0 {

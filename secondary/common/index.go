@@ -400,7 +400,7 @@ type IndexInstList []IndexInst
 
 func (idx IndexDefn) String() string {
 	var str strings.Builder
-	secExprs, _, _, _ := GetUnexplodedExprs(idx.SecExprs, idx.Desc, idx.HasVectorAttr)
+	secExprs, _, _, _, _ := GetUnexplodedExprs(idx.SecExprs, idx.Desc, idx.HasVectorAttr, idx.SecExprsAttrs)
 	fmt.Fprintf(&str, "DefnId: %v ", idx.DefnId)
 	fmt.Fprintf(&str, "Name: %v ", idx.Name)
 	fmt.Fprintf(&str, "Using: %v ", idx.Using)

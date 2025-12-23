@@ -773,18 +773,25 @@ func SetNumCPUs(percent int) int {
 
 func ConstructIndexExprs(defn *IndexDefn) ([]string, string) {
 	exprStmt := ""
-	secExprs, desc, vectorAttr, _ := GetUnexplodedExprs(defn.SecExprs, defn.Desc, defn.HasVectorAttr)
+	secExprs, secExprsAttrs, desc, vectorAttr, _ := GetUnexplodedExprs(defn.SecExprs, defn.Desc, defn.HasVectorAttr, defn.SecExprsAttrs)
 	for i, exp := range secExprs {
 		if exprStmt != "" {
 			exprStmt += ","
 		}
 		exprStmt += exp
+
+		// For Flattend Array Expression all below is set to false in GetUnexplodedExprs
+		// As exprStmt will have all the attributes in it we need not add it back
 		if desc != nil && desc[i] {
 			exprStmt += " DESC"
 		}
 
 		if vectorAttr != nil && vectorAttr[i] {
-			exprStmt += " VECTOR"
+			if secExprsAttrs[i].IsSparseVector() {
+				exprStmt += " SPARSE VECTOR"
+			} else {
+				exprStmt += " VECTOR"
+			}
 		}
 
 		if i == 0 && defn.IndexMissingLeadingKey { // Missing is implicit for non leading keys
@@ -971,13 +978,17 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 
 // For flattened array, returns the list of secExprs and
 // the desc array before explosion
-func GetUnexplodedExprs(secExprs []string, desc []bool, hasVectorAttr []bool) ([]string, []bool, []bool, bool) {
+func GetUnexplodedExprs(secExprs []string, desc []bool,
+	hasVectorAttr []bool, secExprsAttrs []SecExprAttr) (
+	[]string, []SecExprAttr, []bool, []bool, bool) {
 
 	var isArray, isFlatten bool
 	skipFlattenExprsTillPos := 0
 	origSecExprs := make([]string, 0)
+	origSecExprsAttrs := make([]SecExprAttr, 0)
 	origDesc := make([]bool, 0)
 	origHasVectorAttr := make([]bool, 0)
+
 	if desc == nil {
 		desc = make([]bool, len(secExprs))
 		for i, _ := range secExprs {
@@ -989,6 +1000,13 @@ func GetUnexplodedExprs(secExprs []string, desc []bool, hasVectorAttr []bool) ([
 		hasVectorAttr = make([]bool, len(secExprs))
 		for i, _ := range secExprs {
 			hasVectorAttr[i] = false
+		}
+	}
+
+	if secExprsAttrs == nil {
+		secExprsAttrs = make([]SecExprAttr, len(secExprs))
+		for i, _ := range secExprs {
+			secExprsAttrs[i] = SEC_EXPR_ATTR_NONE
 		}
 	}
 
@@ -1010,16 +1028,18 @@ func GetUnexplodedExprs(secExprs []string, desc []bool, hasVectorAttr []bool) ([
 			// DISTINCT ARRAY FLATTEN_KEYS(v.name, v.age DESC)
 			origDesc = append(origDesc, false)
 			origHasVectorAttr = append(origHasVectorAttr, false)
+			origSecExprsAttrs = append(origSecExprsAttrs, SEC_EXPR_ATTR_NONE)
 		} else {
 			origDesc = append(origDesc, desc[i])
 			origHasVectorAttr = append(origHasVectorAttr, hasVectorAttr[i])
+			origSecExprsAttrs = append(origSecExprsAttrs, secExprsAttrs[i])
 		}
 
 		origSecExprs = append(origSecExprs, exp)
 
 	}
 
-	return origSecExprs, origDesc, origHasVectorAttr, isFlatten
+	return origSecExprs, origSecExprsAttrs, origDesc, origHasVectorAttr, isFlatten
 }
 
 func PopulateUnExplodedExprs(defn *IndexDefn) {
