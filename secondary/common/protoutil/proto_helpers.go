@@ -88,6 +88,12 @@ func ConvertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 		HasVectorAttr:          indexDefn.HasVectorAttr,
 	}
 
+	// Pass Exploded Attributes to projector
+	defn.SecExpressionsAttrs = make([]uint32, len(indexDefn.SecExprsAttrs))
+	for i, attr := range indexDefn.SecExprsAttrs {
+		defn.SecExpressionsAttrs[i] = uint32(attr)
+	}
+
 	if indexDefn.IsVectorIndex && indexDefn.VectorMeta != nil {
 		defn.Dimension = proto.Uint64(uint64(indexDefn.VectorMeta.Dimension))
 		defn.IsCosine = proto.Bool(indexDefn.VectorMeta.Similarity == c.COSINE)

@@ -103,4 +103,6 @@ message IndexDefn {
     optional uint64 dimension     = 20; // Expected dimension of the vector in the mutations
     repeated string include       = 21; // List of secondary expressions to be used in include columns
     optional bool   isCosine      = 22; // If distance metric is cosine dont index zero vectors
+    
+    repeated uint32 secExpressionsAttrs = 23; // Attributes for secondaryExpressions
 }
