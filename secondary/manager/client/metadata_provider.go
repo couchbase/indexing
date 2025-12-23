@@ -441,7 +441,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	secExprs []string, desc []bool, hasVectorAttr []bool,
 	indexMissingLeadingKey, isPrimary bool,
 	scheme c.PartitionScheme, partitionKeys []string,
-	plan map[string]interface{}, include []string, isBhive bool) (c.IndexDefnId, error, bool) {
+	plan map[string]interface{}, include []string, isBhive bool,
+	secExprsAttrs []c.SecExprAttr) (c.IndexDefnId, error, bool) {
 
 	// FindIndexByName will only return valid index
 	if o.findIndexByName(name, bucket, scope, collection) != nil {
@@ -452,7 +453,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	idxDefn, err, retry := o.PrepareIndexDefn(name, bucket, scope, collection,
 		using, exprType, whereExpr, secExprs, desc, hasVectorAttr,
 		indexMissingLeadingKey, isPrimary, scheme, partitionKeys, plan,
-		include, isBhive)
+		include, isBhive, secExprsAttrs)
 	if err != nil {
 		return c.IndexDefnId(0), err, retry
 	}
@@ -2206,7 +2207,8 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	secExprs []string, desc []bool, hasVectorAttr []bool,
 	indexMissingLeadingKey, isPrimary bool,
 	partitionScheme c.PartitionScheme, partitionKeys []string,
-	plan map[string]interface{}, includeExprs []string, isBhive bool) (*c.IndexDefn, error, bool) {
+	plan map[string]interface{}, includeExprs []string, isBhive bool,
+	secExprsAttrs []c.SecExprAttr) (*c.IndexDefn, error, bool) {
 
 	//
 	// Validation
@@ -2474,6 +2476,24 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	}
 
 	//
+	// Sparse vector index
+	//
+
+	isSparseVector := false
+	for _, attr := range secExprsAttrs {
+		if attr.IsSparseVector() {
+			isSparseVector = true
+			break
+		}
+	}
+
+	if isSparseVector && (version < c.INDEXER_81_VERSION || clusterVersion < c.INDEXER_81_VERSION) {
+		return nil,
+			errors.New("Fail to create sparse vector index. This option is enabled after cluster is fully upgraded and there is no failed node."),
+			false
+	}
+
+	//
 	// Vector index
 	//
 
@@ -2568,17 +2588,21 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	var dimension, nprobes, trainlist int
 	var quantizer *c.VectorQuantizer
 
+	// SPARSE_TODO: isDenseVectorIndex := !isSparseVector && (isCompositeVectorIndex || isBhive)
+
+	// SPARSE_TODO: Remove isCompositeVectorIndex || isBhive once sparse vector is supported and make it isDenseVectorIndex
 	similarity, err = o.getVectorSimilarity(plan, isCompositeVectorIndex || isBhive)
 	if err != nil {
 		return nil, err, false
 	}
 
+	// SPARSE_TODO: Remove isCompositeVectorIndex || isBhive once sparse vector is supported and make it isDenseVectorIndex
 	dimension, err = o.getVectorDimension(plan, isCompositeVectorIndex || isBhive)
 	if err != nil {
 		return nil, err, false
 	}
 
-	quantizer, err = o.getVectorDescription(plan, isCompositeVectorIndex || isBhive)
+	quantizer, err = o.getVectorDescription(plan, isCompositeVectorIndex || isBhive, isSparseVector)
 	if err != nil {
 		return nil, err, false
 	}
@@ -2652,6 +2676,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		IndexMissingLeadingKey: indexMissingLeadingKey,
 		Include:                includeExprs,
 		IsVectorIndex:          isBhive || isCompositeVectorIndex,
+		SecExprsAttrs:          secExprsAttrs,
 	}
 
 	if idxDefn.IsVectorIndex {
@@ -3522,7 +3547,7 @@ func (o *MetadataProvider) getTrainlistParam(plan map[string]interface{}, isVect
 
 	if !isVectorIndex {
 		if _, ok := plan[keyword]; ok {
-			return 0, fmt.Errorf("Fail to create index. '%v' parameter is expected only in vector indexes. Observed it for non-vector index", keyword)
+			return 0, fmt.Errorf("Fail to create index. '%v' parameter is expected only in dense vector indexes. Observed it for non-dense vector index", keyword)
 		}
 		return 0, nil // For non-vector indexes, no error is expected
 	}
@@ -3710,7 +3735,7 @@ func (o *MetadataProvider) getVectorSimilarity(plan map[string]interface{}, isVe
 	if !isVectorIndex {
 		if _, ok := plan[keyword]; ok {
 			// For a non-vector index, this keyword is not expected to be present
-			return "", fmt.Errorf("Fail to create index. '%v' parameter is expected only in vector indexes. Observed it for non-vector index", keyword)
+			return "", fmt.Errorf("Fail to create index. '%v' parameter is expected only in dense vector indexes. Observed it for non-dense vector index", keyword)
 		}
 		return "", nil // !ok is valid case for non-vector index
 	}
@@ -3733,7 +3758,7 @@ func (o *MetadataProvider) getVectorDimension(plan map[string]interface{}, isVec
 
 	if !isVectorIndex {
 		if _, ok := plan[keyword]; ok {
-			return 0, fmt.Errorf("Fail to create index. '%v' parameter is expected only in vector indexes. Observed it for non-vector index", keyword)
+			return 0, fmt.Errorf("Fail to create index. '%v' parameter is expected only in dense vector indexes. Observed it for non-dense vector index", keyword)
 		}
 		return 0, nil // For non-vector indexes, no error is expected
 	}
@@ -3848,7 +3873,7 @@ RETRY1:
 	return watchers, nil, false
 }
 
-func (o *MetadataProvider) getVectorDescription(plan map[string]interface{}, isVectorIndex bool) (*c.VectorQuantizer, error) {
+func (o *MetadataProvider) getVectorDescription(plan map[string]interface{}, isVectorIndex, isSparseVector bool) (*c.VectorQuantizer, error) {
 	keyword := "description"
 
 	if !isVectorIndex {
@@ -3864,7 +3889,7 @@ func (o *MetadataProvider) getVectorDescription(plan map[string]interface{}, isV
 		description = c.DEFAULT_VECTOR_DESCRIPTION
 	}
 
-	return c.ParseVectorDesciption(description)
+	return c.ParseVectorDesciption(description, isSparseVector)
 }
 
 func (o *MetadataProvider) deleteScheduleTokens(defnID c.IndexDefnId) (bool, bool, error) {

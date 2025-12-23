@@ -350,7 +350,8 @@ func (b *metadataClient) CreateIndex(
 	secExprs []string, desc []bool, hasVectorAttr []bool,
 	indexMissingLeadingKey, isPrimary bool,
 	scheme common.PartitionScheme, partitionKeys []string,
-	planJSON []byte, include []string, isBhive bool) (uint64, error) {
+	planJSON []byte, include []string, isBhive bool,
+	secExprsAttrs []common.SecExprAttr) (uint64, error) {
 
 	plan := make(map[string]interface{})
 	if planJSON != nil && len(planJSON) > 0 {
@@ -365,7 +366,7 @@ RETRY:
 	defnID, err, needRefresh := b.mdClient.CreateIndexWithPlan(
 		indexName, bucket, scope, collection, using, exprType, whereExpr,
 		secExprs, desc, hasVectorAttr, indexMissingLeadingKey, isPrimary,
-		scheme, partitionKeys, plan, include, isBhive)
+		scheme, partitionKeys, plan, include, isBhive, secExprsAttrs)
 
 	if needRefresh && refreshCnt == 0 {
 		logging.Debugf("GsiClient: Indexer Node List is out-of-date.  Require refresh.")

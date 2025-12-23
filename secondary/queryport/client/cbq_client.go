@@ -141,7 +141,8 @@ func (b *cbqClient) CreateIndex(
 	secExprs []string, desc []bool, hasVectorAttr []bool,
 	indexMissingLeadingKey, isPrimary bool,
 	scheme common.PartitionScheme, partitionKeys []string,
-	with []byte, include []string, isBhive bool) (defnID uint64, err error) {
+	with []byte, include []string, isBhive bool,
+	secExprsAttrs []common.SecExprAttr) (defnID uint64, err error) {
 
 	var resp *http.Response
 	var mresp indexMetaResponse

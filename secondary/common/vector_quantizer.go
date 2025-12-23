@@ -144,11 +144,13 @@ func (vq *VectorQuantizer) String() string {
 // The num_centroids value is optional. If not specified, indexer will compute
 // the number of centroids required at the time of build index.
 // In all other cases, indexer should return error
-func ParseVectorDesciption(inp string) (*VectorQuantizer, error) {
+func ParseVectorDesciption(inp string, isSparseVector bool) (*VectorQuantizer, error) {
 	inp = strings.TrimSpace(inp)
 	inp = strings.ToUpper(inp)
 
 	quantizer := &VectorQuantizer{}
+
+	// SPARSE_TODO: Add validation for sparse vector description
 
 	re := regexp.MustCompile(`(IVF)(\d*),( *)(PQ(\d+)X(\d+)(FS)?$|SQFP16$|SQ4$|SQ6$|SQ8$|SQ_4BIT_UNIFORM$|SQ_8BIT_UNIFORM$|SQ_8BIT_DIRECT$)`)
 	matches := re.FindStringSubmatch(inp)
@@ -219,6 +221,8 @@ func (vq *VectorQuantizer) IsValid(dimension int) error {
 	if vq == nil {
 		return errors.New("Nil quantizer is not expected")
 	}
+
+	// SPARSE_TODO: Add validation for sparse vector quantizer
 
 	// As scalar quantizer works only with specific set of types
 	// which are captured when parsing the description, return nil error

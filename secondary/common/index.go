@@ -355,6 +355,7 @@ type IndexDefn struct {
 	IsVectorIndex bool            `json:"isVectorIndex,omitempty"`
 	VectorMeta    *VectorMetadata `json:"vectorMeta,omitempty"`
 
+	// SPARSE_TODO: Populate this field while recovering index definition
 	SecExprsAttrs []SecExprAttr `json:"secExprsAttrs,omitempty"`
 }
 

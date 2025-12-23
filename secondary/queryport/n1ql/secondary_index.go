@@ -619,6 +619,8 @@ func (gsi *gsiKeyspace) CreateIndex6(
 	desc := make([]bool, 0)
 	hasVectorAttr := make([]bool, 0)
 	indexMissingLeadingKey := false
+	secExprsAttrs := make([]c.SecExprAttr, 0)
+
 	// For flattened array index, explode the secExprs string. E.g.,
 	// for the index:
 	// create index idx on default(org,
@@ -654,14 +656,18 @@ func (gsi *gsiKeyspace) CreateIndex6(
 						indexMissingLeadingKey = fk.HasMissing(pos)
 					}
 				}
+				for _, attr := range fk.Attributes() {
+					secExprsAttrs = append(secExprsAttrs, c.SecExprAttr(attr))
+				}
 			}
 		} else {
 			secStrs = append(secStrs, s)
 			desc = append(desc, key.HasAttribute(datastore.IK_DESC))
-			hasVectorAttr = append(hasVectorAttr, key.HasAttribute(datastore.IK_VECTOR))
+			hasVectorAttr = append(hasVectorAttr, key.HasAttribute(datastore.IK_VECTORS))
 			if keyPos == 0 {
 				indexMissingLeadingKey = key.HasAttribute(datastore.IK_MISSING)
 			}
+			secExprsAttrs = append(secExprsAttrs, c.SecExprAttr(key.Attributes))
 		}
 	}
 
@@ -708,7 +714,8 @@ func (gsi *gsiKeyspace) CreateIndex6(
 		partitionKeys,
 		withJSON,
 		includeStrs,
-		isBhive)
+		isBhive,
+		secExprsAttrs)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreateIndex()")
 	}
@@ -1062,6 +1069,8 @@ type secondaryIndex struct {
 	rerankFactor      int
 	persistFullVector bool // Only for BHIVE indexes
 	include           expression.Expressions
+
+	secExprsAttrs []c.SecExprAttr
 }
 
 // for metadata-provider.

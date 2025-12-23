@@ -212,7 +212,7 @@ type BridgeAccessor interface {
 		secExprs []string, desc []bool, hasVectorAttr []bool,
 		indexMissingLeadingKey, isPrimary bool,
 		scheme common.PartitionScheme, partitionKeys []string,
-		with []byte, include []string, isBhive bool) (defnID uint64, err error)
+		with []byte, include []string, isBhive bool, secExprsAttrs []common.SecExprAttr) (defnID uint64, err error)
 
 	// BuildIndexes to build a deferred set of indexes. This call implies
 	// that indexes specified are already created.
@@ -585,7 +585,7 @@ func (c *GsiClient) CreateIndex4(
 
 	return c.CreateIndex6(name, bucket, scope, collection,
 		using, exprType, whereExpr, secExprs, desc, nil, false,
-		isPrimary, scheme, partitionKeys, with, nil, false)
+		isPrimary, scheme, partitionKeys, with, nil, false, nil)
 
 }
 
@@ -595,7 +595,7 @@ func (c *GsiClient) CreateIndex6(
 	secExprs []string, desc []bool, hasVectorAttr []bool,
 	indexMissingLeadingKey, isPrimary bool,
 	scheme common.PartitionScheme, partitionKeys []string,
-	with []byte, include []string, isBhive bool) (defnID uint64, err error) {
+	with []byte, include []string, isBhive bool, secExprsAttrs []common.SecExprAttr) (defnID uint64, err error) {
 
 	err = common.IsValidIndexName(name)
 	if err != nil {
@@ -611,7 +611,7 @@ func (c *GsiClient) CreateIndex6(
 	defnID, err = c.bridge.CreateIndex(
 		name, bucket, scope, collection, using, exprType, whereExpr,
 		secExprs, desc, hasVectorAttr, indexMissingLeadingKey, isPrimary, scheme,
-		partitionKeys, with, include, isBhive)
+		partitionKeys, with, include, isBhive, secExprsAttrs)
 	fmsg := "CreateIndex %v %v %v %v/%v using:%v exprType:%v " +
 		"whereExpr:%v secExprs:%v desc:%v hasVectorAttr:%v indexMissingLeadingKey:%v isPrimary:%v scheme:%v " +
 		" partitionKeys:%v with:%v include:%v isBhive:%v - elapsed(%v) err(%v)"
