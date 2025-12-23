@@ -139,11 +139,12 @@ type IndexKeyOrder struct {
 }
 
 type IndexVector struct {
-	QueryVector []float32 // query vector
-	IndexKeyPos int       // vector key pos in index
-	Probes      int       // nprobes
-	TopNScan    int       // TopNScan for Bhive Index, Override default only when  > 0
-	Rerank      bool      // Enable reranking by using actual vector
+	QueryVector       []float32            // dense query vector
+	QuerySparseVector *common.SparseVector // sparse vector
+	IndexKeyPos       int                  // vector key pos in index
+	Probes            int                  // nprobes
+	TopNScan          int                  // TopNScan for Bhive Index, Override default only when  > 0
+	Rerank            bool                 // Enable reranking by using actual vector
 }
 
 const (

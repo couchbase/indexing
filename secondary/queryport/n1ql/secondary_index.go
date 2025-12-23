@@ -1617,7 +1617,11 @@ func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 			}
 
 			if si.vectorAttr != nil && si.vectorAttr[i] {
-				attr |= datastore.IK_VECTOR
+				attr |= datastore.IK_DENSE_VECTOR
+			}
+
+			if si.secExprsAttrs != nil && si.secExprsAttrs[i] != 0 {
+				attr |= datastore.IkAttributes(si.secExprsAttrs[i])
 			}
 
 			idxkey.SetAttribute(attr, true)
@@ -2873,15 +2877,25 @@ func n1qlindexvectortogsi(indexVector *datastore.IndexVector) *qclient.IndexVect
 	}
 
 	vec := &qclient.IndexVector{
-		QueryVector: make([]float32, len(indexVector.QueryVector)),
 		IndexKeyPos: indexVector.IndexKeyPos,
 		Probes:      indexVector.Probes,
 		TopNScan:    indexVector.TopNScan,
 		Rerank:      indexVector.ReRank,
 	}
 
-	for i, o := range indexVector.QueryVector {
-		vec.QueryVector[i] = o
+	if indexVector.QueryVector != nil {
+		vec.QueryVector = make([]float32, 0, len(indexVector.QueryVector))
+		vec.QueryVector = append(vec.QueryVector, indexVector.QueryVector...)
+	} else if indexVector.QuerySparseVector != nil {
+		qsv := &common.SparseVector{
+			Indices: make([]uint32, 0, len(indexVector.QuerySparseVector.Indices)),
+			Values:  make([]float32, 0, len(indexVector.QuerySparseVector.Values)),
+		}
+		for _, index := range indexVector.QuerySparseVector.Indices {
+			qsv.Indices = append(qsv.Indices, uint32(index))
+		}
+		qsv.Values = append(qsv.Values, indexVector.QuerySparseVector.Values...)
+		vec.QuerySparseVector = qsv
 	}
 
 	return vec
