@@ -1538,19 +1538,20 @@ func (stm *ShardTransferManager) handleRestoreAndUnlockShards(cmd Message) {
 		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards shardId: %v, shard type:%v, refCount: %v",
 			shardId, shardType, shardRefCount.refCount)
 
-		if shardRefCount.lockedForRecovery {
-			logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating RestoreShardDone for shardId: %v", shardId)
-			var err error
-			if shardType == c.PLASMA_SHARD {
-				err = plasma.RestoreShardDone(plasma.ShardId(shardId))
-			} else if shardType == c.BHIVE_SHARD {
-				err = bhive.RestoreShardDone(plasma.ShardId(shardId))
-			}
-			if err != nil {
-				logging.Warnf("ShardTransferManager::handleRestoreAndUnlockShards Err in RestoreShardDone for shardId: %v"+
-					"of shard type:%v, err:%v", shardId, shardType, err)
-			}
-		}
+		// DO NOT CALL restoreShardDone outside rebalance context
+		// if shardRefCount.lockedForRecovery {
+		// 	logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating RestoreShardDone for shardId: %v", shardId)
+		// 	var err error
+		// 	if shardType == c.PLASMA_SHARD {
+		// 		err = plasma.RestoreShardDone(plasma.ShardId(shardId))
+		// 	} else if shardType == c.BHIVE_SHARD {
+		// 		err = bhive.RestoreShardDone(plasma.ShardId(shardId))
+		// 	}
+		// 	if err != nil {
+		// 		logging.Warnf("ShardTransferManager::handleRestoreAndUnlockShards Err in RestoreShardDone for shardId: %v"+
+		// 			"of shard type:%v, err:%v", shardId, shardType, err)
+		// 	}
+		// }
 
 		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating unlock for shardId: %v, refCount: %v", shardId, shardRefCount.refCount)
 		refCount := shardRefCount.refCount

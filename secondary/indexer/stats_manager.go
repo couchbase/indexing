@@ -955,6 +955,9 @@ type IndexerStats struct {
 
 	numDivergingReplicaIndexes stats.Int64Val
 	divergingReplicaIndexesMap *MapHolder
+
+	numLostReplicaIndexes stats.Int64Val
+	lostReplicaIndexesMap *MapHolder
 }
 
 func (s *IndexerStats) Init() {
@@ -1040,6 +1043,10 @@ func (s *IndexerStats) Init() {
 	s.numDivergingReplicaIndexes.Init()
 	s.divergingReplicaIndexesMap = &MapHolder{}
 	s.divergingReplicaIndexesMap.Init()
+
+	s.numLostReplicaIndexes.Init()
+	s.lostReplicaIndexesMap = &MapHolder{}
+	s.lostReplicaIndexesMap.Init()
 }
 
 // SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
@@ -1436,6 +1443,9 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("num_diverging_replica_indexes", &is.numDivergingReplicaIndexes)
 	is.PopulateCorruptedIndexes(statMap)
 
+	statMap.AddStatValueFiltered("num_lost_replica_indexes", &is.numLostReplicaIndexes)
+	is.PopulateLostReplicaIndexes(statMap)
+
 	statMap.AddStatValueFiltered("total_codebook_mem_usage", &is.totalCodebookMemUsage)
 	statMap.AddStatValueFiltered("vector_scan_queued", &is.vectorScanQueued)
 }
@@ -1453,6 +1463,26 @@ func (is *IndexerStats) PopulateCorruptedIndexes(statMap *StatsMap) {
 
 	for indexName := range divergingReplicas {
 		statMap.AddStatValueFiltered(indexName+":is_diverging_replica", &val)
+	}
+}
+
+func (is *IndexerStats) PopulateLostReplicaIndexes(statMap *StatsMap) {
+	if is.lostReplicaIndexesMap == nil {
+		return
+	}
+
+	lostReplicaMap := is.lostReplicaIndexesMap.Get()
+
+	var val stats.Int64Val
+	val.Init()
+
+	for indexName, lostReplica := range lostReplicaMap {
+		lostReplicaVal, ok := lostReplica.(int64)
+		if !ok {
+			continue
+		}
+		val.Set(lostReplicaVal)
+		statMap.AddStatValueFiltered(indexName+":num_lost_replicas", &val)
 	}
 }
 
@@ -2872,6 +2902,45 @@ func (is *IndexerStats) populateIsDivergingReplicaStat(out []byte) []byte {
 	return out
 }
 
+func (is *IndexerStats) populateLostReplicaStat(out []byte) []byte {
+	indexesWithLostReplicas := is.lostReplicaIndexesMap.Get()
+
+	var str, collectionLabels string
+	fmtStr := "%v%v{bucket=\"%v\", %vindex=\"%v\", partition=\"%v\"} %v\n"
+
+	for indexName, val := range indexesWithLostReplicas {
+		var bucket, scope, collection, index, partn string
+		// Retrive bucket, scope, collection from the name
+		split := strings.Split(indexName, ":")
+		if len(split) == 3 { // bucket:index_name
+			bucket = split[0]
+			scope = common.DEFAULT_SCOPE
+			collection = common.DEFAULT_COLLECTION
+			index = split[1]
+			partn = split[2]
+		} else if len(split) == 5 {
+			bucket = split[0]
+			scope = split[1]
+			collection = split[2]
+			index = split[3]
+			partn = split[4]
+		} else {
+			// Ignore the index
+			continue
+		}
+		lostReplicaCount, ok := val.(int)
+		if !ok {
+			// if the value is not integer ignore it
+			continue
+		}
+
+		collectionLabels = fmt.Sprintf("scope=\"%v\", collection=\"%v\", ", scope, collection)
+		str = fmt.Sprintf(fmtStr, PARTN_METRICS_PREFIX, "num_lost_replicas", bucket, collectionLabels, index, partn, lostReplicaCount)
+		out = append(out, []byte(str)...)
+	}
+	return out
+}
+
 // MarshalJSON reworks the layout of the stats in child call GetStats, then marshals the result to a
 // byte slice.
 func (is *IndexerStats) MarshalJSON(spec *statsSpec, creds cbauth.Creds) ([]byte, error) {
@@ -3677,6 +3746,9 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_diverging_replica_indexes gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_diverging_replica_indexes %v\n", METRICS_PREFIX, is.numDivergingReplicaIndexes.Value()))...)
 
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_lost_replica_indexes gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_lost_replica_indexes %v\n", METRICS_PREFIX, is.numLostReplicaIndexes.Value()))...)
+
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_codebook_memory_usage gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_codebook_memory_usage %v\n", METRICS_PREFIX, is.totalCodebookMemUsage.Value()))...)
 
@@ -3743,6 +3815,7 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 	}
 
 	out = is.populateIsDivergingReplicaStat(out)
+	out = is.populateLostReplicaStat(out)
 
 	if common.IsServerlessDeployment() {
 		func() {

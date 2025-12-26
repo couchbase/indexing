@@ -83,6 +83,9 @@ type RunConfig struct {
 
 	// enable shard dealer for shard distribution
 	UseShardDealer bool
+
+	//rebalance summary (only applicable for rebalance command)
+	RebalanceSummary bool
 }
 
 type RunStats struct {
@@ -2045,7 +2048,7 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 
 func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
 	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool,
-	deletedNodes []string, binSize uint64, enableShardAffinity, useShardDealer bool) (
+	deletedNodes []string, binSize uint64, enableShardAffinity, useShardDealer bool, rebalanceSummary bool) (
 	*Solution, error) {
 
 	config := DefaultRunConfig()
@@ -2060,6 +2063,7 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 	config.EnableShardAffinity = enableShardAffinity
 	config.binSize = binSize
 	config.UseShardDealer = useShardDealer
+	config.RebalanceSummary = rebalanceSummary
 
 	p, _, _, err := executeRebal(config, CommandRebalance, plan, indexSpecs, deletedNodes, false)
 
@@ -2880,11 +2884,9 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 
 		PopulateSiblingIndexForReplicaRepair(solution, config.binSize)
 	}
-	if config.Detail {
+	if config.RebalanceSummary {
 		updatedSolution := planner.GetResult()
-		logging.Infof("******************** Rebalance Summary *********************")
 		updatedSolution.PrintRebalanceSummary(solution)
-		logging.Infof("*************************************************************")
 	}
 
 	return planner, s, indexDefnsToRemove, nil

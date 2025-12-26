@@ -2659,6 +2659,13 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			tk.stopTimer(streamId, keyspaceId)
 			tk.ss.cleanupKeyspaceIdFromStream(streamId, keyspaceId)
 			tk.resetTsQueueStats(streamId)
+
+			// Reset MAINT_STREAM timer interval to default when merge is ready
+			defaultTimerInterval := tk.getInMemSnapInterval()
+			logging.Infof("%v Resetting MAINT_STREAM timer interval for keyspace %v to default %vms (merge ready)",
+				_checkInitStreamReadyToMerge, keyspaceId, defaultTimerInterval)
+			tk.resetMergePhaseTimerInterval(keyspaceId, defaultTimerInterval)
+
 			return true
 		}
 	}
@@ -2860,12 +2867,86 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 					streamId, keyspaceId)
 			}
 		}
+	} else {
+		// Get max timer interval from config (0 disables the feature)
+		maxTimerInterval := tk.config["timekeeper.mergePhase.maxTimerInterval"].Uint64()
+
+		// Only apply merge phase timer escalation if feature is enabled
+		if maxTimerInterval > 0 {
+
+			// Get default timer interval from config
+			defaultTimerInterval := tk.getInMemSnapInterval()
+
+			// Get TS queue threshold from config
+			tsQueueThreshold := tk.config["timekeeper.mergePhase.tsQueueThreshold"].Int()
+
+			// Get lenMaintTs for the bucket in MAINT_STREAM
+			var lenMaintTs int
+			tsListMaint := tk.ss.streamKeyspaceIdTsListMap[common.MAINT_STREAM][bucket]
+			if tsListMaint != nil {
+				lenMaintTs = tsListMaint.Len()
+			}
+
+			// Check if both streams have low pending TS counts
+			if lenInitTs <= tsQueueThreshold && lenMaintTs <= tsQueueThreshold {
+
+				// Initialize merge phase start time if not set
+				if _, exists := tk.ss.streamKeyspaceIdMergePhaseStartTime[common.MAINT_STREAM][bucket]; !exists {
+					tk.ss.streamKeyspaceIdMergePhaseStartTime[common.MAINT_STREAM][bucket] = time.Now()
+					tk.ss.streamKeyspaceIdMergePhaseTimerInterval[common.MAINT_STREAM][bucket] = defaultTimerInterval
+					logging.Infof("Timekeeper::checkFlushTsValidForMerge: Started merge phase tracking for MAINT_STREAM keyspace %v", keyspaceId)
+				}
+
+				// Check elapsed time and escalate timer interval
+				mergePhaseStartTime := tk.ss.streamKeyspaceIdMergePhaseStartTime[common.MAINT_STREAM][bucket]
+				currentInterval := tk.ss.streamKeyspaceIdMergePhaseTimerInterval[common.MAINT_STREAM][bucket]
+				elapsedMinutes := int64(time.Since(mergePhaseStartTime) / time.Minute)
+
+				var newInterval uint64
+				if elapsedMinutes >= 15 {
+					// After 15 minutes, set to maxTimerInterval
+					newInterval = maxTimerInterval
+				} else if elapsedMinutes >= 10 {
+					// After 10 minutes, set to 50ms (or maxTimerInterval if smaller)
+					newInterval = 50
+					if newInterval > maxTimerInterval {
+						newInterval = maxTimerInterval
+					}
+				} else if elapsedMinutes >= 5 {
+					// After 5 minutes, set to 20ms (or maxTimerInterval if smaller)
+					newInterval = 20
+					if newInterval > maxTimerInterval {
+						newInterval = maxTimerInterval
+					}
+				} else {
+					// Less than 5 minutes, keep at default timer interval
+					newInterval = defaultTimerInterval
+				}
+
+				// Update timer interval if it has changed
+				// The timer will pick up the change on the next generateNewStabilityTS call
+				if newInterval != currentInterval {
+					logging.Infof("Timekeeper::checkFlushTsValidForMerge: Updating MAINT_STREAM timer interval for keyspace %v from %vms to %vms (elapsed: %v minutes)",
+						keyspaceId, currentInterval, newInterval, elapsedMinutes)
+					tk.ss.streamKeyspaceIdMergePhaseTimerInterval[common.MAINT_STREAM][bucket] = newInterval
+				}
+			} else if lenMaintTs > tsQueueThreshold {
+				// Reset timer back to default interval if lenMaintTs grows too large
+				if tk.resetMergePhaseTimerInterval(keyspaceId, defaultTimerInterval) {
+					logging.Infof("Timekeeper::checkFlushTsValidForMerge: Resetting MAINT_STREAM timer interval for keyspace %v to %vms (lenMaintTs: %v)",
+						keyspaceId, defaultTimerInterval, lenMaintTs)
+				}
+			}
+		}
 	}
+
 	if forceLog || logging.IsEnabled(logging.Verbose) {
 		logging.Infof("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, maintFlushTs %v, initFlushTs %v, last return",
 			streamId, keyspaceId, maintFlushTs, initFlushTs)
 	}
+
 	return false, nil
+
 }
 
 func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
@@ -2912,18 +2993,33 @@ func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
 }
 
 // generates a new StabilityTS. Runs in a go routine per keyspace.
+// Returns the new timer interval if it has changed (for merge phase escalation),
+// or 0 if no change. The caller should restart the ticker with the new interval.
 func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
-	keyspaceId string) {
+	keyspaceId string) uint64 {
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
 	if tk.indexerState != common.INDEXER_ACTIVE {
-		return
+		return 0
 	}
 
 	if status, ok := tk.ss.streamKeyspaceIdStatus[streamId][keyspaceId]; !ok || status != STREAM_ACTIVE {
-		return
+		return 0
+	}
+
+	// Check if timer interval has changed for merge phase escalation
+	// For MAINT_STREAM, check using bucket as key
+	// Return the interval value from the map if it exists, or 0 if not set
+	var newInterval uint64
+	if streamId == common.MAINT_STREAM {
+		bucket, _, _ := SplitKeyspaceId(keyspaceId)
+		if intervalMap, ok := tk.ss.streamKeyspaceIdMergePhaseTimerInterval[streamId]; ok {
+			if newIntervalVal, exists := intervalMap[bucket]; exists && newIntervalVal > 0 {
+				newInterval = newIntervalVal
+			}
+		}
 	}
 
 	if tk.ss.checkNewTSDue(streamId, keyspaceId) {
@@ -2946,12 +3042,12 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 				keyspaceStats.tsQueueSize.Set(int64(tsList.Len()))
 			}
 		}
-		return
+		return newInterval
 	}
 
 	if tk.processPendingTS(streamId, keyspaceId) {
 		//nothing to do
-		return
+		return newInterval
 	}
 
 	// Is it overdue to persist a snapshot for this streamId and keyspaceId? This path skips the
@@ -3009,6 +3105,8 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			}
 		}
 	}
+
+	return newInterval
 }
 
 // processPendingTS checks if there is any pending TS for the given stream and
@@ -3193,6 +3291,16 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 						logging.Errorf("Timekeeper::sendNewStabilityTs: Flusher observed check throttles error for keyspaceId %v streamId %v error %v ", keyspaceId, streamId, err)
 					}
 				}
+			}
+		}
+
+		// Apply forced delay for MAINT_STREAM if configured
+		if streamId == common.MAINT_STREAM {
+			forcedDelay := tk.config["timekeeper.maintStream.forcedDelay"].Uint64()
+			if forcedDelay > 0 {
+				time.Sleep(time.Duration(forcedDelay) * time.Millisecond)
+				logging.Debugf("Timekeeper::sendNewStabilityTS Applied forced delay of %vms for MAINT_STREAM keyspace %v",
+					forcedDelay, keyspaceId)
 			}
 		}
 
@@ -4848,13 +4956,22 @@ func (tk *timekeeper) startTimer(streamId common.StreamId,
 	stopCh := tk.ss.streamKeyspaceIdTimerStopCh[streamId][keyspaceId]
 
 	go func() {
+		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				tk.generateNewStabilityTS(streamId, keyspaceId)
+				// Check if interval has changed and reset ticker if needed
+				// generateNewStabilityTS returns the interval from merge phase tracking map
+				// if it exists, or 0 if not set. Compare with current interval.
+				returnedInterval := tk.generateNewStabilityTS(streamId, keyspaceId)
+				if returnedInterval > 0 && returnedInterval != snapInterval {
+					logging.Infof("Timekeeper::startTimer Updating interval for %v %v from %v to %v ms",
+						streamId, keyspaceId, snapInterval, returnedInterval)
+					snapInterval = returnedInterval
+					ticker.Reset(time.Millisecond * time.Duration(snapInterval))
+				}
 
 			case <-stopCh:
-				ticker.Stop()
 				return
 			}
 		}
@@ -4872,6 +4989,30 @@ func (tk *timekeeper) stopTimer(streamId common.StreamId, keyspaceId string) {
 		close(stopCh)
 	}
 
+}
+
+// resetMergePhaseTimerInterval resets the MAINT_STREAM timer interval to input timer interval
+// and cleans up merge phase tracking.
+// Returns true if the interval value actually changed, false otherwise.
+// Caller must hold tk.lock when calling this function.
+func (tk *timekeeper) resetMergePhaseTimerInterval(keyspaceId string, timerInterval uint64) bool {
+
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	changed := false
+
+	// Check if the interval value actually changed
+	currentInterval, exists := tk.ss.streamKeyspaceIdMergePhaseTimerInterval[common.MAINT_STREAM][bucket]
+	if !exists || currentInterval != timerInterval {
+		tk.ss.streamKeyspaceIdMergePhaseTimerInterval[common.MAINT_STREAM][bucket] = timerInterval
+		changed = true
+	}
+
+	// Clean up merge phase start time tracking for MAINT_STREAM
+	if _, exists := tk.ss.streamKeyspaceIdMergePhaseStartTime[common.MAINT_STREAM][bucket]; exists {
+		delete(tk.ss.streamKeyspaceIdMergePhaseStartTime[common.MAINT_STREAM], bucket)
+	}
+
+	return changed
 }
 
 func (tk *timekeeper) setBuildTs(streamId common.StreamId, keyspaceId string,

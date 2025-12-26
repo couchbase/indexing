@@ -1448,6 +1448,9 @@ func computeServerVersion(v, minorv uint32) (int, error) {
 		return INDEXER_70_VERSION, nil
 	}
 	if v == 8 {
+		if minorv >= 1 {
+			return INDEXER_81_VERSION, nil
+		}
 		return INDEXER_80_VERSION, nil
 	}
 

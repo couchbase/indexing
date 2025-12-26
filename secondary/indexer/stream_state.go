@@ -102,6 +102,12 @@ type StreamState struct {
 	//only used to log debug information for throttle error and avoid log flooding
 	streamKeyspaceIdThrottleDebugLogTime map[common.StreamId]KeyspaceIdThrottleDebugLogTime
 
+	//track merge phase start time for timer interval escalation (MAINT_STREAM only)
+	streamKeyspaceIdMergePhaseStartTime map[common.StreamId]KeyspaceIdMergePhaseStartTime
+
+	//track current timer interval for merge phase (MAINT_STREAM only)
+	streamKeyspaceIdMergePhaseTimerInterval map[common.StreamId]KeyspaceIdMergePhaseTimerInterval
+
 	// throttling duration
 	streamKeyspaceIdThrottleDuration map[common.StreamId]KeyspaceIdThrottleDuration
 
@@ -138,6 +144,8 @@ type KeyspaceIdVbStatusMap map[string]Timestamp
 type KeyspaceIdVbRefCountMap map[string]Timestamp
 type KeyspaceIdRepairStopCh map[string]StopChannel
 type KeyspaceIdTimerStopCh map[string]StopChannel
+type KeyspaceIdMergePhaseStartTime map[string]time.Time
+type KeyspaceIdMergePhaseTimerInterval map[string]uint64
 type KeyspaceIdLastPersistTime map[string]time.Time
 type KeyspaceIdSkippedInMemTs map[string]uint64
 type KeyspaceIdHasInMemSnap map[string]bool
@@ -218,50 +226,52 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdLastSnapAlignFlushedTsMap: make(map[common.StreamId]KeyspaceIdLastFlushedTsMap),
 		streamKeyspaceIdRestartTsMap:              make(map[common.StreamId]KeyspaceIdRestartTsMap),
 
-		streamKeyspaceIdOpenTsMap:              make(map[common.StreamId]KeyspaceIdOpenTsMap),
-		streamKeyspaceIdStartTimeMap:           make(map[common.StreamId]KeyspaceIdStartTimeMap),
-		streamKeyspaceIdFlushEnabledMap:        make(map[common.StreamId]KeyspaceIdFlushEnabledMap),
-		streamKeyspaceIdDrainEnabledMap:        make(map[common.StreamId]KeyspaceIdDrainEnabledMap),
-		streamKeyspaceIdFlushDone:              make(map[common.StreamId]KeyspaceIdFlushDone),
-		streamKeyspaceIdForceRecovery:          make(map[common.StreamId]KeyspaceIdForceRecovery),
-		streamKeyspaceIdVbStatusMap:            make(map[common.StreamId]KeyspaceIdVbStatusMap),
-		streamKeyspaceIdVbRefCountMap:          make(map[common.StreamId]KeyspaceIdVbRefCountMap),
-		streamKeyspaceIdRestartVbTsMap:         make(map[common.StreamId]KeyspaceIdRestartVbTsMap),
-		streamStatus:                           make(map[common.StreamId]StreamStatus),
-		streamKeyspaceIdStatus:                 make(map[common.StreamId]KeyspaceIdStatus),
-		streamKeyspaceIdIndexCountMap:          make(map[common.StreamId]KeyspaceIdIndexCountMap),
-		streamKeyspaceIdRepairStopCh:           make(map[common.StreamId]KeyspaceIdRepairStopCh),
-		streamKeyspaceIdTimerStopCh:            make(map[common.StreamId]KeyspaceIdTimerStopCh),
-		streamKeyspaceIdLastPersistTime:        make(map[common.StreamId]KeyspaceIdLastPersistTime),
-		streamKeyspaceIdSkippedInMemTs:         make(map[common.StreamId]KeyspaceIdSkippedInMemTs),
-		streamKeyspaceIdHasInMemSnap:           make(map[common.StreamId]KeyspaceIdHasInMemSnap),
-		streamKeyspaceIdLastSnapMarker:         make(map[common.StreamId]KeyspaceIdLastSnapMarker),
-		streamKeyspaceIdLastMutationVbuuid:     make(map[common.StreamId]KeyspaceIdLastMutationVbuuid),
-		streamKeyspaceIdNeedsLastRollbackReset: make(map[common.StreamId]KeyspaceIdNeedsLastRollbackReset),
-		keyspaceIdRollbackTime:                 make(map[string]int64),
-		streamKeyspaceIdAsyncMap:               make(map[common.StreamId]KeyspaceIdStreamAsyncMap),
-		streamKeyspaceIdPendingMerge:           make(map[common.StreamId]KeyspaceIdPendingMerge),
-		streamKeyspaceIdLastBeginTime:          make(map[common.StreamId]KeyspaceIdStreamLastBeginTime),
-		streamKeyspaceIdLastRepairTimeMap:      make(map[common.StreamId]KeyspaceIdStreamLastRepairTimeMap),
-		streamKeyspaceIdKVRollbackTsMap:        make(map[common.StreamId]KeyspaceIdKVRollbackTsMap),
-		streamKeyspaceIdKVActiveTsMap:          make(map[common.StreamId]KeyspaceIdKVActiveTsMap),
-		streamKeyspaceIdKVPendingTsMap:         make(map[common.StreamId]KeyspaceIdKVPendingTsMap),
-		streamKeyspaceIdRepairStateMap:         make(map[common.StreamId]KeyspaceIdStreamRepairStateMap),
-		streamKeyspaceIdSessionId:              make(map[common.StreamId]KeyspaceIdSessionId),
-		streamKeyspaceIdCollectionId:           make(map[common.StreamId]KeyspaceIdCollectionId),
-		streamKeyspaceIdPastMinMergeTs:         make(map[common.StreamId]KeyspaceIdPastMinMergeTs),
-		streamKeyspaceIdVBMap:                  make(map[common.StreamId]KeyspaceIdVBMap),
-		streamKeyspaceIdEnableOSO:              make(map[common.StreamId]KeyspaceIdEnableOSO),
-		streamKeyspaceIdHWTOSO:                 make(map[common.StreamId]KeyspaceIdHWTOSO),
-		keyspaceIdPendBuildDebugLogTime:        make(map[string]uint64),
-		keyspaceIdFlushCheckDebugLogTime:       make(map[string]uint64),
-		streamKeyspaceIdLastKVSeqFetch:         make(map[common.StreamId]KeyspaceIdLastKVSeqFetch),
-		streamKeyspaceIdLastMergeCheckTime:     make(map[common.StreamId]KeyspaceIdLastMergeCheckTime),
-		streamKeyspaceIdBlockMergeForRecovery:  make(map[common.StreamId]KeyspaceIdBlockMergeForRecovery),
-		streamKeyspaceIdThrottleDebugLogTime:   make(map[common.StreamId]KeyspaceIdThrottleDebugLogTime),
-		streamKeyspaceIdThrottleDuration:       make(map[common.StreamId]KeyspaceIdThrottleDuration),
-		streamKeyspaceIdNumVBuckets:            make(map[common.StreamId]KeyspaceIdNumVBucketsMap),
-		streamKeyspaceIdAllowMarkFirstSnap:     make(map[common.StreamId]KeyspaceIdAllowMarkFirstSnap),
+		streamKeyspaceIdOpenTsMap:               make(map[common.StreamId]KeyspaceIdOpenTsMap),
+		streamKeyspaceIdStartTimeMap:            make(map[common.StreamId]KeyspaceIdStartTimeMap),
+		streamKeyspaceIdFlushEnabledMap:         make(map[common.StreamId]KeyspaceIdFlushEnabledMap),
+		streamKeyspaceIdDrainEnabledMap:         make(map[common.StreamId]KeyspaceIdDrainEnabledMap),
+		streamKeyspaceIdFlushDone:               make(map[common.StreamId]KeyspaceIdFlushDone),
+		streamKeyspaceIdForceRecovery:           make(map[common.StreamId]KeyspaceIdForceRecovery),
+		streamKeyspaceIdVbStatusMap:             make(map[common.StreamId]KeyspaceIdVbStatusMap),
+		streamKeyspaceIdVbRefCountMap:           make(map[common.StreamId]KeyspaceIdVbRefCountMap),
+		streamKeyspaceIdRestartVbTsMap:          make(map[common.StreamId]KeyspaceIdRestartVbTsMap),
+		streamStatus:                            make(map[common.StreamId]StreamStatus),
+		streamKeyspaceIdStatus:                  make(map[common.StreamId]KeyspaceIdStatus),
+		streamKeyspaceIdIndexCountMap:           make(map[common.StreamId]KeyspaceIdIndexCountMap),
+		streamKeyspaceIdRepairStopCh:            make(map[common.StreamId]KeyspaceIdRepairStopCh),
+		streamKeyspaceIdTimerStopCh:             make(map[common.StreamId]KeyspaceIdTimerStopCh),
+		streamKeyspaceIdLastPersistTime:         make(map[common.StreamId]KeyspaceIdLastPersistTime),
+		streamKeyspaceIdSkippedInMemTs:          make(map[common.StreamId]KeyspaceIdSkippedInMemTs),
+		streamKeyspaceIdHasInMemSnap:            make(map[common.StreamId]KeyspaceIdHasInMemSnap),
+		streamKeyspaceIdLastSnapMarker:          make(map[common.StreamId]KeyspaceIdLastSnapMarker),
+		streamKeyspaceIdLastMutationVbuuid:      make(map[common.StreamId]KeyspaceIdLastMutationVbuuid),
+		streamKeyspaceIdNeedsLastRollbackReset:  make(map[common.StreamId]KeyspaceIdNeedsLastRollbackReset),
+		keyspaceIdRollbackTime:                  make(map[string]int64),
+		streamKeyspaceIdAsyncMap:                make(map[common.StreamId]KeyspaceIdStreamAsyncMap),
+		streamKeyspaceIdPendingMerge:            make(map[common.StreamId]KeyspaceIdPendingMerge),
+		streamKeyspaceIdLastBeginTime:           make(map[common.StreamId]KeyspaceIdStreamLastBeginTime),
+		streamKeyspaceIdLastRepairTimeMap:       make(map[common.StreamId]KeyspaceIdStreamLastRepairTimeMap),
+		streamKeyspaceIdKVRollbackTsMap:         make(map[common.StreamId]KeyspaceIdKVRollbackTsMap),
+		streamKeyspaceIdKVActiveTsMap:           make(map[common.StreamId]KeyspaceIdKVActiveTsMap),
+		streamKeyspaceIdKVPendingTsMap:          make(map[common.StreamId]KeyspaceIdKVPendingTsMap),
+		streamKeyspaceIdRepairStateMap:          make(map[common.StreamId]KeyspaceIdStreamRepairStateMap),
+		streamKeyspaceIdSessionId:               make(map[common.StreamId]KeyspaceIdSessionId),
+		streamKeyspaceIdCollectionId:            make(map[common.StreamId]KeyspaceIdCollectionId),
+		streamKeyspaceIdPastMinMergeTs:          make(map[common.StreamId]KeyspaceIdPastMinMergeTs),
+		streamKeyspaceIdVBMap:                   make(map[common.StreamId]KeyspaceIdVBMap),
+		streamKeyspaceIdEnableOSO:               make(map[common.StreamId]KeyspaceIdEnableOSO),
+		streamKeyspaceIdHWTOSO:                  make(map[common.StreamId]KeyspaceIdHWTOSO),
+		keyspaceIdPendBuildDebugLogTime:         make(map[string]uint64),
+		keyspaceIdFlushCheckDebugLogTime:        make(map[string]uint64),
+		streamKeyspaceIdLastKVSeqFetch:          make(map[common.StreamId]KeyspaceIdLastKVSeqFetch),
+		streamKeyspaceIdLastMergeCheckTime:      make(map[common.StreamId]KeyspaceIdLastMergeCheckTime),
+		streamKeyspaceIdBlockMergeForRecovery:   make(map[common.StreamId]KeyspaceIdBlockMergeForRecovery),
+		streamKeyspaceIdThrottleDebugLogTime:    make(map[common.StreamId]KeyspaceIdThrottleDebugLogTime),
+		streamKeyspaceIdMergePhaseStartTime:     make(map[common.StreamId]KeyspaceIdMergePhaseStartTime),
+		streamKeyspaceIdMergePhaseTimerInterval: make(map[common.StreamId]KeyspaceIdMergePhaseTimerInterval),
+		streamKeyspaceIdThrottleDuration:        make(map[common.StreamId]KeyspaceIdThrottleDuration),
+		streamKeyspaceIdNumVBuckets:             make(map[common.StreamId]KeyspaceIdNumVBucketsMap),
+		streamKeyspaceIdAllowMarkFirstSnap:      make(map[common.StreamId]KeyspaceIdAllowMarkFirstSnap),
 	}
 
 	return ss
@@ -412,6 +422,12 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	keyspaceIdThrottleDebugLogTime := make(KeyspaceIdThrottleDebugLogTime)
 	ss.streamKeyspaceIdThrottleDebugLogTime[streamId] = keyspaceIdThrottleDebugLogTime
 
+	keyspaceIdMergePhaseStartTime := make(KeyspaceIdMergePhaseStartTime)
+	ss.streamKeyspaceIdMergePhaseStartTime[streamId] = keyspaceIdMergePhaseStartTime
+
+	keyspaceIdMergePhaseTimerInterval := make(KeyspaceIdMergePhaseTimerInterval)
+	ss.streamKeyspaceIdMergePhaseTimerInterval[streamId] = keyspaceIdMergePhaseTimerInterval
+
 	keyspaceIdThrottleDuration := make(KeyspaceIdThrottleDuration)
 	ss.streamKeyspaceIdThrottleDuration[streamId] = keyspaceIdThrottleDuration
 
@@ -555,6 +571,8 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdThrottleDebugLogTime[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdThrottleDuration[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdNumVBuckets[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdMergePhaseStartTime[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdMergePhaseTimerInterval[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdAllowMarkFirstSnap[streamId], keyspaceId)
 
 	if bs, ok := ss.streamKeyspaceIdStatus[streamId]; ok && bs != nil {

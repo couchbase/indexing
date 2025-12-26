@@ -1,0 +1,333 @@
+{
+  "placement": [
+    {
+      "nodeId": "127.0.0.1:9001",
+      "nodeUUID": "fdb15192216a984a53fc19de249e0ba4",
+      "indexerId": "Node1",
+      "restUrl": "",
+      "serverGroup": "",
+      "memUsage": 0,
+      "cpuUsage": 1,
+      "memOverhead": 0,
+      "dataSize": 5242880,
+      "memQuota": 104857600,
+      "nodeVersion": 800,
+      "minShardCapacity": 2,
+      "maxInstancesPerShard": 100,
+      "maxDiskUsagePerShard": 268435456000,
+      "diskUsageThreshold": 50.0,
+      "indexes": [
+        {
+          "defnId": 1111,
+          "instId": 11110,
+          "partnId": 0,
+          "name": "index1",
+          "bucket": "bucket1",
+          "host": null,
+          "avgArrSize": 0,
+          "avgArrKeySize": 0,
+          "mutationRate": 0,
+          "scanRate": 0,
+          "memUsage": 0,
+          "cpuUsage": 1,
+          "memOverhead": 0,
+          "instance": {
+            "Defn": {
+              "name": "index1",
+              "defnId": 1111,
+              "bucket": "bucket1",
+              "numReplica": 3
+            },
+            "replicaId": 0
+          },
+          "alternateShardIds": [
+            "1234-0-0",
+            "1234-0-1"
+          ],
+          "initialAlternateShardIds": [
+            "1234-0-0",
+            "1234-0-1"
+          ]
+        },
+        {
+          "defnId": 2222,
+          "instId": 22220,
+          "partnId": 0,
+          "name": "index2",
+          "bucket": "bucket1",
+          "host": null,
+          "avgArrSize": 0,
+          "avgArrKeySize": 0,
+          "mutationRate": 0,
+          "scanRate": 0,
+          "memUsage": 0,
+          "cpuUsage": 1,
+          "memOverhead": 0,
+          "instance": {
+            "Defn": {
+              "name": "index2",
+              "defnId": 2222,
+              "bucket": "bucket1",
+              "numReplica": 1
+            },
+            "replicaId": 0
+          },
+          "alternateShardIds": [
+            "1234-0-0",
+            "1234-0-1"
+          ],
+          "initialAlternateShardIds": [
+            "1234-0-0",
+            "1234-0-1"
+          ]
+        },
+        {
+          "defnId": 3333,
+          "instId": 33330,
+          "partnId": 0,
+          "name": "index3",
+          "bucket": "bucket1",
+          "host": null,
+          "avgArrSize": 0,
+          "avgArrKeySize": 0,
+          "mutationRate": 0,
+          "scanRate": 0,
+          "memUsage": 0,
+          "cpuUsage": 1,
+          "memOverhead": 0,
+          "instance": {
+            "Defn": {
+              "name": "index3",
+              "defnId": 3333,
+              "bucket": "bucket1",
+              "numReplica": 0
+            },
+            "replicaId": 0
+          },
+          "alternateShardIds": [
+            "1234-0-0",
+            "1234-0-1"
+          ],
+          "initialAlternateShardIds": [
+            "1234-0-0",
+            "1234-0-1"
+          ]
+        },
+        {
+          "defnId": 4444,
+          "instId": 44440,
+          "partnId": 0,
+          "name": "index4",
+          "bucket": "bucket1",
+          "host": null,
+          "avgArrSize": 0,
+          "avgArrKeySize": 0,
+          "mutationRate": 0,
+          "scanRate": 0,
+          "memUsage": 0,
+          "cpuUsage": 1,
+          "memOverhead": 0,
+          "instance": {
+            "Defn": {
+              "name": "index4",
+              "defnId": 4444,
+              "bucket": "bucket1",
+              "numReplica": 0
+            },
+            "replicaId": 0
+          },
+          "alternateShardIds": [
+            "1234-0-0",
+            "1234-0-1"
+          ],
+          "initialAlternateShardIds": [
+            "1234-0-0",
+            "1234-0-1"
+          ]
+        }
+      ]
+    },
+    {
+      "nodeId": "127.0.0.1:9002",
+      "nodeUUID": "abc15192216a984a53fc19de249e0ba4",
+      "indexerId": "Node2",
+      "restUrl": "",
+      "serverGroup": "",
+      "memUsage": 0,
+      "cpuUsage": 0,
+      "memOverhead": 0,
+      "nodeVersion": 800,
+      "minShardCapacity": 2,
+      "maxInstancesPerShard": 100,
+      "maxDiskUsagePerShard": 268435456000,
+      "diskUsageThreshold": 50.0,
+      "indexes": [
+        {
+          "defnId": 1111,
+          "instId": 11111,
+          "partnId": 0,
+          "name": "index1",
+          "bucket": "bucket1",
+          "host": null,
+          "avgArrSize": 0,
+          "avgArrKeySize": 0,
+          "mutationRate": 0,
+          "scanRate": 0,
+          "memUsage": 0,
+          "cpuUsage": 1,
+          "memOverhead": 0,
+          "instance": {
+            "Defn": {
+              "name": "index1",
+              "defnId": 1111,
+              "bucket": "bucket1",
+              "numReplica": 3
+            },
+            "replicaId": 1
+          },
+          "alternateShardIds": [
+            "1234-1-0",
+            "1234-1-1"
+          ],
+          "initialAlternateShardIds": [
+            "1234-1-0",
+            "1234-1-1"
+          ]
+        },
+        {
+          "defnId": 2222,
+          "instId": 22221,
+          "partnId": 0,
+          "name": "index2",
+          "bucket": "bucket1",
+          "host": null,
+          "avgArrSize": 0,
+          "avgArrKeySize": 0,
+          "mutationRate": 0,
+          "scanRate": 0,
+          "memUsage": 0,
+          "cpuUsage": 1,
+          "memOverhead": 0,
+          "instance": {
+            "Defn": {
+              "name": "index2",
+              "defnId": 2222,
+              "bucket": "bucket1",
+              "numReplica": 1
+            },
+            "replicaId": 1
+          },
+          "alternateShardIds": [
+            "1234-1-0",
+            "1234-1-1"
+          ],
+          "initialAlternateShardIds": [
+            "1234-1-0",
+            "1234-1-1"
+          ]
+        }
+      ]
+    },
+    {
+      "nodeId": "127.0.0.1:9003",
+      "nodeUUID": "ddd15192216a984a53fc19de249e0ba6",
+      "indexerId": "Node3",
+      "restUrl": "",
+      "serverGroup": "",
+      "memUsage": 0,
+      "cpuUsage": 0,
+      "memOverhead": 0,
+      "nodeVersion": 800,
+      "minShardCapacity": 2,
+      "maxInstancesPerShard": 100,
+      "maxDiskUsagePerShard": 268435456000,
+      "diskUsageThreshold": 50.0,
+      "indexes": [
+        {
+          "defnId": 1111,
+          "instId": 11112,
+          "partnId": 0,
+          "name": "index1",
+          "bucket": "bucket1",
+          "host": null,
+          "avgArrSize": 0,
+          "avgArrKeySize": 0,
+          "mutationRate": 0,
+          "scanRate": 0,
+          "memUsage": 0,
+          "cpuUsage": 1,
+          "memOverhead": 0,
+          "instance": {
+            "Defn": {
+              "name": "index1",
+              "defnId": 1111,
+              "bucket": "bucket1",
+              "numReplica": 3
+            },
+            "replicaId": 2
+          },
+          "alternateShardIds": [
+            "1234-2-0",
+            "1234-2-1"
+          ],
+          "initialAlternateShardIds": [
+            "1234-2-0",
+            "1234-2-1"
+          ]
+        }
+      ]
+    },
+    {
+      "nodeId": "127.0.0.1:9004",
+      "nodeUUID": "eeee15192216a984a53fc19de249e0ba6",
+      "indexerId": "Node4",
+      "restUrl": "",
+      "serverGroup": "",
+      "memUsage": 0,
+      "cpuUsage": 0,
+      "memOverhead": 0,
+      "nodeVersion": 800,
+      "minShardCapacity": 2,
+      "maxInstancesPerShard": 100,
+      "maxDiskUsagePerShard": 268435456000,
+      "diskUsageThreshold": 50.0,
+      "indexes": [
+        {
+          "defnId": 1111,
+          "instId": 11113,
+          "partnId": 0,
+          "name": "index1",
+          "bucket": "bucket1",
+          "host": null,
+          "avgArrSize": 0,
+          "avgArrKeySize": 0,
+          "mutationRate": 0,
+          "scanRate": 0,
+          "memUsage": 0,
+          "cpuUsage": 1,
+          "memOverhead": 0,
+          "instance": {
+            "Defn": {
+              "name": "index1",
+              "defnId": 1111,
+              "bucket": "bucket1",
+              "numReplica": 3
+            },
+            "replicaId": 3
+          },
+          "alternateShardIds": [
+            "1234-3-0",
+            "1234-3-1"
+          ],
+          "initialAlternateShardIds": [
+            "1234-3-0",
+            "1234-3-1"
+          ]
+        }
+      ]
+    }
+  ],
+  "memQuota": 100000000000,
+  "cpuQuota": 30,
+  "isLive": true
+}

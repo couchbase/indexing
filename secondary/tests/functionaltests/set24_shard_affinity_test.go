@@ -1419,6 +1419,215 @@ init:
 	}
 }
 
+func TestStaggeredReplicaCount(t *testing.T) {
+	skipShardAffinityTests(t)
+
+	checkExpectedReplicaCountMap := func(expectedReplicaMap map[string]int) (bool, string) {
+		actualReplicaMap := make(map[string]int)
+		statuses, err := getIndexStatusFromIndexer()
+		errStr := strings.Builder{}
+
+		tc.HandleError(err, "failed to get index status from indexer")
+		for _, status := range statuses.Status {
+			if status.Scope == "_system" && (status.Collection == "_default" || status.Collection == "_query") {
+				continue
+			}
+
+			if _, ok := actualReplicaMap[status.IndexName]; !ok {
+				actualReplicaMap[status.IndexName] = 0
+			}
+			actualReplicaMap[status.IndexName] += 1
+		}
+
+		for name, expectedCount := range expectedReplicaMap {
+			if val, ok := actualReplicaMap[name]; !ok {
+				errStr.WriteString(fmt.Sprintf("\n\tDid not find idx:%v in the status", name))
+				continue
+			} else if val != expectedCount {
+				errStr.WriteString(
+					fmt.Sprintf("\n\tNum replica did not match. idx:%v, expected:%v, found:%v",
+						name, expectedCount, val),
+				)
+			}
+		}
+
+		if errStr.Len() != 0 {
+			return false, errStr.String()
+		}
+		return true, ""
+	}
+
+	log.Println("*********Reset cluster*********")
+	resetCluster(t)
+
+	var err error
+	log.Printf("******** Updating settings: enable_shard_affinity=true, minShardsPerNode=2, shardLimitPerNode=2 **********")
+	configChanges := map[string]interface{}{
+		"indexer.settings.enable_shard_affinity":       true,
+		"indexer.plasma.minShardsPerNode":              2,
+		"indexer.plasma.shardLimitPerNode":             2,
+		"indexer.planner.honourNodesInDefn":            true,
+		"indexer.planner.internal.min_shards_per_node": 2,
+	}
+	err = secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	tc.HandleError(err, fmt.Sprintf("Failed to change config %v", configChanges))
+
+	defer func() {
+		configChanges := map[string]interface{}{
+			"indexer.settings.enable_shard_affinity":       false,
+			"indexer.plasma.minShardsPerNode":              10,
+			"indexer.plasma.shardLimitPerNode":             200,
+			"indexer.planner.internal.min_shards_per_node": 6,
+			"indexer.planner.honourNodesInDefn":            false,
+		}
+		err := secondaryindex.ChangeMultipleIndexerSettings(configChanges, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+		tc.HandleError(err, fmt.Sprintf("Failed to reset config %v", configChanges))
+	}()
+
+	t.Run("TestStaggeredReplica_3_1_1_Replica", func(subt *testing.T) {
+
+		err = clusterutility.SetDataAndIndexQuota(clusterconfig.Nodes[0], clusterconfig.Username, clusterconfig.Password, "1500", SHARD_AFFINITY_INDEXER_QUOTA)
+		tc.HandleError(err, "Failed to set memory quota in cluster")
+		// wait for indexer to come up as the above step will cause a restart
+		secondaryindex.WaitTillAllIndexNodesActive(kvaddress, defaultIndexActiveTimeout)
+
+		err = secondaryindex.WaitForSystemIndices(kvaddress, 0)
+		tc.HandleError(err, "Waiting for indices in system scope")
+
+		addNodeAndRebalance(clusterconfig.Nodes[2], "index", subt)
+		addNodeAndRebalance(clusterconfig.Nodes[3], "index", subt)
+
+		status := getClusterStatus()
+		if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+			!isNodeIndex(status, clusterconfig.Nodes[2]) ||
+			!isNodeIndex(status, clusterconfig.Nodes[3]) {
+			t.Fatalf("%v Unexpected cluster configuration: %v", subt.Name(), status)
+		}
+
+		printClusterConfig(subt.Name(), "entry")
+
+		if !shouldTestWithShardDealer {
+			configChanges["indexer.planner.use_shard_dealer"] = true
+		}
+
+		log.Printf("********Create Docs and Indices**********")
+		err = secondaryindex.DropAllNonSystemIndexes(clusterconfig.Nodes[1])
+		tc.HandleError(err, "Failed to drop all indices")
+
+		numDocs := 1000
+		CreateDocs(numDocs)
+
+		var indexPrefix = strings.ReplaceAll(subt.Name(), "/", "_")
+
+		// Create idx1 on Node 2
+		indexName1 := indexPrefix + "_idx_1"
+		n1qlStmt := fmt.Sprintf("create index %v on `%v`(age) with {\"nodes\": [\"%v\"]}", indexName1, BUCKET, clusterconfig.Nodes[2])
+		executeN1qlStmt(n1qlStmt, BUCKET, subt.Name(), subt)
+		log.Printf("%v %v index is now active", subt.Name(), indexName1)
+
+		// Expand replica_count to 2
+		n1qlStmt = fmt.Sprintf("alter index `%v`.%v with {\"action\":\"replica_count\", \"num_replica\":2}", BUCKET, indexName1)
+		log.Printf("Executing alter index command: %v", n1qlStmt)
+		_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, BUCKET, n1qlStmt, false, nil)
+		FailTestIfError(err, "Error in executing n1ql statement", subt)
+
+		// Create idx2 on Node 2
+		indexName2 := indexPrefix + "_idx_2"
+		n1qlStmt = fmt.Sprintf("create index %v on `%v`(name) with {\"nodes\": [\"%v\"]}", indexName2, BUCKET, clusterconfig.Nodes[2])
+		executeN1qlStmt(n1qlStmt, BUCKET, subt.Name(), subt)
+		log.Printf("%v %v index is now active", subt.Name(), indexName2)
+
+		// Create idx3 on Node 2
+		indexName3 := indexPrefix + "_idx_3"
+		n1qlStmt = fmt.Sprintf("create index %v on `%v`(city) with {\"nodes\": [\"%v\"]}", indexName3, BUCKET, clusterconfig.Nodes[2])
+		executeN1qlStmt(n1qlStmt, BUCKET, subt.Name(), subt)
+		log.Printf("%v %v index is now active", subt.Name(), indexName3)
+
+		log.Printf("******** Remove Node 2 and Rebalance Out **********")
+		removeNode(clusterconfig.Nodes[2], subt)
+
+		performClusterStateValidation(subt, true, tc.MISSING_REPLICA_INVALID_CLUSTER_STATE)
+
+		expectedReplica := map[string]int{
+			indexName1: 2,
+			indexName2: 1,
+			indexName3: 1,
+		}
+
+		if pass, errStr := checkExpectedReplicaCountMap(expectedReplica); !pass {
+			subt.Fatalf("%v Expected replica count where not found. errStr:%v", subt.Name(), errStr)
+		}
+	})
+
+	t.Run("TestStaggeredReplica_3_2_1_Replica", func(subt *testing.T) {
+
+		err = secondaryindex.DropAllNonSystemIndexes(clusterconfig.Nodes[1])
+		tc.HandleError(err, "Failed to drop all indices")
+
+		// Add back Node 2
+		addNodeAndRebalance(clusterconfig.Nodes[2], "index", subt)
+
+		status := getClusterStatus()
+		if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+			!isNodeIndex(status, clusterconfig.Nodes[2]) ||
+			!isNodeIndex(status, clusterconfig.Nodes[3]) {
+			subt.Fatalf("%v Unexpected cluster configuration: %v", subt.Name(), status)
+		}
+
+		printClusterConfig(subt.Name(), "entry")
+
+		if !shouldTestWithShardDealer {
+			configChanges["indexer.planner.use_shard_dealer"] = true
+		}
+
+		var indexPrefix = strings.ReplaceAll(subt.Name(), "/", "_")
+
+		// Create idx1 on Node 1
+		indexName1 := indexPrefix + "_idx_1"
+		n1qlStmt := fmt.Sprintf("create index %v on `%v`(age) with {\"nodes\": [\"%v\"]}", indexName1, BUCKET, clusterconfig.Nodes[2])
+		executeN1qlStmt(n1qlStmt, BUCKET, subt.Name(), subt)
+		log.Printf("%v %v index is now active", subt.Name(), indexName1)
+
+		// Expand idx1 replica_count to 2
+		n1qlStmt = fmt.Sprintf("alter index `%v`.%v with {\"action\":\"replica_count\", \"num_replica\":2}", BUCKET, indexName1)
+		log.Printf("Executing alter index command: %v", n1qlStmt)
+		_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, BUCKET, n1qlStmt, false, nil)
+		FailTestIfError(err, "Error in executing n1ql statement", subt)
+
+		// Create idx2 on Node 1
+		indexName2 := indexPrefix + "_idx_2"
+		n1qlStmt = fmt.Sprintf("create index %v on `%v`(name) with {\"nodes\": [\"%v\"]}", indexName2, BUCKET, clusterconfig.Nodes[2])
+		executeN1qlStmt(n1qlStmt, BUCKET, subt.Name(), subt)
+		log.Printf("%v %v index is now active", subt.Name(), indexName2)
+
+		// Expand idx2 replica_count to 1
+		n1qlStmt = fmt.Sprintf("alter index `%v`.%v with {\"action\":\"replica_count\", \"num_replica\":1}", BUCKET, indexName2)
+		log.Printf("Executing alter index command: %v", n1qlStmt)
+		_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, BUCKET, n1qlStmt, false, nil)
+		FailTestIfError(err, "Error in executing n1ql statement", subt)
+
+		// Create idx3 on Node 1
+		indexName3 := indexPrefix + "_idx_3"
+		n1qlStmt = fmt.Sprintf("create index %v on `%v`(city) with {\"nodes\": [\"%v\"]}", indexName3, BUCKET, clusterconfig.Nodes[2])
+		executeN1qlStmt(n1qlStmt, BUCKET, subt.Name(), subt)
+		log.Printf("%v %v index is now active on Node 2.", subt.Name(), indexName3)
+
+		log.Printf("******** Remove Node 2 and Rebalance Out **********")
+		removeNode(clusterconfig.Nodes[2], subt)
+
+		performClusterStateValidation(subt, true, tc.MISSING_REPLICA_INVALID_CLUSTER_STATE)
+
+		expectedReplica := map[string]int{
+			indexName1: 2,
+			indexName2: 1,
+			indexName3: 1,
+		}
+		if pass, errStr := checkExpectedReplicaCountMap(expectedReplica); !pass {
+			subt.Fatalf("%v Expected replica count where not found. errStr:%v", subt.Name(), errStr)
+		}
+	})
+}
+
 func TestShardRebalanceSetupCluster(t *testing.T) {
 	resetCluster(t)
 

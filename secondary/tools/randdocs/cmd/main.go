@@ -24,9 +24,13 @@ func main() {
 	GenVectors := flag.Bool("genVectors", false, "Set to true to generate vector data")
 	UseSIFTSmall := flag.Bool("useSIFTSmall", false, "Set to true to use SIFT10K dataset")
 	SIFTFVecsFile := flag.String("siftfvecsfile", "./siftsmall/siftsmall_base.fvecs", "path of fvecs file")
+	UseSparseSmall := flag.Bool("useSparseSmall", false, "Set to true to use sparse-small dataset")
+	SparseCSRFile := flag.String("sparsecsrfile", "./sparsesmall/base_small.csr", "path of CSR sparse matrix file")
 	SkipNormalData := flag.Bool("skipNormalData", false, "set to true to avoid normal data like email etc..")
 	VecDim := flag.Int("dimension", 128, "Size of the vector array. Default is 128")
 	VecSeed := flag.Int("vecSeed", 1234, "Seed to be used for random number generator")
+	GenSparseVectors := flag.Bool("genSparseVectors", false, "Set to true to generate random sparse vector data")
+	SparseVecDim := flag.Int("sparseVecDim", 0, "Number of non-zero dimensions for sparse vectors. 0 means variable")
 
 	flag.Parse()
 	if *help {
@@ -100,8 +104,22 @@ func main() {
 		cfg.SIFTFVecsFile = *SIFTFVecsFile
 	}
 
+	if *UseSparseSmall == true {
+		cfg.UseSparseSmall = true
+	}
+
+	if *SparseCSRFile != "" {
+		cfg.SparseCSRFile = *SparseCSRFile
+	}
+
 	if *SkipNormalData == true {
 		cfg.SkipNormalData = true
+	}
+
+	if *GenSparseVectors == true {
+		cfg.GenSparseVectors = true
+		cfg.SparseVecDim = *SparseVecDim
+		cfg.VecSeed = *VecSeed
 	}
 
 	randdocs.Run(cfg)

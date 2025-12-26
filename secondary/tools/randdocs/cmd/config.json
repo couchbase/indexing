@@ -13,5 +13,6 @@
     "DocsNumOffset": 0,
     "OpsPerSec": 100000,
     "VecDimension": 128,
-    "UseSIFTSmall": false
+    "UseSIFTSmall": false,
+    "UseSparseSmall": false
 }

@@ -94,3 +94,56 @@ func generateVectors(dimension int, seed int) []float32 {
 
 	return vecs
 }
+
+func generateSparseVector(dimension int, seed int) []interface{} {
+	rng := rand.New(rand.NewSource(int64(seed)))
+
+	// Determine the number of non-zero dimensions
+	var numDimensions int
+	if dimension == 0 {
+		// Variable dimensions: random between 1 and 100
+		numDimensions = 1 + rng.Intn(100)
+	} else {
+		// Fixed dimensions
+		numDimensions = dimension
+	}
+
+	// Maximum index range for sparse vector (e.g., up to 10000 possible positions)
+	maxIndex := int32(10000)
+
+	// Generate unique random indices
+	indexSet := make(map[int32]struct{})
+	for len(indexSet) < numDimensions {
+		idx := int32(rng.Intn(int(maxIndex)))
+		indexSet[idx] = struct{}{}
+	}
+
+	// Convert set to sorted slice
+	indices := make([]int32, 0, numDimensions)
+	for idx := range indexSet {
+		indices = append(indices, idx)
+	}
+
+	// Sort indices for proper sparse vector representation
+	sortInt32Slice(indices)
+
+	// Generate random values for each index
+	values := make([]float32, numDimensions)
+	for i := 0; i < numDimensions; i++ {
+		values[i] = rng.Float32()
+	}
+
+	return SparseVectorToArrays(SparseVector{
+		Indices: indices,
+		Values:  values,
+	})
+}
+
+func sortInt32Slice(s []int32) {
+	// Simple insertion sort for small slices
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+}

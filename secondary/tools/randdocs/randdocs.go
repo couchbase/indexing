@@ -37,6 +37,12 @@ type Config struct {
 	SIFTFVecsFile  string
 	SkipNormalData bool
 
+	// Sparse Vectors
+	GenSparseVectors bool
+	SparseVecDim     int
+	UseSparseSmall   bool
+	SparseCSRFile    string
+
 	// Seed that should be used to generate random vectors
 	// Default is 1234
 	VecSeed int
@@ -91,6 +97,16 @@ func Run(cfg Config) error {
 		sd = OpenSiftData(cfg.SIFTFVecsFile)
 	}
 
+	var sparseData *SparseData
+	if cfg.UseSparseSmall {
+		var sparseErr error
+		sparseData, sparseErr = OpenSparseData(cfg.SparseCSRFile)
+		if sparseErr != nil {
+			fmt.Printf("Error opening sparse data file: %v\n", sparseErr)
+			return sparseErr
+		}
+	}
+
 	var cid string
 	if cfg.Scope != "" && cfg.Collection != "" {
 		cid, err = common.GetCollectionID(cfg.ClusterAddr, cfg.Bucket, cfg.Scope, cfg.Collection)
@@ -132,8 +148,23 @@ func Run(cfg Config) error {
 						}
 					}
 
+					if cfg.UseSparseSmall {
+						docid, value, err = getSparseData(cfg, sparseData, &cnt)
+						if err != nil {
+							return
+						}
+					}
+
 					if cfg.GenVectors {
 						value["description"] = generateVectors(cfg.VecDimension, cfg.VecSeed)
+					}
+
+					if cfg.GenSparseVectors {
+						key := "sparse_random"
+						if cfg.SparseVecDim > 0 {
+							key = "sparse_dim"
+						}
+						value[key] = generateSparseVector(cfg.SparseVecDim, cfg.VecSeed)
 					}
 
 					if cfg.JunkFieldSize != 0 {

@@ -1141,7 +1141,7 @@ func (m *RestoreContext) placeIndex(enableShardAffinity, useShardDealer bool, bi
 
 	// place indexes using regular rebalance
 	solution, err := planner.ExecuteRebalanceWithOptions(m.current, nil, true, "", "", 0, -1, -1, false, newNodeIds,
-		binSize, enableShardAffinity, useShardDealer)
+		binSize, enableShardAffinity, useShardDealer, false)
 	if err == nil {
 
 		populateAltIdsForNonMovingIndexes(enableShardAffinity, solution)

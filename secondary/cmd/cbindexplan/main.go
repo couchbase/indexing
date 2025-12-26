@@ -176,6 +176,7 @@ var gEjectedNode string
 var gGetUsage bool
 var gNumNewReplica int
 var gEnableShardAffinity bool
+var gRebalanceSummary bool
 
 //////////////////////////////////////////////////////////////
 // Initialization
@@ -217,6 +218,9 @@ func init() {
 
 	// enable shard affinity when creating/moving/repairing indexes
 	flag.BoolVar(&gEnableShardAffinity, "enableShardAffinity", true, "flag to enable shard affinity during the plan phase of index creation/rebalance/replica repair/ restore")
+
+	// rebalance summary - prints rebalance summary and statistics, applicable only with rebalance command
+	flag.BoolVar(&gRebalanceSummary, "rebalanceSummary", false, "prints rebalance summary. Applicable only when command is rebalance.")
 }
 
 func main() {
@@ -224,6 +228,12 @@ func main() {
 	logging.SetLogLevel(logging.Level(strings.ToUpper(gLogLevel)))
 
 	if gHelp {
+		usage()
+		return
+	}
+
+	if gRebalanceSummary && gCommand != string(planner.CommandRebalance) {
+		logging.Fatalf("Invalid argument: option 'rebalanceSummary' is only applicable when command is rebalance.")
 		usage()
 		return
 	}
@@ -321,7 +331,7 @@ func main() {
 				}
 			}
 		}
-		_, err := planner.ExecuteRebalanceWithOptions(plan, nil, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, deletedNodes, binSize, gEnableShardAffinity, false)
+		_, err := planner.ExecuteRebalanceWithOptions(plan, nil, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, deletedNodes, binSize, gEnableShardAffinity, false, gRebalanceSummary)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return
