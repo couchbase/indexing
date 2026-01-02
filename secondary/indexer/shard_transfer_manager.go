@@ -1079,7 +1079,7 @@ func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
 			_, storeEngineDir := c.GetStorageDirs(stm.config, c.GetStorageEngineForIndexDefn(&inst.Defn))
 			destPath := filepath.Join(
 				storeEngineDir,
-				CodebookPath(&inst, partnId, SliceId(0)),
+				CodebookPath2(&inst, partnId, SliceId(0)),
 			)
 			codebookMap[inst.InstId][partnId] = destPath
 			codebookPaths = append(codebookPaths, destPath)
@@ -1170,7 +1170,7 @@ func (stm *ShardTransferManager) RestoreCodebook(
 ) error {
 
 	storageDir, storeEngineDir := c.GetStorageDirs(stm.config, c.GetStorageEngineForIndexDefn(&vectorInst.Defn))
-	relIdxPath := IndexPath(&vectorInst, partnId, SliceId(0))
+	relIdxPath := IndexPath2(&vectorInst, partnId, SliceId(0))
 
 	// For shared instances create the index directory. For dedicated instances Shard Restore will have already created
 	// the index folder
@@ -1225,7 +1225,7 @@ func (stm *ShardTransferManager) RestoreCodebook(
 			"instId: %v, realInstId:%v, partnId: %v, sliceId: %v, srcPath:%v, destPath:%v. err:%v ",
 			vectorInst.InstId, vectorInst.RealInstId, partnId, SliceId(0),
 			filepath.Join(srcRoot, genCodebookFileStagingName(destFilePath)),
-			CodebookPath(&vectorInst, partnId, SliceId(0)), err)
+			CodebookPath2(&vectorInst, partnId, SliceId(0)), err)
 		return err
 	}
 

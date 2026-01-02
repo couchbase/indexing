@@ -2132,7 +2132,7 @@ func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid strin
 					err2 := RemoveCodebookDir(storeEngineDir, &inst, partnId, SliceId(0))
 					if err2 != nil {
 						logging.Errorf("RebalanceServiceManager::cleanupLocalIndexInstsAndShardToken Error observed while cleaning up codebook dir"+
-							"for path:%v, err: %v", IndexPath(&inst, partnId, SliceId(0)), err2)
+							"for path:%v, err: %v", IndexPath2(&inst, partnId, SliceId(0)), err2)
 					}
 				}
 			}

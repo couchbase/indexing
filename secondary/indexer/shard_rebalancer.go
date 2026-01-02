@@ -3558,7 +3558,7 @@ func (sr *ShardRebalancer) getBuildProgressFromStatus(status *IndexStatusRespons
 		// In either case, count will be 0 after calling getBuildProgress(instId) and it will find progress
 		// using realInstId instead.
 		realInstProgress, count := sr.getBuildProgress(status, instId, realInstId, inst.Defn,
-			 tt.DestId, shouldLog)
+			tt.DestId, shouldLog)
 		if count == 0 {
 			realInstProgress, count = sr.getBuildProgress(status, realInstId, realInstId,
 				inst.Defn, tt.DestId, shouldLog)
@@ -4903,7 +4903,7 @@ func getCodebookPaths(tt *c.TransferToken) (codebookPaths []string) {
 		if idxInst.Defn.IsVectorIndex {
 			for _, partnId := range idxInst.Defn.Partitions {
 
-				codebookPath := CodebookPath(&idxInst, partnId, SliceId(0))
+				codebookPath := CodebookPath2(&idxInst, partnId, SliceId(0))
 				if tt.TransferMode == common.TokenTransferModeCopy { // if it is a replica repair, the codebook source will be from the sibling index
 					for _, renameMap := range tt.InstRenameMap {
 						currCodebookPath, newCodebookPath := generateCodebookRenamePaths(renameMap, idxInst.Defn.Bucket, idxInst.Defn.Name, partnId, idxInst.InstId)

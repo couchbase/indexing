@@ -85,6 +85,14 @@ func IndexPath(inst *common.IndexInst, partnId common.PartitionId, sliceId Slice
 	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
 }
 
+func IndexPath2(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
+	instId := inst.InstId
+	if inst.IsProxy() {
+		instId = inst.RealInstId
+	}
+	return fmt.Sprintf("%d_%d.index", instId, partnId)
+}
+
 func CodebookPath(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
 	indexPath := IndexPath(inst, partnId, sliceId)
 	return filepath.Join(indexPath, CODEBOOK_DIR, CodebookName(inst, partnId, sliceId))
@@ -98,6 +106,16 @@ func CodebookName(inst *common.IndexInst, partnId common.PartitionId, sliceId Sl
 	return fmt.Sprintf("%s_%s_%d_%d.codebook", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
 }
 
+func CodebookPath2(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
+	indexPath := IndexPath2(inst, partnId, sliceId)
+	instId := inst.InstId
+	if inst.IsProxy() {
+		instId = inst.RealInstId
+	}
+	codebookName := fmt.Sprintf("%d_%d.codebook", instId, partnId)
+	return filepath.Join(indexPath, CODEBOOK_DIR, codebookName)
+}
+
 func InitCodebookDir(
 	storeEngineDir string, idxInst *common.IndexInst,
 	partnId common.PartitionId, sliceId SliceId,
@@ -105,7 +123,7 @@ func InitCodebookDir(
 	// Construct codebookDirPath path
 	codebookDirPath := filepath.Join(
 		storeEngineDir,
-		IndexPath(idxInst, partnId, sliceId),
+		IndexPath2(idxInst, partnId, sliceId),
 		CODEBOOK_DIR,
 	)
 
@@ -129,9 +147,18 @@ func RemoveCodebookDir(
 
 	codebookDirPath := filepath.Join(
 		storeEngineDir,
+		IndexPath2(idxInst, partnId, sliceId),
+		CODEBOOK_DIR,
+	)
+
+	oldCodebookDirPath := filepath.Join(
+		storeEngineDir,
 		IndexPath(idxInst, partnId, sliceId),
 		CODEBOOK_DIR,
 	)
+
+	// Delete the oldCodebookDirPath too but it may not exist so don't return error if remove fails
+	iowrap.Os_RemoveAll(oldCodebookDirPath)
 
 	return iowrap.Os_RemoveAll(codebookDirPath)
 }
@@ -193,6 +220,44 @@ func GetInstIdPartnIdFromPath(idxPath string) (common.IndexInstId,
 	}
 
 	partnComponents := strings.Split(pathComponents[len(pathComponents)-1], ".")
+	if len(partnComponents) != 2 {
+		err := errors.New(fmt.Sprintf("Malformed index path %v", idxPath))
+		return common.IndexInstId(0), common.PartitionId(0), err
+	}
+
+	strPartnId := partnComponents[0]
+	partnId, err := strconv.ParseUint(strPartnId, 10, 64)
+	if err != nil {
+		return common.IndexInstId(0), common.PartitionId(0), err
+	}
+
+	return common.IndexInstId(instId), common.PartitionId(partnId), nil
+}
+
+func GetInstIdPartnIdFromPath2(idxPath string) (common.IndexInstId,
+	common.PartitionId, error) {
+
+	idxPath = strings.TrimPrefix(idxPath, common.BHIVE_DIR_PREFIX)
+
+	isOldPath, _ := regexp.MatchString(".*_.*_[0-9]+_[0-9]+.index", idxPath)
+
+	if isOldPath {
+		return GetInstIdPartnIdFromPath(idxPath)
+	}
+
+	pathComponents := strings.Split(idxPath, "_")
+	if len(pathComponents) < 2 {
+		err := errors.New(fmt.Sprintf("Malformed index path %v", idxPath))
+		return common.IndexInstId(0), common.PartitionId(0), err
+	}
+
+	strInstId := pathComponents[0]
+	instId, err := strconv.ParseUint(strInstId, 10, 64)
+	if err != nil {
+		return common.IndexInstId(0), common.PartitionId(0), err
+	}
+
+	partnComponents := strings.Split(pathComponents[1], ".")
 	if len(partnComponents) != 2 {
 		err := errors.New(fmt.Sprintf("Malformed index path %v", idxPath))
 		return common.IndexInstId(0), common.PartitionId(0), err
