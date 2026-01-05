@@ -177,6 +177,7 @@ type indexer struct {
 	statsMgrCmdCh        MsgChannel
 	scanCoordCmdCh       MsgChannel //chhannel to send messages to scan coordinator
 	meteringMgrCmdCh     MsgChannel // channel to send messages to metering manager
+	encryptionMgrCmdCh   MsgChannel //channel to send messages to encryption manager
 
 	mutMgrExitCh MsgChannel //channel to indicate mutation manager exited
 
@@ -193,6 +194,7 @@ type indexer struct {
 	scanCoord       ScanCoordinator        //handle to ScanCoordinator
 	cpuThrottle     *CpuThrottle           //handle to CPU throttler (for Autofailover)
 	meteringMgr     *MeteringThrottlingMgr //handle to metering throttling service
+	encryptionMgr   *EncryptionMgr         //handle to encryption changes
 
 	// masterMgr holds AutofailoverServiceManager, GenericServiceManager, PauseServiceManager, and
 	// RebalanceServiceManager singletons as ns_server only supports registering a single object
@@ -343,6 +345,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		statsMgrCmdCh:        make(MsgChannel),
 		scanCoordCmdCh:       make(MsgChannel),
 		meteringMgrCmdCh:     make(MsgChannel),
+
+		encryptionMgrCmdCh: make(MsgChannel),
 
 		mutMgrExitCh: make(MsgChannel),
 
@@ -549,6 +553,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		logging.Fatalf("Indexer::NewIndexer NewCompactionManager Init Error %+v", res)
 		return nil, res
 	}
+
+	idx.encryptionMgr, _ = NewEncryptionMgr(idx.encryptionMgrCmdCh, idx.wrkrRecvCh, idx.config)
 
 	// Find out if there is a bootstrapStorageMode for this node.   Bootstrap storage mode is
 	// set during storage upgrade to instruct the indexer to use this storage for bootstraping
@@ -945,6 +951,7 @@ func (idx *indexer) initHTTPMux() {
 	idx.settingsMgr.RegisterRestEndpoints()
 	idx.statsMgr.RegisterRestEndpoints()
 	idx.clustMgrAgent.RegisterRestEndpoints()
+	idx.encryptionMgr.RegisterRestEndpoints()
 }
 
 type proxyDebugRespWriter struct {
@@ -2010,6 +2017,9 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.tkCmdCh
 	idx.scanCoordCmdCh <- msg
 	<-idx.scanCoordCmdCh
+
+	idx.encryptionMgrCmdCh <- msg
+	<-idx.encryptionMgrCmdCh
 
 	// sendMsgToKVSender lock protects writes and reads to
 	// kvSenderCmdCh so that message crossover is prevented
@@ -9347,6 +9357,12 @@ func (idx *indexer) bootstrap2() error {
 			"PauseResumeMgr"); resp.GetMsgType() != MSG_SUCCESS {
 			return resp.(*MsgError).GetError().cause
 		}
+	}
+
+	//send Ready to EncryptionMgr
+	if resp := idx.sendStreamUpdateToWorker(msg, idx.encryptionMgrCmdCh,
+		"EncryptionMgr"); resp.GetMsgType() != MSG_SUCCESS {
+		return resp.(*MsgError).GetError().cause
 	}
 
 	//if there are no indexes, return from here

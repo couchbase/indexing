@@ -4916,6 +4916,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.encryption.enable_test": ConfigValue{
+		Value:         false,
+		Help:          "Enable testing by using encryption test REST apis",
+		DefaultVal:    false,
+		Immutable:     false,
+		Casesensitive: false,
+	},
 }
 
 // NewConfig from another

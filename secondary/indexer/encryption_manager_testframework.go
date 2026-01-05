@@ -1,4 +1,4 @@
-// Copyright 2014-Present Couchbase, Inc.
+// Copyright 2026-Present Couchbase, Inc.
 //
 // Use of this software is governed by the Business Source License included
 // in the file licenses/BSL-Couchbase.txt.  As of the Change Date specified
@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/couchbase/indexing/secondary/audit"
@@ -39,13 +40,14 @@ type DeksInfo struct {
 }
 
 type EaRKey struct {
-	Id    string `json:"id"`
-	Ciper string `json:"cipher"`
-	Data  []byte `json:"data"`
+	Id     string `json:"id"`
+	Cipher string `json:"cipher"`
+	Data   []byte `json:"data"`
 }
 
 var mockDataTypeKeyInfoMap = make(map[KeyDataType]*DeksInfo)
 var mu sync.Mutex
+var cbsTest *EncryptionCallbacks
 
 type Entry struct {
 	Datatype KeyDataType `json:"datatype"`
@@ -147,8 +149,7 @@ func addEncryptionKey(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 
-		// TODO: Use indexer callback
-		//go RefreshKeysCallback(dtype)
+		go cbsTest.RefreshKeysCallback(dtype)
 	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Ok"))
@@ -196,8 +197,8 @@ func dropEncryptionKey(w http.ResponseWriter, r *http.Request) {
 			for _, keyid := range keyids {
 				deksInfo.UnavailableKeys = append(deksInfo.UnavailableKeys, keyid)
 			}
-			// TODO: Use indexer callback
-			//go DropKeysCallback(dtype, keyids)
+
+			go cbsTest.DropKeysCallback(dtype, keyids)
 		}
 	}()
 	w.WriteHeader(http.StatusOK)
@@ -235,7 +236,7 @@ func disableEncryption(w http.ResponseWriter, r *http.Request) {
 				unavailKeys = append(unavailKeys, uk)
 			}
 
-			//activeKey := mockDataTypeKeyInfoMap[kdt].ActiveKey
+			activeKey := mockDataTypeKeyInfoMap[kdt].ActiveKey
 			mockDataTypeKeyInfoMap[kdt].ActiveKey = ""
 
 			//All non deleted keys also should not be available
@@ -252,8 +253,7 @@ func disableEncryption(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// TODO: Use indexer callback
-			//go DropKeysCallback(kdt, []string{activeKey})
+			go cbsTest.DropKeysCallback(kdt, []string{activeKey})
 		}
 	}()
 
@@ -277,18 +277,17 @@ func getInUseKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Use indexer callback
-	//keys, err := GetInUseKeysCallback(kdt)
-	//if err != nil {
-	//	err := fmt.Errorf("Error getting in use keys err:%v", err.Error())
-	//	http.Error(w, err.Error(), http.StatusBadRequest)
-	//	return
-	//}
-	//kbytes := []byte(strings.Join(keys, "\n"))
+	keys, err := cbsTest.GetInUseKeysCallback(kdt)
+	if err != nil {
+		err := fmt.Errorf("Error getting in use keys err:%v", err.Error())
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	kbytes := []byte(strings.Join(keys, "\n"))
 
-	//w.Header().Set("Content-Length", fmt.Sprintf("%v", len(keys)))
+	w.Header().Set("Content-Length", fmt.Sprintf("%v", len(keys)))
 	w.WriteHeader(http.StatusOK)
-	//w.Write(kbytes)
+	w.Write(kbytes)
 	return
 }
 
