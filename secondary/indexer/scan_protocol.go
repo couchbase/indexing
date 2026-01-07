@@ -10,6 +10,7 @@ package indexer
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"net"
 
 	"github.com/couchbase/indexing/secondary/common"
@@ -26,7 +27,7 @@ type ScanResponseWriter interface {
 	Count(count uint64) error
 	RawBytes([]byte) error
 	Row(pk, sk []byte) error
-	Done(readUnits uint64, clientVersion uint32, scanReport *report.IndexerScanReport) error
+	Done(readUnits uint64, clientVersion uint32, srvrScanReport *report.HostScanReport) error
 	Helo() error
 }
 
@@ -46,6 +47,44 @@ func NewProtoWriter(t ScanReqType, conn net.Conn) *protoResponseWriter {
 		encBuf:   p.GetBlock(),
 		rowBuf:   p.GetBlock(),
 	}
+}
+
+func logScanReport(srvrScanReport *report.HostScanReport) {
+	if !logging.IsEnabled(logging.Debug) || srvrScanReport == nil {
+		return
+	}
+	report, err := json.Marshal(srvrScanReport)
+	if err != nil {
+		logging.Errorf("logScanReport err: %v while marshalling server scan report", err)
+		return
+	}
+	logging.Debugf("Server scan report: %v", string(report))
+}
+
+func packageReport(srvrScanReport *report.HostScanReport) *protobuf.SrvrScanReport {
+	if srvrScanReport == nil || srvrScanReport.SrvrMs == nil || srvrScanReport.SrvrCounts == nil {
+		return nil
+	}
+
+	report := &protobuf.SrvrScanReport{
+		ServerTimings: &protobuf.ServerTimings{
+			TotalDur:          proto.Int64(srvrScanReport.SrvrMs.TotalDur),
+			WaitDur:           proto.Int64(srvrScanReport.SrvrMs.WaitDur),
+			ScanDur:           proto.Int64(srvrScanReport.SrvrMs.ScanDur),
+			GetSeqnosDur:      proto.Int64(srvrScanReport.SrvrMs.GetSeqnosDur),
+			DiskReadDur:       proto.Int64(srvrScanReport.SrvrMs.DiskReadDur),
+			DistCompDur:       proto.Int64(srvrScanReport.SrvrMs.DistCompDur),
+			CentroidAssignDur: proto.Int64(srvrScanReport.SrvrMs.CentroidAssignDur),
+		},
+		ServerCounts: &protobuf.ServerCounts{
+			RowsReturn:  proto.Uint64(srvrScanReport.SrvrCounts.RowsReturn),
+			RowsScan:    proto.Uint64(srvrScanReport.SrvrCounts.RowsScan),
+			BytesRead:   proto.Uint64(srvrScanReport.SrvrCounts.BytesRead),
+			CacheHitPer: proto.Uint64(srvrScanReport.SrvrCounts.CacheHitPer),
+		},
+	}
+
+	return report
 }
 
 func (w *protoResponseWriter) writeLen(l int) error {
@@ -155,7 +194,7 @@ func (w *protoResponseWriter) Row(pk, sk []byte) error {
 	return nil
 }
 
-func (w *protoResponseWriter) Done(readUnits uint64, clientVersion uint32, scanReport *report.IndexerScanReport) error {
+func (w *protoResponseWriter) Done(readUnits uint64, clientVersion uint32, srvrScanReport *report.HostScanReport) error {
 	defer p.PutBlock(w.encBuf)
 	defer p.PutBlock(w.rowBuf)
 
@@ -167,18 +206,17 @@ func (w *protoResponseWriter) Done(readUnits uint64, clientVersion uint32, scanR
 		}
 	}
 
-	if scanReport != nil {
-		logging.Debugf("Scan profiling indexer report: waitDuration: %v, getSeqnosDuration: %v, numRowsReturned: %v, numRowsScanned: %v, scanDuration: %v",
-		scanReport.WaitDur, scanReport.GetSeqnosDur, scanReport.NumRowsReturned, scanReport.NumRowsScanned, scanReport.ScanDur)
+	if clientVersion < common.INDEXER_76_VERSION {
+		return nil
 	}
 
-	if clientVersion >= common.INDEXER_76_VERSION {
-		res := &protobuf.StreamEndResponse{
-			ReadUnits: proto.Uint64(readUnits),
-		}
-
-		return protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
+	res := &protobuf.StreamEndResponse{
+		ReadUnits: proto.Uint64(readUnits),
 	}
 
-	return nil
+	if clientVersion >= common.INDEXER_81_VERSION {
+		res.SrvrScanReport = packageReport(srvrScanReport)
+		logScanReport(srvrScanReport)
+	}
+	return protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
 }

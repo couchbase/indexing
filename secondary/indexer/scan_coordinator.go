@@ -342,7 +342,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 	}
 
 	defer func() {
-		s.handleError(req.LogPrefix, w.Done(readUnits, clientVersion, req.ScanReport))
+		s.handleError(req.LogPrefix, w.Done(readUnits, clientVersion, req.srvrScanReport))
 		req.Done()
 	}()
 
@@ -634,11 +634,11 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	err := scanPipeline.Execute()
 	scanTime := time.Now().Sub(t0)
 
-	if req.ScanReport != nil {
-		req.ScanReport.WaitDur = waitTime
-		req.ScanReport.NumRowsReturned = scanPipeline.RowsReturned()
-		req.ScanReport.NumRowsScanned = scanPipeline.RowsScanned()
-		req.ScanReport.ScanDur = scanTime
+	if req.srvrScanReport != nil && req.srvrScanReport.SrvrMs != nil && req.srvrScanReport.SrvrCounts != nil {
+		req.srvrScanReport.SrvrMs.WaitDur = waitTime.Milliseconds()
+		req.srvrScanReport.SrvrMs.ScanDur = scanTime.Milliseconds()
+		req.srvrScanReport.SrvrCounts.RowsReturn = scanPipeline.RowsReturned()
+		req.srvrScanReport.SrvrCounts.RowsScan = scanPipeline.RowsScanned()
 	}
 
 	stats := s.stats.Get()

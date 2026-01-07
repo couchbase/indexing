@@ -24,6 +24,7 @@ import (
 
 	commonjson "github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/logging/systemevent"
+	report "github.com/couchbase/indexing/secondary/scanreport"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/goextended/syncx"
@@ -58,6 +59,8 @@ type ResponseReader interface {
 	Error() error
 
 	GetReadUnits() uint64
+
+	GetServerScanReport() (*report.HostScanReport)
 }
 
 // ResponseSender is responsible for forwarding result to the client
@@ -1266,6 +1269,9 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 
 	fmsg := "%v {%v,%v} - elapsed(%v) err(%v)"
 	logging.Verbosef(fmsg, logPrefix, defnID, requestId, time.Since(begin), err)
+
+	// For debugging purposes only. This will be removed
+	broker.LogFinalReport()
 	return
 }
 

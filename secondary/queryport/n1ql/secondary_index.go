@@ -2177,6 +2177,8 @@ func makeRequestBroker(
 		}
 	}
 
+	// Commenting to prevent any perf impact
+	//broker.InitScanReport(requestId, common.IndexDefnId(si.defnID))
 	broker.SetResponseHandlerFactory(factory)
 	broker.SetResponseSender(sender)
 	broker.SetBackfillWaiter(backfillWaiter)
@@ -2338,6 +2340,10 @@ func makeResponsehandler(
 		if data.GetReadUnits() != 0 {
 			readUnits := data.GetReadUnits()
 			conn.RecordGsiRU(tenant.Unit(readUnits))
+		}
+
+		if serverScanReport := data.GetServerScanReport(); serverScanReport != nil {
+			broker.AttachIndexerScanReport(serverScanReport, int(id))
 		}
 
 		err := data.Error()

@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	json "github.com/couchbase/indexing/secondary/common/json"
+	report "github.com/couchbase/indexing/secondary/scanreport"
 
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/golang/protobuf/proto"
@@ -57,6 +58,10 @@ func (r *ResponseStream) GetReadUnits() uint64 {
 	return 0
 }
 
+func (r *ResponseStream) GetServerScanReport() (*report.HostScanReport) {
+	return nil
+}
+
 // GetEntries implements queryport.client.ResponseReader{} method.
 func (r *StreamEndResponse) GetEntries(dataEncFmt c.DataEncodingFormat) (*c.ScanResultEntries, [][]byte, error) {
 	var results c.ScanResultEntries
@@ -68,6 +73,28 @@ func (r *StreamEndResponse) Error() error {
 	if e := r.GetErr(); e != nil {
 		if ee := e.GetError(); ee != "" {
 			return errors.New(ee)
+		}
+	}
+	return nil
+}
+
+func (r *StreamEndResponse) GetServerScanReport() (*report.HostScanReport) {
+	if sr := r.GetSrvrScanReport(); sr != nil {
+		return &report.HostScanReport{
+			SrvrMs: &report.ServerTimings{
+				TotalDur:          sr.GetServerTimings().GetTotalDur(),
+				WaitDur:           sr.GetServerTimings().GetWaitDur(),
+				GetSeqnosDur:      sr.GetServerTimings().GetGetSeqnosDur(),
+				DiskReadDur:       sr.GetServerTimings().GetDiskReadDur(),
+				DistCompDur:       sr.GetServerTimings().GetDistCompDur(),
+				CentroidAssignDur: sr.GetServerTimings().GetCentroidAssignDur(),
+			},
+			SrvrCounts: &report.ServerCounts{
+				RowsReturn:  sr.GetServerCounts().GetRowsReturn(),
+				RowsScan:    sr.GetServerCounts().GetRowsScan(),
+				BytesRead:   sr.GetServerCounts().GetBytesRead(),
+				CacheHitPer: sr.GetServerCounts().GetCacheHitPer(),
+			},
 		}
 	}
 	return nil

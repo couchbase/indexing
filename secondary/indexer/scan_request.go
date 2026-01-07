@@ -65,7 +65,9 @@ type ScanRequest struct {
 	Consistency  *common.Consistency
 	Stats        *IndexStats
 	IndexInst    common.IndexInst
-	ScanReport   *report.IndexerScanReport
+
+	// Scan report
+	srvrScanReport *report.HostScanReport
 
 	Ctxs []IndexReaderContext
 
@@ -501,7 +503,10 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.Offset = req.GetOffset()
 		r.SkipReadMetering = req.GetSkipReadMetering()
 		// Commenting to prevent any perf impact
-		//r.ScanReport = &report.IndexerScanReport{}
+		//r.srvrScanReport = &report.PerHostDetail{
+		// 	SrvrMs:     &report.ServerTimings{},
+		// 	SrvrCounts: &report.ServerCounts{},
+		// }
 
 		r.indexKeyNames = req.GetIndexKeyNames()
 		r.inlineFilter = req.GetInlineFilter()
@@ -1793,8 +1798,8 @@ func (r *ScanRequest) setConsistency(cons common.Consistency, vector *protobuf.T
 		if localErr == nil && r.Stats != nil {
 			timeSince := time.Since(t0)
 			r.Stats.Timings.dcpSeqs.Put(timeSince)
-			if r.ScanReport != nil {
-				r.ScanReport.GetSeqnosDur = timeSince
+			if r.srvrScanReport != nil && r.srvrScanReport.SrvrMs != nil {
+				r.srvrScanReport.SrvrMs.GetSeqnosDur = timeSince.Milliseconds()
 			}
 		}
 		r.Ts.Crc64 = 0

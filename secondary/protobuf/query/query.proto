@@ -126,8 +126,29 @@ message ResponseStream {
 
 // Last response packet sent by server to end query results.
 message StreamEndResponse {
-    optional Error  err       = 1;
-    optional uint64 readUnits = 2;
+    optional Error          err             = 1;
+    optional uint64         readUnits       = 2;
+    optional SrvrScanReport srvrScanReport  = 3;
+}
+
+message SrvrScanReport {
+    optional ServerTimings serverTimings = 1;
+    optional ServerCounts serverCounts = 2;
+}
+message ServerTimings {
+    optional int64          totalDur         = 1;
+    optional int64          waitDur          = 2;
+    optional int64          scanDur          = 3;
+    optional int64          getSeqnosDur     = 4;
+    optional int64          diskReadDur      = 5;
+    optional int64          distCompDur      = 6;
+    optional int64          centroidAssignDur = 7;
+}
+message ServerCounts {
+    optional uint64         cacheHitPer      = 1;
+    optional uint64         bytesRead        = 2;
+    optional uint64         rowsReturn       = 3;
+    optional uint64         rowsScan         = 4;
 }
 
 // Count request to indexer.
