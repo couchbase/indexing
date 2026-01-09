@@ -192,6 +192,7 @@ const (
 	INDEX_STATS_BROADCAST
 	INDEX_BOOTSTRAP_STATS_UPDATE
 	INDEX_RR_STATS
+	META_STORE_STATS
 
 	STATS_RESET
 	STATS_PERSISTER_START
@@ -3550,6 +3551,18 @@ func (m *MsgTimestampedCountReq) GetRespCh() chan interface{} {
 	return m.respCh
 }
 
+type MsgMetaStoreStatsReq struct {
+	respCh chan interface{}
+}
+
+func (m *MsgMetaStoreStatsReq) GetMsgType() MsgType {
+	return META_STORE_STATS
+}
+
+func (m *MsgMetaStoreStatsReq) GetRespCh() chan interface{} {
+	return m.respCh
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3839,6 +3852,8 @@ func (m MsgType) String() string {
 		return "INDEX_BOOTSTRAP_STATS_UPDATE"
 	case INDEX_RR_STATS:
 		return "INDEX_RR_STATS"
+	case META_STORE_STATS:
+		return "META_STORE_STATS"
 
 	case STATS_RESET:
 		return "STATS_RESET"

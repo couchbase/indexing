@@ -1655,6 +1655,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_STATS:
 		idx.handleStats(msg)
 
+	case META_STORE_STATS:
+		idx.sendMsgToClustMgr(msg)
+
 	case MSG_ERROR:
 		//crash for all errors by default
 		logging.Fatalf("Indexer::handleWorkerMsgs Fatal Error On Worker Channel %+v", msg)

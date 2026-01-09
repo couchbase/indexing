@@ -199,6 +199,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_INST_ASYNC_RECOVERY_DONE:
 		c.handleInstAsyncRecoveryDone(cmd)
 
+	case META_STORE_STATS:
+		c.handleMetaStats(cmd)
+
 	default:
 		logging.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
 	}
@@ -1164,4 +1167,11 @@ func (meta *metaNotifier) makeDefaultPartitionContainer(partitions []common.Part
 
 	return pc
 
+}
+
+func (c *clustMgrAgent) handleMetaStats(cmd Message) {
+	c.supvCmdch <- &MsgSuccess{}
+
+	respCh := cmd.(*MsgMetaStoreStatsReq).GetRespCh()
+	respCh <- c.mgr.GetMetadataRepo().GetMetastoreStats()
 }
