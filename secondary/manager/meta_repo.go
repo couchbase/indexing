@@ -141,18 +141,17 @@ func NewMetadataRepo(requestAddr string,
 }
 
 // NewLocalMetadataRepo creates a MetaRepo object for a local repo.
-func NewLocalMetadataRepo(msgAddr string,
+func NewLocalMetadataRepo(
+	msgAddr string,
 	eventMgr *eventManager,
 	reqHandler protocol.CustomRequestHandler,
-	repoName string,
-	quota uint64,
-	sleepDur uint64,
-	threshold uint8,
-	minFileSize uint64,
-	authFn gometaC.ServerAuthFunction) (*MetadataRepo, RequestServer, error) {
+	authFn gometaC.ServerAuthFunction,
+	repoOpenParams repo.RepoFactoryParams,
+) (*MetadataRepo, RequestServer, error) {
 
-	ref, err := newLocalRepoRef(msgAddr, eventMgr, reqHandler, repoName,
-		quota, sleepDur, threshold, minFileSize, authFn)
+	ref, err := newLocalRepoRef(
+		msgAddr, eventMgr, reqHandler, authFn, repoOpenParams,
+	)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -813,16 +812,19 @@ func (i *TopologyIterator) Close() {
 func newLocalRepoRef(msgAddr string,
 	eventMgr *eventManager,
 	reqHandler protocol.CustomRequestHandler,
-	repoName string,
-	quota uint64,
-	sleepDur uint64,
-	threshold uint8,
-	minFileSize uint64,
-	authFn gometaC.ServerAuthFunction) (*LocalRepoRef, error) {
+	authFn gometaC.ServerAuthFunction,
+	repoOpenParams repo.RepoFactoryParams,
+) (*LocalRepoRef, error) {
 
 	repoRef := &LocalRepoRef{eventMgr: eventMgr, notifier: nil}
-	server, err := gometa.RunEmbeddedServerWithCustomHandler3(msgAddr, nil,
-		reqHandler, repoName, quota, sleepDur, threshold, minFileSize, authFn)
+
+	server, err := gometa.RunEmbeddedServerWithCustomHandler4(
+		msgAddr,        /* msgAddr string */
+		nil,            /* notifier action.EventNotifier */
+		reqHandler,     /* reqHandler protocol.CustomRequestHandler */
+		authFn,         /* authfn common.ServerAuthFunction */
+		repoOpenParams, /* params repo.RepoFactoryParams */
+	)
 	if err != nil {
 		return nil, err
 	}

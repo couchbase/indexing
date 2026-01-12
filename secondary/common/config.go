@@ -3918,6 +3918,23 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.metadata.enableWAL": ConfigValue{
+		true,
+		"Enable Write-Ahead-Logging for durable metadata writes",
+		true,  // default - true
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.metadata.store_backend": ConfigValue{
+		"magma",
+		"Use pre-defined storage as backend to store localmetadata" +
+			"under the gometa protocol. Values supported - " +
+			"* forestDb" +
+			"* magma (default for enterprise)",
+		"magma", // default - magma
+		false,   // mutable
+		false,   // case-insensitive
+	},
 	"indexer.memcachedTimeout": ConfigValue{
 		120, // In Seconds
 		"Timeout for indexer to memcached communication (In Seconds)",

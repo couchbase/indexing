@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +22,7 @@ import (
 	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
+	"github.com/couchbase/gometa/repository"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/cbauthutil"
@@ -49,7 +49,7 @@ type IndexManager struct {
 	ClusterURL    string
 	factory       *message.ConcreteMsgFactory
 
-	repoName string
+	repoBaseDir string
 
 	useCInfoLite      bool
 	cinfoProvider     common.ClusterInfoProvider
@@ -203,7 +203,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	storagDir, _ := common.GetStorageDirs(config, common.NA_StorageEngine)
 	mgr.basepath = storagDir
 	iowrap.Os_Mkdir(mgr.basepath, 0755)
-	mgr.repoName = filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
+	mgr.repoBaseDir = mgr.basepath
 
 	ninfo, err := mgr.cinfoProvider.GetNodesInfoProvider()
 	if err != nil {
@@ -225,11 +225,30 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	sleepDur := config["metadata.compaction.sleepDuration"].Int()
 	threshold := config["metadata.compaction.threshold"].Int()
 	minFileSize := config["metadata.compaction.minFileSize"].Int()
-	logging.Infof("Starting metadadta repo: quota %v sleep duration %v threshold %v min file size %v",
-		mgr.quota, sleepDur, threshold, minFileSize)
+	enableWAL := config["metadata.enableWAL"].Bool()
+	storeType := repository.FDbStoreType
+	storeStr := config["metadata.store_backend"].String()
+	if common.GetBuildMode() == common.ENTERPRISE {
+		magmaStoreStr := strings.ToLower(repository.MagmaStoreType.String())
+		storeStr = strings.ToLower(storeStr)
+		if magmaStoreStr == storeStr {
+			storeType = repository.MagmaStoreType
+		}
+	}
+	repoOpenParams := repository.RepoFactoryParams{
+		MemoryQuota:                mgr.quota,
+		CompactionTimerDur:         uint64(sleepDur),
+		CompactionThresholdPercent: uint8(threshold),
+		CompactionMinFileSize:      uint64(minFileSize),
+		Dir:                        mgr.repoBaseDir,
+		EnableWAL:                  enableWAL,
+		StoreType:                  storeType,
+	}
+
+	logging.Infof("NewIndexManagerInternal: Starting metadadta repo with params %v",
+		repoOpenParams)
 	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(adminPort,
-		mgr.eventMgr, mgr.lifecycleMgr, mgr.repoName, mgr.quota,
-		uint64(sleepDur), uint8(threshold), uint64(minFileSize), mgr.ServerAuth)
+		mgr.eventMgr, mgr.lifecycleMgr, mgr.ServerAuth, repoOpenParams)
 	if err != nil {
 		mgr.Close()
 		return nil, err
