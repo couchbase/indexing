@@ -2497,6 +2497,10 @@ func (cicl *ClusterInfoCacheLiteClient) GetBucketUUID(bucketName string) (uuid s
 	return bi.GetBucketUUID(bucketName), nil
 }
 
+func (cicl *ClusterInfoCacheLiteClient) GetBucketNames() []couchbase.BucketName {
+	return cicl.ciclMgr.GetBucketNames()
+}
+
 func (cicl *ClusterInfoCacheLiteClient) GetNumVBuckets(bucketName string) (numVBuckets int,
 	err error) {
 

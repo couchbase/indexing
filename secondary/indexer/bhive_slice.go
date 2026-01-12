@@ -2929,6 +2929,21 @@ func (mdb *bhiveSlice) Destroy() {
 	}
 }
 
+func (mdb *bhiveSlice) SetCurrentEncryptionKey(masterEncryptionKey []byte, keyId []byte, cipher string) error {
+	// ENCRYPT_TODO: Update after storage changes
+	return nil
+}
+
+func (mdb *bhiveSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
+	// ENCRYPT_TODO: Update after storage changes
+	doneCh <- nil
+}
+
+func (mdb *bhiveSlice) GetKeyIdList() []string {
+	// ENCRYPT_TODO: Update after storage changes
+	return []string{}
+}
+
 func tryDeleteBhiveSlice(mdb *bhiveSlice) {
 
 	//cleanup the disk directory

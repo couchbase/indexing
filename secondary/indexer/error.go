@@ -92,6 +92,9 @@ const (
 
 	//metering throttling mgr
 	ERROR_METERING_THROTTLING_UNKNOWN_COMMAND
+
+	//EncryptionMgr
+	ERROR_ENCRYPTION_MGR
 )
 
 type errSeverity int16
@@ -117,6 +120,7 @@ const (
 	STORAGE_MGR
 	CLUSTER_MGR
 	METERING_THROTTLING_MGR
+	ENCRYPTION_MGR
 )
 
 type Error struct {

@@ -440,6 +440,14 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case TIMESTAMPED_COUNT_STATS:
 		s.handleGetTimestampedItemsCount(cmd)
 
+	case ENCRYPTION_UPDATE_KEY:
+		s.handleEncryptionUpdateKey(cmd)
+
+	case ENCRYPTION_GET_INUSE_KEYS:
+		s.handleEncryptionGetInUseKeys(cmd)
+
+	case ENCRYPTION_DROP_KEY:
+		s.handleEncryptionDropKey(cmd)
 	}
 
 }
@@ -3508,5 +3516,255 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 		}
 
 		respCh <- out
+	}()
+}
+
+func (s *storageMgr) handleEncryptionGetInUseKeys(msg Message) {
+
+	logging.Infof("StorageMgr::handleEncryptionGetInUseKeys...")
+	s.supvCmdch <- &MsgSuccess{}
+
+	keyMapCh := msg.(*MsgEncryptionGetInuseKeys).GetKeyMapCh()
+
+	keyMap := make(map[KeyDataType][]string)
+
+	//This map avoids duplicate entries for KeyDataType
+	//Use it to construct keyMap to be returned back on keyMapCh
+	kdtKeyMap := make(map[KeyDataType]map[string]bool)
+
+	indexInstMap := s.indexInstMap.Get()
+	indexPartnMap := s.indexPartnMap.Get()
+
+	go func() {
+		//Get keys used by storage
+		for instId, inst := range indexInstMap {
+			bucketUUID := inst.Defn.BucketUUID
+			kdt := KeyDataType{TypeName: "bucket", BucketUUID: bucketUUID}
+
+			if _, ok := kdtKeyMap[kdt]; !ok {
+				kdtKeyMap[kdt] = make(map[string]bool)
+			}
+
+			partnMap, ok := indexPartnMap[instId]
+			if !ok {
+				logging.Warnf("StorageMgr::handleEncryptionGetInUseKeys No partitions found for instId %v", instId)
+				continue
+			}
+			for _, partnInst := range partnMap {
+				sc := partnInst.Sc
+				for _, slice := range sc.GetAllSlices() {
+					keys := slice.GetKeyIdList()
+					for _, key := range keys {
+						kdtKeyMap[kdt][key] = true
+					}
+				}
+			}
+		}
+
+		//Get keys used by codebook
+		//for _, inst := range indexInstMap {
+		//	if !inst.Defn.IsVectorIndex {
+		//		continue
+		//	}
+		//	partnMap, ok := indexPartnMap[inst.InstId]
+		//	if !ok {
+		//		logging.Warnf("getCodebookInUseKeys: partition map missing for indexInstId:%v", inst.InstId)
+		//		continue
+		//	}
+		//
+		//	_ = partnMap
+		//	kdt := KeyDataType{TypeName: "bucket", BucketUUID: inst.Defn.BucketUUID}
+		//	if _, ok := kdtKeyMap[kdt]; !ok {
+		//		kdtKeyMap[kdt] = make(map[string]bool, 0)
+		//	}
+		// ENCRYPT_TODO: Implement function to get codebook encryption key
+		//for _, partnMap := range idx.indexPartnMap {
+		//	for _, partnInst := range partnMap {
+		//		sc := partnInst.Sc
+		//		for _, slice := range sc.GetAllSlices() {
+		//			// ENCRYPT_TODO:Get key used for codebook encryption
+		//			key := slice.GetCodebookKey()
+		//			kdtKeyMap[kdt][key] = true
+		//		}
+		//	}
+		//}
+
+		// Transform kdtKeyMap map[KeyDataType]map[string]bool to keyMap map[KeyDataType][]string
+		for kdt, keyBoolMap := range kdtKeyMap {
+			if _, ok := keyMap[kdt]; !ok {
+				keyMap[kdt] = make([]string, 0)
+			}
+			keys := make([]string, 0)
+			for key := range keyBoolMap {
+				keys = append(keys, key)
+			}
+			keyMap[kdt] = append(keyMap[kdt], keys...)
+		}
+
+		keyMapCh <- keyMap
+	}()
+}
+
+func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
+
+	s.supvCmdch <- &MsgSuccess{}
+
+	kdt := cmd.(*MsgEncryptionUpdateKey).GetKeyDataType()
+	respCh := cmd.(*MsgEncryptionUpdateKey).GetRespCh()
+	logging.Infof("StorageMgr::handleEncryptionUpdateKey keydatatype:%v", kdt)
+	if kdt.TypeName != "bucket" {
+		respCh <- nil
+		return
+	}
+	earkey := cmd.(*MsgEncryptionUpdateKey).GetEarKey()
+
+	indexInstMap := s.indexInstMap.Get()
+	indexPartnMap := s.indexPartnMap.Get()
+
+	go func() {
+		//Storage encryption
+		for instId, inst := range indexInstMap {
+			if inst.Defn.BucketUUID != kdt.BucketUUID {
+				continue
+			}
+			partnMap, ok := indexPartnMap[instId]
+			if !ok {
+				logging.Infof("StorageMgr::handleEncryptionUpdateKey No partitions found for instId %v", instId)
+				continue
+			}
+			for _, partnInst := range partnMap {
+				sc := partnInst.Sc
+				for _, slice := range sc.GetAllSlices() {
+					err := slice.SetCurrentEncryptionKey(earkey.Data, []byte(earkey.Id), earkey.Cipher)
+					if err != nil {
+						respCh <- err
+						return
+					}
+				}
+			}
+		}
+
+		// ENCRYPT_TODO:
+		// Codebook encryption
+		//for instId, inst := range indexInstMap {
+		//	if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex {
+		//		continue
+		//	}
+		//	partnMap, ok := indexPartnMap[instId]
+		//	if !ok {
+		//		logging.Infof("StorageMgr::handleEncryptionUpdateKey No partitions found for instId %v", instId)
+		//		continue
+		//	}
+		//	for _, partnInst := range partnMap {
+		//		sc := partnInst.Sc
+		//		for _, slice := range sc.GetAllSlices() {
+		//			err := slice.SetCodebookEncryptionKey(earkey.Data, []byte(earkey.Id), earkey.Cipher)
+		//			if err != nil {
+		//				respCh <- err
+		//				return
+		//			}
+		//		}
+		//	}
+		//}
+
+		respCh <- nil
+	}()
+}
+
+func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
+
+	s.supvCmdch <- &MsgSuccess{}
+
+	kdt := cmd.(*MsgEncryptionDropKey).GetKeyDataType()
+	dropKeyIds := cmd.(*MsgEncryptionDropKey).GetDropKeyIds()
+	respCh := cmd.(*MsgEncryptionDropKey).GetRespCh()
+	logging.Infof("StorageMgr::handleEncryptionDropKey keydatatype:%v", kdt)
+
+	dropKeyIdsBytes := make([][]byte, len(dropKeyIds))
+	for i, key := range dropKeyIds {
+		dropKeyIdsBytes[i] = []byte(key)
+	}
+
+	indexInstMap := s.indexInstMap.Get()
+	indexPartnMap := s.indexPartnMap.Get()
+
+	if kdt.TypeName != "bucket" {
+		respCh <- nil
+		return
+	}
+
+	var err error
+	var wg sync.WaitGroup
+	errCh := make(chan error, 1)
+
+	go func() {
+
+		//Storage encryption
+		for instId, inst := range indexInstMap {
+			if inst.Defn.BucketUUID != kdt.BucketUUID {
+				continue
+			}
+			partnMap, ok := indexPartnMap[instId]
+			if !ok {
+				logging.Infof("StorageMgr::handleEncryptionDropKey No partitions found for instId %v", instId)
+				continue
+			}
+			for _, partnInst := range partnMap {
+				sc := partnInst.Sc
+				for _, slice := range sc.GetAllSlices() {
+
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+
+						respChSlice := make(chan error, 1)
+						slice.DropKeys(dropKeyIdsBytes, respChSlice)
+						errResp := <-respChSlice
+						if errResp != nil {
+							select {
+							case errCh <- errResp:
+							default:
+							}
+						}
+
+					}()
+
+				}
+			}
+		}
+
+		wg.Wait()
+		select {
+		case err = <-errCh:
+			respCh <- err
+		default:
+		}
+
+		// ENCRYPT_TODO:
+		// Codebook encryption
+		//outerLoop2:
+		//for instId, inst := range indexInstMap {
+		//	if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex  {
+		//		continue
+		//	}
+		//	partnMap, ok := indexPartnMap[instId]
+		//	if !ok {
+		//		logging.Infof("StorageMgr::handleEncryptionDropKey No partitions found for instId %v", instId)
+		//		continue
+		//	}
+		//	for _, partnInst := range partnMap {
+		//		sc := partnInst.Sc
+		//		for _, slice := range sc.GetAllSlices() {
+		//			//Handle dropKeyId==""
+		//			errResp:=slice.DropKeysCodebook(dropKeyIds)
+		//			if errResp != nil {
+		//				err = errResp
+		//				break outerLoop2
+		//			}
+		//		}
+		//	}
+		//}
+		//respCh <- err
+
 	}()
 }

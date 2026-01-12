@@ -239,6 +239,8 @@ const (
 	BHIVE_GRAPH_READY
 	BHIVE_BUILD_GRAPH
 	ENCRYPTION_GET_INUSE_KEYS
+	ENCRYPTION_UPDATE_KEY
+	ENCRYPTION_DROP_KEY
 )
 
 type Message interface {
@@ -3476,12 +3478,70 @@ func (m *MsgBuildBhiveGraph) GetBhiveGraphStatus() map[common.PartitionId]bool {
 	return m.bhiveGraphStatus
 }
 
-//TODO: Sender and handler implementation
+// ENCRYPT_TODO: Sender and handler implementation
 type MsgEncryptionGetInuseKeys struct {
+	keyDataType KeyDataType
+	respMapCh   chan map[KeyDataType][]string
 }
 
 func (m *MsgEncryptionGetInuseKeys) GetMsgType() MsgType {
 	return ENCRYPTION_GET_INUSE_KEYS
+}
+func (m *MsgEncryptionGetInuseKeys) GetKeyDataType() KeyDataType {
+	return m.keyDataType
+}
+
+func (m *MsgEncryptionGetInuseKeys) GetKeyMapCh() chan map[KeyDataType][]string {
+	return m.respMapCh
+}
+
+type MsgEncryptionUpdateKey struct {
+	keyDataType KeyDataType
+	earkey      EaRKey
+	respCh      chan error
+}
+
+func (m *MsgEncryptionUpdateKey) GetMsgType() MsgType {
+	return ENCRYPTION_UPDATE_KEY
+}
+
+func (m *MsgEncryptionUpdateKey) GetKeyDataType() KeyDataType {
+	return m.keyDataType
+}
+
+func (m *MsgEncryptionUpdateKey) GetEarKey() EaRKey {
+	return m.earkey
+}
+
+func (m *MsgEncryptionUpdateKey) GetRespCh() chan error {
+	return m.respCh
+}
+
+type MsgEncryptionDropKey struct {
+	keyDataType  KeyDataType
+	dropKeyIds   []string
+	activeEarkey EaRKey
+	respCh       chan error
+}
+
+func (m *MsgEncryptionDropKey) GetMsgType() MsgType {
+	return ENCRYPTION_DROP_KEY
+}
+
+func (m *MsgEncryptionDropKey) GetKeyDataType() KeyDataType {
+	return m.keyDataType
+}
+
+func (m *MsgEncryptionDropKey) GetActiveEarKey() EaRKey {
+	return m.activeEarkey
+}
+
+func (m *MsgEncryptionDropKey) GetDropKeyIds() []string {
+	return m.dropKeyIds
+}
+
+func (m *MsgEncryptionDropKey) GetRespCh() chan error {
+	return m.respCh
 }
 
 type MsgPopulateShardType struct {
@@ -3923,6 +3983,10 @@ func (m MsgType) String() string {
 		return "CLEAR_SHARD_TYPE"
 	case ENCRYPTION_GET_INUSE_KEYS:
 		return "ENCRYPTION_GET_INUSE_KEYS"
+	case ENCRYPTION_UPDATE_KEY:
+		return "ENCRYPTION_UPDATE_KEY"
+	case ENCRYPTION_DROP_KEY:
+		return "ENCRYPTION_DROP_KEY"
 	default:
 		return "UNKNOWN_MSG_TYPE"
 	}
