@@ -312,19 +312,6 @@ func (b *RequestBroker) AttachIndexerScanReport(hostReport *report.HostScanRepor
 	}
 }
 
-func (b *RequestBroker) GenPerClientReportId(instId uint64, partnIDs []common.PartitionId) string {
-	// Format: <instId>[<partnId0>,<partnId1>,...]
-	s := fmt.Sprintf("%d[", instId)
-	for i, p := range partnIDs {
-		if i > 0 {
-			s += ","
-		}
-		s += fmt.Sprintf("%d", p)
-	}
-	s += "]"
-	return s
-}
-
 func (b *RequestBroker) DoRetry() bool {
 	return b.retry
 }
@@ -792,19 +779,17 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 	var tmpbufPoolIdx uint32
 	c.tmpbufs = make([]*[]byte, len(client))
 	c.tmpbufsPoolIdx = make([]uint32, len(client))
-	for i := 0; i < len(client); i++ {
-		tmpbuf, tmpbufPoolIdx = GetFromPools()
-		c.tmpbufs[i] = tmpbuf
-		c.tmpbufsPoolIdx[i] = tmpbufPoolIdx
+	c.perHostReportIds = make([]string, len(client))
+	if c.scanReport != nil {
+		c.scanReport.PopulatePartns(index, targetInstId, partition)
 	}
 
-	c.perHostReportIds = make([]string, len(client))
 	for i := 0; i < len(client); i++ {
 		tmpbuf, tmpbufPoolIdx = GetFromPools()
 		c.tmpbufs[i] = tmpbuf
 		c.tmpbufsPoolIdx[i] = tmpbufPoolIdx
 		if c.scanReport != nil {
-			c.perHostReportIds[i] = c.GenPerClientReportId(targetInstId[i], partition[i])
+			c.perHostReportIds[i] = report.GenPerClientReportId(targetInstId[i], partition[i])
 		}
 	}
 

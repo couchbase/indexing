@@ -467,6 +467,10 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 			req.Stats.scanReqDuration.Add(elapsed)
 			req.Stats.scanReqLatDist.Add(elapsed)
 		}
+
+		if req.srvrScanReport != nil && req.srvrScanReport.SrvrMs != nil {
+			req.srvrScanReport.SrvrMs.TotalDur = time.Now().Sub(ttime).Milliseconds()
+		}
 	}()
 
 	if len(req.Ctxs) != 0 {
@@ -639,6 +643,8 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 		req.srvrScanReport.SrvrMs.ScanDur = scanTime.Milliseconds()
 		req.srvrScanReport.SrvrCounts.RowsReturn = scanPipeline.RowsReturned()
 		req.srvrScanReport.SrvrCounts.RowsScan = scanPipeline.RowsScanned()
+		req.srvrScanReport.SrvrCounts.BytesRead = scanPipeline.BytesRead()
+		req.srvrScanReport.SrvrCounts.CacheHitPer = uint64(scanPipeline.CacheHitRatio())
 	}
 
 	stats := s.stats.Get()
