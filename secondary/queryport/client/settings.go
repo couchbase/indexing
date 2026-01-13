@@ -73,6 +73,9 @@ type ClientSettings struct {
 	rerankFactor int32
 	maxHeapSize  int32
 	maxVectorDimension int32
+
+	// Scan reporting flag
+	enableScanReporting uint32
 }
 
 func NewClientSettings(needRefresh bool, toolsConfig common.Config) *ClientSettings {
@@ -398,6 +401,18 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.indexLimit, 200)
 	}
 
+	enableScanReporting, ok := config["indexer.settings.generateScanReport"]
+	if ok {
+		if enableScanReporting.Bool() {
+			atomic.StoreUint32(&s.enableScanReporting, 1)
+		} else {
+			atomic.StoreUint32(&s.enableScanReporting, 0)
+		}
+	} else {
+		logging.Errorf("ClientSettings: missing indexer.settings.generateScanReport")
+		atomic.StoreUint32(&s.enableScanReporting, 0)
+	}
+
 	allowDDLDuringScaleUp, ok := config["indexer.allow_ddl_during_scaleup"]
 	if ok {
 		if allowDDLDuringScaleUp.Bool() {
@@ -582,6 +597,10 @@ func (s *ClientSettings) MaxHeapSize() int32 {
 
 func (s *ClientSettings) MaxVectorDimension() int32 {
 	return atomic.LoadInt32(&s.maxVectorDimension)
+}
+
+func (s *ClientSettings) EnableScanReporting() bool {
+	return atomic.LoadUint32(&s.enableScanReporting) == 1
 }
 
 func setShardDealerConfig(s *ClientSettings, config common.Config) {

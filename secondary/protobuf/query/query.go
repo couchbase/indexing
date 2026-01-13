@@ -84,6 +84,7 @@ func (r *StreamEndResponse) GetServerScanReport() (*report.HostScanReport) {
 			SrvrMs: &report.ServerTimings{
 				TotalDur:          sr.GetServerTimings().GetTotalDur(),
 				WaitDur:           sr.GetServerTimings().GetWaitDur(),
+				ScanDur:           sr.GetServerTimings().GetScanDur(),
 				GetSeqnosDur:      sr.GetServerTimings().GetGetSeqnosDur(),
 				DiskReadDur:       sr.GetServerTimings().GetDiskReadDur(),
 				DistCompDur:       sr.GetServerTimings().GetDistCompDur(),

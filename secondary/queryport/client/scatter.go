@@ -284,7 +284,12 @@ func (b *RequestBroker) SetRetry(retry bool) {
 	b.retry = retry
 }
 
-func (b *RequestBroker) InitScanReport(requestId string, defnID common.IndexDefnId) {
+func (b *RequestBroker) InitScanReport(requestId string, defnID common.IndexDefnId, enableScanReporting bool) {
+	if !enableScanReporting {
+		b.scanReport = nil
+		return
+	}
+
 	b.scanReport = &report.ScanReportState{
 		ReqID:         requestId,
 		DefnID:        defnID,
@@ -293,8 +298,12 @@ func (b *RequestBroker) InitScanReport(requestId string, defnID common.IndexDefn
 }
 
 func (b *RequestBroker) AttachIndexerScanReport(hostReport *report.HostScanReport, i int) {
-	hostId := b.perHostReportIds[i]
+	if b.scanReport == nil {
+		logging.Errorf("scan report is not initialized but received scan report from indexer for requestId: %v", b.requestId)
+		return
+	}
 
+	hostId := b.perHostReportIds[i]
 	if b.scanReport.HostScanReport[hostId] != nil {
 		b.scanReport.HostScanReport[hostId].SrvrMs = hostReport.SrvrMs
 		b.scanReport.HostScanReport[hostId].SrvrCounts = hostReport.SrvrCounts
@@ -794,7 +803,9 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 		tmpbuf, tmpbufPoolIdx = GetFromPools()
 		c.tmpbufs[i] = tmpbuf
 		c.tmpbufsPoolIdx[i] = tmpbufPoolIdx
-		c.perHostReportIds[i] = c.GenPerClientReportId(targetInstId[i], partition[i])
+		if c.scanReport != nil {
+			c.perHostReportIds[i] = c.GenPerClientReportId(targetInstId[i], partition[i])
+		}
 	}
 
 	if c.useGather() {
