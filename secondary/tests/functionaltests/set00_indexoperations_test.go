@@ -3,13 +3,17 @@ package functionaltests
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"testing"
 	"time"
 
 	"gopkg.in/couchbase/gocb.v1"
 
+	"github.com/couchbase/gometa/repository"
 	c "github.com/couchbase/indexing/secondary/common"
+	json "github.com/couchbase/indexing/secondary/common/json"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
@@ -588,4 +592,50 @@ func TestIndexingOnXATTRs(t *testing.T) {
 	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
 	time.Sleep(bucketOpWaitDur * time.Second) // Sleep after bucket create or delete*/
+}
+
+func TestIndexMetadataStore(t *testing.T) {
+	log.Printf("In %v()", t.Name())
+
+	nodes, err := secondaryindex.GetIndexerNodes(kvaddress)
+	tc.HandleError(err, "failed to read couchbase nodes")
+
+	for _, node := range nodes {
+		metastats := getMetastoreStats(node.Hostname, t)
+		if metastats.Type != repository.MagmaStoreType {
+			t.Errorf("Expected node %v to have %s store but has %s",
+				node.Hostname, repository.MagmaStoreType, metastats.Type)
+		}
+	}
+}
+
+func getMetastoreStats(nodeAddr string, t *testing.T) *repository.MetastoreStats {
+	idxAddr := secondaryindex.GetIndexHttpAddrOnNode(
+		clusterconfig.Username,
+		clusterconfig.Password,
+		nodeAddr,
+	)
+	metaUrl := "http://" + idxAddr + "/stats/metadata"
+
+	client := &http.Client{}
+	defer client.CloseIdleConnections()
+	log.Printf("for IndexMetadataStore %v", metaUrl)
+	req, _ := http.NewRequest("GET", metaUrl, nil)
+	req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+
+	resp, err := client.Do(req)
+	tc.HandleError(err, "failed to read indexer metadata")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("GET /stats/metadata failed")
+	}
+
+	metastats := new(repository.MetastoreStats)
+	body, _ := ioutil.ReadAll(resp.Body)
+	err = json.Unmarshal(body, metastats)
+	tc.HandleError(err, "GET /stats/metadata :: Unmarshal of response body")
+
+	return metastats
 }
