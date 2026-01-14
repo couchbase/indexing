@@ -60,7 +60,7 @@ type ResponseReader interface {
 
 	GetReadUnits() uint64
 
-	GetServerScanReport() (*report.HostScanReport)
+	GetServerScanReport() *report.HostScanReport
 }
 
 // ResponseSender is responsible for forwarding result to the client
@@ -1806,7 +1806,16 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
+
+	retryCount := -1
+	defer func() {
+		if broker.scanReport != nil {
+			broker.scanReport.Retries = retryCount
+		}
+	}()
+
 	for i := 0; true; {
+		retryCount++
 		foundScanport := false
 
 		queryports, targetDefnID, targetInstIds, rollbackTimes, partitions, numPartitions, ok := c.bridge.GetScanport(defnID, excludes, skips)
