@@ -62,19 +62,19 @@ func logScanReport(srvrScanReport *report.HostScanReport) {
 }
 
 func packageReport(srvrScanReport *report.HostScanReport) *protobuf.SrvrScanReport {
-	if srvrScanReport == nil || srvrScanReport.SrvrMs == nil || srvrScanReport.SrvrCounts == nil {
+	if srvrScanReport == nil || srvrScanReport.SrvrNs == nil || srvrScanReport.SrvrCounts == nil {
 		return nil
 	}
 
 	report := &protobuf.SrvrScanReport{
 		ServerTimings: &protobuf.ServerTimings{
-			TotalDur:          proto.Int64(srvrScanReport.SrvrMs.TotalDur),
-			WaitDur:           proto.Int64(srvrScanReport.SrvrMs.WaitDur),
-			ScanDur:           proto.Int64(srvrScanReport.SrvrMs.ScanDur),
-			GetSeqnosDur:      proto.Int64(srvrScanReport.SrvrMs.GetSeqnosDur),
-			DiskReadDur:       proto.Int64(srvrScanReport.SrvrMs.DiskReadDur),
-			DistCompDur:       proto.Int64(srvrScanReport.SrvrMs.DistCompDur),
-			CentroidAssignDur: proto.Int64(srvrScanReport.SrvrMs.CentroidAssignDur),
+			TotalDur:          proto.Int64(srvrScanReport.SrvrNs.TotalDur),
+			WaitDur:           proto.Int64(srvrScanReport.SrvrNs.WaitDur),
+			ScanDur:           proto.Int64(srvrScanReport.SrvrNs.ScanDur),
+			GetSeqnosDur:      proto.Int64(srvrScanReport.SrvrNs.GetSeqnosDur),
+			DiskReadDur:       proto.Int64(srvrScanReport.SrvrNs.DiskReadDur),
+			DistCompDur:       proto.Int64(srvrScanReport.SrvrNs.DistCompDur),
+			CentroidAssignDur: proto.Int64(srvrScanReport.SrvrNs.CentroidAssignDur),
 		},
 		ServerCounts: &protobuf.ServerCounts{
 			RowsReturn:  proto.Uint64(srvrScanReport.SrvrCounts.RowsReturn),

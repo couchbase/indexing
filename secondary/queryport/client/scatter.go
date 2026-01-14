@@ -305,7 +305,7 @@ func (b *RequestBroker) AttachIndexerScanReport(hostReport *report.HostScanRepor
 
 	hostId := b.perHostReportIds[i]
 	if b.scanReport.HostScanReport[hostId] != nil {
-		b.scanReport.HostScanReport[hostId].SrvrMs = hostReport.SrvrMs
+		b.scanReport.HostScanReport[hostId].SrvrNs = hostReport.SrvrNs
 		b.scanReport.HostScanReport[hostId].SrvrCounts = hostReport.SrvrCounts
 	} else {
 		logging.Errorf("AttachIndexerScanReport: report per host detail not initialized for hostId: %v for requestId: %v", hostId, b.requestId)
@@ -316,18 +316,18 @@ func (b *RequestBroker) DoRetry() bool {
 	return b.retry
 }
 
-// For debugging purposes only. This will be removed
 func (b *RequestBroker) LogFinalReport() {
 	if !logging.IsEnabled(logging.Debug) || b.scanReport == nil {
 		return
 	}
 
 	sr := b.scanReport
-	report, err := json.Marshal(sr)
+	reportMap := sr.ToMap()
+	reportJson, err := json.Marshal(reportMap)
 	if err != nil {
 		logging.Errorf("logFinalReport err: %v, RequestId: %v", err, sr.ReqID)
 	}
-	logging.Debugf("Final scan report: %v", string(report))
+	logging.Debugf("Final scan report: %v", string(reportJson))
 }
 
 // Close the broker on error

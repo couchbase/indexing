@@ -507,7 +507,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.generateScanReport = req.GetGenerateScanReport()
 		if r.generateScanReport {
 			r.srvrScanReport = &report.HostScanReport{
-				SrvrMs:     &report.ServerTimings{},
+				SrvrNs:     &report.ServerTimings{},
 				SrvrCounts: &report.ServerCounts{},
 			}
 		}
@@ -1802,8 +1802,8 @@ func (r *ScanRequest) setConsistency(cons common.Consistency, vector *protobuf.T
 		if localErr == nil && r.Stats != nil {
 			timeSince := time.Since(t0)
 			r.Stats.Timings.dcpSeqs.Put(timeSince)
-			if r.srvrScanReport != nil && r.srvrScanReport.SrvrMs != nil {
-				r.srvrScanReport.SrvrMs.GetSeqnosDur = timeSince.Milliseconds()
+			if r.srvrScanReport != nil && r.srvrScanReport.SrvrNs != nil {
+				r.srvrScanReport.SrvrNs.GetSeqnosDur = timeSince.Nanoseconds()
 			}
 		}
 		r.Ts.Crc64 = 0

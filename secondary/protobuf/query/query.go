@@ -81,7 +81,7 @@ func (r *StreamEndResponse) Error() error {
 func (r *StreamEndResponse) GetServerScanReport() (*report.HostScanReport) {
 	if sr := r.GetSrvrScanReport(); sr != nil {
 		return &report.HostScanReport{
-			SrvrMs: &report.ServerTimings{
+			SrvrNs: &report.ServerTimings{
 				TotalDur:          sr.GetServerTimings().GetTotalDur(),
 				WaitDur:           sr.GetServerTimings().GetWaitDur(),
 				ScanDur:           sr.GetServerTimings().GetScanDur(),

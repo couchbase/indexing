@@ -468,8 +468,8 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 			req.Stats.scanReqLatDist.Add(elapsed)
 		}
 
-		if req.srvrScanReport != nil && req.srvrScanReport.SrvrMs != nil {
-			req.srvrScanReport.SrvrMs.TotalDur = time.Now().Sub(ttime).Milliseconds()
+		if req.srvrScanReport != nil && req.srvrScanReport.SrvrNs != nil {
+			req.srvrScanReport.SrvrNs.TotalDur = time.Now().Sub(ttime).Milliseconds()
 		}
 	}()
 
@@ -638,9 +638,9 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	err := scanPipeline.Execute()
 	scanTime := time.Now().Sub(t0)
 
-	if req.srvrScanReport != nil && req.srvrScanReport.SrvrMs != nil && req.srvrScanReport.SrvrCounts != nil {
-		req.srvrScanReport.SrvrMs.WaitDur = waitTime.Milliseconds()
-		req.srvrScanReport.SrvrMs.ScanDur = scanTime.Milliseconds()
+	if req.srvrScanReport != nil && req.srvrScanReport.SrvrNs != nil && req.srvrScanReport.SrvrCounts != nil {
+		req.srvrScanReport.SrvrNs.WaitDur = waitTime.Nanoseconds()
+		req.srvrScanReport.SrvrNs.ScanDur = scanTime.Nanoseconds()
 		req.srvrScanReport.SrvrCounts.RowsReturn = scanPipeline.RowsReturned()
 		req.srvrScanReport.SrvrCounts.RowsScan = scanPipeline.RowsScanned()
 		req.srvrScanReport.SrvrCounts.BytesRead = scanPipeline.BytesRead()
