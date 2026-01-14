@@ -377,8 +377,8 @@ func main() {
 			return
 		}
 
-		tokens, _, err := planner.ExecuteRebalanceInternal(gClusterUrl, change, masterId, true,
-			gDetail, true, false, 0, 0, false, 100, 20000, binSize, 0, gEnableShardAffinity, false, nil)
+	tokens, _, err := planner.ExecuteRebalanceInternal(gClusterUrl, change, masterId, true,
+		gDetail, true, false, false, 0, 0, false, 100, 20000, binSize, 0, gEnableShardAffinity, false, nil)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return

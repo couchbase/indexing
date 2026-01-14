@@ -157,6 +157,11 @@ func (p *RandomPlacement) HasOptionalIndexes() bool {
 	return len(p.optionals) > 0
 }
 
+// Are all eligible indexes optional
+func (p *RandomPlacement) AllEligibleAreOptional() bool {
+	return len(p.indexes) > 0 && len(p.indexes) == len(p.optionals)
+}
+
 // Validate
 func (p *RandomPlacement) Validate(s *Solution) error {
 

@@ -58,6 +58,7 @@ type RunConfig struct {
 	CpuCostWeight    float64
 	MemCostWeight    float64
 	EjectOnly        bool
+	CanBypassReplicaRepairConstraints bool
 	DisableRepair    bool
 	Timeout          int
 	UseLive          bool
@@ -194,19 +195,19 @@ type TenantUsage struct {
 /////////////////////////////////////////////////////////////
 
 func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool,
-	disableReplicaRepair bool, threshold float64, timeout int, cpuProfile bool, minIterPerTemp int,
-	maxIterPerTemp int, binSize uint64, maxReplanRetry int, enableShardAffinity, useShardDealer bool) (
+	canBypassReplicaRepairConstraints bool, disableReplicaRepair bool, threshold float64, timeout int, cpuProfile bool,
+	minIterPerTemp int, maxIterPerTemp int, binSize uint64, maxReplanRetry int, enableShardAffinity, useShardDealer bool) (
 	map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn,
 	error) {
 	runtime := time.Now()
-	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair,
+	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, canBypassReplicaRepairConstraints, disableReplicaRepair,
 		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, binSize, maxReplanRetry, enableShardAffinity, useShardDealer, &runtime)
 }
 
 func ExecuteRebalanceInternal(clusterUrl string,
 	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool,
-	disableReplicaRepair bool, timeout int, threshold float64, cpuProfile bool, minIterPerTemp, maxIterPerTemp int,
-	binSize uint64, maxReplanRetry int, enableShardAffinity, useShardDealer bool, runtime *time.Time) (
+	canBypassReplicaRepairConstraints bool, disableReplicaRepair bool, timeout int, threshold float64, cpuProfile bool, minIterPerTemp,
+	maxIterPerTemp int, binSize uint64, maxReplanRetry int, enableShardAffinity, useShardDealer bool, runtime *time.Time) (
 	map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn,
 	error) {
 
@@ -245,6 +246,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.Resize = false
 	config.AddNode = numNode
 	config.EjectOnly = ejectOnly
+	config.CanBypassReplicaRepairConstraints = canBypassReplicaRepairConstraints
 	config.DisableRepair = disableReplicaRepair
 	config.Timeout = timeout
 	config.Runtime = runtime
@@ -3823,34 +3825,35 @@ func genCreateIndexDDL(ddl string, solution *Solution) error {
 func DefaultRunConfig() *RunConfig {
 
 	return &RunConfig{
-		Detail:                false,
-		GenStmt:               "",
-		MemQuotaFactor:        1.0,
-		CpuQuotaFactor:        1.0,
-		Resize:                true,
-		MaxNumNode:            int(math.MaxInt16),
-		Output:                "",
-		Shuffle:               0,
-		AllowMove:             false,
-		AllowSwap:             true,
-		AllowUnpin:            false,
-		AddNode:               0,
-		DeleteNode:            0,
-		MaxMemUse:             -1,
-		MaxCpuUse:             -1,
-		MemQuota:              -1,
-		CpuQuota:              -1,
-		DataCostWeight:        1,
-		CpuCostWeight:         1,
-		MemCostWeight:         1,
-		EjectOnly:             false,
-		DisableRepair:         false,
-		MinIterPerTemp:        100,
-		MaxIterPerTemp:        20000,
-		AllowDDLDuringScaleup: false,
-		binSize:               common.DEFAULT_BIN_SIZE, // 2.5G
-		UseShardDealer:        false,
-		maxReplanRetry:        0,
+		Detail:                            false,
+		GenStmt:                           "",
+		MemQuotaFactor:                    1.0,
+		CpuQuotaFactor:                    1.0,
+		Resize:                            true,
+		MaxNumNode:                        int(math.MaxInt16),
+		Output:                            "",
+		Shuffle:                           0,
+		AllowMove:                         false,
+		AllowSwap:                         true,
+		AllowUnpin:                        false,
+		AddNode:                           0,
+		DeleteNode:                        0,
+		MaxMemUse:                         -1,
+		MaxCpuUse:                         -1,
+		MemQuota:                          -1,
+		CpuQuota:                          -1,
+		DataCostWeight:                    1,
+		CpuCostWeight:                     1,
+		MemCostWeight:                     1,
+		EjectOnly:                         false,
+		CanBypassReplicaRepairConstraints: true,
+		DisableRepair:                     false,
+		MinIterPerTemp:                    100,
+		MaxIterPerTemp:                    20000,
+		AllowDDLDuringScaleup:             false,
+		binSize:                           common.DEFAULT_BIN_SIZE, // 2.5G
+		UseShardDealer:                    false,
+		maxReplanRetry:                    0,
 	}
 }
 
@@ -3905,7 +3908,7 @@ func initialSolution(config *RunConfig,
 
 	indexers := indexerNodes(constraint, indexes, sizing, false)
 
-	r := newSolution(constraint, sizing, indexers, false, false, config.DisableRepair, allowDDLDuringScaleup)
+	r := newSolution(constraint, sizing, indexers, false, false, config.DisableRepair, allowDDLDuringScaleup, config.CanBypassReplicaRepairConstraints, config.EjectOnly)
 
 	placement := newRandomPlacement(indexes, config.AllowSwap, false)
 	if err := placement.InitialPlace(r, indexes); err != nil {
@@ -3930,7 +3933,7 @@ func emptySolution(config *RunConfig,
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
-	r := newSolution(constraint, sizing, ([]*IndexerNode)(nil), false, false, config.DisableRepair, allowDDLDuringScaleup)
+	r := newSolution(constraint, sizing, ([]*IndexerNode)(nil), false, false, config.DisableRepair, allowDDLDuringScaleup, config.CanBypassReplicaRepairConstraints, config.EjectOnly)
 
 	return r, constraint
 }
@@ -3976,7 +3979,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
-	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, useLive, config.DisableRepair, allowDDLDuringScaleup)
+	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, useLive, config.DisableRepair, allowDDLDuringScaleup, config.CanBypassReplicaRepairConstraints, config.EjectOnly)
 	r.calculateSize() // in case sizing formula changes after the plan is saved
 	r.usedReplicaIdMap = plan.UsedReplicaIdMap
 

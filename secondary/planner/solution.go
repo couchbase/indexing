@@ -66,9 +66,20 @@ type Solution struct {
 	// rebalance while upgrading
 	swapOnlyRebalance bool
 
+	// flag for ignoring constraint check during replica repair when only
+	// optional indexes (replicas) are being rebuilt on a single node
+	bypassReplicaRepairConstraintCheck bool
+
+	// Config: Feature flag from indexer.settings.rebalance.bypassReplicaRepairConstraintCheck
+	canBypassReplicaRepairConstraints bool
+
 	// When set to 1, planner ignores excludeNode params as well as resource
 	// contraints during DDL operations
 	allowDDLDuringScaleUp bool
+
+	// When set to true, only indexes from ejected nodes are moved (no redistribution)
+	// This is the inverted value of indexer.settings.rebalance.redistribute_indexes
+	ejectOnly bool
 
 	// Contains the slot mapping for each index that is present in the
 	// cluster. DefnId -> replicaId -> PartnId -> SlotId on which the partition exists
@@ -83,25 +94,28 @@ type Solution struct {
 
 // Constructor
 func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*IndexerNode, isLive bool, useLive bool,
-	disableRepair bool, allowDDLDuringScaleUp bool) *Solution {
+	disableRepair bool, allowDDLDuringScaleUp bool, canBypassReplicaRepairConstraints bool, ejectOnly bool) *Solution {
 
 	r := &Solution{
-		constraint:            constraint,
-		sizing:                sizing,
-		Placement:             make([]*IndexerNode, len(indexers)),
-		isLiveData:            isLive,
-		useLiveData:           useLive,
-		disableRepair:         disableRepair,
-		estimate:              true,
-		enableExclude:         true,
-		indexSGMap:            make(ServerGroupMap),
-		replicaMap:            make(ReplicaMap),
-		usedReplicaIdMap:      make(UsedReplicaIdMap),
-		eligIndexSGMap:        make(ServerGroupMap),
-		eligReplicaMap:        make(ReplicaMap),
-		eligUsedReplicaIdMap:  make(UsedReplicaIdMap),
-		swapOnlyRebalance:     false,
-		allowDDLDuringScaleUp: allowDDLDuringScaleUp,
+		constraint:                         constraint,
+		sizing:                             sizing,
+		Placement:                          make([]*IndexerNode, len(indexers)),
+		isLiveData:                         isLive,
+		useLiveData:                        useLive,
+		disableRepair:                      disableRepair,
+		estimate:                           true,
+		enableExclude:                      true,
+		indexSGMap:                         make(ServerGroupMap),
+		replicaMap:                         make(ReplicaMap),
+		usedReplicaIdMap:                   make(UsedReplicaIdMap),
+		eligIndexSGMap:                     make(ServerGroupMap),
+		eligReplicaMap:                     make(ReplicaMap),
+		eligUsedReplicaIdMap:               make(UsedReplicaIdMap),
+		swapOnlyRebalance:                  false,
+		bypassReplicaRepairConstraintCheck: false,                             // Decision - will be set by canBypassResourceConstraintsForReplicaRepair()
+		canBypassReplicaRepairConstraints:  canBypassReplicaRepairConstraints, // Config flag
+		allowDDLDuringScaleUp:              allowDDLDuringScaleUp,
+		ejectOnly:                          ejectOnly,
 
 		indexSlots: make(map[common.IndexDefnId]map[int]map[common.PartitionId]uint64),
 		slotMap:    make(map[uint64]map[*IndexerNode]int),
@@ -128,6 +142,10 @@ func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*I
 // Whether solution should use live data
 func (s *Solution) UseLiveData() bool {
 	return s.isLiveData && s.useLiveData
+}
+
+func (s *Solution) GetBypassReplicaRepairConstraintCheck() bool {
+	return s.bypassReplicaRepairConstraintCheck
 }
 
 // Get the constraint method for the solution
@@ -358,6 +376,7 @@ func (s *Solution) clone() *Solution {
 	r.drainMean = s.drainMean
 	r.enforceConstraint = s.enforceConstraint
 	r.swapOnlyRebalance = s.swapOnlyRebalance
+	r.bypassReplicaRepairConstraintCheck = s.bypassReplicaRepairConstraintCheck
 	r.indexSGMap = s.indexSGMap
 	r.replicaMap = s.replicaMap
 	r.usedReplicaIdMap = s.usedReplicaIdMap
@@ -365,6 +384,8 @@ func (s *Solution) clone() *Solution {
 	r.eligReplicaMap = make(ReplicaMap)
 	r.eligUsedReplicaIdMap = make(UsedReplicaIdMap)
 	r.allowDDLDuringScaleUp = s.allowDDLDuringScaleUp
+	r.canBypassReplicaRepairConstraints = s.canBypassReplicaRepairConstraints
+	r.ejectOnly = s.ejectOnly
 
 	for _, node := range s.Placement {
 		if node.isDelete && len(node.Indexes) == 0 {
@@ -554,8 +575,8 @@ func (s *Solution) PrintLayout() {
 			indexer.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDiskUsage(s.UseLiveData()))),
 			indexer.GetScanRate(s.UseLiveData()), indexer.GetDrainRate(s.UseLiveData()),
 			len(indexer.Indexes), indexer.ShardCompatVersion)
-		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v allowDDLDuringScaleup:%v",
-			indexer.IsDeleted(), indexer.isNew, indexer.Exclude, indexer.meetConstraint, s.computeUsageRatio(indexer), s.AllowDDLDuringScaleUp())
+		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v allowDDLDuringScaleup:%v bypassConstraintsCheck:%v",
+			indexer.IsDeleted(), indexer.isNew, indexer.Exclude, indexer.meetConstraint, s.computeUsageRatio(indexer), s.AllowDDLDuringScaleUp(), s.GetBypassReplicaRepairConstraintCheck())
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
@@ -637,8 +658,8 @@ func (s *Solution) PrintCompactLayout() {
 			indexer.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDiskUsage(s.UseLiveData()))),
 			indexer.GetScanRate(s.UseLiveData()), indexer.GetDrainRate(s.UseLiveData()),
 			len(indexer.Indexes), indexer.ShardCompatVersion)
-		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v allowDDLDuringScaleup:%v",
-			indexer.IsDeleted(), indexer.isNew, indexer.Exclude, indexer.meetConstraint, s.computeUsageRatio(indexer), s.AllowDDLDuringScaleUp())
+		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v allowDDLDuringScaleup:%v bypassConstraintCheck:%v",
+			indexer.IsDeleted(), indexer.isNew, indexer.Exclude, indexer.meetConstraint, s.computeUsageRatio(indexer), s.AllowDDLDuringScaleUp(), s.GetBypassReplicaRepairConstraintCheck())
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
@@ -1367,6 +1388,11 @@ func (s *Solution) ignoreResourceConstraint() bool {
 	// TODO: Add checks for DDL during a transient heterogenous state in swap-only rebalance
 	// Check for Swap-only Rebalance during upgrade
 	if s.swapOnlyRebalance {
+		return true
+	}
+
+	// Check for Replica Repair bypass constraints check when only optional indexes are being rebuilt
+	if s.bypassReplicaRepairConstraintCheck {
 		return true
 	}
 
@@ -2347,6 +2373,50 @@ func (s *Solution) markSwapOnlyRebalance() {
 			}
 		}
 	}
+}
+
+// Check for Replica Repair Bypass
+// Scenario: Scale-up with replica repair
+// Conditions for bypass:
+// 1. Feature flag bypassReplicaRepairConstraintCheck == true
+// 2. redistributeIndexes == false
+// 3. command == CommandRebalance
+// 4. numDeletedNode == 0 (no nodes being ejected)
+// 5. numNewNode == 1 (exactly one new node being added)
+// 6. All eligible indexes are optional (replica-repair only, no required indexes)
+// 7. All eligible indexes are placed on the new node
+func (s *Solution) canBypassResourceConstraintsForReplicaRepair() {
+
+	s.bypassReplicaRepairConstraintCheck = false
+
+	if !s.canBypassReplicaRepairConstraints {
+		return
+	}
+
+	redistribute := !s.ejectOnly
+	newNodes := s.getNewNodes()
+	if s.command != CommandRebalance || s.numDeletedNode != 0 || len(newNodes) != 1 {
+		return
+	}
+	if redistribute || s.place == nil {
+		return
+	}
+
+	if !s.place.AllEligibleAreOptional() {
+		logging.Infof("Solution::canBypassResourceConstraintsForReplicaRepair: Not all eligible indexes are optional")
+		return
+	}
+	// Check that ALL eligible indexes are on new node
+	for _, indexer := range s.Placement {
+		for _, idx := range indexer.Indexes {
+			if idx.eligible && !indexer.isNew {
+				// Found an eligible index on an old node - fail bypass
+				return
+			}
+		}
+	}
+	s.bypassReplicaRepairConstraintCheck = true
+	logging.Infof("Solution::canBypassResourceConstraintsForReplicaRepair: Replica repair constraint bypass is set to true")
 }
 
 func (s *Solution) addToIndexSlots(defnId common.IndexDefnId, replicaId int, partnId common.PartitionId, slotId uint64) {

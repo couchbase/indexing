@@ -336,6 +336,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 				if sr.canMaintainShardAffinity && !common.IsServerlessDeployment() {
 					onEjectOnly := cfg["rebalance.node_eject_only"].Bool()
 					optimizePlacement := cfg["settings.rebalance.redistribute_indexes"].Bool()
+					canBypassReplicaRepairConstraints := cfg["settings.rebalance.canBypassReplicaRepairConstraints"].Bool()
 					disableReplicaRepair := cfg["rebalance.disable_replica_repair"].Bool()
 					timeout := cfg["planner.timeout"].Int()
 					threshold := cfg["planner.variationThreshold"].Float64()
@@ -356,7 +357,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					}
 
 					sr.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *sr.topologyChange,
-						sr.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
+						sr.nodeUUID, onEjectOnly, canBypassReplicaRepairConstraints, disableReplicaRepair, threshold, timeout, cpuProfile,
 						minIterPerTemp, maxIterPerTemp, binSize, maxReplanRetry, true, useShardDealer)
 
 				} else { //
