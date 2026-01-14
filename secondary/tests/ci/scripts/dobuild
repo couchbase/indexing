@@ -156,6 +156,12 @@ git submodule init
 git submodule update --init --force --remote
 note_version testrunner $WORKSPACE/testrunner
 
+cd $WORKSPACE/goproj/src/github.com/couchbase/gocbcrypto
+echo "Switching gocbcrypto to main"
+git checkout main 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout main"
+git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
+note_version gocbcrypto $WORKSPACE/goproj/src/github.com/couchbase/gocbcrypto
+
 >~/gerrit.list
 if [ "$CIBOT" = "true" ]; then
   autolist="$(ssh review.couchbase.org gerrit query \"project:indexing status:open branch:$BRANCH reviewer:self\" | grep number: | awk '{print $2}' | sort -n)"
