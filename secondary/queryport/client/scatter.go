@@ -308,7 +308,7 @@ func (b *RequestBroker) AttachIndexerScanReport(hostReport *report.HostScanRepor
 		b.scanReport.HostScanReport[hostId].SrvrMs = hostReport.SrvrMs
 		b.scanReport.HostScanReport[hostId].SrvrCounts = hostReport.SrvrCounts
 	} else {
-		b.scanReport.HostScanReport[hostId] = hostReport
+		logging.Errorf("AttachIndexerScanReport: report per host detail not initialized for hostId: %v for requestId: %v", hostId, b.requestId)
 	}
 }
 
@@ -789,7 +789,17 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 		c.tmpbufs[i] = tmpbuf
 		c.tmpbufsPoolIdx[i] = tmpbufPoolIdx
 		if c.scanReport != nil {
-			c.perHostReportIds[i] = report.GenPerClientReportId(targetInstId[i], partition[i])
+			id := report.GenPerClientReportId(targetInstId[i], partition[i])
+			c.perHostReportIds[i] = id
+
+			// Pre-create all PerHostDetail entries so no concurrent write to the map
+			// is needed while attaching per host reports
+			if c.scanReport.HostScanReport == nil {
+				c.scanReport.HostScanReport = make(map[string]*report.HostScanReport, len(client))
+			}
+			if _, ok := c.scanReport.HostScanReport[id]; !ok {
+				c.scanReport.HostScanReport[id] = &report.HostScanReport{}
+			}
 		}
 	}
 

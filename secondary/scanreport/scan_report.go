@@ -11,13 +11,11 @@ package scanreport
 
 import (
 	"fmt"
-	"sync"
 
 	"github.com/couchbase/indexing/secondary/common"
 )
 
 type ScanReportState struct {
-	sync.Mutex
 	ReqID string
 
 	// Final report fields
