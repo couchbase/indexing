@@ -15,6 +15,7 @@ import (
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/memdb"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
@@ -500,6 +501,9 @@ func TestIdxCorruptMOITwoSnapsBothCorrupt(t *testing.T) {
 	}
 
 	var slicePath string
+	var cfg memdb.Config
+	cfg.SetTestEncryption()
+
 	slicePath, err = tc.GetIndexSlicePath("corrupt_idx5_name", "default", absIndexStorageDir, 0)
 	FailTestIfError(err, "Error in GetIndexSlicePath", t)
 
@@ -519,7 +523,7 @@ func TestIdxCorruptMOITwoSnapsBothCorrupt(t *testing.T) {
 	}
 
 	// Step 3: Corrupt all snapshots
-	infos, err := tc.GetMemDBSnapshots(slicePath, false)
+	infos, err := tc.GetMemDBSnapshots(slicePath, false, cfg.GetKeyById)
 	FailTestIfError(err, "Error in GetMemDBSnapshots", t)
 
 	snapInfoContainer := tc.NewSnapshotInfoContainer(infos)

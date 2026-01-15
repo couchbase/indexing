@@ -14,6 +14,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	mclient "github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/natsort"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -726,6 +727,10 @@ func corruptPlasmaIndex(indexName, bucketName, dirPath string, partnId c.Partiti
 func corruptMOIIndex(indexName, bucketName, dirPath string, partnId c.PartitionId) error {
 	var err error
 	var slicePath string
+	var cfg memdb.Config
+	// configure GetKeyId callback if slice is encrypted. TBD: fetch callback from the framework
+	cfg.SetTestEncryption()
+
 	slicePath, err = tc.GetIndexSlicePath(indexName, bucketName, dirPath, partnId)
 	if err != nil {
 		return err
@@ -733,7 +738,7 @@ func corruptMOIIndex(indexName, bucketName, dirPath string, partnId c.PartitionI
 
 	log.Printf("Corrupting index %v slicePath %v", indexName, slicePath)
 
-	infos, err := tc.GetMemDBSnapshots(slicePath, true)
+	infos, err := tc.GetMemDBSnapshots(slicePath, true, cfg.GetKeyById)
 	if err != nil {
 		return err
 	}
@@ -802,6 +807,10 @@ func CorruptMOIIndexLatestSnapshot(indexName, bucketName, dirPath, indexUsing st
 
 	var err error
 	var slicePath string
+
+	var cfg memdb.Config
+	cfg.SetTestEncryption()
+
 	slicePath, err = tc.GetIndexSlicePath(indexName, bucketName, dirPath, partnId)
 	if err != nil {
 		return err
@@ -809,7 +818,7 @@ func CorruptMOIIndexLatestSnapshot(indexName, bucketName, dirPath, indexUsing st
 
 	log.Printf("Corrupting index %v slicePath %v", indexName, slicePath)
 
-	infos, err := tc.GetMemDBSnapshots(slicePath, true)
+	infos, err := tc.GetMemDBSnapshots(slicePath, true, cfg.GetKeyById)
 	if err != nil {
 		return err
 	}

@@ -3,13 +3,17 @@ package common
 import (
 	"container/list"
 	"encoding/json"
-	"io/ioutil"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/couchbase/gocbcrypto"
+	"github.com/couchbase/indexing/secondary/memdb"
 )
 
 const tmpDirName = ".tmp" // Same as indexer.tmpDirName
@@ -52,7 +56,7 @@ func NewSnapshotInfoContainer(infos []*MemdbSnapshotInfo) *snapshotInfoContainer
 	return sc
 }
 
-func GetMemDBSnapshots(slicePath string, retry bool) ([]*MemdbSnapshotInfo, error) {
+func GetMemDBSnapshots(slicePath string, retry bool, getKeyById memdb.GetKeyByIdCb) ([]*MemdbSnapshotInfo, error) {
 	var files []string
 	pattern := "*/manifest.json"
 
@@ -78,11 +82,27 @@ func GetMemDBSnapshots(slicePath string, retry bool) ([]*MemdbSnapshotInfo, erro
 			fd, err := os.Open(f)
 			if err == nil {
 				defer fd.Close()
-				bs, err := ioutil.ReadAll(fd)
+				bs, err := io.ReadAll(fd)
+				if err == nil {
+					if gocbcrypto.IsBytesEncrypted(bs) {
+						if getKeyById != nil {
+							fn := func([]byte) []byte {
+								key, _, _ := getKeyById(nil)
+								return key
+							}
+							bs, err = gocbcrypto.ReadFile(f, fn, nil)
+						} else {
+							err = fmt.Errorf("nil GetKeyById callback")
+						}
+					}
+				}
+
 				if err == nil {
 					err = json.Unmarshal(bs, info)
 					if err == nil {
 						infos = append(infos, info)
+					} else {
+						log.Printf("GetMemDBSnapshots error:%v", err)
 					}
 				}
 			}
