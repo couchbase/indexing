@@ -181,7 +181,8 @@ type builder struct {
 	commandListener *mc.CommandListener
 	listenerDonech  chan bool
 
-	lastLogTime time.Time
+	lastLogTime            time.Time
+	lastItemCountCheckTime time.Time
 }
 
 type janitor struct {
@@ -4147,6 +4148,10 @@ func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error
 		return false
 	}
 
+	if common.IsRetryableTrainListSizeError(err.Error()) {
+		return true
+	}
+
 	if common.IsVectorTrainingError(err.Error()) {
 		return false
 	}
@@ -5223,9 +5228,19 @@ func (s *builder) run() {
 			s.addPending(defn.Bucket, defn.Scope, defn.Collection, uint64(defn.DefnId))
 
 		case <-ticker.C:
+
+			logMsg := time.Since(s.lastLogTime) > time.Duration(30*time.Second)
+			itemCountCheck := false
+			// Set itemsCountCheck to true every 10 seconds based on ticker which is set
+			// for every 200 milliseconds
+			if time.Since(s.lastItemCountCheckTime) > time.Duration(10*time.Second) {
+				itemCountCheck = true
+				s.lastItemCountCheckTime = time.Now()
+			}
+
 			// This case submits index builds for as many defnIds in the pendings map as allowed
 			// (batchSize minus number already building).
-			processed := s.processBuildToken(false)
+			processed := s.processBuildToken(logMsg)
 
 			//when building from build tokens, sleep for 30 seconds,
 			//to avoid racing ahead of build index command coming
@@ -5249,14 +5264,14 @@ func (s *builder) run() {
 			if len(s.pendings) > 0 {
 				buildList, quota := s.getBuildList()
 				for _, key := range buildList {
-					quota = s.tryBuildIndex(key, quota) // submits defnId builds and reduces quota by number submitted
+					quota = s.tryBuildIndex(key, quota, logMsg, itemCountCheck) // submits defnId builds and reduces quota by number submitted
 					if quota <= 0 {
 						break
 					}
 				}
 			}
 
-			if time.Since(s.lastLogTime) > time.Duration(30*time.Second) {
+			if logMsg {
 				s.lastLogTime = time.Now()
 			}
 
@@ -5320,7 +5335,7 @@ func (s *builder) addPending(bucket, scope, collection string, defnId uint64) bo
 
 // tryBuildIndex starts as many index builds as possible for keyspace pendingKey w.r.t. the quota argument
 // (which is per index, not per instance). It returns the remaining quota (original minus number of builds started).
-func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
+func (s *builder) tryBuildIndex(pendingKey string, quota int32, logMsg bool, itemCountCheck bool) int32 {
 
 	bucket, scope, collection := getCollectionFromKey(pendingKey)
 	quotaRemaining := quota // original quota minus number of index builds started here
@@ -5364,9 +5379,43 @@ func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 						break
 					}
 
-					// Do not retry index build if there are any errors observed during
-					// vector index training as user intervention might be required
-					if common.IsVectorTrainingError(inst.Error) {
+					// If error is retryable get itemsCount for the index keyspace
+					// and build index if retry will succeed
+					if common.IsRetryableTrainListSizeError(inst.Error) {
+						if inst.State == uint32(common.INDEX_STATE_READY) {
+							foundReady = true
+						}
+
+						if !itemCountCheck {
+							buildDefnId = false
+							if logMsg {
+								logging.Infof("builder: Will retry building index (%v, %v) in next iteration. ItemCountCheck: %v", defnId, bucket, itemCountCheck)
+							}
+							continue
+						}
+
+						itemsCount, err := common.CollectionItemCount(s.manager.clusterURL, common.DEFAULT_POOL, defn.Bucket, defn.CollectionId)
+						if err != nil {
+							buildDefnId = false
+							if logMsg {
+								logging.Infof("builder: Failed to get itemsCount for index (%v, %v).  Skipping.", defn.DefnId, defn.Bucket)
+							}
+							continue
+						}
+
+						trainListSize := defn.VectorMeta.GetTrainListSize(itemsCount)
+						if itemsCount < trainListSize {
+							buildDefnId = false
+							if logMsg {
+								logging.Infof("builder: Items count for index (%v, %v) is less than train list size configured (%v).  Skipping.", defn.DefnId, defn.Bucket, trainListSize)
+							}
+							continue
+						}
+					}
+
+					if common.IsVectorTrainingError(inst.Error) && !common.IsRetryableTrainListSizeError(inst.Error) {
+						// Do not retry index build if there are any errors observed during
+						// vector index training as user intervention might be required
 						logging.Verbosef("builder: Disabling background build for inst: %v due to err: %v", inst.InstId, inst.Error)
 						continue
 					}
@@ -5390,7 +5439,9 @@ func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 				} else if !buildDefnId {
 					// put it back to the pending list if index build is disable
 					pendingList = append(pendingList, defnId)
-					logging.Warnf("builder: Background build is disabled.  Will retry building index (%v, %v) in next iteration.", defnId, bucket)
+					if logMsg {
+						logging.Warnf("builder: Will retry building index (%v, %v) in next iteration. IsDisableBuild: %v", defnId, bucket, isDisableBuild)
+					}
 				}
 			}
 
@@ -5485,13 +5536,12 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 	return quota, skipList
 }
 
-func (s *builder) processBuildToken(bootstrap bool) bool {
+func (s *builder) processBuildToken(logMsg bool) bool {
 
 	entries := s.commandListener.GetNewBuildTokens()
 	retryList := make(map[string]*mc.BuildCommandToken)
 
 	canAllowDDLDuringRebalance := s.manager.canAllowDDLDuringRebalance() && s.manager.isRebalanceRunning()
-	logMsg := time.Since(s.lastLogTime) > time.Duration(30*time.Second)
 
 	processed := false
 
@@ -5569,9 +5619,9 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 				continue
 			}
 
-			// Do not retry index build if there are any errors observed during
-			// vector index training as user intervention might be required
-			if common.IsVectorTrainingError(inst.Error) {
+			if common.IsVectorTrainingError(inst.Error) && !common.IsRetryableTrainListSizeError(inst.Error) {
+				// Do not retry index build if there are any errors observed during
+				// vector index training as user intervention might be required
 				logging.Verbosef("builder: Skipping build token from further processing for inst: %v due to err: %v", inst.InstId, inst.Error)
 				continue
 			}

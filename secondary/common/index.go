@@ -1137,6 +1137,8 @@ type VectorMetadata struct {
 	TrainList         int              `json:"trainlist,omitempty"`
 	PersistFullVector bool             `json:"persistFullVector,omitempty"`
 
+	TrainListWait bool `json:"trainListWait,omitempty"`
+
 	Quantizer *VectorQuantizer `json:"quantizer,omitempty"`
 }
 
@@ -1153,6 +1155,7 @@ func (v *VectorMetadata) Clone() *VectorMetadata {
 		Nprobes:           v.Nprobes,
 		TrainList:         v.TrainList,
 		PersistFullVector: v.PersistFullVector,
+		TrainListWait:     v.TrainListWait,
 		Quantizer:         v.Quantizer.Clone(),
 	}
 
@@ -1179,13 +1182,39 @@ func (v *VectorMetadata) IsEquivalent(u *VectorMetadata) bool {
 	return v.Quantizer.IsEquivalent(u.Quantizer)
 }
 
+func (v *VectorMetadata) WaitForTrainList() bool {
+	if v == nil {
+		return false
+	}
+
+	return v.TrainListWait
+}
+
 func (v *VectorMetadata) String() string {
 	if v == nil {
 		return ""
 	}
 
-	return fmt.Sprintf("CompositeVector: %v, BHIVE: %v, Dimension: %v, Similarity: %v, Quantizer: %v, nprobes: %v",
-		v.IsCompositeIndex, v.IsBhive, v.Dimension, v.Similarity, v.Quantizer.String(), v.Nprobes)
+	return fmt.Sprintf("CompositeVector: %v, BHIVE: %v, Dimension: %v, Similarity: %v, Quantizer: %v, nprobes: %v, trainListWait: %v",
+		v.IsCompositeIndex, v.IsBhive, v.Dimension, v.Similarity, v.Quantizer.String(), v.Nprobes, v.TrainListWait)
+}
+
+// GetTrainListSize returns the effective minimum number of training items required for this
+// vector index given the current items count in the keyspace. If TrainList is explicitly
+// configured, it is returned as-is. Otherwise the minimum centroids are derived from
+// itemsCount and the quantizer settings (Nlist / PQ Nbits).
+func (v *VectorMetadata) GetTrainListSize(itemsCount uint64) uint64 {
+	if v == nil {
+		return 0
+	}
+	if v.TrainList != 0 {
+		return uint64(v.TrainList)
+	}
+	minCentroids := v.Quantizer.ComputeNlist(itemsCount)
+	if v.Quantizer != nil && v.Quantizer.Type == PQ {
+		minCentroids = max(1<<v.Quantizer.Nbits, minCentroids)
+	}
+	return uint64(minCentroids)
 }
 
 type SparseVector struct {

@@ -11,6 +11,7 @@ const ERR_TRAINING string = "ErrTraining: "
 const ERR_BUILD_AFTER_TRAINING string = "ErrInBuildAfterTraining: "
 const INVALID_TRAIN_LIST_SIZE string = "InvalidTrainListSize: "
 const INVALID_ITEMS_COUNT string = "InvalidItemsCount: "
+const ERR_RETRYABLE_TRAIN_LIST_SIZE string = "RetryableTrainListSizeError: "
 
 // error codes
 
@@ -221,7 +222,11 @@ const (
 const STAT_LOG_TS_FORMAT = "2006-01-02T15:04:05.000-07:00"
 
 func IsVectorTrainingError(errStr string) bool {
-	return len(errStr) > len(ERR_TRAINING) && errStr[0:len(ERR_TRAINING)] == ERR_TRAINING
+	return len(errStr) > len(ERR_TRAINING) && strings.Contains(errStr, ERR_TRAINING)
+}
+
+func IsRetryableTrainListSizeError(errStr string) bool {
+	return len(errStr) > len(ERR_RETRYABLE_TRAIN_LIST_SIZE) && strings.Contains(errStr, ERR_RETRYABLE_TRAIN_LIST_SIZE)
 }
 
 func IsBuildErrAfterTraining(errStr string) bool {
