@@ -230,6 +230,9 @@ func (tp TrainingPhase) String() string {
 
 type SecExprAttr uint32
 
+// Note:
+// * Keep these in sync with IkAttributes in query/datastore/index.go
+// * Unit test TestIkAttributesMatchSecExprAttr should be updated to reflect the changes.
 // IK_DESC IkAttributes = 1 << iota
 // IK_MISSING
 // IK_DENSE_VECTOR
