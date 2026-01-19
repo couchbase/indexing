@@ -228,6 +228,31 @@ func (tp TrainingPhase) String() string {
 	}
 }
 
+type SecExprAttr uint32
+
+// IK_DESC IkAttributes = 1 << iota
+// IK_MISSING
+// IK_DENSE_VECTOR
+// IK_SPARSE_VECTOR
+// IK_MULTI_VECTOR
+// IK_VECTOR  IkAttributes = IK_DENSE_VECTOR
+// IK_VECTORS IkAttributes = (IK_DENSE_VECTOR | IK_SPARSE_VECTOR | IK_MULTI_VECTOR)
+// IK_NONE    IkAttributes = 0x00
+const (
+	SEC_EXPR_ATTR_DESC SecExprAttr = 1 << iota // 1
+	SEC_EXPR_ATTR_MISSING
+	SEC_EXPR_ATTR_DENSE_VECTOR
+	SEC_EXPR_ATTR_SPARSE_VECTOR
+	SEC_EXPR_ATTR_MULTI_VECTOR
+	SEC_EXPR_ATTR_VECTOR  SecExprAttr = SEC_EXPR_ATTR_DENSE_VECTOR
+	SEC_EXPR_ATTR_VECTORS SecExprAttr = SEC_EXPR_ATTR_DENSE_VECTOR | SEC_EXPR_ATTR_SPARSE_VECTOR | SEC_EXPR_ATTR_MULTI_VECTOR
+	SEC_EXPR_ATTR_NONE    SecExprAttr = 0x00
+)
+
+func (attr SecExprAttr) IsSparseVector() bool {
+	return attr&SEC_EXPR_ATTR_SPARSE_VECTOR != 0
+}
+
 // IndexDefn represents the index definition as specified
 // during CREATE INDEX
 type IndexDefn struct {
@@ -326,6 +351,8 @@ type IndexDefn struct {
 
 	IsVectorIndex bool            `json:"isVectorIndex,omitempty"`
 	VectorMeta    *VectorMetadata `json:"vectorMeta,omitempty"`
+
+	SecExprsAttrs []SecExprAttr `json:"secExprsAttrs,omitempty"`
 }
 
 // IndexInst is an instance of an Index(aka replica)
@@ -380,6 +407,7 @@ func (idx IndexDefn) String() string {
 	fmt.Fprintf(&str, "NumReplica: %v ", idx.GetNumReplica())
 	fmt.Fprintf(&str, "InstVersion: %v ", idx.InstVersion)
 	fmt.Fprintf(&str, "\n\t\tSecExprs: %v ", logging.TagUD(secExprs))
+	fmt.Fprintf(&str, "\n\t\tSecExprsAttrs: %v ", idx.SecExprsAttrs) // Print exploded attributes
 	fmt.Fprintf(&str, "\n\t\tDesc: %v", idx.Desc)
 	fmt.Fprintf(&str, "\n\t\tHasVectorAttr: %v", idx.HasVectorAttr)
 	fmt.Fprintf(&str, "\n\t\tIndexMissingLeadingKey: %v", idx.IndexMissingLeadingKey)
@@ -468,6 +496,15 @@ func (idx *IndexDefn) HasDescending() bool {
 	}
 	return false
 
+}
+
+func (idx *IndexDefn) HasSparseVector() bool {
+	for _, attr := range idx.SecExprsAttrs {
+		if attr.IsSparseVector() {
+			return true
+		}
+	}
+	return false
 }
 
 func (idx *IndexDefn) GetNumReplica() int {
@@ -1133,4 +1170,9 @@ func (v *VectorMetadata) String() string {
 
 	return fmt.Sprintf("CompositeVector: %v, BHIVE: %v, Dimension: %v, Similarity: %v, Quantizer: %v, nprobes: %v",
 		v.IsCompositeIndex, v.IsBhive, v.Dimension, v.Similarity, v.Quantizer.String(), v.Nprobes)
+}
+
+type SparseVector struct {
+	Indices []uint32
+	Values  []float32
 }

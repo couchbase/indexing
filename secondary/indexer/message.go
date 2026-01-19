@@ -237,6 +237,7 @@ const (
 	CLEAR_SHARD_TYPE
 	BHIVE_GRAPH_READY
 	BHIVE_BUILD_GRAPH
+	ENCRYPTION_GET_INUSE_KEYS
 )
 
 type Message interface {
@@ -3474,6 +3475,14 @@ func (m *MsgBuildBhiveGraph) GetBhiveGraphStatus() map[common.PartitionId]bool {
 	return m.bhiveGraphStatus
 }
 
+//TODO: Sender and handler implementation
+type MsgEncryptionGetInuseKeys struct {
+}
+
+func (m *MsgEncryptionGetInuseKeys) GetMsgType() MsgType {
+	return ENCRYPTION_GET_INUSE_KEYS
+}
+
 type MsgPopulateShardType struct {
 	transferId string
 	shardType  common.ShardType
@@ -3897,7 +3906,8 @@ func (m MsgType) String() string {
 		return "POPULATE_SHARD_TYPE"
 	case CLEAR_SHARD_TYPE:
 		return "CLEAR_SHARD_TYPE"
-
+	case ENCRYPTION_GET_INUSE_KEYS:
+		return "ENCRYPTION_GET_INUSE_KEYS"
 	default:
 		return "UNKNOWN_MSG_TYPE"
 	}
