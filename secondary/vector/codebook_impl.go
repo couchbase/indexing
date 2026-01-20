@@ -30,6 +30,8 @@ func RecoverCodebook(data []byte, qType string) (codebook.Codebook, error) {
 		return recoverCodebookIVFPQ(data)
 	case "SQ":
 		return recoverCodebookIVFSQ(data)
+	case "SPARSE":
+		return recoverCodebookSparse(data)
 	}
 
 	return nil, codebook.ErrUnknownType

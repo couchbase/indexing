@@ -15,6 +15,7 @@ var (
 	ErrUnknownType        = errors.New("Unknown Codebook Type")
 	ErrCodebookClosed     = errors.New("Codebook closed")
 	ErrUnsupportedMetric  = errors.New("Unsupported Distance Metric")
+	ErrNotImplemented     = errors.New("Method Not Implemented")
 )
 
 type MetricType int
