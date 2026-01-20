@@ -2588,16 +2588,14 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	var dimension, nprobes, trainlist int
 	var quantizer *c.VectorQuantizer
 
-	// SPARSE_TODO: isDenseVectorIndex := !isSparseVector && (isCompositeVectorIndex || isBhive)
+	isDenseVectorIndex := !isSparseVector && (isCompositeVectorIndex || isBhive)
 
-	// SPARSE_TODO: Remove isCompositeVectorIndex || isBhive once sparse vector is supported and make it isDenseVectorIndex
-	similarity, err = o.getVectorSimilarity(plan, isCompositeVectorIndex || isBhive)
+	similarity, err = o.getVectorSimilarity(plan, isCompositeVectorIndex || isBhive, isSparseVector)
 	if err != nil {
 		return nil, err, false
 	}
 
-	// SPARSE_TODO: Remove isCompositeVectorIndex || isBhive once sparse vector is supported and make it isDenseVectorIndex
-	dimension, err = o.getVectorDimension(plan, isCompositeVectorIndex || isBhive)
+	dimension, err = o.getVectorDimension(plan, isDenseVectorIndex)
 	if err != nil {
 		return nil, err, false
 	}
@@ -2619,7 +2617,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 
 	// For a vector index, validate the quantizer. For non-vector indexes, quantizer would be 'nil'
 	if isCompositeVectorIndex || isBhive {
-		if err := quantizer.IsValid(dimension); err != nil {
+		if err := quantizer.IsValid(dimension, isSparseVector); err != nil {
 			return nil,
 				fmt.Errorf("Failure to create vector index. Invalid product quantization scheme. Err: %v", err),
 				false
@@ -3729,7 +3727,7 @@ func (o *MetadataProvider) getResidentRatioParam(plan map[string]interface{}) (f
 	return residentRatio, nil, false
 }
 
-func (o *MetadataProvider) getVectorSimilarity(plan map[string]interface{}, isVectorIndex bool) (c.VectorSimilarity, error) {
+func (o *MetadataProvider) getVectorSimilarity(plan map[string]interface{}, isVectorIndex, isSparseVector bool) (c.VectorSimilarity, error) {
 	keyword := "similarity"
 
 	if !isVectorIndex {
@@ -3742,7 +3740,20 @@ func (o *MetadataProvider) getVectorSimilarity(plan map[string]interface{}, isVe
 
 	similarity, ok := plan[keyword].(string)
 	if !ok {
-		similarity = c.DEFAULT_VECTOR_SIMILARITY
+		if isSparseVector {
+			similarity = c.DEFAULT_SPARSE_VECTOR_SIMILARITY
+		} else {
+			similarity = c.DEFAULT_VECTOR_SIMILARITY
+		}
+	}
+
+	// For sparse vectors, only DOT is supported
+	if isSparseVector {
+		similarityUpper := strings.ToUpper(similarity)
+		if similarityUpper != string(c.DOT) {
+			return "", fmt.Errorf("Fail to create sparse vector index. Invalid `%v` parameter. It should be: 'DOT'", keyword)
+		}
+		return c.VectorSimilarity(similarity), nil
 	}
 
 	switch strings.ToUpper(similarity) {
@@ -3753,10 +3764,10 @@ func (o *MetadataProvider) getVectorSimilarity(plan map[string]interface{}, isVe
 	}
 }
 
-func (o *MetadataProvider) getVectorDimension(plan map[string]interface{}, isVectorIndex bool) (int, error) {
+func (o *MetadataProvider) getVectorDimension(plan map[string]interface{}, isDenseVectorIndex bool) (int, error) {
 	keyword := "dimension"
 
-	if !isVectorIndex {
+	if !isDenseVectorIndex {
 		if _, ok := plan[keyword]; ok {
 			return 0, fmt.Errorf("Fail to create index. '%v' parameter is expected only in dense vector indexes. Observed it for non-dense vector index", keyword)
 		}
@@ -3887,9 +3898,16 @@ func (o *MetadataProvider) getVectorDescription(plan map[string]interface{}, isV
 	description, ok := plan[keyword].(string)
 	if !ok {
 		description = c.DEFAULT_VECTOR_DESCRIPTION
+		if isSparseVector {
+			description = c.DEFAULT_SPARSE_VECTOR_DESCRIPTION
+		}
 	}
 
-	return c.ParseVectorDesciption(description, isSparseVector)
+	if isSparseVector {
+		return c.ParseSparseVectorDescription(description)
+	}
+
+	return c.ParseVectorDesciption(description)
 }
 
 func (o *MetadataProvider) deleteScheduleTokens(defnID c.IndexDefnId) (bool, bool, error) {

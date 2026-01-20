@@ -1115,6 +1115,7 @@ const (
 )
 
 var DEFAULT_VECTOR_SIMILARITY = "L2_SQUARED"
+var DEFAULT_SPARSE_VECTOR_SIMILARITY = "DOT"
 
 type VectorMetadata struct {
 	IsCompositeIndex  bool             `json:"isCompositeIndex,omitempty"`
