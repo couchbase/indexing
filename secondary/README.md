@@ -10,6 +10,9 @@ All production secondary index related components (code, design, documentation) 
     $ git clone git@github.com:couchbase/indexing.git
     $ cd indexing/secondary
     $ go get -d -v ./...
+    $ cd $GOPATH/src/github.com/couchbase/query/parser/n1ql
+    $ go tool yacc n1ql.y
+    $ cd $GOPATH/src/github.com/couchbase/indexing/secondary
     $ ./build.sh
 
 Note:
