@@ -170,6 +170,7 @@ func (s *settingsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/bhiveDiag", s.handleBhiveDiag)
 	mux.HandleFunc("/settings/thisNodeOnly", s.handlePerNodeSettingsReq)
 	mux.HandleFunc("/settings/shardAffinity", s.handleShardAffinitySettingsReq)
+	mux.HandleFunc("/settings/metadataStore", s.handleMetadataStoreSettingsReq)
 }
 
 func (s *settingsManager) writeOk(w http.ResponseWriter) {
@@ -508,7 +509,9 @@ func (s *settingsManager) metaKVCallback(kve metakv.KVEntry) error {
 		return nil
 	}
 
-	if kve.Path == common.IndexingSettingsMetaPath || kve.Path == common.IndexingSettingsShardAffinityMetaPath {
+	if kve.Path == common.IndexingSettingsMetaPath ||
+		kve.Path == common.IndexingSettingsShardAffinityMetaPath ||
+		kve.Path == common.IndexingSettingsMetadataStoreMetaPath {
 		logging.Infof("settingsManager::metakvCallback triggered for path %v (rev %v)",
 			kve.Path, kve.Rev)
 		err := s.applySettings(kve.Path, kve.Value, kve.Rev)
@@ -571,6 +574,11 @@ func (s *settingsManager) applySettings(path string, value []byte, rev interface
 			}
 			return nil
 		}
+	}
+
+	if path == common.IndexingSettingsMetadataStoreMetaPath {
+		logging.Infof("settingsManager::applySettings: new setting received on metadata store path. it cannot be applied to a live node. update will be ignored")
+		return nil
 	}
 
 	oldConfig := s.config.Clone()
@@ -1036,4 +1044,64 @@ func tryUpgradeConfig(value []byte) ([]byte, bool, bool) {
 	}
 
 	return value, upgradedCompactionDaysSetting || upgradedBloomSetting, minNumShardChanged
+}
+
+func (s *settingsManager) handleMetadataStoreSettingsReq(w http.ResponseWriter, r *http.Request) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, r, w,
+		"SettingsManager::handleSettings") {
+		return
+	}
+
+	switch r.Method {
+	case "POST":
+
+		bytes, _ := ioutil.ReadAll(r.Body)
+
+		config := s.config.Get("indexer.metadata.store_backend")
+		current, rev, err := metakv.Get(common.IndexingSettingsMetadataStoreMetaPath)
+		if err == nil {
+			if len(current) > 0 {
+				config.Update(current)
+			}
+
+			if bytes, _, err = common.MapSettings(bytes); err != nil {
+				logging.Errorf("Fail to map settings.  Error: %v", err)
+				s.writeError(w, err)
+				return
+			}
+
+			err = config.Update(bytes)
+		}
+
+		if err != nil {
+			s.writeError(w, err)
+			return
+		}
+
+		newSettingsBytes := config.Json()
+		if err = metakv.Set(common.IndexingSettingsMetadataStoreMetaPath, newSettingsBytes, rev); err != nil {
+			s.writeError(w, err)
+			return
+		}
+		s.writeOk(w)
+
+	case "GET":
+		settingsConfig, err := common.GetSettingsConfig(s.config)
+		if err != nil {
+			s.writeError(w, err)
+			return
+		}
+
+		settingsConfig = settingsConfig.Get("indexer.metadata.store_backend")
+		s.writeJson(w, settingsConfig.Json())
+
+	default:
+		s.writeError(w, errors.New("Unsupported method"))
+		return
+	}
 }

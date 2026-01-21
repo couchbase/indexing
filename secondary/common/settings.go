@@ -34,6 +34,14 @@ const (
 	// {"indexer.default.enable_shard_affinity":<true|false>}'
 	// Otherwise, ns_server compatability would break
 	IndexingSettingsShardAffinityMetaPath = IndexingSettingsFeaturesMetaPath + "ShardAffinity"
+
+	// Path for reading metadata store setting during first indexer bootstrap only. this is to
+	// disable indexer to use magma stores. if indexer has created magma stores successfully once,
+	// then we cannot fallback to fDb even if the config says so.
+	//
+	// settings on this path overrides the global settings.
+	// any config updates will not be applied during settings callback
+	IndexingSettingsMetadataStoreMetaPath = IndexingSettingsFeaturesMetaPath + "MetadataStore"
 )
 
 func GetSettingsConfig(cfg Config) (Config, error) {
@@ -60,7 +68,21 @@ func GetSettingsConfig(cfg Config) (Config, error) {
 			}
 		} else {
 			logging.Errorf("GetSettingsConfig() failed to retrive shard affinity meta path: %v", err)
+			return err
 		}
+
+		// if path is not found, it does not return an error
+		current, _, err = metakv.Get(IndexingSettingsMetadataStoreMetaPath)
+		if err == nil {
+			if len(current) > 0 {
+				newConfig.Update(current)
+			}
+		} else {
+			logging.Errorf("GetSettingsConfig() failed to retrieve metadata store settings from path: %v due to err %v",
+				IndexingSettingsMetadataStoreMetaPath, err)
+			return err
+		}
+
 		return err
 	}
 
@@ -71,12 +93,17 @@ func GetSettingsConfig(cfg Config) (Config, error) {
 
 func SetupSettingsNotifier(callb func(Config), cancelCh chan struct{}) {
 	metaKvCb := func(kve metakv.KVEntry) error {
-		if kve.Path == IndexingSettingsMetaPath || kve.Path == IndexingSettingsShardAffinityMetaPath {
+		if kve.Path == IndexingSettingsMetaPath ||
+			kve.Path == IndexingSettingsShardAffinityMetaPath ||
+			kve.Path == IndexingSettingsMetadataStoreMetaPath {
 			logging.Infof("New settings received on path: %v, value: \n%s",
 				(kve.Path), string(kve.Value))
 			config := SystemConfig.FilterConfig(".settings.")
-			if kve.Path == IndexingSettingsShardAffinityMetaPath {
+			switch kve.Path {
+			case IndexingSettingsShardAffinityMetaPath:
 				config = SystemConfig.Get("indexer.default.enable_shard_affinity")
+			case IndexingSettingsMetadataStoreMetaPath:
+				config = SystemConfig.Get("indexer.metadata.store_backend")
 			}
 			config.Update(kve.Value)
 			callb(config)
