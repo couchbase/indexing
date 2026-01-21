@@ -738,6 +738,16 @@ func (b *metadataClient) equivalentIndex(
 		}
 	}
 
+	if len(d1.SecExprsAttrs) != len(d2.SecExprsAttrs) {
+		return false
+	}
+
+	for i, s1 := range d1.SecExprsAttrs {
+		if s1 != d2.SecExprsAttrs[i] {
+			return false
+		}
+	}
+
 	if len(d1.PartitionKeys) != len(d2.PartitionKeys) {
 		return false
 	}

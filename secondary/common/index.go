@@ -447,6 +447,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		CollectionId:           idx.CollectionId,
 		IsPrimary:              idx.IsPrimary,
 		SecExprs:               idx.SecExprs,
+		SecExprsAttrs:          idx.SecExprsAttrs,
 		Desc:                   idx.Desc,
 		HasVectorAttr:          idx.HasVectorAttr,
 		ExprType:               idx.ExprType,
@@ -969,6 +970,16 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 
 	for i, s1 := range d1.SecExprs {
 		if s1 != d2.SecExprs[i] {
+			return false
+		}
+	}
+
+	if len(d1.SecExprsAttrs) != len(d2.SecExprsAttrs) {
+		return false
+	}
+
+	for i, s1 := range d1.SecExprsAttrs {
+		if s1 != d2.SecExprsAttrs[i] {
 			return false
 		}
 	}
