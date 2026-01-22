@@ -993,6 +993,8 @@ func (m *RebalanceServiceManager) runCleanupPhaseLOCKED(path string, isMaster bo
 		return err
 	}
 
+	m.runCleanupEmptyShards()
+
 	err = m.cleanupRebalanceRunning()
 	if err != nil {
 		return err
@@ -4794,5 +4796,36 @@ func (m *RebalanceServiceManager) handleDestroyEmptyShards(w http.ResponseWriter
 		m.writeOk(w)
 	} else {
 		m.writeError(w, errors.New("Unsupported method"))
+	}
+}
+
+func (m *RebalanceServiceManager) runCleanupEmptyShards() {
+	// trigger a shard destroy here so that empty shards can be cleaned up post DCP rebalance too
+	l.Infof("RebalanceServiceManager::runCleanupEmptyShards running empty shard cleanup")
+	respCh := make(chan struct{})
+	m.supvMsgch <- &MsgDestroyEmptyShard{force: true, respCh: respCh}
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	var counter = 0
+	for {
+		select {
+		case <-ticker.C:
+			l.Infof(
+				"RebalanceServiceManager::runCleanupEmptyShards waiting for empty shard cleanup"+
+					" to finish since %v mins",
+				counter*5)
+			counter++
+			if counter > 5 {
+				// waiting for 25 mins already. we should now return and not block rebalance end
+				l.Infof(
+					"RebalanceServiceManager::runCleanupEmptyShards timeout waiting for empty shard cleanup" +
+						" to finish",
+				)
+				return
+			}
+		case <-respCh:
+			l.Infof("RebalanceServiceManager::runCleanupEmptyShards done with empty shard cleanup")
+			return
+		}
 	}
 }

@@ -3364,8 +3364,8 @@ func (m *MsgPeerServerCommand) GetRespCh() chan error {
 }
 
 type MsgDestroyEmptyShard struct {
-	mType MsgType
-	force bool
+	respCh chan struct{}
+	force  bool
 }
 
 func (m *MsgDestroyEmptyShard) GetMsgType() MsgType {
@@ -3374,6 +3374,10 @@ func (m *MsgDestroyEmptyShard) GetMsgType() MsgType {
 
 func (m *MsgDestroyEmptyShard) IsForced() bool {
 	return m.force
+}
+
+func (m *MsgDestroyEmptyShard) GetRespCh() chan struct{} {
+	return m.respCh
 }
 
 type MsgPersistanceStatus struct {
