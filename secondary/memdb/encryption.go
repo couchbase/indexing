@@ -32,7 +32,12 @@ const (
 	encrypt_bak_ext  = ".bak"
 )
 
-var unencryptedFiles = []string{"checksums.json", "files.json", "nitro.json"}
+var (
+	unencryptedFiles = []string{"checksums.json", "files.json", "nitro.json"}
+
+	// KDF label/context for memdb encryption
+	KDFLabelCtx = []byte("indexing/memdb")
+)
 
 type RotationType int
 
@@ -142,7 +147,7 @@ func (m *MemDB) NewEncryptionContext(keyId []byte, cipher string) (gocbcrypto.En
 		if len(keyId) == 0 {
 			return nil, gocbcrypto.ErrInvalidArgs
 		}
-		return gocbcrypto.NewAESGCM256Context(keyId, m.GetEncryptionKeyById)
+		return gocbcrypto.NewAESGCM256ContextWithOpenSSL(keyId, m.GetEncryptionKeyById(keyId), KDFLabelCtx, 0)
 	}
 
 	return nil, gocbcrypto.ErrCipherUnsupported
@@ -639,7 +644,7 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 
 		// encryption by block should be faster than by item
 		bytesWritten, err = gocbcrypto.ReencryptFileByChunk(ctx, file, tmpDst,
-			encryptCtx, v.db.GetEncryptionKeyById, iowrap.CountDiskFailures)
+			encryptCtx, v.db.GetEncryptionKeyById, KDFLabelCtx, iowrap.CountDiskFailures)
 
 		if err != nil && !errors.Is(err, context.Canceled) {
 			atomic.AddUint64(&v.NumFilesErrRencrypt, 1)
@@ -647,7 +652,7 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 
 	case Decrypt:
 		bytesWritten, err = gocbcrypto.DecryptFileByChunk(ctx, file, tmpDst,
-			v.db.GetEncryptionKeyById, iowrap.CountDiskFailures)
+			v.db.GetEncryptionKeyById, KDFLabelCtx, iowrap.CountDiskFailures)
 
 		if err != nil && !errors.Is(err, context.Canceled) {
 			atomic.AddUint64(&v.NumFilesErrDecrypt, 1)
@@ -966,7 +971,7 @@ func ReadFileKeyId(filepath string, getKeyId func([]byte) []byte) ([]byte, error
 		iowrap.File_Close(fd)
 	}()
 
-	rd, err := gocbcrypto.NewCryptFileReader(fd, getKeyId, gocbcrypto.ChunkSize, false, iowrap.CountDiskFailures)
+	rd, err := gocbcrypto.NewCryptFileReaderWithLabel(fd, getKeyId, KDFLabelCtx, gocbcrypto.ChunkSize, false, iowrap.CountDiskFailures)
 	if err != nil {
 		return nil, err
 	}

@@ -1390,8 +1390,8 @@ func (mdb *memdbSlice) getSnapshots() ([]SnapshotInfo, []string, error) {
 			iowrap.File_Close(fd)
 			if err == nil {
 				if gocbcrypto.IsBytesEncrypted(bs) {
-					bs, err = gocbcrypto.ReadFile(f, mdb.mainstore.GetEncryptionKeyById, iowrap.CountDiskFailures)
 					// TBD: we never return error even before encryption changes; need to revisit
+					bs, err = gocbcrypto.ReadFile(f, mdb.mainstore.GetEncryptionKeyById, memdb.KDFLabelCtx, iowrap.CountDiskFailures)
 					if err != nil && !errors.Is(err, fs.ErrNotExist) {
 						logging.Errorf("MemDB::%v getSnapshots file:%v error:%v", mdb.Path, f, err)
 					}

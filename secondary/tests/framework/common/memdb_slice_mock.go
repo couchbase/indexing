@@ -90,7 +90,7 @@ func GetMemDBSnapshots(slicePath string, retry bool, getKeyById memdb.GetKeyById
 								key, _, _ := getKeyById(nil)
 								return key
 							}
-							bs, err = gocbcrypto.ReadFile(f, fn, nil)
+							bs, err = gocbcrypto.ReadFile(f, fn, memdb.KDFLabelCtx, nil)
 						} else {
 							err = fmt.Errorf("nil GetKeyById callback")
 						}
