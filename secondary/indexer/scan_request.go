@@ -24,6 +24,7 @@ import (
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	report "github.com/couchbase/indexing/secondary/scanreport"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	"github.com/golang/protobuf/proto"
 
@@ -64,6 +65,7 @@ type ScanRequest struct {
 	Consistency  *common.Consistency
 	Stats        *IndexStats
 	IndexInst    common.IndexInst
+	ScanReport   *report.IndexerScanReport
 
 	Ctxs []IndexReaderContext
 
@@ -133,6 +135,7 @@ type ScanRequest struct {
 	isVectorScan             bool
 	isBhiveScan              bool
 	queryVector              []float32
+	sparseQueryVector        *common.SparseVector
 	codebookMap              map[common.PartitionId]codebook.Codebook
 	centroidMap              map[common.PartitionId][]int64
 	protoScans               []*protobuf.Scan
@@ -473,8 +476,8 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		setTimeoutTimer(timeout, r)
 
 		r.isVectorScan = (req.GetIndexVector() != nil)
+		ivec := req.GetIndexVector()
 		if r.isVectorScan {
-			ivec := req.GetIndexVector()
 			r.setVectorIndexParams(ivec)
 		}
 
@@ -497,6 +500,9 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 		r.Offset = req.GetOffset()
 		r.SkipReadMetering = req.GetSkipReadMetering()
+		// Commenting to prevent any perf impact
+		//r.ScanReport = &report.IndexerScanReport{}
+
 		r.indexKeyNames = req.GetIndexKeyNames()
 		r.inlineFilter = req.GetInlineFilter()
 
@@ -543,6 +549,23 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			r.protoScans = req.GetScans() // Save ref to protoScans to generate vector scans later
 			if err = r.setVectorIndexParamsFromDefn(); err != nil {
 				return
+			}
+			// Populate query vector in req
+			if r.IsSparseVectorIndexScan() {
+				nFloat32Bits := ivec.GetQueryVector()[0]
+				n := math.Float32bits(nFloat32Bits)
+				sqv := &common.SparseVector{
+					Indices: make([]uint32, n),
+					Values:  make([]float32, n),
+				}
+				for i := 0; i < int(n); i++ {
+					sqv.Indices[i] = uint32(math.Float32bits(ivec.GetQueryVector()[i+1]))
+					sqv.Values[i] = ivec.GetQueryVector()[i+1+int(n)]
+				}
+				r.sparseQueryVector = sqv
+			} else {
+				qvec := ivec.GetQueryVector()
+				r.queryVector = append(r.queryVector, qvec...)
 			}
 
 			r.projectVectorDist = r.ProjectVectorDist()
@@ -624,10 +647,6 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 // these values are passed from query client and this function must be called before findIndexInstance
 // and nprobes is used to fetch index reader contexts
 func (r *ScanRequest) setVectorIndexParams(ivec *protobuf.IndexVector) {
-	// Populate query vector in req
-	qvec := ivec.GetQueryVector()
-	r.queryVector = append(r.queryVector, qvec...)
-
 	// Set Scan type to VectorScanReq so that we can process vector req differently
 	// If r.nprobes is 0 fallback to value from index creation time after getting the definition
 	// Currently set to value from query and can be 0 its reset in setVectorIndexParamsFromDefn
@@ -1772,7 +1791,11 @@ func (r *ScanRequest) setConsistency(cons common.Consistency, vector *protobuf.T
 			r.LogPrefix, cluster, r.Bucket, r.CollectionId,
 			cfg["use_bucket_seqnos"].Bool())
 		if localErr == nil && r.Stats != nil {
-			r.Stats.Timings.dcpSeqs.Put(time.Since(t0))
+			timeSince := time.Since(t0)
+			r.Stats.Timings.dcpSeqs.Put(timeSince)
+			if r.ScanReport != nil {
+				r.ScanReport.GetSeqnosDur = timeSince
+			}
 		}
 		r.Ts.Crc64 = 0
 		r.Ts.Bucket = r.Bucket
@@ -2781,6 +2804,10 @@ func (r *ScanRequest) ScanRangeSequencing() bool {
 
 func (r *ScanRequest) IsVectorIndex() bool {
 	return r.IndexInst.Defn.IsVectorIndex
+}
+
+func (r *ScanRequest) IsSparseVectorIndexScan() bool {
+	return r.isVectorScan && r.IndexInst.Defn.HasSparseVector()
 }
 
 /////////////////////////////////////////////////////////////////////////

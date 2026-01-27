@@ -395,6 +395,7 @@ func (r *Rebalancer) initRebalAsync() {
 
 					onEjectOnly := cfg["rebalance.node_eject_only"].Bool()
 					optimizePlacement := cfg["settings.rebalance.redistribute_indexes"].Bool()
+					canBypassReplicaRepairConstraints := cfg["settings.rebalance.canBypassReplicaRepairConstraints"].Bool()
 					disableReplicaRepair := cfg["rebalance.disable_replica_repair"].Bool()
 					timeout := cfg["planner.timeout"].Int()
 					threshold := cfg["planner.variationThreshold"].Float64()
@@ -422,7 +423,7 @@ func (r *Rebalancer) initRebalAsync() {
 
 					} else {
 						r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.topologyChange,
-							r.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
+							r.nodeUUID, onEjectOnly, canBypassReplicaRepairConstraints, disableReplicaRepair, threshold, timeout, cpuProfile,
 							minIterPerTemp, maxIterPerTemp, binSize, maxReplanRetry, false, false)
 
 						r.resetAlternateShardIds()

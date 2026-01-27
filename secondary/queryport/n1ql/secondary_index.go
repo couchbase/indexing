@@ -619,6 +619,8 @@ func (gsi *gsiKeyspace) CreateIndex6(
 	desc := make([]bool, 0)
 	hasVectorAttr := make([]bool, 0)
 	indexMissingLeadingKey := false
+	secExprsAttrs := make([]c.SecExprAttr, 0)
+
 	// For flattened array index, explode the secExprs string. E.g.,
 	// for the index:
 	// create index idx on default(org,
@@ -654,14 +656,18 @@ func (gsi *gsiKeyspace) CreateIndex6(
 						indexMissingLeadingKey = fk.HasMissing(pos)
 					}
 				}
+				for _, attr := range fk.Attributes() {
+					secExprsAttrs = append(secExprsAttrs, c.SecExprAttr(attr))
+				}
 			}
 		} else {
 			secStrs = append(secStrs, s)
 			desc = append(desc, key.HasAttribute(datastore.IK_DESC))
-			hasVectorAttr = append(hasVectorAttr, key.HasAttribute(datastore.IK_VECTOR))
+			hasVectorAttr = append(hasVectorAttr, key.HasAttribute(datastore.IK_VECTORS))
 			if keyPos == 0 {
 				indexMissingLeadingKey = key.HasAttribute(datastore.IK_MISSING)
 			}
+			secExprsAttrs = append(secExprsAttrs, c.SecExprAttr(key.Attributes))
 		}
 	}
 
@@ -708,7 +714,8 @@ func (gsi *gsiKeyspace) CreateIndex6(
 		partitionKeys,
 		withJSON,
 		includeStrs,
-		isBhive)
+		isBhive,
+		secExprsAttrs)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreateIndex()")
 	}
@@ -1062,6 +1069,8 @@ type secondaryIndex struct {
 	rerankFactor      int
 	persistFullVector bool // Only for BHIVE indexes
 	include           expression.Expressions
+
+	secExprsAttrs []c.SecExprAttr
 }
 
 // for metadata-provider.
@@ -1102,7 +1111,7 @@ func newSecondaryIndexFromMetaData(
 	}
 
 	if indexDefn.SecExprs != nil {
-		origSecExprs, origDesc, origHasVectorAttr, _ := common.GetUnexplodedExprs(indexDefn.SecExprs, indexDefn.Desc, indexDefn.HasVectorAttr)
+		origSecExprs, origSecExprsAttrs, origDesc, origHasVectorAttr, _ := common.GetUnexplodedExprs(indexDefn.SecExprs, indexDefn.Desc, indexDefn.HasVectorAttr, indexDefn.SecExprsAttrs)
 		exprs := make(expression.Expressions, 0, len(origSecExprs))
 		for _, secExpr := range origSecExprs {
 			expr, _ := parser.Parse(secExpr)
@@ -1111,6 +1120,7 @@ func newSecondaryIndexFromMetaData(
 		si.secExprs = exprs
 		si.desc = origDesc
 		si.vectorAttr = origHasVectorAttr
+		si.secExprsAttrs = origSecExprsAttrs
 	}
 
 	if len(indexDefn.PartitionKeys) != 0 {
@@ -1607,7 +1617,11 @@ func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 			}
 
 			if si.vectorAttr != nil && si.vectorAttr[i] {
-				attr |= datastore.IK_VECTOR
+				attr |= datastore.IK_DENSE_VECTOR
+			}
+
+			if si.secExprsAttrs != nil && si.secExprsAttrs[i] != 0 {
+				attr |= datastore.IkAttributes(si.secExprsAttrs[i])
 			}
 
 			idxkey.SetAttribute(attr, true)
@@ -2863,15 +2877,25 @@ func n1qlindexvectortogsi(indexVector *datastore.IndexVector) *qclient.IndexVect
 	}
 
 	vec := &qclient.IndexVector{
-		QueryVector: make([]float32, len(indexVector.QueryVector)),
 		IndexKeyPos: indexVector.IndexKeyPos,
 		Probes:      indexVector.Probes,
 		TopNScan:    indexVector.TopNScan,
 		Rerank:      indexVector.ReRank,
 	}
 
-	for i, o := range indexVector.QueryVector {
-		vec.QueryVector[i] = o
+	if indexVector.QueryVector != nil {
+		vec.QueryVector = make([]float32, 0, len(indexVector.QueryVector))
+		vec.QueryVector = append(vec.QueryVector, indexVector.QueryVector...)
+	} else if indexVector.QuerySparseVector != nil {
+		qsv := &common.SparseVector{
+			Indices: make([]uint32, 0, len(indexVector.QuerySparseVector.Indices)),
+			Values:  make([]float32, 0, len(indexVector.QuerySparseVector.Values)),
+		}
+		for _, index := range indexVector.QuerySparseVector.Indices {
+			qsv.Indices = append(qsv.Indices, uint32(index))
+		}
+		qsv.Values = append(qsv.Values, indexVector.QuerySparseVector.Values...)
+		vec.QuerySparseVector = qsv
 	}
 
 	return vec

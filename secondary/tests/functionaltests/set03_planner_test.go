@@ -202,6 +202,220 @@ var replicaRepairTestCases = []replicaRepairTestCase{
 	},
 }
 
+type bypassReplicaRepairConstraintCheckTestCase struct {
+	comment                   string
+	memQuotaFactor            float64
+	cpuQuotaFactor            float64
+	plan                      string
+	shuffle                   int
+	addNode                   int
+	keepNodesByNodeID         []string
+	excludeValueOnDeleteNodes string
+	redistributeIndexes       bool  // if true, bypass should NOT trigger
+	expectBypass              bool  // whether bypass is expected to trigger
+	expectedIndexCount        int   // expected total index count after replica repair (0 = skip check)
+	expectReplicaRepairFail   bool  // if true, replica repair should fail (replica NOT placed)
+	overrideMemQuota          int64 // if > 0, override the plan's memQuota with this value
+	featureFlagEnabled        bool
+}
+
+var bypassReplicaRepairConstraintCheckTestCases = []bypassReplicaRepairConstraintCheckTestCase{
+	{
+		comment:             "replica repair bypass - 1 new",
+		memQuotaFactor:      1,
+		cpuQuotaFactor:      1,
+		plan:                "../testdata/planner/plan/replica-repair-bypass-1-zone.json",
+		shuffle:             0,
+		addNode:             1,
+		keepNodesByNodeID:   []string{},
+		redistributeIndexes: false,
+		expectBypass:        true,
+		expectedIndexCount:  5,
+		featureFlagEnabled:  true,
+	},
+	{
+
+		comment:             "replica repair bypass - partitioned indexes - 1 new",
+		memQuotaFactor:      1,
+		cpuQuotaFactor:      1,
+		plan:                "../testdata/planner/plan/replica-repair-bypass-1-zone-partn.json",
+		shuffle:             0,
+		addNode:             1,
+		keepNodesByNodeID:   []string{},
+		redistributeIndexes: false,
+		expectBypass:        true,
+		expectedIndexCount:  16,
+		featureFlagEnabled:  true,
+	},
+	{
+
+		comment:             "replica repair bypass should NOT trigger - 2 new",
+		memQuotaFactor:      1,
+		cpuQuotaFactor:      1,
+		plan:                "../testdata/planner/plan/replica-repair-2-new-nodes.json",
+		shuffle:             0,
+		addNode:             2,
+		keepNodesByNodeID:   []string{},
+		redistributeIndexes: false,
+		expectBypass:        false,
+		expectedIndexCount:  0,
+		featureFlagEnabled:  true,
+	},
+	{
+
+		comment:             "replica repair bypass should NOT trigger - 2 replicas missing, only 1 new node",
+		memQuotaFactor:      1,
+		cpuQuotaFactor:      1,
+		plan:                "../testdata/planner/plan/replica-repair-bypass-2-missing.json",
+		shuffle:             0,
+		addNode:             1,
+		keepNodesByNodeID:   []string{},
+		redistributeIndexes: false,
+		expectBypass:        false,
+		expectedIndexCount:  0,
+		featureFlagEnabled:  true,
+	},
+	{
+
+		comment:             "replica repair bypass should NOT trigger - multi-SG forces replica to existing node",
+		memQuotaFactor:      1,
+		cpuQuotaFactor:      1,
+		plan:                "../testdata/planner/plan/replica-repair-bypass-multi-sg.json",
+		shuffle:             0,
+		addNode:             1,
+		keepNodesByNodeID:   []string{},
+		redistributeIndexes: false,
+		expectBypass:        false,
+		expectedIndexCount:  0,
+		featureFlagEnabled:  true,
+	},
+	{
+
+		comment:             "replica repair bypass should NOT trigger - redistribute_indexes=true",
+		memQuotaFactor:      1,
+		cpuQuotaFactor:      1,
+		plan:                "../testdata/planner/plan/replica-repair-bypass-1-zone.json",
+		shuffle:             0,
+		addNode:             1,
+		keepNodesByNodeID:   []string{},
+		redistributeIndexes: true,
+		expectBypass:        false,
+		expectedIndexCount:  0,
+		featureFlagEnabled:  true,
+	},
+	{
+
+		comment:             "replica repair bypass ENABLED - memory stress, bypass allows placement",
+		memQuotaFactor:      1,
+		cpuQuotaFactor:      1,
+		plan:                "../testdata/planner/plan/replica-repair-bypass-stress-memory.json",
+		shuffle:             0,
+		addNode:             1,
+		keepNodesByNodeID:   []string{},
+		redistributeIndexes: false,
+		expectBypass:        true,
+		expectedIndexCount:  4,
+		featureFlagEnabled:  true,
+	},
+	{
+
+		comment:                 "replica repair bypass DISABLED - memory stress, constraint fails",
+		memQuotaFactor:          1,
+		cpuQuotaFactor:          1,
+		plan:                    "../testdata/planner/plan/replica-repair-bypass-stress-memory.json",
+		shuffle:                 0,
+		addNode:                 1,
+		keepNodesByNodeID:       []string{},
+		redistributeIndexes:     false,
+		expectBypass:            false,
+		expectedIndexCount:      0,
+		expectReplicaRepairFail: true, // replica should NOT be placed due to memory constraints
+		featureFlagEnabled:      false,
+	},
+
+	//positive mem quota case
+
+	{
+
+		comment:             "replica repair bypass with reduced mem quota",
+		memQuotaFactor:      0.1,
+		cpuQuotaFactor:      1,
+		plan:                "../testdata/planner/plan/replica-repair-bypass-1-zone.json",
+		shuffle:             0,
+		addNode:             1,
+		keepNodesByNodeID:   []string{},
+		redistributeIndexes: false,
+		expectBypass:        true,
+		expectedIndexCount:  5,
+		overrideMemQuota:    16670000,
+		featureFlagEnabled:  true,
+	},
+	//negative case: WITHOUT bypass
+	{
+
+		comment:                 "replica repair WITHOUT bypass - 1-zone, feature disabled, low quota causes failure",
+		memQuotaFactor:          0.1,
+		cpuQuotaFactor:          1,
+		plan:                    "../testdata/planner/plan/replica-repair-bypass-1-zone.json",
+		shuffle:                 0,
+		addNode:                 1,
+		keepNodesByNodeID:       []string{},
+		redistributeIndexes:     false,
+		expectBypass:            false,
+		expectedIndexCount:      0,
+		overrideMemQuota:        16670000,
+		featureFlagEnabled:      false,
+		expectReplicaRepairFail: true,
+	},
+	//positive memory stress case
+	{
+
+		comment:             "replica repair bypass - partitioned indexes - reduced mem quota",
+		memQuotaFactor:      1,
+		cpuQuotaFactor:      1,
+		plan:                "../testdata/planner/plan/replica-repair-bypass-1-zone-partn.json",
+		shuffle:             0,
+		addNode:             1,
+		keepNodesByNodeID:   []string{},
+		redistributeIndexes: false,
+		expectBypass:        true,
+		expectedIndexCount:  16,
+		featureFlagEnabled:  true,
+		overrideMemQuota:    20670000,
+	},
+	//negative case: WITHOUT bypass (feature disabled), low memory quota causes failure
+	{
+
+		comment:                 "replica repair WITHOUT bypass - partitioned indexes, feature disabled, low quota causes failure",
+		memQuotaFactor:          1,
+		cpuQuotaFactor:          1,
+		plan:                    "../testdata/planner/plan/replica-repair-bypass-1-zone-partn.json",
+		shuffle:                 0,
+		addNode:                 1,
+		keepNodesByNodeID:       []string{},
+		redistributeIndexes:     false,
+		expectBypass:            false,
+		expectedIndexCount:      0,
+		overrideMemQuota:        20670000, // Same low quota as positive test
+		featureFlagEnabled:      false,
+		expectReplicaRepairFail: true,
+	},
+	{
+
+		comment:             "replica repair bypass should NOT trigger - feature flag DISABLED",
+		memQuotaFactor:      1,
+		cpuQuotaFactor:      1,
+		plan:                "../testdata/planner/plan/replica-repair-bypass-1-zone.json",
+		shuffle:             0,
+		addNode:             1,
+		keepNodesByNodeID:   []string{},
+		redistributeIndexes: false,
+		expectBypass:        false,
+		expectedIndexCount:  0,
+		featureFlagEnabled:  false,
+	},
+}
+
 var iterationTestCases = []iterationTestCase{
 	{
 		"Remove one node - failure",
@@ -602,6 +816,7 @@ func TestPlanner(t *testing.T) {
 	replicaRepairTest(t)
 	heterogenousRebalanceTest(t)
 	equivIndexRebalanceTest(t)
+	bypassReplicaRepairConstraintCheckTest(t)
 }
 
 func TestGreedyPlanner(t *testing.T) {
@@ -3970,4 +4185,128 @@ func compareMaps(expected, actual map[string]int) bool {
 		}
 	}
 	return true
+}
+
+// This test verifies that resource constraints are bypassed when only optional indexes
+//
+//	are being rebuilt during replica repair on a single node rebalance.
+//
+// Conditions:
+// 1. command == CommandRebalance
+// 2. numDeletedNode == 0
+// 3. numNewNode == 1
+// 4. Only optional indexes are being rebuilt
+func bypassReplicaRepairConstraintCheckTest(t *testing.T) {
+	for i, testcase := range bypassReplicaRepairConstraintCheckTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		config := planner.DefaultRunConfig()
+		config.MemQuotaFactor = testcase.memQuotaFactor
+		config.CpuQuotaFactor = testcase.cpuQuotaFactor
+		config.Shuffle = testcase.shuffle
+		config.AddNode = testcase.addNode
+		config.Resize = false
+		config.EjectOnly = !testcase.redistributeIndexes
+		config.CanBypassReplicaRepairConstraints = testcase.featureFlagEnabled
+		s := planner.NewSimulator()
+
+		plan, err := planner.ReadPlan(testcase.plan)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		if testcase.overrideMemQuota > 0 {
+			plan.MemQuota = uint64(testcase.overrideMemQuota)
+		}
+
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, testcase.keepNodesByNodeID, testcase.excludeValueOnDeleteNodes)
+		FailTestIfError(err, "Error in planner test", t)
+
+		solution := p.GetResult()
+
+		// Verify all replicas should be present
+		if !testcase.expectReplicaRepairFail {
+			validateReplicaRepair(t, p)
+		}
+
+		if solution.GetBypassReplicaRepairConstraintCheck() != testcase.expectBypass {
+			t.Fatalf("Test case %d (%s): Expected BypassReplicaRepairConstraintCheck: %v, got %v",
+				i, testcase.comment, testcase.expectBypass, solution.GetBypassReplicaRepairConstraintCheck())
+		}
+
+		if testcase.expectBypass {
+
+			if testcase.expectedIndexCount > 0 {
+				totalIndexes := 0
+				for _, indexer := range solution.Placement {
+					totalIndexes += len(indexer.Indexes)
+				}
+				if totalIndexes != testcase.expectedIndexCount {
+					t.Fatalf("Expected %v indexes after replica repair, got %v", testcase.expectedIndexCount, totalIndexes)
+				}
+			}
+
+			originalNodes := make(map[string]bool)
+			for _, origIndexer := range plan.Placement {
+				originalNodes[origIndexer.NodeId] = true
+			}
+
+			var newNodes []*planner.IndexerNode
+			for _, indexer := range solution.Placement {
+				if !originalNodes[indexer.NodeId] {
+					newNodes = append(newNodes, indexer)
+				}
+			}
+
+			if len(newNodes) != 1 {
+				t.Fatalf("Expected exactly 1 new node in solution, found %v", len(newNodes))
+			}
+			newNodeId := newNodes[0].NodeId
+
+			var newNodeIndexes []*planner.IndexUsage
+			for _, indexer := range solution.Placement {
+				if indexer.NodeId == newNodeId {
+					newNodeIndexes = indexer.Indexes
+					break
+				}
+			}
+
+			if len(newNodeIndexes) == 0 {
+				t.Fatalf("New node %v has no indexes - expected rebuilt replicas there", newNodeId)
+			}
+
+			for _, idx := range newNodeIndexes {
+				if idx.Instance == nil {
+					t.Fatalf("Index %v has nil index instance", idx.Name)
+				}
+			}
+		} else {
+
+			if testcase.expectReplicaRepairFail {
+
+				idxReplicaMap := planner.GenerateReplicaMap(solution.Placement)
+				var expectedCount, finalCount int
+				found := make(map[common.IndexDefnId]bool)
+				for _, indexer := range solution.Placement {
+					for _, idx := range indexer.Indexes {
+						if _, ok := found[idx.DefnId]; !ok {
+							found[idx.DefnId] = true
+							if idx.Instance != nil {
+								expectedCount += int(idx.Instance.Defn.NumReplica + 1)
+							} else {
+								t.Fatalf("Bad input for index: (%v %v %v)",
+									idx.Name, idx.DefnId, idx.InstId)
+							}
+						}
+					}
+				}
+				for defnId := range idxReplicaMap {
+					finalCount += len(idxReplicaMap[defnId])
+				}
+				if finalCount >= expectedCount {
+					t.Fatalf("Expected replica repair to FAIL, but got finalCount=%v >= expectedCount: %v", finalCount, expectedCount)
+				}
+
+			}
+		}
+	}
 }

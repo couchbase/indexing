@@ -1,0 +1,172 @@
+{
+	"placement": [
+		{
+			"nodeId": "127.0.0.1:9001",
+			"nodeUUID": "af33bb1cf058349f6fafffa6a843a979",
+			"serverGroup": "grp",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 0,
+			"actualMemUsage": 500000000,
+			"actualMemOverhead": 100000000,
+			"actualMemMin": 450000000,
+			"exclude": "",
+			"indexes": [
+				{
+					"defnId": 4311133052450780820,
+					"instId": 3660231233502846268,
+					"name": "idx1",
+					"bucket": "default",
+					"isMOI": true,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 1000000,
+					"residentRatio": 1,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 0,
+					"cpuUsage": 0,
+					"memOverhead": 0,
+					"actualMemUsage": 500000000,
+					"actualMemOverhead": 100000000,
+					"actualMemMin": 450000000,
+					"actualKeySize": 0,
+					"instance": {
+						"InstId": 3660231233502846268,
+						"Defn": {
+							"defnId": 4311133052450780820,
+							"name": "idx1",
+							"using": "plasma",
+							"bucket": "default",
+							"bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+							"secExprs": [
+								"`country`"
+							],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE",
+							"numReplica": 2
+						},
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 1
+					}
+				}
+			]
+		},
+		{
+			"nodeId": "127.0.0.1:9002",
+			"nodeUUID": "929bb73f8aaeb55422bdc071cf2dfbfc",
+			"serverGroup": "grp",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 0,
+			"actualMemUsage": 980000000,
+			"actualMemOverhead": 200000000,
+			"actualMemMin": 880000000,
+			"exclude": "",
+			"indexes": [
+				{
+					"defnId": 8811133052450780820,
+					"instId": 5866023123340284628,
+					"name": "dummy_idx",
+					"bucket": "default",
+					"isMOI": true,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 1000000,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 0,
+					"cpuUsage": 0,
+					"memOverhead": 0,
+					"actualMemUsage": 480000000,
+					"actualMemOverhead": 100000000,
+					"actualMemMin": 430000000,
+					"actualKeySize": 0,
+					"instance": {
+						"InstId": 5866023123340284628,
+						"Defn": {
+							"defnId": 8811133052450780820,
+							"name": "dummy_idx",
+							"using": "plasma",
+							"bucket": "default",
+							"bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+							"secExprs": [
+								"`dummy`"
+							],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE",
+							"numReplica": 0
+						},
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 0
+					}
+				},
+				{
+					"defnId": 4311133052450780820,
+					"instId": 3660231233502846269,
+					"name": "idx1",
+					"bucket": "default",
+					"isMOI": true,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 1000000,
+					"residentRatio": 1,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 0,
+					"cpuUsage": 0,
+					"memOverhead": 0,
+					"actualMemUsage": 500000000,
+					"actualMemOverhead": 100000000,
+					"actualMemMin": 450000000,
+					"actualKeySize": 0,
+					"instance": {
+						"InstId": 3660231233502846269,
+						"Defn": {
+							"defnId": 4311133052450780820,
+							"name": "idx1",
+							"using": "plasma",
+							"bucket": "default",
+							"bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+							"secExprs": [
+								"`country`"
+							],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE",
+							"numReplica": 2
+						},
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 0
+					}
+				}
+			]
+		}
+	],
+	"memQuota": 350000000,
+	"cpuQuota": 8,
+	"isLive": true
+}

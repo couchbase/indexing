@@ -102,14 +102,15 @@ func (instance *IndexInst) GetPartitionObject() Partition {
 // IndexEvaluator implements `Evaluator` interface for protobuf
 // definition of an index instance.
 type IndexEvaluator struct {
-	keyspaceId string
-	skExprs    []interface{} // compiled expression
-	pkExprs    []interface{} // compiled expression
-	whExpr     interface{}   // compiled expression
-	instance   *IndexInst
-	version    FeedVersion
-	xattrs     []string
-	stats      *IndexEvaluatorStats
+	keyspaceId   string
+	skExprs      []interface{}   // compiled expression
+	skExprsAttrs []c.SecExprAttr // exploded attributes for secondary expressions
+	pkExprs      []interface{}   // compiled expression
+	whExpr       interface{}     // compiled expression
+	instance     *IndexInst
+	version      FeedVersion
+	xattrs       []string
+	stats        *IndexEvaluatorStats
 
 	// For flattened array index, this variable represents
 	// the number of keys in the flatten_keys expression
@@ -237,6 +238,11 @@ func NewIndexEvaluator(
 		}
 		_, xattrNames, _ := qu.GetXATTRNames(xattrExprs)
 		ie.xattrs = xattrNames
+
+		secExprsAttrs := defn.GetSecExpressionsAttrs()
+		for i := range secExprsAttrs {
+			ie.skExprsAttrs = append(ie.skExprsAttrs, c.SecExprAttr(secExprsAttrs[i]))
+		}
 
 		// Vector index related information
 		hasVectorAttr := defn.GetHasVectorAttr()

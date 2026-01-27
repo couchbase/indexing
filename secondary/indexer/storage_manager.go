@@ -3360,15 +3360,16 @@ type IndexInfo struct {
 	// The fully qualified name of the index (<bucket_name>:<scope_name>:<coll_name>:<index_name>)
 	IndexName string `json:"indexName"`
 
-	DefnId        uint64 `json:"defnId"`        // Index definition ID
-	InstId        uint64 `json:"instId"`        // Index instanceId
-	ReplicaID     int    `json:"replicaId"`     // replica ID of the index
-	PartitionID   int    `json:"partitionId"`   // partition ID of the index
-	Bucket        string `json:"bucket"`        // bucket to which the index belogs
-	IsArrayIndex  bool   `json:"isArrayIndex"`  // Some validations happen only for non-array indexes
-	ItemsCount    uint64 `json:"itemsCount"`    // total number of items in the snapshot at the recorded timestamp
-	NumPartitions int    `json:"numPartitions"` // maximum number of partitions defined for this index
-	NumReplica    int    `json:"numReplica,omitempty"`
+	DefnId        uint64            `json:"defnId"`        // Index definition ID
+	InstId        uint64            `json:"instId"`        // Index instanceId
+	ReplicaID     int               `json:"replicaId"`     // replica ID of the index
+	PartitionID   int               `json:"partitionId"`   // partition ID of the index
+	Bucket        string            `json:"bucket"`        // bucket to which the index belogs
+	IsArrayIndex  bool              `json:"isArrayIndex"`  // Some validations happen only for non-array indexes
+	ItemsCount    uint64            `json:"itemsCount"`    // total number of items in the snapshot at the recorded timestamp
+	NumPartitions int               `json:"numPartitions"` // maximum number of partitions defined for this index
+	NumReplica    int               `json:"numReplica,omitempty"`
+	IndexState    common.IndexState `json:"indexState,omitempty"`
 
 	timestamp []uint64 // Used only for internal processing - not exported
 	nodeId    string   // ID of the node on which the replica partition exists - Used only for internal processing
@@ -3436,13 +3437,11 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 				indexInst, ok := indexInstMap[instId]
 				if !ok ||
 					snapC.deleted || // If snap container is deleted, it means index is deleted. Skip the index
-					indexInst.Stream != common.MAINT_STREAM || // Process only MAINT_STREAM indexes
-					indexInst.State != common.INDEX_STATE_ACTIVE || // process only active indexes
 					indexInst.RState != common.REBAL_ACTIVE { // Skip indexes in rebalance
 					if doLog || logging.IsEnabled(logging.Verbose) {
 						logging.Infof("storageMgr::handleGetTimestampedItemsCount Skip processing inst: %v, partn: %v due to one of the following being true. "+
-							"snapC.deleted: %v, state: %v, rstate: %v, stream: %v, arrayIndex: %v",
-							instId, indexInst.Pc, snapC.deleted, indexInst.State, indexInst.RState, indexInst.Stream, indexInst.Defn.IsArrayIndex)
+							"snapC.deleted: %v, rstate: %v, stream: %v, arrayIndex: %v",
+							instId, indexInst.Pc, snapC.deleted, indexInst.RState, indexInst.Stream, indexInst.Defn.IsArrayIndex)
 					}
 					return
 				}
@@ -3488,6 +3487,7 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 							IsArrayIndex: indexInst.Defn.IsArrayIndex,
 							ItemsCount:   count,
 							NumReplica:   indexInst.Defn.GetNumReplica(),
+							IndexState:   indexInst.State,
 						}
 
 						if common.IsPartitioned(indexInst.Defn.PartitionScheme) {

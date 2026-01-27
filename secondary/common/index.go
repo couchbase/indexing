@@ -230,6 +230,9 @@ func (tp TrainingPhase) String() string {
 
 type SecExprAttr uint32
 
+// Note:
+// * Keep these in sync with IkAttributes in query/datastore/index.go
+// * Unit test TestIkAttributesMatchSecExprAttr should be updated to reflect the changes.
 // IK_DESC IkAttributes = 1 << iota
 // IK_MISSING
 // IK_DENSE_VECTOR
@@ -352,6 +355,7 @@ type IndexDefn struct {
 	IsVectorIndex bool            `json:"isVectorIndex,omitempty"`
 	VectorMeta    *VectorMetadata `json:"vectorMeta,omitempty"`
 
+	// SPARSE_TODO: Populate this field while recovering index definition
 	SecExprsAttrs []SecExprAttr `json:"secExprsAttrs,omitempty"`
 }
 
@@ -396,7 +400,7 @@ type IndexInstList []IndexInst
 
 func (idx IndexDefn) String() string {
 	var str strings.Builder
-	secExprs, _, _, _ := GetUnexplodedExprs(idx.SecExprs, idx.Desc, idx.HasVectorAttr)
+	secExprs, _, _, _, _ := GetUnexplodedExprs(idx.SecExprs, idx.Desc, idx.HasVectorAttr, idx.SecExprsAttrs)
 	fmt.Fprintf(&str, "DefnId: %v ", idx.DefnId)
 	fmt.Fprintf(&str, "Name: %v ", idx.Name)
 	fmt.Fprintf(&str, "Using: %v ", idx.Using)
@@ -443,6 +447,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		CollectionId:           idx.CollectionId,
 		IsPrimary:              idx.IsPrimary,
 		SecExprs:               idx.SecExprs,
+		SecExprsAttrs:          idx.SecExprsAttrs,
 		Desc:                   idx.Desc,
 		HasVectorAttr:          idx.HasVectorAttr,
 		ExprType:               idx.ExprType,
@@ -969,6 +974,16 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 		}
 	}
 
+	if len(d1.SecExprsAttrs) != len(d2.SecExprsAttrs) {
+		return false
+	}
+
+	for i, s1 := range d1.SecExprsAttrs {
+		if s1 != d2.SecExprsAttrs[i] {
+			return false
+		}
+	}
+
 	if len(d1.PartitionKeys) != len(d2.PartitionKeys) {
 		return false
 	}
@@ -1111,6 +1126,7 @@ const (
 )
 
 var DEFAULT_VECTOR_SIMILARITY = "L2_SQUARED"
+var DEFAULT_SPARSE_VECTOR_SIMILARITY = "DOT"
 
 type VectorMetadata struct {
 	IsCompositeIndex  bool             `json:"isCompositeIndex,omitempty"`

@@ -128,6 +128,7 @@ type PlacementMethod interface {
 	AddRequiredIndexes([]*IndexUsage)
 	RemoveOptionalIndexes() []*IndexUsage
 	HasOptionalIndexes() bool
+	AllEligibleAreOptional() bool
 	RemoveEligibleIndex([]*IndexUsage)
 	RegroupIndexes(bool)
 	Print()
@@ -1089,6 +1090,10 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	}
 	cloned.generateReplicaMap()
 	p.suppressEqivIndexIfNecessary(cloned)
+
+	if s.command == CommandRebalance {
+		cloned.canBypassResourceConstraintsForReplicaRepair()
+	}
 
 	cloned.evaluateNodes() // must be after all the adjustments and before Validate
 	if s.command != CommandPlan {

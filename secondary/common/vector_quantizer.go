@@ -29,6 +29,7 @@ const (
 )
 
 var DEFAULT_VECTOR_DESCRIPTION = "IVF,SQ8"
+var DEFAULT_SPARSE_VECTOR_DESCRIPTION = "IVF"
 
 type VectorQuantizer struct {
 	Type QuantizationType `json:"quantization_type,omitempty"`
@@ -214,10 +215,46 @@ func ParseVectorDesciption(inp string) (*VectorQuantizer, error) {
 	return quantizer, nil
 }
 
-func (vq *VectorQuantizer) IsValid(dimension int) error {
+// For sparse vectors
+// * description - optional (default “IVF”)
+func ParseSparseVectorDescription(inp string) (*VectorQuantizer, error) {
+	inp = strings.TrimSpace(inp)
+	inp = strings.ToUpper(inp)
+
+	quantizer := &VectorQuantizer{}
+
+	re := regexp.MustCompile(`^(IVF)(\d*)$`)
+	matches := re.FindStringSubmatch(inp)
+
+	if len(matches) == 0 || len(matches) != 3 {
+		return nil, fmt.Errorf("Invalid format for sparse vector description")
+	}
+
+	nlist, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return nil, fmt.Errorf("Error observed while parsing number of centroids, err: %v", err)
+	}
+
+	if nlist == 0 {
+		return nil, fmt.Errorf("number of centroids can not be equal to zero")
+	}
+	quantizer.Nlist = nlist
+
+	return quantizer, nil
+}
+
+func (vq *VectorQuantizer) IsValid(dimension int, isSparseVector bool) error {
 
 	if vq == nil {
 		return errors.New("Nil quantizer is not expected")
+	}
+
+	// Add validation for sparse vector quantizer
+	if isSparseVector {
+		if vq.Type != "" {
+			return errors.New("quantizer is supported only for dense vectors. Observed it for sparse vector")
+		}
+		return nil
 	}
 
 	// As scalar quantizer works only with specific set of types

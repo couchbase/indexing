@@ -3746,6 +3746,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.rebalance.canBypassReplicaRepairConstraints": ConfigValue{
+		true,
+		"Enable bypassing resource constraints during replica repair when only " +
+			"optional indexes are being rebuilt on a single node during rebalance",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.planner.minResidentRatio": ConfigValue{
 		0.1,
 		"minimum resident ratio for index.  Use for enforcing minimum memory check. Set to 0 to disable memory check.",

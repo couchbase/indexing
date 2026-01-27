@@ -13,8 +13,10 @@ import (
 	"net"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	report "github.com/couchbase/indexing/secondary/scanreport"
 	"github.com/golang/protobuf/proto"
 )
 
@@ -24,7 +26,7 @@ type ScanResponseWriter interface {
 	Count(count uint64) error
 	RawBytes([]byte) error
 	Row(pk, sk []byte) error
-	Done(readUnits uint64, clientVersion uint32) error
+	Done(readUnits uint64, clientVersion uint32, scanReport *report.IndexerScanReport) error
 	Helo() error
 }
 
@@ -153,7 +155,7 @@ func (w *protoResponseWriter) Row(pk, sk []byte) error {
 	return nil
 }
 
-func (w *protoResponseWriter) Done(readUnits uint64, clientVersion uint32) error {
+func (w *protoResponseWriter) Done(readUnits uint64, clientVersion uint32, scanReport *report.IndexerScanReport) error {
 	defer p.PutBlock(w.encBuf)
 	defer p.PutBlock(w.rowBuf)
 
@@ -163,6 +165,11 @@ func (w *protoResponseWriter) Done(readUnits uint64, clientVersion uint32) error
 		if err != nil {
 			return err
 		}
+	}
+
+	if scanReport != nil {
+		logging.Debugf("Scan profiling indexer report: waitDuration: %v, getSeqnosDuration: %v, numRowsReturned: %v, numRowsScanned: %v, scanDuration: %v",
+		scanReport.WaitDur, scanReport.GetSeqnosDur, scanReport.NumRowsReturned, scanReport.NumRowsScanned, scanReport.ScanDur)
 	}
 
 	if clientVersion >= common.INDEXER_76_VERSION {

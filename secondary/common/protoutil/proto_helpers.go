@@ -66,7 +66,7 @@ func ConvertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 			protobuf.PartitionScheme_value[string(c.KEY)]).Enum()
 	}
 
-	secExprs, _, _, _ := c.GetUnexplodedExprs(indexDefn.SecExprs, nil, indexDefn.HasVectorAttr)
+	secExprs, _, _, _, _ := c.GetUnexplodedExprs(indexDefn.SecExprs, nil, indexDefn.HasVectorAttr, indexDefn.SecExprsAttrs)
 	defn := &protobuf.IndexDefn{
 		DefnID:                 proto.Uint64(uint64(indexDefn.DefnId)),
 		Bucket:                 proto.String(indexDefn.Bucket),
@@ -86,6 +86,12 @@ func ConvertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 		CollectionID:           proto.String(indexDefn.CollectionId),
 		IndexMissingLeadingKey: proto.Bool(indexDefn.IndexMissingLeadingKey),
 		HasVectorAttr:          indexDefn.HasVectorAttr,
+	}
+
+	// Pass Exploded Attributes to projector
+	defn.SecExpressionsAttrs = make([]uint32, len(indexDefn.SecExprsAttrs))
+	for i, attr := range indexDefn.SecExprsAttrs {
+		defn.SecExpressionsAttrs[i] = uint32(attr)
 	}
 
 	if indexDefn.IsVectorIndex && indexDefn.VectorMeta != nil {

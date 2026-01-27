@@ -22,6 +22,8 @@ var ErrInvalidVectorDimension = errors.New("Length of VECTOR in incoming documen
 var ErrHeterogenousVectorData = errors.New("All entries of a vector are expected to be floating point numbers. Found other data types")
 var ErrDataOutOfBounds = errors.New("Value of the vector exceeds float32 range")
 var ErrZeroVectorForCosine = errors.New("Zero vector for cosine distance")
+var ErrZeroSparseVector = errors.New("Zero sparse vector")
+var ErrInvalidSparseVector = errors.New("Invalid sparse vector")
 
 func getVectorStatStr(err error) string {
 	switch err {
@@ -250,7 +252,11 @@ func N1QLTransformForVectorIndex(
 				// d. If the VECTOR entry is invalid and it is non-leading key,
 				//    the VECTOR entry will be indexed as NULL
 				if keyPos == ie.vectorPos {
-					vector, err = validateVector(key, ie.dimension, ie.isCosine)
+					if ie.skExprsAttrs[keyPos].IsSparseVector() {
+						vector, err = validateSparseVector(key)
+					} else {
+						vector, err = validateVector(key, ie.dimension, ie.isCosine)
+					}
 
 					if err != nil { // invalid vector entry
 						ie.stats.updateErrCount(err)
@@ -292,7 +298,8 @@ func N1QLTransformForVectorIndex(
 						return nil, nil, nil, nil, nil
 					}
 				} else if keyPos == ie.vectorPos { // array of vectors
-					vectors, array = getValidVectorsFromArray(array, ie.dimension, ie.isCosine)
+					isSparseVector := ie.skExprsAttrs[keyPos].IsSparseVector()
+					vectors, array = getValidVectorsFromArray(array, ie.dimension, ie.isCosine, isSparseVector)
 					if len(array) == 0 {
 						return nil, nil, nil, nil, nil
 					}
@@ -317,7 +324,8 @@ func N1QLTransformForVectorIndex(
 							return nil, nil, nil, nil, nil
 						}
 
-						vectors, array = getValidVectorsFromArray(array, ie.dimension, ie.isCosine)
+						isSparseVector := ie.skExprsAttrs[keyPos].IsSparseVector()
+						vectors, array = getValidVectorsFromArray(array, ie.dimension, ie.isCosine, isSparseVector)
 						if len(array) == 0 {
 							return nil, nil, nil, nil, nil
 						}
@@ -483,6 +491,89 @@ func isArrayNull(array qvalue.Values) bool {
 	return (len(array) == 1 && array[0].Type() == qvalue.NULL)
 }
 
+func validateSparseVector(vector qvalue.Value) ([]float32, error) {
+	if vector.Type() != qvalue.ARRAY {
+		return nil, ErrInvalidSparseVector
+	}
+
+	indices := make([]uint32, 0)
+	values := make([]float32, 0)
+
+	rawIndices, ok := vector.Index(0)
+	if !ok {
+		return nil, ErrInvalidSparseVector
+	}
+	rawValues, ok := vector.Index(1)
+	if !ok {
+		return nil, ErrInvalidSparseVector
+	}
+
+	if rawIndices.Type() != qvalue.ARRAY || rawValues.Type() != qvalue.ARRAY {
+		return nil, ErrInvalidSparseVector
+	}
+
+	// Get indices
+	for i := 0; ; i++ {
+		v, ok := rawIndices.Index(i)
+		if !ok {
+			break
+		}
+		if v.Type() != qvalue.NUMBER {
+			return nil, ErrInvalidSparseVector
+		}
+		vi := value.AsNumberValue(v).Float64()
+		if vi < 0 || vi >= math.MaxUint32 {
+			return nil, ErrDataOutOfBounds
+		}
+		indices = append(indices, uint32(vi))
+	}
+
+	// Get values
+	for i := 0; ; i++ {
+		v, ok := rawValues.Index(i)
+		if !ok {
+			break
+		}
+		if v.Type() != qvalue.NUMBER {
+			return nil, ErrInvalidSparseVector
+		}
+		vf := value.AsNumberValue(v).Float64()
+		if vf < -math.MaxFloat32 || vf > math.MaxFloat32 {
+			return nil, ErrDataOutOfBounds
+		}
+		values = append(values, float32(vf))
+	}
+
+	// Check if all values are zero and return nil if so
+	allZero := true
+	for _, v := range values {
+		if v != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		return nil, ErrZeroSparseVector
+	}
+
+	// Check if length of indices and values is same
+	if len(indices) != len(values) {
+		return nil, ErrInvalidSparseVector
+	}
+
+	// Merge indices and values into a sigle float32 array
+	// Format will be [N, index0, index1, ....., indexN-1, value0, value1, ....., valueN-1]
+	// Store N and Indices using math.Float32frombits(uint32(N)) to prevent loss of precision
+	n := len(indices)
+	res := make([]float32, 2*n+1)
+	res[0] = math.Float32frombits(uint32(n))
+	for i := 0; i < n; i++ {
+		res[i+1] = math.Float32frombits(uint32(indices[i]))
+		res[n+i+1] = values[i]
+	}
+	return res, nil
+}
+
 func validateVector(vector qvalue.Value, dimension int, isCosine bool) ([]float32, error) {
 	if vector.Type() != qvalue.ARRAY {
 		return nil, ErrInvalidVectorType
@@ -521,11 +612,17 @@ func validateVector(vector qvalue.Value, dimension int, isCosine bool) ([]float3
 	return res, nil
 }
 
-func getValidVectorsFromArray(vectors qvalue.Values, dimension int, isCosine bool) ([][]float32, []qvalue.Value) {
+func getValidVectorsFromArray(vectors qvalue.Values, dimension int, isCosine, isSparseVector bool) ([][]float32, []qvalue.Value) {
 	var outVec [][]float32
 	var outVal []qvalue.Value
 	for i := range vectors {
-		vec, err := validateVector(vectors[i], dimension, isCosine)
+		var vec []float32
+		var err error
+		if isSparseVector {
+			vec, err = validateSparseVector(vectors[i])
+		} else {
+			vec, err = validateVector(vectors[i], dimension, isCosine)
+		}
 		if err != nil {
 			// If vector is missing/null, then skip indexing the document
 			continue

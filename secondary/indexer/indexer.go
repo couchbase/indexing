@@ -15116,6 +15116,48 @@ func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
 	}
 }
 
+func (idx *indexer) pruneIndexInfo(sortedIndexInfo []*IndexInfo) []*IndexInfo {
+
+	// Only prune if the cluster version is greater or equal to 8.1, before that the
+	// index state is not populated for the index instances.
+	if clusterVersion := common.GetClusterVersion(); clusterVersion <= c.INDEXER_80_VERSION {
+		return sortedIndexInfo
+	}
+
+	defnWithMultipleStates := make(map[uint64]map[common.IndexState]string) // defnId -> IndexState -> NodeId
+	defnIdIndexStateMap := make(map[uint64]map[common.IndexState]string)    // defnId -> IndexState -> NodeId
+	for _, indexInfo := range sortedIndexInfo {
+		defnId := indexInfo.DefnId
+		indexState := indexInfo.IndexState
+		nodeId := indexInfo.nodeId
+
+		if _, ok := defnIdIndexStateMap[defnId]; !ok {
+			defnIdIndexStateMap[defnId] = make(map[common.IndexState]string)
+		}
+		defnIdIndexStateMap[defnId][indexState] = nodeId
+		if len(defnIdIndexStateMap[defnId]) > 1 {
+			defnWithMultipleStates[defnId] = defnIdIndexStateMap[defnId]
+		}
+	}
+
+	if len(defnWithMultipleStates) == 0 {
+		return sortedIndexInfo
+	}
+
+	logging.Infof("Indexer::monitorItemsCount Ignoring indexes from items count mismatch check "+
+		"as multiple states found: %v", defnWithMultipleStates)
+
+	// Filter out all instances with defnIds that have multiple states
+	prunedList := make([]*IndexInfo, 0, len(sortedIndexInfo))
+	for _, indexInfo := range sortedIndexInfo {
+		if _, ok := defnWithMultipleStates[indexInfo.DefnId]; !ok {
+			prunedList = append(prunedList, indexInfo)
+		}
+	}
+
+	return prunedList
+}
+
 func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
 
 	divergingReplicasMap := make(map[string]interface{})
@@ -15639,6 +15681,7 @@ func (idx *indexer) monitorItemsCount() {
 
 			// Step-2: Extract index info from timestamp counts
 			sortedIndexInfo := idx.getIndexInfoFromTsCounts(allTimestampedCounts)
+			sortedIndexInfo = idx.pruneIndexInfo(sortedIndexInfo)
 
 			// Step-3: Check for any items_count mismatches
 			idx.checkForItemsCountMismatch(sortedIndexInfo)

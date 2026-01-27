@@ -1,4 +1,4 @@
-#!/bin/bash 
+#!/bin/bash
 
 if [ "$C_INCLUDE_PATH" == "" ]; then
   top="`pwd`/../../../../../.."
@@ -11,42 +11,32 @@ fi
 build_indexer(){
 
     echo "Building Indexer..."
-    cd cmd/indexer/
-    # tag added for nitro/mm
-    GO111MODULE=auto go build -tags=jemalloc -mod=mod -o indexer
-    cp indexer ../../bin/
-    cd ../..
+    cd $top/build
+    make indexer
     echo "Done"
     echo "Indexer binary under bin/"
 }
 
 clean_indexer(){
 
-    cd cmd/indexer/
-    go clean
-    rm -f indexer
-    cd ../..
-    rm -f bin/indexer
+    cd $top/build
+    make clean
 }
 
 build_projector(){
 
     echo "Building Projector..."
-    cd cmd/projector/
-    go build -o projector
-    cp projector ../../bin/
-    cd ../..
+    cd $top/build
+    make projector
     echo "Done"
     echo "Projector binary under bin/"
 }
 
 clean_projector(){
 
-    cd cmd/projector/
+    cd $top/build
     go clean
-    rm -f projector
-    cd ../..
-    rm -f bin/projector
+    make clean
 }
 
 build_protobuf(){

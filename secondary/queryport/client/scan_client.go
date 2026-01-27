@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"time"
 
@@ -1158,13 +1159,29 @@ func (c *GsiScanClient) Scan(
 	var protoIndexVector *protobuf.IndexVector
 	if indexVector != nil {
 		protoIndexVector = &protobuf.IndexVector{
-			QueryVector: make([]float32, len(indexVector.QueryVector)),
 			IndexKeyPos: proto.Int32(int32(indexVector.IndexKeyPos)),
 			Probes:      proto.Int32(int32(indexVector.Probes)),
 			TopNScan:    proto.Int32(int32(indexVector.TopNScan)),
 			Rerank:      proto.Bool(indexVector.Rerank),
 		}
-		copy(protoIndexVector.QueryVector, indexVector.QueryVector)
+		if indexVector.QuerySparseVector != nil {
+			// Encode QuerySparseVector as [N, rowId_0, ..., rowId_{N-1}, val_0, ..., val_{N-1}]
+			// Store N and indices as uint32 digits converted to float32 without loss of precision
+			n := len(indexVector.QuerySparseVector.Indices)
+			protoIndexVector.QueryVector = make([]float32, 0, 2*n+1)
+			nFloat32Bits := math.Float32frombits(uint32(n))
+			protoIndexVector.QueryVector = append(protoIndexVector.QueryVector, nFloat32Bits)
+			for _, index := range indexVector.QuerySparseVector.Indices {
+				indexFloat32Bits := math.Float32frombits(uint32(index))
+				protoIndexVector.QueryVector = append(protoIndexVector.QueryVector, indexFloat32Bits)
+			}
+			protoIndexVector.QueryVector = append(protoIndexVector.QueryVector, indexVector.QuerySparseVector.Values...)
+		} else if indexVector.QueryVector != nil {
+			protoIndexVector.QueryVector = make([]float32, len(indexVector.QueryVector))
+			copy(protoIndexVector.QueryVector, indexVector.QueryVector)
+		} else {
+			return errors.New("index vector is nil"), false
+		}
 	}
 
 	// IndexKeyOrder - Send only for vector index scans when orderby is pushed down

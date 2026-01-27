@@ -118,10 +118,11 @@ type IndexStatus struct {
 	WhereExpr  string   `json:"where,omitempty"`
 	IndexType  string   `json:"indexType,omitempty"`
 	// Vector-index specific metadata
-	IsVectorIndex bool                   `json:"isVectorIndex,omitempty"`
-	VectorPos     int                    `json:"vectorPos"`
-	Include       []string               `json:"include,omitempty"`
-	With          map[string]interface{} `json:"with,omitempty"`
+	IsVectorIndex  bool                   `json:"isVectorIndex,omitempty"`
+	IsVectorSparse bool                   `json:"isVectorSparse,omitempty"`
+	VectorPos      int                    `json:"vectorPos"`
+	Include        []string               `json:"include,omitempty"`
+	With           map[string]interface{} `json:"with,omitempty"`
 
 	Status     string `json:"status,omitempty"`
 	Definition string `json:"definition"`
@@ -1055,13 +1056,15 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 			if len(defn.UnexplodedSecExprs) > 0 {
 				secExprs = defn.UnexplodedSecExprs
 			} else {
-				secExprs, _, _, _ = common.GetUnexplodedExprs(defn.SecExprs, defn.Desc, defn.HasVectorAttr)
+				secExprs, _, _, _, _ = common.GetUnexplodedExprs(defn.SecExprs, defn.Desc, defn.HasVectorAttr, defn.SecExprsAttrs)
 			}
 
 			// Vector specific fields
 			vectorPos := -1
 			var includeFields []string
 			withObj := make(map[string]interface{})
+
+			isVectorSparse := defn.HasSparseVector()
 
 			if defn.IsVectorIndex && defn.VectorMeta != nil {
 				withObj["similarityDistance"] = string(defn.VectorMeta.Similarity)
@@ -1072,7 +1075,11 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 					}
 					withObj["quantization"] = desc
 				}
-				withObj["dimension"] = defn.VectorMeta.Dimension
+				// SPARSE_TODO: Check if we need to Populate this field with sparseJL Compressed
+				// Vector Dimension for sparse vector indexes and make it configurable
+				if !isVectorSparse {
+					withObj["dimension"] = defn.VectorMeta.Dimension
+				}
 				if defn.VectorMeta.TrainList > 0 {
 					withObj["trainList"] = defn.VectorMeta.TrainList
 				}
@@ -1185,6 +1192,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 							WhereExpr:         defn.WhereExpr,
 							IndexType:         indexType,
 							IsVectorIndex:     defn.IsVectorIndex,
+							IsVectorSparse:    isVectorSparse,
 							VectorPos:         vectorPos,
 							Include:           includeFields,
 							With:              withObj,
@@ -3878,7 +3886,7 @@ func (s *rhSchedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *In
 
 	// TODO: Scheduled: Should we rename it to ScheduledBuild ?
 
-	secExprs, _, _, _ := common.GetUnexplodedExprs(defn.SecExprs, defn.Desc, defn.HasVectorAttr)
+	secExprs, _, _, _, _ := common.GetUnexplodedExprs(defn.SecExprs, defn.Desc, defn.HasVectorAttr, defn.SecExprsAttrs)
 	// Use DefnId for InstId as a placeholder value because InstId cannot zero.
 	return &IndexStatus{
 		DefnId:       defn.DefnId,
