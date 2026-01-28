@@ -30,6 +30,7 @@ import (
 	"unsafe"
 
 	"github.com/couchbase/cbauth"
+	repo "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	commonjson "github.com/couchbase/indexing/secondary/common/json"
@@ -3280,12 +3281,15 @@ var statsFilterMap = map[string]uint64{
 	"smartBatching":    stats.SmartBatchingFilter,
 }
 
-const ST_TYPE_INDEXER = "indexer"
-const ST_TYPE_INDEX = "index_"
-const ST_TYPE_KEYSPACE = "keyspace"
-const ST_TYPE_PROJ_LAT = "projlat"
-const ST_TYPE_INDEXSTORAGE = "indexstorage_"
-const ST_TYPE_BUCKET = "bucket"
+const (
+	ST_TYPE_INDEXER      = "indexer"
+	ST_TYPE_INDEX        = "index_"
+	ST_TYPE_KEYSPACE     = "keyspace"
+	ST_TYPE_PROJ_LAT     = "projlat"
+	ST_TYPE_INDEXSTORAGE = "indexstorage_"
+	ST_TYPE_BUCKET       = "bucket"
+	ST_TYPE_METASTORE    = "metadata"
+)
 
 type statLogger struct {
 	s              *statsManager
@@ -3404,6 +3408,7 @@ func (l *statLogger) Write(stats *IndexerStats, essential, writeStorageStats boo
 		} else if logging.IsEnabled(logging.Timing) {
 			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil, nil))
 		}
+		l.writeMetadataStats()
 	} else {
 		storageStats = ""
 	}
@@ -3413,6 +3418,17 @@ func (l *statLogger) Write(stats *IndexerStats, essential, writeStorageStats boo
 	} else {
 		if len(storageStats) != 0 {
 			logging.Infof(storageStats)
+		}
+	}
+}
+
+func (l *statLogger) writeMetadataStats() {
+	metastats, ok := l.s.getMetadataStats()
+	if ok {
+		if l.enableStatsLog {
+			l.sLogger.Write(ST_TYPE_METASTORE, metastats.Map())
+		} else {
+			logging.Infof("metastore_stats %s", metastats.StatsString())
 		}
 	}
 }
@@ -3483,6 +3499,7 @@ func (s *statsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/storage/jemalloc/profileDeactivate", s.jemallocMemoryProfileDeactivateHandler)
 	mux.HandleFunc("/storage/jemalloc/profileDump", s.jemallocMemoryProfileDumpHandler)
 	mux.HandleFunc("/stats/cinfolite", common.HandleCICLStats)
+	mux.HandleFunc("/stats/metadata", s.handleMetaStatsRequest)
 	mux.HandleFunc("/stats/timestampedCounts", s.handleTimestampedCountsReq)
 	mux.HandleFunc("/stats/refreshTimestampedCounts", s.handleRefreshTimestampedCountsReq)
 	mux.HandleFunc("/_prometheusMetrics", s.handleMetrics)
@@ -5071,6 +5088,92 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 			}
 		}
 	}
+}
+
+func (s *statsManager) handleMetaStatsRequest(w http.ResponseWriter, r *http.Request) {
+	creds, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleMetaStatsRequest", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
+		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!write")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("StatsManager::handleMetaStatsRequest not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
+	}
+
+	if r.Method == "GET" {
+		r.ParseForm()
+
+		// /stats/metadata?debug=1
+		dbgStr := r.FormValue("debug")
+
+		var metastats, ok = s.getMetadataStats()
+
+		if !ok {
+			logging.Warnf("StatsManager::handleMetaStatsRequest timeout in reading stats or failed to convert object to relevant type")
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte{})
+			return
+		}
+
+		var res, err = json.Marshal(metastats)
+		if err != nil {
+			logging.Warnf("StatsManager::handleMetaStatsRequest failed to marshal meta stat with err - %v",
+				err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte{})
+			return
+		}
+
+		if dbgStr == "1" {
+			// if debug, also send raw stats
+			var rawStats, err1 = json.Marshal(metastats.Raw) // Raw is expected to be a map => {...}
+			if err1 == nil && len(rawStats) > 2 {
+				// only append to res if non-empty marshal aka len > "{}"
+				res[len(res)-1] = ','
+				res = append(res, rawStats[1:]...)
+			}
+		}
+
+		w.WriteHeader(200)
+		w.Write(res)
+	} else {
+		w.WriteHeader(400)
+		w.Write([]byte("Unsupported method"))
+	}
+}
+
+func (s *statsManager) getMetadataStats() (repo.MetastoreStats, bool) {
+	var respCh = make(chan interface{})
+	s.supvMsgch <- &MsgMetaStoreStatsReq{
+		respCh: respCh,
+	}
+
+	var ticker = time.NewTimer(30 * time.Second)
+	var iStats interface{}
+	select {
+	case iStats = <-respCh:
+		var metastats, ok = iStats.(repo.MetastoreStats)
+		return metastats, ok
+	case <-ticker.C:
+		go func() { <-respCh }()
+		return repo.MetastoreStats{}, false
+	}
+
 }
 
 func positiveNum(n int64) int64 {

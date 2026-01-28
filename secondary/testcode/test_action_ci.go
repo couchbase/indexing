@@ -48,14 +48,34 @@ func TestActionAtTag(cfg common.Config, tag TestActionTag) error {
 		case INDEXER_PANIC:
 			panic(fmt.Errorf("TestCode::TestActionAtTag - Inducing artificial panic at tag: %v as wished", tag))
 		case REBALANCE_CANCEL:
-			resp, err := security.PostWithAuth(clusterAddr+"/controller/stopRebalance", "application/json", strings.NewReader(""), nil)
-			if err != nil {
-				logging.Errorf("TestCode::TestActionAtTag - Error observed while posting cancel message, err: %v", err)
+			fn := func(attempt int, lastErr error) error {
+				if attempt > 0 {
+					logging.Infof("TestCode::TestActionAtTag Error occurred during cancel rebalance:%v ... Retrying(%d)",
+						lastErr, attempt)
+				}
+
+				resp, err := security.PostWithAuth(clusterAddr+"/controller/stopRebalance", "application/json", strings.NewReader(""), nil)
+				if err != nil {
+					logging.Errorf("TestCode::TestActionAtTag - Error observed while posting cancel message, err: %v", err)
+					return err
+				}
+
+				if resp != nil {
+					statusCode := resp.StatusCode
+					resp.Body.Close()
+					if statusCode >= 200 && statusCode < 300 {
+						return nil
+					}
+					return fmt.Errorf("non-2XX response: %v", statusCode) // Retry on non-2XX
+				}
+				return nil
 			}
-			if resp != nil {
-				defer resp.Body.Close()
-			}
+			rh := common.NewRetryHelper(4, 500*time.Millisecond, 1, fn)
+			rh.RunWithConditionalError(func(err error) bool {
+				return !strings.Contains(err.Error(), "non-2XX response")
+			})
 			time.Sleep(3 * time.Second)
+
 		case SLEEP:
 			logging.Infof("TestCode::TestActionAtTag: Sleeping for %v milliseconds as wished", option.SleepTime)
 			time.Sleep(time.Duration(option.SleepTime) * time.Millisecond)

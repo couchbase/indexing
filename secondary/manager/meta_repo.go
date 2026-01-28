@@ -57,6 +57,7 @@ type RepoRef interface {
 	resetConnections() error
 	isMetaDirty() bool
 	clearMetaDirty()
+	getMetastoreStats() repo.MetastoreStats
 }
 
 // RemoteRepoRef implements the RepoRef interface for a remote metadata repo.
@@ -541,6 +542,10 @@ func (c *MetadataRepo) SetGlobalTopology(topology *GlobalTopology) error {
 	return nil
 }
 
+func (c *MetadataRepo) GetMetastoreStats() repo.MetastoreStats {
+	return c.repo.getMetastoreStats()
+}
+
 ///////////////////////////////////////////////////////
 //  Public Function : Indexer Info
 ///////////////////////////////////////////////////////
@@ -894,6 +899,10 @@ func (c *LocalRepoRef) resetConnections() error {
 	return c.server.ResetConnections()
 }
 
+func (c *LocalRepoRef) getMetastoreStats() repo.MetastoreStats {
+	return c.server.GetMetastoreStats()
+}
+
 func getEventType(key string) EventType {
 
 	evtType := EVENT_NONE
@@ -1082,6 +1091,10 @@ func (c *RemoteRepoRef) newDictionaryRequest(request *Request, reply **Reply) er
 	}
 
 	return nil
+}
+
+func (c *RemoteRepoRef) getMetastoreStats() repo.MetastoreStats {
+	return c.repository.GetStoreStats()
 }
 
 func (c *RemoteRepoRef) close() {

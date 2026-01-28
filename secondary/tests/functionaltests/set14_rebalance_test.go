@@ -297,6 +297,7 @@ func TestCreateIndexesBeforeRebalance(t *testing.T) {
 func TestIndexNodeRebalanceIn(t *testing.T) {
 	addTwoNodesAndRebalance("TestIndexNodeRebalanceIn", t)
 	waitForRebalanceCleanup()
+	TestIndexMetadataStore(t)
 }
 
 // addTwoNodesAndRebalance is the delegate of two tests that perform the same actions at different points

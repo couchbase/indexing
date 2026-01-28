@@ -17,6 +17,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	report "github.com/couchbase/indexing/secondary/scanreport"
 	"github.com/couchbase/query/value"
 
 	//"runtime"
@@ -134,6 +135,10 @@ type RequestBroker struct {
 	// Temporary bufferes needed for DecodeN1QLValues.
 	tmpbufs        []*[]byte
 	tmpbufsPoolIdx []uint32
+
+	// scan report
+	scanReport       *report.ScanReportState
+	perHostReportIds []string
 }
 
 type doneStatus struct {
@@ -279,8 +284,54 @@ func (b *RequestBroker) SetRetry(retry bool) {
 	b.retry = retry
 }
 
+func (b *RequestBroker) InitScanReport(requestId string, defnID common.IndexDefnId) {
+	b.scanReport = &report.ScanReportState{
+		ReqID:         requestId,
+		DefnID:        defnID,
+		HostScanReport: make(map[string]*report.HostScanReport),
+	}
+}
+
+func (b *RequestBroker) AttachIndexerScanReport(hostReport *report.HostScanReport, i int) {
+	hostId := b.perHostReportIds[i]
+
+	if b.scanReport.HostScanReport[hostId] != nil {
+		b.scanReport.HostScanReport[hostId].SrvrMs = hostReport.SrvrMs
+		b.scanReport.HostScanReport[hostId].SrvrCounts = hostReport.SrvrCounts
+	} else {
+		b.scanReport.HostScanReport[hostId] = hostReport
+	}
+}
+
+func (b *RequestBroker) GenPerClientReportId(instId uint64, partnIDs []common.PartitionId) string {
+	// Format: <instId>[<partnId0>,<partnId1>,...]
+	s := fmt.Sprintf("%d[", instId)
+	for i, p := range partnIDs {
+		if i > 0 {
+			s += ","
+		}
+		s += fmt.Sprintf("%d", p)
+	}
+	s += "]"
+	return s
+}
+
 func (b *RequestBroker) DoRetry() bool {
 	return b.retry
+}
+
+// For debugging purposes only. This will be removed
+func (b *RequestBroker) LogFinalReport() {
+	if !logging.IsEnabled(logging.Debug) || b.scanReport == nil {
+		return
+	}
+
+	sr := b.scanReport
+	report, err := json.Marshal(sr)
+	if err != nil {
+		logging.Errorf("logFinalReport err: %v, RequestId: %v", err, sr.ReqID)
+	}
+	logging.Debugf("Final scan report: %v", string(report))
 }
 
 // Close the broker on error
@@ -736,6 +787,14 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 		tmpbuf, tmpbufPoolIdx = GetFromPools()
 		c.tmpbufs[i] = tmpbuf
 		c.tmpbufsPoolIdx[i] = tmpbufPoolIdx
+	}
+
+	c.perHostReportIds = make([]string, len(client))
+	for i := 0; i < len(client); i++ {
+		tmpbuf, tmpbufPoolIdx = GetFromPools()
+		c.tmpbufs[i] = tmpbuf
+		c.tmpbufsPoolIdx[i] = tmpbufPoolIdx
+		c.perHostReportIds[i] = c.GenPerClientReportId(targetInstId[i], partition[i])
 	}
 
 	if c.useGather() {
@@ -1384,6 +1443,10 @@ func (d *bypassResponseReader) Error() error {
 
 func (d *bypassResponseReader) GetReadUnits() uint64 {
 	return 0
+}
+
+func (d *bypassResponseReader) GetServerScanReport() (*report.HostScanReport) {
+	return nil
 }
 
 func makeDefaultRequestBroker(cb ResponseHandler,
