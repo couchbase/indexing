@@ -1056,6 +1056,7 @@ type secondaryIndex struct {
 
 	// Vector index related metadata
 	isCompositeVector    bool
+	isVectorSparse       bool
 	vectorDistanceType   datastore.IndexDistanceType
 	vectorUserSimilarity string
 	vectorDimension      int
@@ -1149,6 +1150,7 @@ func newSecondaryIndexFromMetaData(
 		}
 
 		si.isCompositeVector = indexDefn.VectorMeta.IsCompositeIndex
+		si.isVectorSparse = indexDefn.HasSparseVector()
 		if val, ok := gsi2N1QLSimilarity[c.VectorSimilarity(strings.ToUpper(string(indexDefn.VectorMeta.Similarity)))]; !ok {
 			return nil, errors.NewError(nil, fmt.Sprintf("Invalid vector similarity seen for index with defnId: %v, defn's similarity: %v", indexDefn.DefnId, indexDefn.VectorMeta.Similarity))
 		} else {
@@ -1287,8 +1289,10 @@ func (si *secondaryIndex) With() map[string]interface{} {
 	withClause := make(map[string]interface{})
 
 	if si.isCompositeVector || si.isBhive {
-		withClause["dimension"] = si.vectorDimension
-		withClause["similarity"] = si.vectorUserSimilarity
+		if !si.isVectorSparse {
+			withClause["dimension"] = si.vectorDimension
+			withClause["similarity"] = si.vectorUserSimilarity
+		}
 		withClause["scan_nprobes"] = si.nprobes
 		withClause["description"] = si.vectorDescription
 		if si.vectorTrainList != 0 {
@@ -1616,9 +1620,6 @@ func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 				attr |= datastore.IK_MISSING
 			}
 
-			if si.vectorAttr != nil && si.vectorAttr[i] {
-				attr |= datastore.IK_DENSE_VECTOR
-			}
 
 			if si.secExprsAttrs != nil && si.secExprsAttrs[i] != 0 {
 				attr |= datastore.IkAttributes(si.secExprsAttrs[i])

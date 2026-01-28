@@ -943,8 +943,10 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 			withExpr += ","
 		}
 
-		withExpr += fmt.Sprintf(" \"dimension\":%v,", def.VectorMeta.Dimension)
-		withExpr += fmt.Sprintf(" \"similarity\":\"%v\",", def.VectorMeta.Similarity)
+		if !def.HasSparseVector() {
+			withExpr += fmt.Sprintf(" \"dimension\":%v,", def.VectorMeta.Dimension)
+			withExpr += fmt.Sprintf(" \"similarity\":\"%v\",", def.VectorMeta.Similarity)
+		}
 		withExpr += fmt.Sprintf(" \"description\":\"%v\"", def.VectorMeta.Quantizer.String())
 
 		if def.VectorMeta.Nprobes > 1 {
