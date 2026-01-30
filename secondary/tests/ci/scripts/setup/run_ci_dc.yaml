@@ -9,7 +9,7 @@ services:
         RELEASE: ${RELEASE:-8.1.0}
         MANIFEST: ${MANIFEST:-couchbase-server/totoro/8.1.0.xml}
         CIBOT: true
-        MODE: ${MODE:-"unit,functional"}
+        MODE: ${MODE:-"lint,unit,functional"}
         USERNAME: cbci # gerrit username
       tags:
         - ci_machine:latest
