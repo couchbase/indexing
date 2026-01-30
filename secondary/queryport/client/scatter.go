@@ -18,6 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	report "github.com/couchbase/indexing/secondary/scanreport"
+	"github.com/couchbase/query/datastore"
 	"github.com/couchbase/query/value"
 
 	//"runtime"
@@ -291,8 +292,8 @@ func (b *RequestBroker) InitScanReport(requestId string, defnID common.IndexDefn
 	}
 
 	b.scanReport = &report.ScanReportState{
-		ReqID:         requestId,
-		DefnID:        defnID,
+		ReqID:          requestId,
+		DefnID:         defnID,
 		HostScanReport: make(map[string]*report.HostScanReport),
 	}
 }
@@ -316,18 +317,24 @@ func (b *RequestBroker) DoRetry() bool {
 	return b.retry
 }
 
-func (b *RequestBroker) LogFinalReport() {
-	if !logging.IsEnabled(logging.Debug) || b.scanReport == nil {
+func (b *RequestBroker) SendFinalReport(conn *datastore.IndexConnection) {
+	if b.scanReport == nil {
 		return
 	}
 
 	sr := b.scanReport
-	reportMap := sr.ToMap()
-	reportJson, err := json.Marshal(reportMap)
-	if err != nil {
-		logging.Errorf("logFinalReport err: %v, RequestId: %v", err, sr.ReqID)
+	includeDetailed := conn.IsDetailedIndexScanReport()
+	newReport := sr.ToMap(includeDetailed)
+	conn.AggregateScanReport(report.AggregateScanReportsFn, newReport)
+
+	if logging.IsEnabled(logging.Debug) {
+		reportJson, err := json.Marshal(newReport)
+		if err != nil {
+			logging.Warnf("SendFinalReport err: %v, RequestId: %v", err, sr.ReqID)
+		} else {
+			logging.Debugf("Final scan report sent: %v", string(reportJson))
+		}
 	}
-	logging.Debugf("Final scan report: %v", string(reportJson))
 }
 
 // Close the broker on error
@@ -1451,7 +1458,7 @@ func (d *bypassResponseReader) GetReadUnits() uint64 {
 	return 0
 }
 
-func (d *bypassResponseReader) GetServerScanReport() (*report.HostScanReport) {
+func (d *bypassResponseReader) GetServerScanReport() *report.HostScanReport {
 	return nil
 }
 

@@ -24,7 +24,7 @@ type ScanReportState struct {
 	SrvrTotalCounts *ServerCounts
 	Partns          map[string][]int
 	Retries         int
-	HostScanReport   map[string]*HostScanReport
+	HostScanReport  map[string]*HostScanReport
 }
 type HostScanReport struct {
 	SrvrNs     *ServerTimings `json:"srvr_ns,omitempty"`
@@ -110,7 +110,7 @@ func (s *ScanReportState) PopulatePartns(index *common.IndexDefn, instIds []uint
 	s.Partns = partns
 }
 
-func (s *ScanReportState) ToMap() map[string]interface{} {
+func (s *ScanReportState) ToMap(includeDetailed bool) map[string]interface{} {
 	if s == nil {
 		return nil
 	}
@@ -133,7 +133,7 @@ func (s *ScanReportState) ToMap() map[string]interface{} {
 	if s.Retries != 0 {
 		m["retries"] = s.Retries
 	}
-	if s.HostScanReport != nil && len(s.HostScanReport) > 0 {
+	if includeDetailed && s.HostScanReport != nil && len(s.HostScanReport) > 0 {
 		detailed := make(map[string]interface{}, len(s.HostScanReport))
 		for id, detail := range s.HostScanReport {
 			detailed[id] = detail
@@ -141,73 +141,4 @@ func (s *ScanReportState) ToMap() map[string]interface{} {
 		m["detailed"] = detailed
 	}
 	return m
-}
-
-func (s *ScanReportState) aggregateServerMetrics() {
-	if s == nil || len(s.HostScanReport) == 0 {
-		return
-	}
-
-	if len(s.HostScanReport) == 1 {
-		for _, detail := range s.HostScanReport {
-			if detail == nil {
-				return
-			}
-			if detail.SrvrNs != nil {
-				avgTimings := *detail.SrvrNs
-				s.SrvrAvgNs = &avgTimings
-			}
-			if detail.SrvrCounts != nil {
-				totalCounts := *detail.SrvrCounts
-				s.SrvrTotalCounts = &totalCounts
-			}
-			return
-		}
-	}
-
-	var (
-		avgTimings ServerTimings
-		numHosts   int64
-		totalCounts ServerCounts
-		sumCache  uint64
-	)
-
-	for _, detail := range s.HostScanReport {
-		if detail == nil {
-			continue
-		}
-		if detail.SrvrNs != nil {
-			avgTimings.TotalDur += detail.SrvrNs.TotalDur
-			avgTimings.WaitDur += detail.SrvrNs.WaitDur
-			avgTimings.ScanDur += detail.SrvrNs.ScanDur
-			avgTimings.GetSeqnosDur += detail.SrvrNs.GetSeqnosDur
-			avgTimings.DiskReadDur += detail.SrvrNs.DiskReadDur
-			avgTimings.DistCompDur += detail.SrvrNs.DistCompDur
-		}
-		if detail.SrvrCounts != nil {
-			totalCounts.RowsReturn += detail.SrvrCounts.RowsReturn
-			totalCounts.RowsScan += detail.SrvrCounts.RowsScan
-			totalCounts.BytesRead += detail.SrvrCounts.BytesRead
-			sumCache += detail.SrvrCounts.CacheHitPer
-		}
-		numHosts++
-	}
-
-	if numHosts > 0 {
-		s.SrvrAvgNs = &ServerTimings{
-			TotalDur:          avgTimings.TotalDur / numHosts,
-			WaitDur:           avgTimings.WaitDur / numHosts,
-			ScanDur:           avgTimings.ScanDur / numHosts,
-			GetSeqnosDur:      avgTimings.GetSeqnosDur / numHosts,
-			DiskReadDur:       avgTimings.DiskReadDur / numHosts,
-			DistCompDur:       avgTimings.DistCompDur / numHosts,
-		}
-
-		s.SrvrTotalCounts = &ServerCounts{
-			RowsReturn:  totalCounts.RowsReturn,
-			RowsScan:    totalCounts.RowsScan,
-			BytesRead:   totalCounts.BytesRead,
-			CacheHitPer: sumCache / uint64(numHosts), // avg percent across indexers
-		}
-	}
 }

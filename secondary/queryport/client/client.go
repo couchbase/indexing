@@ -1279,9 +1279,6 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 
 	fmsg := "%v {%v,%v} - elapsed(%v) err(%v)"
 	logging.Verbosef(fmsg, logPrefix, defnID, requestId, time.Since(begin), err)
-
-	// For debugging purposes only. This will be removed
-	broker.LogFinalReport()
 	return
 }
 
@@ -1819,6 +1816,11 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 		foundScanport := false
 
 		queryports, targetDefnID, targetInstIds, rollbackTimes, partitions, numPartitions, ok := c.bridge.GetScanport(defnID, excludes, skips)
+
+		if broker.scanReport != nil && defnID != uint64(broker.scanReport.DefnID) {
+			broker.scanReport.DefnID = common.IndexDefnId(defnID)
+		}
+
 		var index *common.IndexDefn
 		if ok {
 			index = c.bridge.GetIndexDefn(targetDefnID)
