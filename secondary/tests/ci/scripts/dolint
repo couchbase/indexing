@@ -126,7 +126,7 @@ ensure_golangci_lint() {
   if ! command -v golangci-lint &> /dev/null; then
     echo "Installing golangci-lint (with v2 config format support)..."
     if command -v go &> /dev/null; then
-      GOPATH_BIN="$(go env GOPATH)/bin"
+      GOPATH_BIN="$(go env GOROOT)/bin"
       # Install latest version (supports v2 config format)
       # The config file uses version: "2" format, which is supported by recent versions
       curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$GOPATH_BIN" latest
