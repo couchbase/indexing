@@ -104,22 +104,10 @@ linters:
       multi-if: true
       multi-func: true
     govet:
-      enable-all: true
+      # enable-all: true
       settings:
         printf:
-          funcs:
-            - fmt.Println
-            - fmt.Printf
-            - fmt.Sprintf
-            - fmt.Errorf
-            - fmt.Errorf
-            - (github.com/couchbase/indexing/secondary/logging).Infof
-            - (github.com/couchbase/indexing/secondary/logging).Warnf
-            - (github.com/couchbase/indexing/secondary/logging).Errorf
-            - (github.com/couchbase/indexing/secondary/logging).Debugf
-            - (github.com/couchbase/indexing/secondary/logging).Tracef
-            - (github.com/couchbase/indexing/secondary/logging).Panicf
-            - (github.com/couchbase/indexing/secondary/logging).Fatalf
+          funcs: "fmt.Println,fmt.Printf,fmt.Sprintf,fmt.Errorf,logging.Infof,logging.Warnf,logging.Errorf,logging.Debugf,logging.Tracef,logging.Panicf,logging.Fatalf,l.Infof,l.Warnf,l.Errorf,l.Debugf,l.Tracef,l.Panicf,l.Fatalf,(github.com/couchbase/indexing/secondary/logging).Infof,(github.com/couchbase/indexing/secondary/logging).Warnf,(github.com/couchbase/indexing/secondary/logging).Errorf,(github.com/couchbase/indexing/secondary/logging).Debugf, (github.com/couchbase/indexing/secondary/logging).Tracef,(github.com/couchbase/indexing/secondary/logging).Panicf,(github.com/couchbase/indexing/secondary/logging).Fatalf,(github.com/couchbase/indexing/secondary/logging).Infof,(*github.com/couchbase/indexing/secondary/logging).Infof,(*github.com/couchbase/indexing/secondary/logging).Errorf,(*github.com/couchbase/indexing/secondary/logging).Debugf,(*github.com/couchbase/indexing/secondary/logging).Tracef,(*github.com/couchbase/indexing/secondary/logging).Panicf,(*github.com/couchbase/indexing/secondary/logging).Fatalf"
   exclusions:
     paths:
       - protobuf

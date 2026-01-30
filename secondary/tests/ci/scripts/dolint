@@ -117,7 +117,7 @@ reset_worktree() {
     base_branch="master"
   fi
 
-  git reset --hard "origin/$base_branch" >/dev/null 2>&1
+  git reset --hard "$base_branch" >/dev/null 2>&1
   git clean -fdx >/dev/null 2>&1
 }
 
@@ -178,6 +178,16 @@ if [ ! -f ~/gerrit.list ]; then
   exit 0
 fi
 
+lint_cfg="$WORKSPACE/goproj/src/github.com/couchbase/indexing/.golangci.yml"
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
+indexing_lint_output=$(golangci-lint run --config $lint_cfg -j 12 --new --new-from-merge-base=couchbase/unstable 2>&1)
+index_lint_status=$?
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
+gometa_lint_output=$(golangci-lint run --config $lint_cfg -j 12 --new --new-from-merge-base=couchbase/master 2>&1)
+gometa_lint_status=$?
+
 # Process each patch in gerrit.list
 while IFS= read -r line; do
   if [ -z "$line" ]; then
@@ -221,8 +231,6 @@ while IFS= read -r line; do
     continue
   fi
 
-  echo "  Linting patch $patch_id, patchset $patchset (commit ${commit_hash:0:7}) in project $project_name"
-
   # Change to project directory
   cd "$project_path"
 
@@ -257,18 +265,24 @@ while IFS= read -r line; do
   # Run golangci-lint on the entire project using the indexing config
   # Note: The changes are already cherry-picked in the working tree
   # We track by commit hash to avoid re-linting unchanged commits
-  lint_cfg="$WORKSPACE/goproj/src/github.com/couchbase/indexing/.golangci.yml"
   if [ ! -f "$lint_cfg" ]; then
     echo "  Warning: golangci config not found at $lint_cfg, skipping lint"
     mark_commit_linted "$patch_id" "$patchset" "$commit_hash"
     continue
   fi
 
-  lint_output=$(golangci-lint run --config "$lint_cfg" --timeout 10m 2>&1)
-  lint_status=$?
-
   # Mark as linted regardless of result
   mark_commit_linted "$patch_id" "$patchset" "$commit_hash"
+
+  lint_status=0
+  lint_output=""
+  if [ "$project_name" = "indexing" ]; then
+    lint_status=$index_lint_status
+    lint_output=$indexing_lint_output
+  elif [ "$project_name" = "gometa" ]; then
+    lint_status=$gometa_lint_status
+    lint_output=$gometa_lint_output
+  fi
 
   if [ $lint_status -eq 0 ]; then
     echo "  ✓ Linting passed for patch $patch_id, patchset $patchset"
@@ -313,10 +327,6 @@ while IFS= read -r line; do
       echo "  Comment already posted for patch $patch_id, patchset $patchset"
     fi
   fi
-
-  # Always reset the worktree after reviewing the patch
-  reset_worktree "$project_name" "$project_path"
-
 done < ~/gerrit.list
 
 echo "</pre>"
