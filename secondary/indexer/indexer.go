@@ -15552,22 +15552,26 @@ func (idx *indexer) checkForLostReplicas(
 				// Should not hit into this. Handling edge case
 				continue
 			}
-			// expected replicas are present for this partition
-			if len(replicaIndexInfo) == expectedInstReplicaMap[defnId] {
-				continue
+
+			// GetNumReplica() returns the number of replicas specified when
+			// the index was created, NOT including the original instance.
+			// add 1 to count all replica instances.
+			totalExpectedInstances := expectedInstReplicaMap[defnId] + 1
+			if len(replicaIndexInfo) == totalExpectedInstances {
+				continue // expected instances are present for this partition
 			}
-
 			key := fmt.Sprintf("%v:%v", replicaIndexInfo[0].IndexName, partnId)
-			indexesWithLostReplica[key] = expectedInstReplicaMap[defnId] - len(replicaIndexInfo)
+			indexesWithLostReplica[key] = totalExpectedInstances - len(replicaIndexInfo)
 
-			presentReplica := make([]int, len(replicaIndexInfo))
+			presentReplica := make([]int, 0, len(replicaIndexInfo))
 			for _, indexInfo := range replicaIndexInfo {
 				presentReplica = append(presentReplica, indexInfo.ReplicaID)
 			}
 
-			logging.Warnf("Indexer::checkForLostReplica defnId: %v, partnId: %v has only %v(%v) replicas "+
-				"while it is expected to have %v replicas", defnId, partnId, len(presentReplica),
-				presentReplica, expectedInstReplicaMap[defnId])
+			logging.Warnf("Indexer::checkForLostReplica defnId: %v, partnId: %v "+
+				"has only %v(%v) replica instances while it is "+
+				"expected to have %v total instances", defnId, partnId, len(presentReplica),
+				presentReplica, totalExpectedInstances)
 		}
 	}
 
