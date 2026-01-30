@@ -1,14 +1,13 @@
 version: "2"
 
 run:
-  go: "1.24"
+  go: "1.25"
   timeout: 10m
   tests: false
   issues-exit-code: 1
   modules-download-mode: readonly
   allow-parallel-runners: true
   build-tags:
-    - enterprise
     - "!community"
     - "jemalloc"
     - "vectors"
@@ -18,7 +17,7 @@ issues:
   max-issues-per-linter: 0 # Unlimited
   max-same-issues: 0 # Unlimited
   new: true
-  new-from-merge-base: "master"
+  # new-from-merge-base: "couchbase/master"
   fix: false
   whole-files: false
 
