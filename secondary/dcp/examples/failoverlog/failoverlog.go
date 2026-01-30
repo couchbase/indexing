@@ -1,3 +1,5 @@
+//go:build nolint
+
 package main
 
 import (
@@ -8,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/dcp"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 )
 
 const clusterAddr = "http://localhost:9000"

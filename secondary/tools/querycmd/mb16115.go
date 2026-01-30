@@ -1,14 +1,18 @@
+//go:build nolint
+
 package main
 
-import "fmt"
-import "log"
-import "os"
-import "sync"
-import "time"
-import "os/exec"
+import (
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"sync"
+	"time"
 
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import "github.com/couchbase/indexing/secondary/querycmd"
+	"github.com/couchbase/indexing/secondary/querycmd"
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+)
 
 // test case to simulate
 // https://issues.couchbase.com/browse/MB-16115

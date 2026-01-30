@@ -1,10 +1,10 @@
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
-github.com/Azure/azure-sdk-for-go/sdk/azcore v1.20.0 h1:JXg2dwJUmPB9JmtVmdEB16APJ7jurfbY5jnfXpJoRMc=
-github.com/Azure/azure-sdk-for-go/sdk/azcore v1.20.0/go.mod h1:YD5h/ldMsG0XiIw7PdyNhLxaM317eFh5yNLccNfGdyw=
+github.com/Azure/azure-sdk-for-go/sdk/azcore v1.16.0 h1:JZg6HRh6W6U4OLl6lk7BZ7BLisIzM9dG1R50zUk9C/M=
+github.com/Azure/azure-sdk-for-go/sdk/azcore v1.16.0/go.mod h1:YL1xnZ6QejvQHWJrX/AvhFl4WW4rqHVoKspWNVwFk0M=
 github.com/Azure/azure-sdk-for-go/sdk/internal v1.10.0 h1:ywEEhmNahHBihViHepv3xPBn1663uRv2t2q/ESv9seY=
 github.com/Azure/azure-sdk-for-go/sdk/internal v1.10.0/go.mod h1:iZDifYGJTIgIIkYRNWPENUnqx6bJ2xnSDFI2tjwZNuY=
-github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.3 h1:ZJJNFaQ86GVKQ9ehwqyAFE6pIfyicpuJ8IkVaPBc6/4=
-github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.3/go.mod h1:URuDvhmATVKqHBH9/0nOiNKk0+YcwfQ3WkK5PqHKxc8=
+github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.5.0 h1:mlmW46Q0B79I+Aj4azKC6xDMFN9a9SyZWESlGWYXbFs=
+github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.5.0/go.mod h1:PXe2h+LKcWTX9afWdZoHyODqR4fBa5boUM/8uJfZ0Jo=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/aws/aws-sdk-go-v2 v1.41.0 h1:tNvqh1s+v0vFYdA1xq0aOJH+Y5cRyZ5upu6roPgPKd4=
 github.com/aws/aws-sdk-go-v2 v1.41.0/go.mod h1:MayyLB8y+buD9hZqkCW3kX1AKq07Y5pXxtgB+rRFhz0=
@@ -76,8 +76,8 @@ github.com/couchbase/logstats v1.0.0 h1:zhfu1kyBfvdBk5y+8VRPRnpdVivwXAI/DsBGqbeY
 github.com/couchbase/logstats v1.0.0/go.mod h1:S+drFV9YF6dSqFaj54vmsNqe3xvelFwz7EVw0vPSfR4=
 github.com/couchbase/tools-common/cloud/v7 v7.2.0 h1:Ng9qxN5de+RoHoXj8eU7D4LhYdKIW6uX3fRELNg/kVM=
 github.com/couchbase/tools-common/cloud/v7 v7.2.0/go.mod h1:A5wGss0ZI1sHuImt72Pv5p2mQK1L+j5Cew1eMb+FssQ=
-github.com/couchbase/tools-common/errors v1.1.0 h1:ruGRk4YX7UBiqBGmMgl5QaLXbH6L33lD4zxgoGE4/OY=
-github.com/couchbase/tools-common/errors v1.1.0/go.mod h1:fIO0OUBgKtTD5UW34aRyZYjqnx58rY0/ZjX2EGT3xtQ=
+github.com/couchbase/tools-common/errors v1.0.0 h1:lEPRdPrk7iHOiZIJspEH7OnywxRR+SKlrG78KkOWnXA=
+github.com/couchbase/tools-common/errors v1.0.0/go.mod h1:9or/a3TpNd/1aZIUr/a8y0uF03O9hachXFCnu6Y3sjM=
 github.com/couchbase/tools-common/fs v1.0.3 h1:KXhisN+hmp5yicOWkUBNjJcd/WsblHA2SVShjL2eGiY=
 github.com/couchbase/tools-common/fs v1.0.3/go.mod h1:5Pw+X/IkVL909GEtrCkIfV+yKLV1FL8TS2U1ZcmB37U=
 github.com/couchbase/tools-common/functional v1.1.1 h1:9Vg6RdP0L30cVjZ0NF8MRQyLfco45Pfi0h7317ww8gA=

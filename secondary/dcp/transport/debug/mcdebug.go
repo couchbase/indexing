@@ -1,3 +1,5 @@
+//go:build nolint
+
 // Package mcdebug provides memcached client op statistics via expvar.
 package mcdebug
 
@@ -7,7 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/couchbase/indexing/secondary/dcp/transport"
-	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
 )
 
 type mcops struct {

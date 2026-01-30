@@ -1,9 +1,13 @@
+//go:build nolint
+
 package main
 
-import "time"
-import "fmt"
+import (
+	"fmt"
+	"time"
 
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+)
 
 func doBenchtimeit(cluster string, client *qclient.GsiClient) (err error) {
 	start := time.Now()

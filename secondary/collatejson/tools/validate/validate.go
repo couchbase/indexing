@@ -5,26 +5,32 @@
 //  in that file, in accordance with the Business Source License, use of this
 //  software will be governed by the Apache License, Version 2.0, included in
 //  the file licenses/APL2.txt.
+//go:build nolint
 
 package main
 
-import "encoding/json"
-import "flag"
-import "fmt"
-import "log"
-import "math/rand"
-import "sort"
-import "strconv"
-import "time"
-import "io/ioutil"
-import "path"
-import "runtime"
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"math/rand"
+	"path"
+	"runtime"
+	"sort"
+	"strconv"
+	"time"
 
-import qv "github.com/couchbase/query/value"
-import "github.com/prataprc/collatejson"
-import "github.com/prataprc/goparsec"
-import "github.com/prataprc/monster"
-import mcommon "github.com/prataprc/monster/common"
+	"github.com/couchbase/indexing/secondary/common"
+	qv "github.com/couchbase/query/value"
+	"github.com/prataprc/collatejson"
+
+	parsec "github.com/prataprc/goparsec"
+	"github.com/prataprc/monster"
+
+	mcommon "github.com/prataprc/monster/common"
+)
 
 var options struct {
 	count   int

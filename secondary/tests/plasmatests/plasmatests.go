@@ -1,3 +1,5 @@
+//go:build nolint
+
 // Copyright 2017-Present Couchbase, Inc.
 //
 // Use of this software is governed by the Business Source License included

@@ -1,13 +1,17 @@
+//go:build nolint
+
 package main
 
-import "time"
-import "flag"
-import "log"
-import "strings"
+import (
+	"flag"
+	"log"
+	"strings"
+	"time"
 
-import "github.com/couchbase/cbauth"
-import "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/indexer"
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/indexer"
+)
 
 var options struct {
 	bucket  string

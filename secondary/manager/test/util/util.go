@@ -1,14 +1,17 @@
+//go:build nolint
+
 package test
 
 import (
+	"net"
+	"testing"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbase/indexing/secondary/transport"
-	"net"
-	"testing"
 )
 
 type TestDefaultClientFactory struct {
