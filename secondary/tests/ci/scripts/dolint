@@ -150,6 +150,26 @@ ensure_golangci_lint() {
 
 echo "</pre><h3>Linting Go Code</h3><pre>"
 
+arch=`uname -m`
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
+gover="`grep -A20 'TARGET indexer PACKAGE' CMakeLists.txt  | grep GOVERSION | head -1 | sed 's/^.*\(\([0-9]\.[0-9]*.[0-9]\)\|\(SUPPORTED_NEWER\)\|\(SUPPORTED_OLDER\)\).*$/\1/'`"
+newerGover="`cat $WORKSPACE/golang/versions/$gover.txt`"
+golatest="`ls $HOME/.cbdepscache/exploded/$arch/ | grep $newerGover | tail -1`"
+
+mkdir -p "$WORKSPACE/go"
+base="$HOME/.cbdepscache/exploded/$arch/$golatest"
+[ -d "$base/go" ] && export GOROOT="$base/go" || export GOROOT="$base"
+export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
+export PATH=$GOROOT/bin:$PATH
+export C_INCLUDE_PATH=$WORKSPACE/platform/include/:$WORKSPACE/install/include:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include:$WORKSPACE/sigar/include:$WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include:$WORKSPACE/build/tlm/deps/faiss.exploded/include:$WORKSPACE/magma/include:$WORKSPACE/build/tlm/deps/lz4.exploded/include:$WORKSPACE/build/tlm/deps/openssl.exploded/include
+export CGO_LDFLAGS="-L $WORKSPACE/install/lib -Wl,-rpath $WORKSPACE/install/lib"
+# export LD_LIBRARY_PATH=$WORKSPACE/install/lib
+#Note: enabling auto tells go get to download modules under godeps/pkg/mod
+#This breaks unit tests which depend on fixed file paths under monster module
+export GO111MODULE=auto
+
+cd $WORKSPACE
+
 # Ensure golangci-lint is installed
 ensure_golangci_lint
 
