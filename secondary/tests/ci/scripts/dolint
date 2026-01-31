@@ -161,7 +161,32 @@ base="$HOME/.cbdepscache/exploded/$arch/$golatest"
 [ -d "$base/go" ] && export GOROOT="$base/go" || export GOROOT="$base"
 export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
 export PATH=$GOROOT/bin:$PATH
-export C_INCLUDE_PATH=$WORKSPACE/platform/include/:$WORKSPACE/install/include:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include:$WORKSPACE/sigar/include:$WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include:$WORKSPACE/build/tlm/deps/faiss.exploded/include:$WORKSPACE/magma/include:$WORKSPACE/build/tlm/deps/lz4.exploded/include:$WORKSPACE/build/tlm/deps/openssl.exploded/include
+
+
+export C_INCLUDE_PATH="$WORKSPACE/platform/include/"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/install/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/forestdb/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/magma/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/sigar/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/build/tlm/deps/curl.exploded/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/build/tlm/deps/faiss.exploded/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/build/tlm/deps/jemalloc.exploded/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/build/tlm/deps/lz4.exploded/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/build/tlm/deps/openssl.exploded/include"
+
+export CGO_CPPFLAGS="-I $WORKSPACE/platform/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/install/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/forestdb/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/magma/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/build/tlm/deps/curl.exploded/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/sigar/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/build/tlm/deps/faiss.exploded/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/build/tlm/deps/jemalloc.exploded/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/build/tlm/deps/lz4.exploded/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/build/tlm/deps/openssl.exploded/include"
+
 export CGO_LDFLAGS="-L $WORKSPACE/install/lib -Wl,-rpath $WORKSPACE/install/lib"
 # export LD_LIBRARY_PATH=$WORKSPACE/install/lib
 #Note: enabling auto tells go get to download modules under godeps/pkg/mod
@@ -307,15 +332,17 @@ while IFS= read -r line; do
     if ! is_comment_posted "$patch_id" "$patchset"; then
       echo "  Posting linting results to gerrit..."
 
-      # Format the linting output for gerrit comment
-      comment_body="$(echo "'$lint_output'" | head -200)"
+      # Escape double quotes within the message to prevent breaking the SSH command
+      comment_body=$(echo "$lint_output" | head -200 | sed 's/"/\\"/g')
       comment_msg=$(printf "Go linting issues found:\n\n%s\n\nSee http://%s.northscale.in/gsi-%s.fail.html for full details" \
         "$comment_body" \
         "$CINAME" \
         "$TS")
 
+      comment_msg=$(echo $comment_msg | sed 's/"/\\"/g')
+
       # Post comment to gerrit
-      ssh review.couchbase.org gerrit review -m "'$comment_msg'" --verified -1 "$patch_id,$patchset"
+      ssh review.couchbase.org gerrit review -m "$comment_msg" --verified -1 "$patch_id,$patchset"
 
       if [ $? -eq 0 ]; then
         mark_comment_posted "$patch_id" "$patchset"
