@@ -25,7 +25,7 @@ if [ "$WORKSPACE" = "" ]; then
 fi
 
 if [ "$MODE" = "" ]; then
-  echo MODE must be some combination of: 'sanity,unit,functional,integration'
+  echo MODE must be some combination of: 'lint,sanity,unit,functional,integration'
   exit 2
 fi
 
@@ -48,6 +48,9 @@ export TS="`date +%d.%m.%Y-%H.%M`"
 echo '<html><head></head><body><pre>' > /var/www/gsi-current.html
 chmod a+rx /var/www/gsi-current.html
 dobuild clean 1>>/var/www/gsi-current.html 2>&1; rc=$?
+if [[ $MODE == *"lint"* ]]; then
+test $rc -eq 0 && dolint 1>>/var/www/gsi-current.html 2>&1; lint_rc=$?
+fi
 test $rc -eq 0 && dotest 1>>/var/www/gsi-current.html 2>&1; rc=$?
 echo '</pre>' >> /var/www/gsi-current.html
 if [ $rc -eq 0 ]; then status=pass; else status=fail; fi

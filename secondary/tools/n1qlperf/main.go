@@ -1,16 +1,19 @@
+//go:build nolint
+
 package main
 
 import (
 	"flag"
 	"fmt"
-	"github.com/couchbase/cbauth"
-	"github.com/couchbase/indexing/secondary/logging"
 	"io"
 	"os"
 	"runtime"
 	"runtime/pprof"
 	"strings"
 	"time"
+
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 func handleError(err error) {

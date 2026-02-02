@@ -1,15 +1,20 @@
+//go:build nolint
+
 package main
 
-import "flag"
-import "os"
-import "strings"
-import "log"
-import "time"
+import (
+	"flag"
+	"log"
+	"os"
+	"strings"
+	"time"
 
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/cbauth"
-import "github.com/couchbase/indexing/secondary/dcp"
+	"github.com/couchbase/cbauth"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+)
 
 var options struct {
 	maxVbs   int

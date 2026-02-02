@@ -1,3 +1,5 @@
+//go:build nolint
+
 package main
 
 import (

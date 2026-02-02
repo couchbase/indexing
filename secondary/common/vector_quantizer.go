@@ -11,8 +11,10 @@ import (
 type QuantizationType string
 
 const (
-	PQ QuantizationType = "PQ"
-	SQ QuantizationType = "SQ"
+	// NO_QUANTIZATION is used only for sparse vectors
+	NO_QUANTIZATION QuantizationType = "NONE"
+	PQ              QuantizationType = "PQ"
+	SQ              QuantizationType = "SQ"
 )
 
 type ScalarQuantizerRange string
@@ -128,6 +130,12 @@ func (vq *VectorQuantizer) String() string {
 		} else {
 			return fmt.Sprintf("IVF,%v", vq.SQRange)
 		}
+	case NO_QUANTIZATION:
+		if vq.Nlist > 0 {
+			return fmt.Sprintf("IVF%v", vq.Nlist)
+		} else {
+			return fmt.Sprintf("IVF")
+		}
 	}
 	return ""
 }
@@ -222,6 +230,7 @@ func ParseSparseVectorDescription(inp string) (*VectorQuantizer, error) {
 	inp = strings.ToUpper(inp)
 
 	quantizer := &VectorQuantizer{}
+	quantizer.Type = NO_QUANTIZATION
 
 	re := regexp.MustCompile(`^(IVF)(\d*)$`)
 	matches := re.FindStringSubmatch(inp)
@@ -251,7 +260,7 @@ func (vq *VectorQuantizer) IsValid(dimension int, isSparseVector bool) error {
 
 	// Add validation for sparse vector quantizer
 	if isSparseVector {
-		if vq.Type != "" {
+		if vq.Type != NO_QUANTIZATION {
 			return errors.New("quantizer is supported only for dense vectors. Observed it for sparse vector")
 		}
 		return nil

@@ -97,6 +97,9 @@ type ShardRebalancer struct {
 	// For computing rebalance progress
 	lastKnownProgress map[c.IndexInstId]float64
 
+	// Track last time build progress was logged (to limit logging frequency)
+	lastBuildProgressLogTime time.Time
+
 	// topologyChange is populated in Rebalance and Failover cases only, else nil
 	topologyChange *service.TopologyChange
 
@@ -3495,6 +3498,11 @@ func (sr *ShardRebalancer) computeShardProgress() float64 {
 	restoreWt := 0.35
 	recoverWt := 0.3
 
+	shouldLog := false
+	if time.Since(sr.lastBuildProgressLogTime) >= 5*time.Minute {
+		sr.lastBuildProgressLogTime = time.Now()
+		shouldLog = true
+	}
 	var totalProgress float64
 	for ttid, tt := range tokens {
 		state := tt.ShardTransferTokenState
@@ -3512,7 +3520,7 @@ func (sr *ShardRebalancer) computeShardProgress() float64 {
 		} else if state == c.ShardTokenRecoverShard {
 			// If index state is recovered, get build progress
 			totalProgress += transferWt*100.0 + restoreWt*100.0
-			totalProgress += recoverWt * sr.getBuildProgressFromStatus(statusResp, tt)
+			totalProgress += recoverWt * sr.getBuildProgressFromStatus(statusResp, tt, shouldLog)
 		}
 	}
 
@@ -3530,7 +3538,8 @@ func (sr *ShardRebalancer) computeShardProgress() float64 {
 
 // getBuildProgressFromStatus is a helper for computeProgress that gets an estimate of index build progress for the
 // given transfer token from the status arg.
-func (sr *ShardRebalancer) getBuildProgressFromStatus(status *IndexStatusResponse, tt *c.TransferToken) float64 {
+func (sr *ShardRebalancer) getBuildProgressFromStatus(status *IndexStatusResponse,
+	tt *c.TransferToken, shouldLog bool) float64 {
 
 	totalProgress := 0.0
 	for i, inst := range tt.IndexInsts {
@@ -3548,9 +3557,11 @@ func (sr *ShardRebalancer) getBuildProgressFromStatus(status *IndexStatusRespons
 		// 2) partition has already been merged to instance with realInstId
 		// In either case, count will be 0 after calling getBuildProgress(instId) and it will find progress
 		// using realInstId instead.
-		realInstProgress, count := sr.getBuildProgress(status, instId, realInstId, inst.Defn, tt.DestId)
+		realInstProgress, count := sr.getBuildProgress(status, instId, realInstId, inst.Defn,
+			 tt.DestId, shouldLog)
 		if count == 0 {
-			realInstProgress, count = sr.getBuildProgress(status, realInstId, realInstId, inst.Defn, tt.DestId)
+			realInstProgress, count = sr.getBuildProgress(status, realInstId, realInstId,
+				inst.Defn, tt.DestId, shouldLog)
 		}
 
 		if count > 0 {
@@ -3565,7 +3576,8 @@ func (sr *ShardRebalancer) getBuildProgressFromStatus(status *IndexStatusRespons
 }
 
 func (sr *ShardRebalancer) getBuildProgress(status *IndexStatusResponse,
-	instId, realInstId c.IndexInstId, defn c.IndexDefn, destId string) (realInstProgress float64, count int) {
+	instId, realInstId c.IndexInstId, defn c.IndexDefn, destId string,
+	shouldLog bool) (realInstProgress float64, count int) {
 
 	for _, idx := range status.Status {
 		if idx.InstId == instId {
@@ -3579,11 +3591,13 @@ func (sr *ShardRebalancer) getBuildProgress(status *IndexStatusResponse,
 					progress = idx.Progress
 				}
 
-				destNode := getDestNode(defn.Partitions[0], idx.PartitionMap)
-				l.Infof("ShardRebalancer::getBuildProgress Index: %v:%v:%v:%v"+
-					" Progress: %v InstId: %v RealInstId: %v Partitions: %v Destination: %v",
-					defn.Bucket, defn.Scope, defn.Collection, defn.Name,
-					progress, instId, realInstId, defn.Partitions, destNode)
+				if shouldLog || (sr.lastKnownProgress[instId] != progress && progress == 100) {
+					destNode := getDestNode(defn.Partitions[0], idx.PartitionMap)
+					l.Infof("ShardRebalancer::getBuildProgress Index: %v:%v:%v:%v"+
+						" Progress: %v InstId: %v RealInstId: %v Partitions: %v Destination: %v",
+						defn.Bucket, defn.Scope, defn.Collection, defn.Name,
+						progress, instId, realInstId, defn.Partitions, destNode)
+				}
 
 				realInstProgress += progress
 				count++
@@ -3779,6 +3793,10 @@ loop:
 					if isIndexInAsyncRecovery(response.Error) {
 						// Wait for async recovery to finish
 						l.Errorf("ShardRebalancer::dropShardsWhenIdle: Index is in async recovery, defn: %v, url: %v, err: %v",
+							defn, url, response.Error)
+						continue
+					} else if isIndexUnderTraining(response.Error) {
+						l.Errorf("ShardRebalancer::dropShardsWhenIdle Index is in training. defn %v, url: %v, err: %v",
 							defn, url, response.Error)
 						continue
 					} else if !isMissingBSC(response.Error) &&
@@ -4755,6 +4773,11 @@ func isIndexDeletedDuringRebal(errMsg string) bool {
 
 func isIndexInAsyncRecovery(errMsg string) bool {
 	return errMsg == common.ErrIndexInAsyncRecovery.Error()
+}
+
+func isIndexUnderTraining(errMsg string) bool {
+	errMsg = strings.ToLower(errMsg)
+	return strings.Contains(errMsg, "training is in progress")
 }
 
 func isBuildAlreadyInProgress(errMsg string) bool {

@@ -1,3 +1,5 @@
+//go:build nolint
+
 // Copyright 2014-Present Couchbase, Inc.
 //
 // Use of this software is governed by the Business Source License included
@@ -9,12 +11,13 @@
 package test
 
 import (
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/manager"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager"
 )
 
 // For this test, use index definition id from 200 - 210

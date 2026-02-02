@@ -1,11 +1,13 @@
+//go:build nolint
+
 // 2020-12-10 this code is not used anywhere according to Deepkaran Salooja,
 // so I got his permission to comment it out so we won't have to maintain
 // it. Note that it contains TCP connection leaks as none of the calls to
 // http.DefaultClient.Do() closes the response body. To avoid the leaks,
 // whenever the response is not an error, its body must be read to the end
 // then and closed.
-//
-//package main
+package main
+
 //
 //import "net/http"
 //import "encoding/json"

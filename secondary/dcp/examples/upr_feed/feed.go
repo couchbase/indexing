@@ -1,3 +1,5 @@
+//go:build nolint
+
 package main
 
 import (
@@ -14,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/dcp"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 )

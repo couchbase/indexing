@@ -1,6 +1,7 @@
 package mockcbauth
 
 import (
+	"context"
 	"crypto/tls"
 	"net/http"
 
@@ -81,4 +82,29 @@ func (a *AuthImpl) TriggerConfigRefreshCallback(code uint64) error {
 func (a *AuthImpl) SetGuardrailStatuses(gss cbauth.GuardrailStatuses, err error) {
 	a.grStatuses = gss
 	a.grStatusErr = err
+}
+
+func (a *AuthImpl) GetEncryptionKeys(_ cbauth.KeyDataType) (*cbauth.EncrKeysInfo, error) {
+	return nil, nil
+}
+
+func (a *AuthImpl) GetEncryptionKeysBlocking(_ context.Context, _ cbauth.KeyDataType) (
+	*cbauth.EncrKeysInfo, error,
+) {
+
+	return nil, nil
+}
+
+func (a *AuthImpl) RegisterEncryptionKeysCallbacks(
+	_ cbauth.RefreshKeysCallback,
+	_ cbauth.GetInUseKeysCallback,
+	_ cbauth.DropKeysCallback,
+	_ cbauth.SynchronizeKeyFilesCallback,
+) error {
+
+	return nil
+}
+
+func (a *AuthImpl) KeysDropComplete(_ cbauth.KeyDataType, _ error) error {
+	return nil
 }

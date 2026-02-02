@@ -1,11 +1,14 @@
+//go:build nolint
+
 package main
 
 import (
 	"fmt"
-	"github.com/couchbase/indexing/secondary/fdb"
 	"log"
 	"os"
 	"time"
+
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 )
 
 func main() {

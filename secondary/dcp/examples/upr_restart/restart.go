@@ -1,3 +1,5 @@
+//go:build nolint
+
 package main
 
 import (
@@ -6,9 +8,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/dcp"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
-	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
 )
 
 const clusterAddr = "http://localhost:9000"

@@ -1,16 +1,22 @@
+//go:build nolint
+
 package main
 
-import "flag"
-import "fmt"
-import "log"
-import "os"
-import "runtime"
-import "runtime/pprof"
+import (
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"runtime"
+	"runtime/pprof"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/querycmd"
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
+	"github.com/couchbase/indexing/secondary/logging"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/querycmd"
+
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+)
 
 func usage(fset *flag.FlagSet) {
 	fmt.Fprintf(os.Stderr, "Usage: %s (sanity|bench|...)\n", os.Args[0])

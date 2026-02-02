@@ -635,10 +635,10 @@ func execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, index, s
 	// Create a partitioned index with defer_build:true
 	_, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, url.PathEscape(bucket),
 		n1qlStatement, false, gocb.RequestPlus)
-  	if err != nil {
-	    if strings.Contains(err.Error(), "Encountered transient error") == false { // Ignore any transient errors
-		FailTestIfError(err, fmt.Sprintf("Error during n1qlExecute: %v", n1qlStatement), t)
-            }
+	if err != nil {
+		if strings.Contains(err.Error(), "Encountered transient error") == false { // Ignore any transient errors
+			FailTestIfError(err, fmt.Sprintf("Error during n1qlExecute: %v", n1qlStatement), t)
+		}
 	}
 
 	// Wait for index created

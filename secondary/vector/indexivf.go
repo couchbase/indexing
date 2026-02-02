@@ -49,3 +49,10 @@ func NewIndexIVFSQ_HNSW(dim, nlist, metric int, sqRange common.ScalarQuantizerRa
 	return faiss.IndexFactory(dim, description, metric)
 
 }
+
+func NewIndexIVF_HNSW(dim, nlist, metric int) (*faiss.IndexImpl, error) {
+
+	description := fmt.Sprintf("IVF%v_HNSW,Flat", nlist)
+	return faiss.IndexFactory(dim, description, metric)
+
+}

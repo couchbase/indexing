@@ -1,16 +1,20 @@
+//go:build nolint
+
 package main
 
-import "os"
+import (
+	"bytes"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
 
 //import "encoding/json"
-import "fmt"
-import "io/ioutil"
-import "regexp"
-import "strconv"
-import "bytes"
-import "sort"
-import "strings"
-import "time"
 
 type filename string
 type testname string

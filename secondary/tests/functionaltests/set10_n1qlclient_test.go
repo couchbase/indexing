@@ -454,6 +454,10 @@ func (ctxt *qcmdContext) GetErrors() []qerrors.Error {
 	return nil
 }
 
+func (ctxt *qcmdContext) ScanReportWait() time.Duration {
+	return 0
+}
+
 func cleanbackfillFiles() {
 	dir := backfillDir()
 	files, err := ioutil.ReadDir(dir)

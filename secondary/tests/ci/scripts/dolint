@@ -1,0 +1,359 @@
+#!/bin/bash
+
+source ~/.cienv
+
+if [ "$WORKSPACE" = "" ]; then
+  echo 'WORKSPACE not set'
+  exit 2
+fi
+
+if [ "$CIBOT" != "true" ]; then
+  # Only run linting when CIBOT is enabled
+  exit 0
+fi
+
+# Initialize linted commits tracking file if it doesn't exist
+LINTED_FILE=~/gerrit-linted.list
+touch "$LINTED_FILE"
+
+project_path_for() {
+  local project_name=$1
+  case "$project_name" in
+    indexing) echo "$WORKSPACE/goproj/src/github.com/couchbase/indexing" ;;
+    gometa)   echo "$WORKSPACE/goproj/src/github.com/couchbase/gometa" ;;
+    plasma)   echo "$WORKSPACE/goproj/src/github.com/couchbase/plasma" ;;
+    nitro)    echo "$WORKSPACE/goproj/src/github.com/couchbase/nitro" ;;
+    bhive)    echo "$WORKSPACE/goproj/src/github.com/couchbase/bhive" ;;
+    *)        echo "" ;;
+  esac
+}
+
+get_commit_hash() {
+  local project_name=$1
+  local patch_id=$2
+
+  local project_path
+  project_path=$(project_path_for "$project_name")
+  if [ ! -d "$project_path" ]; then
+    echo ""
+    return
+  fi
+
+  cd "$project_path"
+  revspec=$(git ls-remote -q ssh://review.couchbase.org/$project_name refs/changes/*/$patch_id/* 2>/dev/null | awk '{print $2}' | sort -n -t/ -k5 | tail -1)
+  if [ "$revspec" = "" ]; then
+    echo ""
+    return
+  fi
+
+  git fetch -q ssh://review.couchbase.org/$project_name $revspec 2>/dev/null || { echo ""; return; }
+  git rev-parse FETCH_HEAD 2>/dev/null
+}
+
+# Function to check if commit has been linted
+is_commit_linted() {
+  local patch_id=$1
+  local patchset=$2
+  local commit_hash=$3
+
+  grep -q "^${patch_id},${patchset},${commit_hash}$" "$LINTED_FILE" 2>/dev/null
+}
+
+# Function to mark commit as linted
+mark_commit_linted() {
+  local patch_id=$1
+  local patchset=$2
+  local commit_hash=$3
+
+  echo "${patch_id},${patchset},${commit_hash}" >> "$LINTED_FILE"
+}
+
+# Function to check if comment has been posted for this patchset
+is_comment_posted() {
+  local patch_id=$1
+  local patchset=$2
+
+  grep -q "^${patch_id},${patchset},posted$" ~/gerrit-comments-posted.list 2>/dev/null
+}
+
+# Function to mark comment as posted
+mark_comment_posted() {
+  local patch_id=$1
+  local patchset=$2
+
+  touch ~/gerrit-comments-posted.list
+  echo "${patch_id},${patchset},posted" >> ~/gerrit-comments-posted.list
+}
+
+# Track posted success comments to avoid duplicates
+is_comment_posted_pass() {
+  local patch_id=$1
+  local patchset=$2
+
+  grep -q "^${patch_id},${patchset},pass$" ~/gerrit-comments-pass.list 2>/dev/null
+}
+
+mark_comment_posted_pass() {
+  local patch_id=$1
+  local patchset=$2
+
+  touch ~/gerrit-comments-pass.list
+  echo "${patch_id},${patchset},pass" >> ~/gerrit-comments-pass.list
+}
+
+# Reset worktree to clean state after reviewing a patch
+reset_worktree() {
+  local project_name=$1
+  local project_path=$2
+
+  if [ ! -d "$project_path" ]; then
+    return
+  fi
+
+  cd "$project_path"
+  # Choose branch based on project
+  local base_branch="$BRANCH"
+  if [ "$project_name" = "gometa" ]; then
+    base_branch="master"
+  fi
+
+  git reset --hard "$base_branch" >/dev/null 2>&1
+  git clean -fdx >/dev/null 2>&1
+}
+
+# Function to install golangci-lint if not present
+ensure_golangci_lint() {
+  if ! command -v golangci-lint &> /dev/null; then
+    echo "Installing golangci-lint (with v2 config format support)..."
+    if command -v go &> /dev/null; then
+      GOPATH_BIN="$(go env GOROOT)/bin"
+      # Install latest version (supports v2 config format)
+      # The config file uses version: "2" format, which is supported by recent versions
+      curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$GOPATH_BIN" latest
+      export PATH="$GOPATH_BIN:$PATH"
+    else
+      echo "Error: go command not found, cannot install golangci-lint"
+      exit 1
+    fi
+  fi
+  # Ensure golangci-lint is in PATH
+  if ! command -v golangci-lint &> /dev/null; then
+    if command -v go &> /dev/null; then
+      export PATH="$(go env GOPATH)/bin:$PATH"
+    fi
+  fi
+  # Verify installation and version
+  if command -v golangci-lint &> /dev/null; then
+    echo "golangci-lint version: $(golangci-lint --version 2>&1 | head -1)"
+  fi
+}
+
+echo "</pre><h3>Linting Go Code</h3><pre>"
+
+arch=`uname -m`
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
+gover="`grep -A20 'TARGET indexer PACKAGE' CMakeLists.txt  | grep GOVERSION | head -1 | sed 's/^.*\(\([0-9]\.[0-9]*.[0-9]\)\|\(SUPPORTED_NEWER\)\|\(SUPPORTED_OLDER\)\).*$/\1/'`"
+newerGover="`cat $WORKSPACE/golang/versions/$gover.txt`"
+golatest="`ls $HOME/.cbdepscache/exploded/$arch/ | grep $newerGover | tail -1`"
+
+mkdir -p "$WORKSPACE/go"
+base="$HOME/.cbdepscache/exploded/$arch/$golatest"
+[ -d "$base/go" ] && export GOROOT="$base/go" || export GOROOT="$base"
+export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
+export PATH=$GOROOT/bin:$PATH
+
+
+export C_INCLUDE_PATH="$WORKSPACE/platform/include/"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/install/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/forestdb/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/magma/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/sigar/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/build/tlm/deps/curl.exploded/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/build/tlm/deps/faiss.exploded/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/build/tlm/deps/jemalloc.exploded/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/build/tlm/deps/lz4.exploded/include"
+export C_INCLUDE_PATH="$C_INCLUDE_PATH:$WORKSPACE/build/tlm/deps/openssl.exploded/include"
+
+export CGO_CPPFLAGS="-I $WORKSPACE/platform/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/install/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/forestdb/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/magma/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/build/tlm/deps/curl.exploded/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/sigar/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/build/tlm/deps/faiss.exploded/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/build/tlm/deps/jemalloc.exploded/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/build/tlm/deps/lz4.exploded/include"
+export CGO_CPPFLAGS="$CGO_CPPFLAGS -I $WORKSPACE/build/tlm/deps/openssl.exploded/include"
+
+export CGO_LDFLAGS="-L $WORKSPACE/install/lib -Wl,-rpath $WORKSPACE/install/lib"
+# export LD_LIBRARY_PATH=$WORKSPACE/install/lib
+#Note: enabling auto tells go get to download modules under godeps/pkg/mod
+#This breaks unit tests which depend on fixed file paths under monster module
+export GO111MODULE=auto
+
+cd $WORKSPACE
+
+# Ensure golangci-lint is installed
+ensure_golangci_lint
+
+if [ ! -f ~/gerrit.list ]; then
+  echo "No gerrit patches to lint"
+  exit 0
+fi
+
+lint_cfg="$WORKSPACE/goproj/src/github.com/couchbase/indexing/.golangci.yml"
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
+indexing_lint_output=$(golangci-lint run --config $lint_cfg -j 12 --new --new-from-merge-base=couchbase/unstable 2>&1)
+index_lint_status=$?
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
+gometa_lint_output=$(golangci-lint run --config $lint_cfg -j 12 --new --new-from-merge-base=couchbase/master 2>&1)
+gometa_lint_status=$?
+
+# Process each patch in gerrit.list
+while IFS= read -r line; do
+  if [ -z "$line" ]; then
+    continue
+  fi
+
+  # Parse project, patch_id, patchset from gerrit.list (format: project,patch_id,patchset)
+  project_name=$(echo "$line" | cut -d',' -f1)
+  patch_id=$(echo "$line" | cut -d',' -f2)
+  patchset=$(echo "$line" | cut -d',' -f3)
+
+  if [ -z "$project_name" ] || [ -z "$patch_id" ] || [ -z "$patchset" ]; then
+    continue
+  fi
+
+  echo "Processing patch $patch_id, patchset $patchset"
+
+  # Only lint indexing and gometa
+  if [ "$project_name" != "indexing" ] && [ "$project_name" != "gometa" ]; then
+    echo "  Skipping patch $patch_id: linting only runs for indexing or gometa (found $project_name)"
+    mark_commit_linted "$patch_id" "$patchset" "skipped-$project_name"
+    continue
+  fi
+
+  project_path=$(project_path_for "$project_name")
+
+  if [ -z "$project_name" ] || [ ! -d "$project_path" ]; then
+    echo "  Skipping patch $patch_id: project not found or path doesn't exist"
+    continue
+  fi
+
+  commit_hash=$(get_commit_hash "$project_name" "$patch_id")
+  if [ -z "$commit_hash" ]; then
+    echo "  Skipping patch $patch_id: could not get commit hash"
+    continue
+  fi
+
+  # Check if we've already linted this commit
+  if is_commit_linted "$patch_id" "$patchset" "$commit_hash"; then
+    echo "  Patch $patch_id, patchset $patchset (commit ${commit_hash:0:7}) already linted, skipping"
+    continue
+  fi
+
+  # Change to project directory
+  cd "$project_path"
+
+  # Check if this is a Go project (has .go files or go.mod)
+  if [ ! -f "go.mod" ] && [ -z "$(find . -name '*.go' -type f | head -1)" ]; then
+    echo "  Skipping patch $patch_id: not a Go project"
+    mark_commit_linted "$patch_id" "$patchset" "$commit_hash"
+    continue
+  fi
+
+  # Check if there are any Go files in this commit
+  # Fetch the commit again to ensure we have it
+  revspec=$(git ls-remote -q ssh://review.couchbase.org/$project_name refs/changes/*/$patch_id/* 2>/dev/null | awk '{print $2}' | sort -n -t/ -k5 | tail -1)
+  has_go_files=false
+  if [ "$revspec" != "" ]; then
+    git fetch -q ssh://review.couchbase.org/$project_name $revspec 2>/dev/null
+    if [ $? -eq 0 ]; then
+      # Check if there are any Go files changed in this commit
+      changed_files=$(git diff --name-only FETCH_HEAD^..FETCH_HEAD 2>/dev/null | grep '\.go$' || true)
+      if [ -n "$changed_files" ]; then
+        has_go_files=true
+      fi
+    fi
+  fi
+
+  if [ "$has_go_files" != "true" ]; then
+    echo "  No Go files changed in patch $patch_id, skipping lint"
+    mark_commit_linted "$patch_id" "$patchset" "$commit_hash"
+    continue
+  fi
+
+  # Run golangci-lint on the entire project using the indexing config
+  # Note: The changes are already cherry-picked in the working tree
+  # We track by commit hash to avoid re-linting unchanged commits
+  if [ ! -f "$lint_cfg" ]; then
+    echo "  Warning: golangci config not found at $lint_cfg, skipping lint"
+    mark_commit_linted "$patch_id" "$patchset" "$commit_hash"
+    continue
+  fi
+
+  # Mark as linted regardless of result
+  mark_commit_linted "$patch_id" "$patchset" "$commit_hash"
+
+  lint_status=0
+  lint_output=""
+  if [ "$project_name" = "indexing" ]; then
+    lint_status=$index_lint_status
+    lint_output=$indexing_lint_output
+  elif [ "$project_name" = "gometa" ]; then
+    lint_status=$gometa_lint_status
+    lint_output=$gometa_lint_output
+  fi
+
+  if [ $lint_status -eq 0 ]; then
+    echo "  ✓ Linting passed for patch $patch_id, patchset $patchset"
+    # Post a pass comment with label +1 only once per patchset
+    if ! is_comment_posted_pass "$patch_id" "$patchset"; then
+      pass_msg=$(printf "Lint passed for project %s patch %s (commit %s)" "$project_name" "$patch_id" "${commit_hash:0:7}")
+      ssh review.couchbase.org gerrit review --verified +1 -m "'$pass_msg'" "$patch_id" 2>&1
+      if [ $? -eq 0 ]; then
+        mark_comment_posted_pass "$patch_id" "$patchset"
+        echo "  Posted lint pass (+1) to gerrit for patch $patch_id"
+      else
+        echo "  Warning: failed to post lint pass (+1) to gerrit for patch $patch_id"
+      fi
+    fi
+  else
+    echo "  ✗ Linting failed for patch $patch_id, patchset $patchset"
+    echo "  --- lint output (first 200 lines) ---"
+    echo "$lint_output" | head -200
+    echo "  --- end lint output ---"
+
+    # Post comment to gerrit only once per patchset
+    if ! is_comment_posted "$patch_id" "$patchset"; then
+      echo "  Posting linting results to gerrit..."
+
+      # Escape double quotes within the message to prevent breaking the SSH command
+      comment_body=$(echo "$lint_output" | head -200 | sed 's/"/\\"/g')
+      comment_msg=$(printf "Go linting issues found:\n\n%s\n\nSee http://%s.northscale.in/gsi-%s.fail.html for full details" \
+        "$comment_body" \
+        "$CINAME" \
+        "$TS")
+
+      comment_msg=$(echo $comment_msg | sed 's/"/\\"/g')
+
+      # Post comment to gerrit
+      ssh review.couchbase.org gerrit review -m "$comment_msg" --verified -1 "$patch_id,$patchset"
+
+      if [ $? -eq 0 ]; then
+        mark_comment_posted "$patch_id" "$patchset"
+        echo "  Comment posted to gerrit for patch $patch_id"
+      else
+        echo "  Warning: failed to post comment to gerrit for patch $patch_id"
+      fi
+    else
+      echo "  Comment already posted for patch $patch_id, patchset $patchset"
+    fi
+  fi
+done < ~/gerrit.list
+
+echo "</pre>"

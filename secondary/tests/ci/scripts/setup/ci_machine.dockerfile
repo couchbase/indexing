@@ -78,9 +78,9 @@ VOLUME [ "/var/www/" ]
 ARG WORKSPACE=/home/bot/build
 ARG CINAME=ci2i-unstable
 ARG CIBOT=false
-ARG RELEASE=8.0.0
-ARG MANIFEST="couchbase-server/morpheus/8.0.0.xml"
-ARG MODE="sanity,unit,functional,integration"
+ARG RELEASE=8.1.0
+ARG MANIFEST="couchbase-server/totoro/8.1.0.xml"
+ARG MODE="lint,sanity,unit,functional,integration"
 ARG BRANCH="unstable"
 ARG STORAGE="plasma"
 ARG PEGGED

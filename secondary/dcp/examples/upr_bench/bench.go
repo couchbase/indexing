@@ -1,3 +1,5 @@
+//go:build nolint
+
 // Tool receives raw events from dcp client.
 package main
 
@@ -9,7 +11,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/dcp"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
