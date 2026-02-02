@@ -70,12 +70,15 @@ type ClientSettings struct {
 	minPartitionsPerShard atomic.Pointer[map[uint64]uint64]
 
 	// Vector settings
-	rerankFactor int32
-	maxHeapSize  int32
+	rerankFactor       int32
+	maxHeapSize        int32
 	maxVectorDimension int32
 
 	// Scan reporting flag
 	enableScanReporting uint32
+
+	// Encryption
+	encryptBackfill atomic.Bool
 }
 
 func NewClientSettings(needRefresh bool, toolsConfig common.Config) *ClientSettings {
@@ -460,6 +463,15 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: invalid setting value for maxDimension=%v", maxVectorDimension)
 	}
 
+	encryptBackfill, ok := config["indexer.encryption.enable_test"]
+	if ok {
+		if encryptBackfill.Bool() {
+			s.encryptBackfill.Store(true)
+		} else {
+			s.encryptBackfill.Store(false)
+		}
+	}
+
 	setShardDealerConfig(s, config)
 }
 
@@ -601,6 +613,10 @@ func (s *ClientSettings) MaxVectorDimension() int32 {
 
 func (s *ClientSettings) EnableScanReporting() bool {
 	return atomic.LoadUint32(&s.enableScanReporting) == 1
+}
+
+func (s *ClientSettings) EncryptBackfill() bool {
+	return s.encryptBackfill.Load()
 }
 
 func setShardDealerConfig(s *ClientSettings, config common.Config) {
