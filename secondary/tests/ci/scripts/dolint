@@ -336,9 +336,9 @@ while IFS= read -r line; do
     echo "  --- end lint output ---"
 
     if [[ "$project_name" == "indexing" ]]; then
-      cp -n $WORKSPACE/indexing-lint.html /var/www/indexing-lint-$TS.html
+      cp --update=none $WORKSPACE/indexing-lint.html /var/www/indexing-lint-$TS.html
     elif [[ "$project_name" == "gometa" ]]; then
-      cp -n $WORKSPACE/gometa-lint.html /var/www/gometa-lint-$TS.html
+      cp --update=none $WORKSPACE/gometa-lint.html /var/www/gometa-lint-$TS.html
     fi
 
     # Post comment to gerrit only once per patchset
@@ -351,7 +351,7 @@ while IFS= read -r line; do
         "$TS")
 
       # Post comment to gerrit
-      ssh review.couchbase.org gerrit review -m "$comment_msg" --verified -1 "$patch_id,$patchset"
+      ssh review.couchbase.org gerrit review "$patch_id,$patchset" -m "'$comment_msg'" --verified -1
 
       if [ $? -eq 0 ]; then
         mark_comment_posted "$patch_id" "$patchset"
