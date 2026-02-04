@@ -371,6 +371,41 @@ func splitmix64(x uint64) uint64 {
 	return z ^ (z >> 31)
 }
 
+// Transpose performs query term matching between the input query
+// and sparse vector and stores the values for the matching terms
+// in the `result`. It also returns a bool to indicate if there were
+// any matching terms.
+// Input for q and s must be in the concise format.
+// Output `result` stores only the values of the matching terms.
+
+// This function has been taken from bhive.
+// https://github.com/couchbase/bhive/blob/main/vanama_quantized.go
+func (cb *codebookSparse) Transpose(q []float32, s []float32, result []float32) bool {
+	nqdim := int(q[0])       // #dim query
+	ndim := int(s[0])        // #dim vec
+	q = q[1 : 1+nqdim]       // query dim
+	d := s[1 : 1+ndim]       // vec dim
+	s = s[1+ndim : 1+2*ndim] // vec value
+	i := 0                   // query dim pos
+	j := 0                   // data dim pos
+
+	keep := false
+	for ; i < nqdim; i++ {
+		for ; j < ndim && q[i] > d[j]; j++ { // fast forward when query dim > vector dim
+		}
+
+		if j < ndim && q[i] == d[j] { // dimension matches
+			result[i] = s[j]
+			j++
+			keep = true // at least 1 dim matches
+		} else {
+			result[i] = 0
+		}
+	}
+
+	return keep
+}
+
 // Not implemented for Sparse
 func (cb *codebookSparse) CodeSize() (int, error) {
 
