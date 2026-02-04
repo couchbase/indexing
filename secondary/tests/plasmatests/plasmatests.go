@@ -151,7 +151,7 @@ func createSliceFunc(ctx smat.Context) (next smat.State, err error) {
 	if err != nil {
 		return nil, err
 	}
-	c.slice, err = indexer.NewPlasmaSlice(c.plasmaDir, c.plasmaDir, "", 0, idxDefn, instID, common.PartitionId(0), false, 1, config, stats, int64(config.GetIndexerMemoryQuota()), false, true, nil, 64, 0, nil, nil)
+	c.slice, err = indexer.NewPlasmaSlice(c.plasmaDir, c.plasmaDir, "", 0, idxDefn, instID, common.PartitionId(0), false, 1, config, stats, int64(config.GetIndexerMemoryQuota()), false, true, nil, 64, 0, nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -3309,6 +3309,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.generateScanReport": ConfigValue{
+		false,
+		"Allow generation of per scan report.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.settings.log_level": ConfigValue{
 		"info",
 		"Projector logging level",

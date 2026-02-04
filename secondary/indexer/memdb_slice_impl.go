@@ -1955,6 +1955,21 @@ func (mdb *memdbSlice) String() string {
 
 }
 
+func (mdb *memdbSlice) SetCurrentEncryptionKey(masterEncryptionKey []byte, keyId []byte, cipher string) error {
+	// ENCRYPT_TODO: Update after storage changes
+	return nil
+}
+
+func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
+	// ENCRYPT_TODO: Update after storage changes
+	doneCh <- nil
+}
+
+func (mdb *memdbSlice) GetKeyIdList() []string {
+	// ENCRYPT_TODO: Update after storage changes
+	return []string{}
+}
+
 func tryDeletememdbSlice(mdb *memdbSlice) {
 
 	//cleanup the disk directory

@@ -97,6 +97,7 @@ message ScanRequest {
     repeated string             indexKeyNames   = 22;
     optional string             inlineFilter    = 23;
     repeated Scan		        includeColumnScans       = 24;
+    optional bool               generateScanReport = 25;
 }
 
 // Full table scan request from indexer.
@@ -113,6 +114,7 @@ message ScanAllRequest {
     optional bool          skipReadMetering  = 10;
     optional IndexVector   indexVector   = 11;
     optional int64         ReqTimeout    = 12;
+    optional bool          generateScanReport = 13;
 }
 
 // Request by client to stop streaming the query results.

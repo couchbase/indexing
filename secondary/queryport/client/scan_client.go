@@ -407,7 +407,7 @@ func (c *GsiScanClient) ScanAll(
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
-	reqDeadline time.Time, reqDeadlineSlack time.Duration) (error, bool) {
+	reqDeadline time.Time, reqDeadlineSlack time.Duration, generateScanReport bool) (error, bool) {
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -415,16 +415,17 @@ func (c *GsiScanClient) ScanAll(
 	}
 
 	req := &protobuf.ScanAllRequest{
-		DefnID:           proto.Uint64(defnID),
-		RequestId:        proto.String(requestId),
-		Limit:            proto.Int64(limit),
-		Cons:             proto.Uint32(uint32(cons)),
-		RollbackTime:     proto.Int64(rollbackTime),
-		PartitionIds:     partnIds,
-		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
-		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
-		User:             proto.String(scanParams["user"].(string)),
-		ReqTimeout:       proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
+		DefnID:             proto.Uint64(defnID),
+		RequestId:          proto.String(requestId),
+		Limit:              proto.Int64(limit),
+		Cons:               proto.Uint32(uint32(cons)),
+		RollbackTime:       proto.Int64(rollbackTime),
+		PartitionIds:       partnIds,
+		DataEncFmt:         proto.Uint32(uint32(dataEncFmt)),
+		SkipReadMetering:   proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:               proto.String(scanParams["user"].(string)),
+		ReqTimeout:         proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
+		GenerateScanReport: proto.Bool(generateScanReport),
 	}
 	if tsvector != nil {
 		req.TsVector = protobuf.NewTsConsistency(
@@ -1088,7 +1089,7 @@ func (c *GsiScanClient) Scan(
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
 	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration,
 	indexOrderForVector *IndexKeyOrder, indexKeyNames []string,
-	inlineFilter string, includeColumnScans Scans) (error, bool) {
+	inlineFilter string, includeColumnScans Scans, generateScanReport bool) (error, bool) {
 
 	// serialize scans
 	protoScans, err := getProtoScansFromScans(scans)
@@ -1223,6 +1224,7 @@ func (c *GsiScanClient) Scan(
 		IndexKeyNames:      indexKeyNames,
 		InlineFilter:       proto.String(inlineFilter),
 		IncludeColumnScans: protoIncludeColumnScans,
+		GenerateScanReport: proto.Bool(generateScanReport),
 	}
 	if tsvector != nil {
 		req.TsVector = protobuf.NewTsConsistency(
@@ -1239,7 +1241,7 @@ func (c *GsiScanClient) ScanPrimary(
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
-	reqDeadline time.Time, reqDeadlineSlack time.Duration) (error, bool) {
+	reqDeadline time.Time, reqDeadlineSlack time.Duration, generateScanReport bool) (error, bool) {
 
 	var what string
 	// serialize scans
@@ -1356,22 +1358,23 @@ func (c *GsiScanClient) ScanPrimary(
 		Span: &protobuf.Span{
 			Range: nil,
 		},
-		RequestId:        proto.String(requestId),
-		Distinct:         proto.Bool(distinct),
-		Limit:            proto.Int64(limit),
-		Cons:             proto.Uint32(uint32(cons)),
-		Scans:            protoScans,
-		Indexprojection:  protoProjection,
-		Reverse:          proto.Bool(reverse),
-		Offset:           proto.Int64(offset),
-		RollbackTime:     proto.Int64(rollbackTime),
-		PartitionIds:     partnIds,
-		GroupAggr:        protoGroupAggr,
-		Sorted:           proto.Bool(sorted),
-		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
-		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
-		User:             proto.String(scanParams["user"].(string)),
-		ReqTimeout:       proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
+		RequestId:          proto.String(requestId),
+		Distinct:           proto.Bool(distinct),
+		Limit:              proto.Int64(limit),
+		Cons:               proto.Uint32(uint32(cons)),
+		Scans:              protoScans,
+		Indexprojection:    protoProjection,
+		Reverse:            proto.Bool(reverse),
+		Offset:             proto.Int64(offset),
+		RollbackTime:       proto.Int64(rollbackTime),
+		PartitionIds:       partnIds,
+		GroupAggr:          protoGroupAggr,
+		Sorted:             proto.Bool(sorted),
+		DataEncFmt:         proto.Uint32(uint32(dataEncFmt)),
+		SkipReadMetering:   proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:               proto.String(scanParams["user"].(string)),
+		ReqTimeout:         proto.Int64(c.setRequestTimeout(reqDeadline, reqDeadlineSlack)),
+		GenerateScanReport: proto.Bool(generateScanReport),
 	}
 	if tsvector != nil {
 		req.TsVector = protobuf.NewTsConsistency(

@@ -554,7 +554,11 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
-	idx.encryptionMgr, _ = NewEncryptionMgr(idx.encryptionMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	idx.encryptionMgr, res = NewEncryptionMgr(idx.encryptionMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	if res.GetMsgType() != MSG_SUCCESS {
+		logging.Fatalf("Indexer::NewIndexer NewEncryptionMgr Init Error %+v", res)
+		return nil, res
+	}
 
 	// Find out if there is a bootstrapStorageMode for this node.   Bootstrap storage mode is
 	// set during storage upgrade to instruct the indexer to use this storage for bootstraping
@@ -1827,11 +1831,79 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case REFRESH_TIMESTAMPED_COUNT_STATS:
 		idx.refreshTimestampedCountStatsCh <- msg
 
+	case ENCRYPTION_UPDATE_KEY:
+		idx.handleEncryptionUpdateKey(msg)
+
+	case ENCRYPTION_GET_INUSE_KEYS:
+		idx.handleEncryptionGetInUseKeys(msg)
+
+	case ENCRYPTION_DROP_KEY:
+		idx.handleEncryptionDropKeys(msg)
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
 	}
 
+}
+
+func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
+
+	logging.Infof("Indexer::handleEncryptionGetInUseKeys...")
+	kdt := msg.(*MsgEncryptionGetInuseKeys).GetKeyDataType()
+
+	switch kdt.TypeName {
+	case "bucket":
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
+
+	// ENCRYPT_TODO: Handle below types later
+	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
+	// ENCRYPT_TODO: Handle MoI Paused
+	case "log":
+	case "config":
+	case "audit":
+	default:
+	}
+
+}
+
+func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
+
+	kdt := msg.(*MsgEncryptionUpdateKey).GetKeyDataType()
+	logging.Infof("Indexer::handleEncryptionUpdateKey keydatatype: %v", kdt)
+
+	switch kdt.TypeName {
+	case "bucket":
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
+
+	// ENCRYPT_TODO: Handle below types later
+	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
+	case "log":
+	case "config":
+	case "audit":
+	default:
+	}
+}
+
+func (idx *indexer) handleEncryptionDropKeys(msg Message) {
+
+	kdt := msg.(*MsgEncryptionDropKey).GetKeyDataType()
+	logging.Infof("Indexer::handleEncryptionDropKeys...")
+
+	switch kdt.TypeName {
+	case "bucket":
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
+
+	// ENCRYPT_TODO: Handle below types later
+	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
+	case "log":
+	case "config":
+	case "audit":
+	default:
+	}
 }
 
 func (idx *indexer) handleDropCollection(msg Message) {
@@ -6878,8 +6950,13 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			shardIds = indexInst.Defn.ShardIdsForDest[partnId]
 		}
 
+		cbs := SliceEncryptionCallbacks{
+			getActiveKeyIdCipher: idx.encryptionMgr.getActiveKeyIdCipher,
+			getKeyCipherById:     idx.encryptionMgr.getKeyCipherById,
+			setInUseKeys:         idx.encryptionMgr.SetInUseKeys,
+		}
 		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, partnStats, memQuota,
-			ephemeral, !bootstrapPhase, idx.meteringMgr, numVBuckets, shardIds, cancelCh)
+			ephemeral, !bootstrapPhase, idx.meteringMgr, numVBuckets, shardIds, cancelCh, cbs)
 
 		if indexInst.Defn.IsVectorIndex {
 			err = idx.handleCodebookRecoveryError(indexInst, partnId, bootstrapPhase, err)
@@ -11305,7 +11382,6 @@ func (idx *indexer) handleStats(cmd Message) {
 	idx.stats.memoryUsedActual.Set(plasma.TenantQuotaNeeded())
 
 	idx.updateStatsFromMemStats()
-
 	replych <- true
 }
 
@@ -11325,7 +11401,7 @@ func (idx *indexer) memoryUsedStorage() int64 {
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	conf common.Config, partnStats map[c.PartitionId]*IndexStats, memQuota int64,
 	ephemeral, isNew bool, meteringMgr *MeteringThrottlingMgr, numVBuckets int,
-	shardIds []common.ShardId, cancelCh chan bool) (slice Slice, err error) {
+	shardIds []common.ShardId, cancelCh chan bool, sliceEncryptionCallbacks SliceEncryptionCallbacks) (slice Slice, err error) {
 
 	isInitialBuild := func() bool {
 		return indInst.State == common.INDEX_STATE_INITIAL || indInst.State == common.INDEX_STATE_CATCHUP ||
@@ -11364,7 +11440,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 		} else {
 			slice, err = NewPlasmaSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
-				CodebookPath(indInst, partitionId, id))
+				CodebookPath(indInst, partitionId, id), sliceEncryptionCallbacks)
 		}
 
 	}

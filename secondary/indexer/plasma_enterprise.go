@@ -31,12 +31,12 @@ func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	isPrimary bool, numPartitions int, sysconf common.Config, idxStats *IndexStats,
 	memQuota int64, isNew bool, isInitialBuild bool, meteringMgr *MeteringThrottlingMgr,
 	numVBuckets, replicaId int, shardIds []common.ShardId,
-	cancelCh chan bool, codebookPath string) (*plasmaSlice, error) {
+	cancelCh chan bool, codebookPath string, sliceEncryptionCallbacks SliceEncryptionCallbacks) (*plasmaSlice, error) {
 
 	return newPlasmaSlice(storage_dir, log_dir, path, sliceId,
 		idxDefn, idxInstId, partitionId, isPrimary, numPartitions,
 		sysconf, idxStats, memQuota, isNew, isInitialBuild, meteringMgr,
-		numVBuckets, replicaId, shardIds, cancelCh, codebookPath)
+		numVBuckets, replicaId, shardIds, cancelCh, codebookPath, sliceEncryptionCallbacks)
 }
 
 // DestroySlice_Plasma - Destroy a plasma slice which cannot be initialised (usually due to

@@ -284,7 +284,12 @@ func (b *RequestBroker) SetRetry(retry bool) {
 	b.retry = retry
 }
 
-func (b *RequestBroker) InitScanReport(requestId string, defnID common.IndexDefnId) {
+func (b *RequestBroker) InitScanReport(requestId string, defnID common.IndexDefnId, enableScanReporting bool) {
+	if !enableScanReporting {
+		b.scanReport = nil
+		return
+	}
+
 	b.scanReport = &report.ScanReportState{
 		ReqID:         requestId,
 		DefnID:        defnID,
@@ -293,45 +298,36 @@ func (b *RequestBroker) InitScanReport(requestId string, defnID common.IndexDefn
 }
 
 func (b *RequestBroker) AttachIndexerScanReport(hostReport *report.HostScanReport, i int) {
-	hostId := b.perHostReportIds[i]
+	if b.scanReport == nil {
+		logging.Errorf("scan report is not initialized but received scan report from indexer for requestId: %v", b.requestId)
+		return
+	}
 
+	hostId := b.perHostReportIds[i]
 	if b.scanReport.HostScanReport[hostId] != nil {
-		b.scanReport.HostScanReport[hostId].SrvrMs = hostReport.SrvrMs
+		b.scanReport.HostScanReport[hostId].SrvrNs = hostReport.SrvrNs
 		b.scanReport.HostScanReport[hostId].SrvrCounts = hostReport.SrvrCounts
 	} else {
-		b.scanReport.HostScanReport[hostId] = hostReport
+		logging.Errorf("AttachIndexerScanReport: report per host detail not initialized for hostId: %v for requestId: %v", hostId, b.requestId)
 	}
-}
-
-func (b *RequestBroker) GenPerClientReportId(instId uint64, partnIDs []common.PartitionId) string {
-	// Format: <instId>[<partnId0>,<partnId1>,...]
-	s := fmt.Sprintf("%d[", instId)
-	for i, p := range partnIDs {
-		if i > 0 {
-			s += ","
-		}
-		s += fmt.Sprintf("%d", p)
-	}
-	s += "]"
-	return s
 }
 
 func (b *RequestBroker) DoRetry() bool {
 	return b.retry
 }
 
-// For debugging purposes only. This will be removed
 func (b *RequestBroker) LogFinalReport() {
 	if !logging.IsEnabled(logging.Debug) || b.scanReport == nil {
 		return
 	}
 
 	sr := b.scanReport
-	report, err := json.Marshal(sr)
+	reportMap := sr.ToMap()
+	reportJson, err := json.Marshal(reportMap)
 	if err != nil {
 		logging.Errorf("logFinalReport err: %v, RequestId: %v", err, sr.ReqID)
 	}
-	logging.Debugf("Final scan report: %v", string(report))
+	logging.Debugf("Final scan report: %v", string(reportJson))
 }
 
 // Close the broker on error
@@ -783,18 +779,28 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 	var tmpbufPoolIdx uint32
 	c.tmpbufs = make([]*[]byte, len(client))
 	c.tmpbufsPoolIdx = make([]uint32, len(client))
-	for i := 0; i < len(client); i++ {
-		tmpbuf, tmpbufPoolIdx = GetFromPools()
-		c.tmpbufs[i] = tmpbuf
-		c.tmpbufsPoolIdx[i] = tmpbufPoolIdx
+	c.perHostReportIds = make([]string, len(client))
+	if c.scanReport != nil {
+		c.scanReport.PopulatePartns(index, targetInstId, partition)
 	}
 
-	c.perHostReportIds = make([]string, len(client))
 	for i := 0; i < len(client); i++ {
 		tmpbuf, tmpbufPoolIdx = GetFromPools()
 		c.tmpbufs[i] = tmpbuf
 		c.tmpbufsPoolIdx[i] = tmpbufPoolIdx
-		c.perHostReportIds[i] = c.GenPerClientReportId(targetInstId[i], partition[i])
+		if c.scanReport != nil {
+			id := report.GenPerClientReportId(targetInstId[i], partition[i])
+			c.perHostReportIds[i] = id
+
+			// Pre-create all PerHostDetail entries so no concurrent write to the map
+			// is needed while attaching per host reports
+			if c.scanReport.HostScanReport == nil {
+				c.scanReport.HostScanReport = make(map[string]*report.HostScanReport, len(client))
+			}
+			if _, ok := c.scanReport.HostScanReport[id]; !ok {
+				c.scanReport.HostScanReport[id] = &report.HostScanReport{}
+			}
+		}
 	}
 
 	if c.useGather() {

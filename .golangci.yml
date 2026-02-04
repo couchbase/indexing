@@ -136,3 +136,7 @@ output:
       colors: false
       print-issued-lines: true
       print-linter-name: true
+  show-stats: false
+
+severity:
+  default: error

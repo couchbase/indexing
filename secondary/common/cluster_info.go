@@ -1606,6 +1606,10 @@ func (c *ClusterInfoClient) GetBucketInfoProvider(buckeName string) (
 	return BucketInfoProvider(c.cinfo), nil
 }
 
+func (c *ClusterInfoClient) GetBucketNames() []couchbase.BucketName {
+	return c.cinfo.pool.BucketNames
+}
+
 func (c *ClusterInfoClient) WatchRebalanceChanges() {
 	c.fetchDataOnHashChangeOnly = false
 }

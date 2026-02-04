@@ -212,6 +212,8 @@ type plasmaSlice struct {
 	meteringStats *meteringStats
 	stopWUBilling uint32
 
+	sliceEncryptionCallbacks SliceEncryptionCallbacks
+
 	// vector index related metadata
 	nlist int // number of centroids to use for training
 
@@ -234,7 +236,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	sysconf common.Config, idxStats *IndexStats, memQuota int64,
 	isNew bool, isInitialBuild bool, meteringMgr *MeteringThrottlingMgr,
 	numVBuckets int, replicaId int, shardIds []common.ShardId,
-	cancelCh chan bool, codebookPath string) (*plasmaSlice, error) {
+	cancelCh chan bool, codebookPath string, sliceEncryptionCallbacks SliceEncryptionCallbacks) (*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
 
@@ -248,6 +250,8 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.indexerMemoryQuota = memQuota
 	slice.meteringMgr = meteringMgr
 	slice.meteringStats = &meteringStats{}
+
+	slice.sliceEncryptionCallbacks = sliceEncryptionCallbacks
 
 	slice.get_bytes = 0
 	slice.insert_bytes = 0
@@ -309,7 +313,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 		}
 	}
 
-	if err := slice.initStores(isInitialBuild, cancelCh); err != nil {
+	if err := slice.initStores(isInitialBuild, cancelCh, slice.GetEncryptionKeyByIdCb); err != nil {
 		// Index is unusable. Remove the data files and reinit
 		if err == errStorageCorrupted || err == errStoragePathNotFound {
 			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v PartitionId %v isNew %v"+
@@ -320,6 +324,10 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 		}
 		return nil, err
 	}
+
+	// ENCRYPT_TODO: Update after storage changes
+	// Get keyid:= slice.GetKeyId() from storage used for slice
+	//slice.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "bucket", BucketUUID: idxDefn.BucketUUID}, keyid)
 
 	if isInitialBuild {
 		atomic.StoreInt32(&slice.isInitialBuild, 1)
@@ -402,7 +410,11 @@ func backupCorruptedSlice_Plasma(storageDir string, prefix string, rename func(s
 	return plasma.BackupCorruptedInstance(storageDir, prefix, rename, clean)
 }
 
-func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) error {
+// ENCRYPT_TODO: Update after storage changes
+// Use storage callback plasma.GetKeyByIdCb
+type GetKeyByIdCb func(keyId []byte) (masterEncryptionKey []byte, returnedKeyId []byte, cipher string)
+
+func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool, keyCb GetKeyByIdCb) error {
 	var err error
 
 	// This function encapsulates confLock.RLock + defer confLock.RUnlock
@@ -632,6 +644,11 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 			}
 		}
 
+		// ENCRYPT_TODO: Update after storage changes
+		// callback will be used by storage to get keydata for keyId
+		//mCfg.GetKeyByIdCb = keyCb
+		//bCfg.GetKeyByIdCb = keyCb
+
 		return mCfg, bCfg
 	}()
 
@@ -849,6 +866,70 @@ func (s *plasmaSlice) RecordWriteUnits(bytes uint64, writeVariant UnitType) {
 	if err != nil {
 		// TODO: Handle error graciously
 	}
+}
+
+func (s *plasmaSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, string) {
+
+	var rk string
+	var cipher string
+	var rkeyId []byte
+	var masterEncryptionKeyBytes []byte
+	var err error
+	retry := 0
+
+	// ENCRYPT_TODO: Check behavior for cases like key not available for bucket
+	for {
+		if len(keyId) == 0 {
+			buuid := s.idxDefn.BucketUUID
+			masterEncryptionKeyBytes, rk, cipher, err = s.sliceEncryptionCallbacks.getActiveKeyIdCipher("bucket", buuid)
+			rkeyId = []byte(rk)
+		} else {
+			//Plasma instance belonging to a bucket can ask for key related to another bucket
+			keyIdStr := string(keyId)
+			masterEncryptionKeyBytes, cipher, err = s.sliceEncryptionCallbacks.getKeyCipherById(keyIdStr)
+			rkeyId = keyId
+		}
+
+		if err != nil {
+			logging.Warnf("PlasmaSlice:GetEncryptionKeyByIdCb keyId:%v retry:%v err:%v", string(keyId), retry, err)
+		} else {
+			break
+		}
+
+		retry+=1
+		time.Sleep(5 * time.Second)
+	}
+
+	return masterEncryptionKeyBytes, rkeyId, cipher
+}
+
+func (s *plasmaSlice) SetCurrentEncryptionKey(masterEncryptionKey []byte, keyId []byte, cipher string) error {
+
+	// ENCRYPT_TODO: Update after storage changes
+	//err := s.mainstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
+	//if err != nil {
+	//	return err
+	//}
+	//if !s.isPrimary {
+	//	err := s.backstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
+
+	// s.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "bucket", BucketUUID: s.idxDefn.BucketUUID}, string(keyId))
+
+	return nil
+}
+
+func (mdb *plasmaSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
+	// ENCRYPT_TODO: Update after storage changes
+	doneCh <- nil
+}
+
+func (mdb *plasmaSlice) GetKeyIdList() []string {
+	// ENCRYPT_TODO: Update after storage changes
+	return []string{}
 }
 
 type plasmaReaderCtx struct {
@@ -2653,7 +2734,7 @@ func (mdb *plasmaSlice) resetStores(initBuild bool) error {
 	}
 
 	mdb.newBorn = true
-	if err := mdb.initStores(initBuild, nil); err != nil {
+	if err := mdb.initStores(initBuild, nil, mdb.GetEncryptionKeyByIdCb); err != nil {
 		return err
 	}
 

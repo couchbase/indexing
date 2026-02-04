@@ -35,6 +35,8 @@ type ClusterInfoProvider interface {
 	// Bucket Info Level Information accessors in client
 	GetBucketUUID(bucket string) (uuid string, err error)
 
+	GetBucketNames() []couchbase.BucketName
+
 	GetNumVBuckets(bucket string) (numVBuckets int, err error)
 
 	GetCollectionID(bucket, scope, collection string) string

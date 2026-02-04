@@ -1662,6 +1662,21 @@ func (fdb *fdbSlice) String() string {
 
 }
 
+func (fdb *fdbSlice) SetCurrentEncryptionKey(masterEncryptionKey []byte, keyId []byte, cipher string) error {
+	// no-op
+	return nil
+}
+
+func (mdb *fdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
+	// no-op
+	doneCh <- nil
+}
+
+func (mdb *fdbSlice) GetKeyIdList() []string {
+	// no-op
+	return []string{}
+}
+
 func (fdb *fdbSlice) updateSnapshotsMeta(infos []SnapshotInfo) error {
 	fdb.metaLock.Lock()
 	defer fdb.metaLock.Unlock()

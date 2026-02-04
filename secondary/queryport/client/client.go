@@ -60,7 +60,7 @@ type ResponseReader interface {
 
 	GetReadUnits() uint64
 
-	GetServerScanReport() (*report.HostScanReport)
+	GetServerScanReport() *report.HostScanReport
 }
 
 // ResponseSender is responsible for forwarding result to the client
@@ -867,6 +867,11 @@ func (c *GsiClient) ScanAllInternal(
 		return err
 	}
 
+	var generateScanReport bool
+	if broker.scanReport != nil {
+		generateScanReport = true
+	}
+
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
@@ -881,7 +886,7 @@ func (c *GsiClient) ScanAllInternal(
 		}
 		return qc.ScanAll(uint64(index.DefnId), requestId, broker.GetLimit(),
 			cons, tsvector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(),
-			scanParams, reqDeadline, reqDeadlineSlack)
+			scanParams, reqDeadline, reqDeadlineSlack, generateScanReport)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -1222,6 +1227,11 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 
 	begin := time.Now()
 
+	var generateScanReport bool
+	if broker.scanReport != nil {
+		generateScanReport = true
+	}
+
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
 		handler ResponseHandler) (error, bool) {
 		var err error
@@ -1239,7 +1249,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 				projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 				broker.GetSorted(), cons, tsvector, handler, rollbackTime,
 				partitions, dataEncFmt, broker.DoRetry(), scanParams, reqDeadline,
-				reqDeadlineSlack)
+				reqDeadlineSlack, generateScanReport)
 		}
 
 		return qc.Scan(
@@ -1248,7 +1258,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 			broker.GetSorted(), cons, tsvector, handler, rollbackTime,
 			partitions, dataEncFmt, broker.DoRetry(), scanParams, indexVector,
 			reqDeadline, reqDeadlineSlack, indexOrder, indexKeyNames, inlineFilter,
-			includeColumnScans)
+			includeColumnScans, generateScanReport)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -1796,7 +1806,16 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
+
+	retryCount := -1
+	defer func() {
+		if broker.scanReport != nil {
+			broker.scanReport.Retries = retryCount
+		}
+	}()
+
 	for i := 0; true; {
+		retryCount++
 		foundScanport := false
 
 		queryports, targetDefnID, targetInstIds, rollbackTimes, partitions, numPartitions, ok := c.bridge.GetScanport(defnID, excludes, skips)
