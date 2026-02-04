@@ -9,6 +9,7 @@
 package vector
 
 import (
+	"math/rand"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func TestCodebookSparse(t *testing.T) {
 			}
 
 			//generate random vectors
-			vecs := genRandomSparseVecs(tc.size, tc.num_vecs, seed)
+			vecs_s := genRandomSparseVecs(tc.size, tc.num_vecs, seed)
 
 			//t.Logf("Sample sparse vector %v", vecs[0])
 			//set verbose log level
@@ -52,20 +53,20 @@ func TestCodebookSparse(t *testing.T) {
 			cb.index.SetVerbose(1)
 
 			//convert to sparse JL format
-			sparseJLVecs := make([][]float32, tc.num_vecs)
+			vecs_jl := make([][]float32, tc.num_vecs)
 			for i := 0; i < tc.num_vecs; i++ {
-				sparseJLVecs[i] = make([]float32, tc.dim)
-				err = cb.Concise2SparseJL(vecs[i], sparseJLVecs[i])
+				vecs_jl[i] = make([]float32, tc.dim)
+				err = cb.Concise2SparseJL(vecs_s[i], vecs_jl[i])
 				if err != nil {
 					t.Errorf("Error converting to sparse JL format %v", err)
 				}
 			}
-			//t.Logf("Sample sparse JL vector %v", sparseJLVecs[0])
+			//t.Logf("Sample sparse JL vector %v", vecs_jl[0])
 
 			//train the codebook using 10000 vecs
-			train_vecs := convertTo1D(sparseJLVecs[:tc.trainlist])
+			tvecs_jl := convertTo1D(vecs_jl[:tc.trainlist])
 			t0 := time.Now()
-			err = codebook.Train(train_vecs)
+			err = codebook.Train(tvecs_jl)
 			delta := time.Now().Sub(t0)
 			t.Logf("Train timing %v vectors %v", tc.trainlist, delta)
 
@@ -84,9 +85,9 @@ func TestCodebookSparse(t *testing.T) {
 			}
 
 			//find the nearest centroid
-			query_vec := convertTo1D(sparseJLVecs[:1])
+			qvec_jl := convertTo1D(vecs_jl[:1])
 			t0 = time.Now()
-			label, err := codebook.FindNearestCentroids(query_vec, 100)
+			label, err := codebook.FindNearestCentroids(qvec_jl, 100)
 			delta = time.Now().Sub(t0)
 			t.Logf("Assign results %v %v", label, err)
 			t.Logf("Assign timing %v", delta)
@@ -95,6 +96,32 @@ func TestCodebookSparse(t *testing.T) {
 					t.Errorf("Result label out of range. Total %v. Label %v", tc.nlist, l)
 				}
 			}
+
+			//choose a query vector
+			qvec_s := convertTo1D(vecs_s[:1])
+			//t.Logf("Random query vector %v", qvec_s)
+
+			//choose a sparse vector
+			rand_vec_s := vecs_s[rand.Intn(tc.num_vecs)]
+			//t.Logf("Random sparse vector %v", rand_vec_s)
+
+			tvec := make([]float32, len(qvec_s))
+			found := cb.Transpose(qvec_s, rand_vec_s, tvec)
+
+			t.Logf("Matching term found = %v, result = %v", found, tvec)
+
+			//compute distance
+			dist := make([]float32, len(qvec_s))
+
+			//create a slice with only values for dist computation
+			qvec_s_d := qvec_s[1+tc.size : 1+2*tc.size]
+
+			err = codebook.ComputeDistance(qvec_s_d, tvec, dist)
+			if err != nil {
+				t.Errorf("Error computing distance %v", err)
+			}
+
+			t.Logf("Computed distance %v", dist)
 
 			//check the size
 			pSize := codebook.Size()
@@ -144,7 +171,7 @@ func TestCodebookSparse(t *testing.T) {
 			}
 
 			//find the nearest centroid
-			label, err = newcb.FindNearestCentroids(query_vec, 3)
+			label, err = newcb.FindNearestCentroids(qvec_jl, 3)
 			t.Logf("Assign results %v %v", label, err)
 			for _, l := range label {
 				if l > int64(tc.nlist) || l == -1 {
