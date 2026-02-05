@@ -2918,9 +2918,10 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 			// Update index maps with this index
 			msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 			msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{inst})
-			// update index map in storage manager so that the "checkForLostPartitionsAndLostReplica" that index
-			// service performs will not ignore the newly moved instance
-			if err := idx.sendMessageToWorker(msgUpdateIndexInstMap, idx.storageMgrCmdCh, "StorageMgr"); err != nil {
+			// broadcast to all workers
+			// update index map in storage manager so that the "checkForLostPartitionsAndLostReplica"
+			// service will not ignore the newly moved instance
+			if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 				logging.Errorf("Indexer::updateRStateOrMergePartition error observed when updating "+
 					"RState of inst: %v, err: %v", inst.InstId, err) // Log error but do not act on it yet
 			}
@@ -7469,6 +7470,16 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 
 	inst.RState = rstate
 	idx.indexInstMap[instId] = inst
+
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{inst})
+	// broadcast to all workers
+	// imp for storage mngr so that the "checkForLostPartitionsAndLostReplica"
+	// service will not read stale data and ignore newly moved instances
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+		logging.Errorf("Indexer::handleUpdateIndexRState error observed when updating "+
+			"RState of inst: %v, err: %v", inst.InstId, err)
+	}
 
 	instIds := []common.IndexInstId{instId}
 	if err := idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, false, nil, respCh); err != nil {
