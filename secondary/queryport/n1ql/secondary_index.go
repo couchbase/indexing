@@ -1818,6 +1818,8 @@ func (si *secondaryIndex3) Scan3(
 		conn.Error(n1qlError(client, err))
 	}
 
+	broker.SendFinalReport(conn)
+
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	si.gsi.scandur.Add(int64(time.Since(starttm)))
 
@@ -2114,6 +2116,8 @@ func (si *secondaryIndex6) Scan6(
 	if err != nil {
 		conn.Error(n1qlError(client, err))
 	}
+
+	broker.SendFinalReport(conn)
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	si.gsi.scandur.Add(int64(time.Since(starttm)))

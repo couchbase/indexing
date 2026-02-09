@@ -1180,21 +1180,31 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	thisNodeId := string(m.nodeInfo.NodeID)
 	// count of partitions with same defn and realInst for this destination, for partitioned indexes.
 	destTTRealInstMap := make(map[c.IndexDefnId]map[c.IndexInstId]int)
+	populateDestTTRealInstMap := func(inst *c.IndexInst, realInstId c.IndexInstId) {
+		defn := inst.Defn
+		if common.IsPartitioned(defn.PartitionScheme) {
+			if _, ok := destTTRealInstMap[defn.DefnId]; !ok {
+				destTTRealInstMap[defn.DefnId] = make(map[c.IndexInstId]int)
+			}
+			if _, ok := destTTRealInstMap[defn.DefnId][realInstId]; !ok {
+				destTTRealInstMap[defn.DefnId][realInstId] = 1
+			} else {
+				// we have more than one instance to same dest, defn and same realInstid
+				destTTRealInstMap[defn.DefnId][realInstId]++
+				hasMultiPartsToSameDest = true
+			}
+		}
+	}
 
 	for _, tt := range tts {
-		// only this node as dest and partitioned indexes
-		if tt.DestId == thisNodeId && common.IsPartitioned(tt.IndexInst.Defn.PartitionScheme) {
-			defnId := tt.IndexInst.Defn.DefnId
-			realInstId := tt.RealInstId
-			if _, ok := destTTRealInstMap[defnId]; !ok {
-				destTTRealInstMap[defnId] = make(map[c.IndexInstId]int)
-			}
-			if _, ok := destTTRealInstMap[defnId][realInstId]; !ok {
-				destTTRealInstMap[defnId][realInstId] = 1
+		// Only process tokens where this node is the destination
+		if tt.DestId == thisNodeId {
+			if tt.IsShardTransferToken() {
+				for i, inst := range tt.IndexInsts {
+					populateDestTTRealInstMap(&inst, tt.RealInstIds[i])
+				}
 			} else {
-				// we have more than one instances to same dest, defn and same realInstid
-				destTTRealInstMap[defnId][realInstId] = destTTRealInstMap[defnId][realInstId] + 1
-				hasMultiPartsToSameDest = true
+				populateDestTTRealInstMap(&tt.IndexInst, tt.RealInstId)
 			}
 		}
 	}
@@ -1216,22 +1226,34 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	// are added to ttListRealInst so that these real insts are processed at end.
 	ttListRealInst := []ttListElement{}
 
+	isRealInstToken := func(inst *c.IndexInst, realInstId c.IndexInstId, instId c.IndexInstId) bool {
+		defnId := inst.Defn.DefnId
+		if _, ok := destTTRealInstMap[defnId]; ok {
+			if cnt, ok := destTTRealInstMap[defnId][realInstId]; ok && cnt > 1 {
+				isProxy, err := m.isProxyFromMeta(inst, instId, localMeta)
+				// If even one instance is a realInst, then add the token to the list
+				if err == nil && !isProxy {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+token_loop:
 	for ttid, tt := range tts {
 		if hasMultiPartsToSameDest {
 			if tt.DestId == thisNodeId {
-				defnId := tt.IndexInst.Defn.DefnId
-				realInstId := tt.RealInstId
-				if _, ok := destTTRealInstMap[defnId]; ok {
-					// more than one tts for partitioned index to same dest with same defn and realInst
-					if cnt, ok := destTTRealInstMap[defnId][realInstId]; ok && cnt > 1 {
-						isProxy, err := m.isProxyFromMeta(tt, localMeta)
-						// we wont fail the rebalance here if isProxyFromMeta returned error and
-						// let it do the normal cleanup which may or may not fail later
-						if err == nil && !isProxy { // this is a realInst
+				if tt.IsShardTransferToken() {
+					for i, inst := range tt.IndexInsts {
+						if isRealInstToken(&inst, tt.RealInstIds[i], tt.InstIds[i]) {
 							ttListRealInst = append(ttListRealInst, ttListElement{ttid, tt})
-							continue
+							continue token_loop
 						}
 					}
+				} else if isRealInstToken(&tt.IndexInst, tt.RealInstId, tt.InstId) {
+					ttListRealInst = append(ttListRealInst, ttListElement{ttid, tt})
+					continue token_loop
 				}
 			}
 		}
@@ -1338,11 +1360,12 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	return failedShardIds.cleanupFailedShards, shardIdsToClear, nil
 }
 
-func (m *RebalanceServiceManager) isProxyFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMetadata) (bool, error) {
+func (m *RebalanceServiceManager) isProxyFromMeta(
+	inst *c.IndexInst, instId c.IndexInstId,
+	localMeta *manager.LocalIndexMetadata,
+) (bool, error) {
 
 	method := "RebalanceServiceManager::isProxyFromMeta"
-
-	inst := tt.IndexInst
 
 	topology := findTopologyByCollection(localMeta.IndexTopologies, inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
 	if topology == nil {
@@ -1351,7 +1374,7 @@ func (m *RebalanceServiceManager) isProxyFromMeta(tt *c.TransferToken, localMeta
 		l.Errorf("%v %v", method, err)
 		return false, err
 	}
-	isProxy := topology.IsProxyIndexInst(tt.IndexInst.Defn.DefnId, tt.InstId)
+	isProxy := topology.IsProxyIndexInst(inst.Defn.DefnId, instId)
 	return isProxy, nil
 }
 

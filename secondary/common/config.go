@@ -3944,7 +3944,7 @@ var SystemConfig = Config{
 		"magma",
 		"Use pre-defined storage as backend to store localmetadata" +
 			"under the gometa protocol. Values supported - " +
-			"* forestDb" +
+			"* forestDb / fdb" +
 			"* magma (default for enterprise)",
 		"magma", // default - magma
 		false,   // mutable

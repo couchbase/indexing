@@ -2535,7 +2535,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			false
 	}
 
-	persistFullVector, err := o.getPersistFullVectorParam(plan, isBhive)
+	persistFullVector, err := o.getPersistFullVectorParam(plan, isBhive, isSparseVector)
 	if err != nil {
 		return nil, err, false
 	}
@@ -2686,7 +2686,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			Quantizer:         quantizer,
 			Nprobes:           nprobes,
 			TrainList:         trainlist,
-			PersistFullVector: persistFullVector, // set to true only for BHIVE
+			PersistFullVector: persistFullVector, // set to true only for BHIVE and Dense vector
 		}
 	}
 
@@ -3220,10 +3220,15 @@ func (o *MetadataProvider) getDeferredParam(plan map[string]interface{}, scope s
 	return deferred, nil, false
 }
 
-func (o *MetadataProvider) getPersistFullVectorParam(plan map[string]interface{}, isBhive bool) (bool, error) {
+func (o *MetadataProvider) getPersistFullVectorParam(plan map[string]interface{}, isBhive bool,
+	isSparseVector bool) (bool, error) {
 
 	if !isBhive {
 		return false, nil // Persisting full vector is supported only in BHIVE indexes
+	}
+
+	if isSparseVector {
+		return false, nil // Persisting full vector is not supported for Sparse Vector
 	}
 
 	persistFullVector := true // Default value is true. User can explicitly disable if required

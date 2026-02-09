@@ -1739,9 +1739,7 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	indexStats := make(map[string]interface{})
 	addStat := addStatFactory(skipEmpty, indexStats)
 
-	reqs := s.int64Stats(func(ss *IndexStats) int64 {
-		return ss.numRequests.Value()
-	})
+	reqs := s.numRequests.Value()
 	pendingReqs := reqs - s.numCompletedRequests.Value()
 
 	// if this is array index created with version 7.1 or above use arrItemsCount as repalcement for

@@ -14,6 +14,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -226,15 +228,37 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	threshold := config["metadata.compaction.threshold"].Int()
 	minFileSize := config["metadata.compaction.minFileSize"].Int()
 	enableWAL := config["metadata.enableWAL"].Bool()
-	storeType := repository.FDbStoreType
 	storeStr := config["metadata.store_backend"].String()
-	if common.GetBuildMode() == common.ENTERPRISE {
-		magmaStoreStr := strings.ToLower(repository.MagmaStoreType.String())
-		storeStr = strings.ToLower(storeStr)
-		if magmaStoreStr == storeStr {
+	storeType := repository.GetStoreTypeFromString(storeStr)
+
+	if common.GetBuildMode() == common.ENTERPRISE && storeType != repository.MagmaStoreType {
+		// HACK for safety: breaking `gometa` black box barrier for repository migration
+		// to handle consistency
+
+		////////// if we have already migrated to magma but the store_backend says to use fDb,
+		// it will be incorrect to use fDb as it can no longer have the latest data;
+		// detect if the magma migration marker exists or not and if it does exist, force boot
+		// into magma stores
+		checkpntFile := filepath.Join(
+			mgr.repoBaseDir, gometaC.MAGMA_SUB_DIR, gometaC.MAGMA_MIGRATION_MARKER,
+		)
+		_, err := os.Stat(checkpntFile)
+		if err == nil {
+			logging.Warnf("NewIndexManagerInternal: Found config for store backend as %v but detected magma being used on disk. will force magma as backend for metadata",
+				storeStr)
 			storeType = repository.MagmaStoreType
+		} else if err != nil && !os.IsNotExist(err) {
+			logging.Errorf("NewIndexManagerInternal: failed to read metadata migration file %v with error %v",
+				checkpntFile, err)
+			mgr.Close()
+			return nil, err
 		}
+	} else if common.GetBuildMode() == common.COMMUNITY && storeType != repository.FDbStoreType {
+		logging.Infof("NewIndexManagerInternal: found store type as %v for community edition. forcing to use forestDb",
+			storeType)
+		storeType = repository.FDbStoreType
 	}
+
 	repoOpenParams := repository.RepoFactoryParams{
 		MemoryQuota:                mgr.quota,
 		CompactionTimerDur:         uint64(sleepDur),
