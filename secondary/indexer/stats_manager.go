@@ -4170,11 +4170,18 @@ func (s *statsManager) handleRefreshTimestampedCountsReq(w http.ResponseWriter, 
 }
 
 func (s *statsManager) getStorageStatsMap(spec *statsSpec) map[string]interface{} {
-	result := make(map[string]interface{})
+	result := make(map[string]interface{}, 1)
 	replych := make(chan []IndexStorageStats)
 	statReq := &MsgIndexStorageStats{respch: replych, spec: spec}
 	s.supvMsgch <- statReq
-	res := <-replych
+
+	res, ok := readFromChanWithTimeout(replych)
+	if !ok {
+		logging.Warnf(
+			"StatsManager::getStorageStats timed out in reading storage stats. skip logging them",
+		)
+		return nil
+	}
 
 	for _, sts := range res {
 		if sts.IsLoggingDisabled() {
@@ -4201,20 +4208,32 @@ func (s *statsManager) getStorageStatsMap(spec *statsSpec) map[string]interface{
 	return result
 }
 
+var errReqTimedOut = errors.New("indexer is busy. stats read timed out")
+
 func (s *statsManager) getShardStorageStats() ([]byte, error) {
-	replych := make(chan map[string]*common.ShardStats)
+	replych := make(chan map[string]*common.ShardStats, 1)
 	statReq := &MsgShardStatsRequest{mType: SHARD_STORAGE_STATS, respch: replych}
 	s.supvMsgch <- statReq
-	res := <-replych
+
+	res, ok := readFromChanWithTimeout(replych)
+	if !ok {
+		logging.Warnf("StatsManager::getShardStorageStats: timed out in reading storage stats")
+		return nil, errReqTimedOut
+	}
 	return json.Marshal(res)
 }
 
 func (s *statsManager) getStorageStats(spec *statsSpec, creds cbauth.Creds) string {
 	var result strings.Builder
-	replych := make(chan []IndexStorageStats)
+	replych := make(chan []IndexStorageStats, 1)
 	statReq := &MsgIndexStorageStats{respch: replych, spec: spec}
 	s.supvMsgch <- statReq
-	res := <-replych
+
+	res, ok := readFromChanWithTimeout(replych)
+	if !ok {
+		logging.Warnf("StatsManager::getStorageStats: timed out in reading storage stats")
+		return ""
+	}
 
 	permissionCache := common.NewSessionPermissionsCache(creds)
 	addSeparator := false
@@ -5155,23 +5174,30 @@ func (s *statsManager) handleMetaStatsRequest(w http.ResponseWriter, r *http.Req
 	}
 }
 
+func readFromChanWithTimeout[T any](respCh chan T) (T, bool) {
+	var ticker = time.NewTicker(30 * time.Second) //nolint:mnd
+	defer ticker.Stop()
+	select {
+	case res := <-respCh:
+		return res, true
+	case <-ticker.C:
+		var def T
+		return def, false
+	}
+}
+
 func (s *statsManager) getMetadataStats() (repo.MetastoreStats, bool) {
-	var respCh = make(chan interface{})
+	var respCh = make(chan interface{}, 1)
 	s.supvMsgch <- &MsgMetaStoreStatsReq{
 		respCh: respCh,
 	}
 
-	var ticker = time.NewTimer(30 * time.Second)
-	var iStats interface{}
-	select {
-	case iStats = <-respCh:
+	var iStats, ok = readFromChanWithTimeout(respCh)
+	if ok {
 		var metastats, ok = iStats.(repo.MetastoreStats)
 		return metastats, ok
-	case <-ticker.C:
-		go func() { <-respCh }()
-		return repo.MetastoreStats{}, false
 	}
-
+	return repo.MetastoreStats{}, false
 }
 
 func positiveNum(n int64) int64 {
