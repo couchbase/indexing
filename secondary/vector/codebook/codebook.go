@@ -127,6 +127,22 @@ type Codebook interface {
 	Dimension() int
 }
 
+// SparseCodebook provides sparse-specific methods for codebook operations.
+type SparseCodebook interface {
+	Codebook
+
+	// Concise2SparseJL converts a sparse vector from concise format to SparseJL format.
+	// concise format = [size,index1,index2,..... , value1, value2,....]
+	Concise2SparseJL(concise, out []float32) error
+
+	// Transpose performs query term matching between the input query
+	// and sparse vector and stores the values for the matching terms
+	// in the `result`. It returns a bool to indicate if there were
+	// any matching terms.
+	// Input for q and s must be in the concise format.
+	Transpose(q []float32, s []float32, result []float32) bool
+}
+
 // SetMaxCPU sets the max number of cores that can be used by the
 // underlying library
 func SetMaxCPU(n int) {
