@@ -197,13 +197,15 @@ type memdbSlice struct {
 
 	// encryption
 	dropKeyMu sync.Mutex
+
+	sliceEncryptionCallbacks SliceEncryptionCallbacks
 }
 
 // NewMemDBSlice is the constructor for memdbSlice.
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId, isPrimary bool,
 	hasPersistance bool, numPartitions int, sysconf common.Config, idxStats *IndexStats,
-	numVBuckets int) (*memdbSlice, error) {
+	numVBuckets int, sliceEncryptionCallbacks SliceEncryptionCallbacks) (*memdbSlice, error) {
 
 	info, err := iowrap.Os_Stat(path)
 	if err != nil || err == nil && info.IsDir() {
@@ -216,6 +218,8 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	mdb.idxStats.combinedResidentPercent.Set(100.0)
 	mdb.idxStats.cacheHitPercent.Set(100)
 	mdb.idxStats.rCacheHitPercent.Set(100)
+
+	mdb.sliceEncryptionCallbacks = sliceEncryptionCallbacks
 
 	mdb.get_bytes = 0
 	mdb.insert_bytes = 0
@@ -277,6 +281,23 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		logging.Errorf("memdbSlice:NewMemDBSlice Id %v IndexInstId %v "+
 			"error occured: %v", sliceId, idxInstId, err)
 		return nil, err
+	}
+
+	// Mark in use key for encryption
+	keys, err := mdb.GetKeyIdList()
+	if err != nil {
+		logging.Errorf("memdbSlice:NewMemDBSlice:GetKeyIdList Id %v IndexInstId %v "+
+			"failed error: %v", sliceId, idxInstId, err)
+		return nil, err
+	}
+
+	for _, keyByte := range keys {
+		key := string(keyByte)
+		mdb.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "bucket", BucketUUID: idxDefn.BucketUUID}, key)
+	}
+	// If GetKeyIdList doesn't return any keys, mark "" key in-use thus GetInUseKeysCallback will know that there can some un-encrypted data.
+	if len(keys) == 0 {
+		mdb.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "bucket", BucketUUID: idxDefn.BucketUUID}, "")
 	}
 
 	// Array related initialization
@@ -357,7 +378,8 @@ func (mdb *memdbSlice) initStores() error {
 	cfg.SetKeyComparator(byteItemCompare)
 
 	// GSI place holder for encryption callback setup
-	// cfg.SetTestEncryption()
+	// cfg.SetEncryptionDummy()
+	cfg.GetKeyById = mdb.GetEncryptionKeyByIdCb
 
 	cfg.Path = mdb.path
 
@@ -379,6 +401,10 @@ func (mdb *memdbSlice) initStores() error {
 	}
 
 	return nil
+}
+
+func (mdb *memdbSlice) SetInUseKeys(kdt KeyDataType, key string) {
+	mdb.sliceEncryptionCallbacks.setInUseKeys(kdt, key)
 }
 
 func (mdb *memdbSlice) checkStorageCorruptionError() error {
@@ -2117,6 +2143,40 @@ func (mdb *memdbSlice) SetStopWriteUnitBilling(disableBilling bool) {
 
 func (mdb *memdbSlice) GetCodebook() (codebook.Codebook, error) {
 	return nil, ErrorNotImplemented
+}
+
+func (s *memdbSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, string) {
+	var rk string
+	var cipher string
+	var rkeyId []byte
+	var masterEncryptionKeyBytes []byte
+	var err error
+	retry := 0
+
+	// ENCRYPT_TODO: Check behavior for cases like key not available for bucket
+	for {
+		if len(keyId) == 0 {
+			buuid := s.idxDefn.BucketUUID
+			masterEncryptionKeyBytes, rk, cipher, err = s.sliceEncryptionCallbacks.getActiveKeyIdCipher("bucket", buuid)
+			rkeyId = []byte(rk)
+		} else {
+			// Plasma instance belonging to a bucket can ask for key related to another bucket
+			keyIdStr := string(keyId)
+			masterEncryptionKeyBytes, cipher, err = s.sliceEncryptionCallbacks.getKeyCipherById(keyIdStr)
+			rkeyId = keyId
+		}
+
+		if err != nil {
+			logging.Warnf("memdbSlice:GetEncryptionKeyByIdCb keyId:%v retry:%v err:%v", string(keyId), retry, err)
+		} else {
+			break
+		}
+
+		retry += 1
+		time.Sleep(5 * time.Second)
+	}
+
+	return masterEncryptionKeyBytes, rkeyId, cipher
 }
 
 //////////////////////////////////

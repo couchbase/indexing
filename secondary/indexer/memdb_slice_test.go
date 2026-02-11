@@ -128,7 +128,7 @@ func TestMemDBInsertionPerf(t *testing.T) {
 		IsArrayIndex: false}
 	slice, err := NewMemDBSlice("/tmp/mdbslice",
 		SliceId(0), idxDefn, common.IndexInstId(0), common.PartitionId(0), *isPrimary, true, 1,
-		cfg, stats, 1024)
+		cfg, stats, 1024, EncrCbsTest)
 	common.CrashOnError(err)
 
 	// Initial build

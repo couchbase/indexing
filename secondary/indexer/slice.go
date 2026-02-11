@@ -77,12 +77,14 @@ type Slice interface {
 	SetCurrentEncryptionKey([]byte, []byte, string) error
 	DropKeys([][]byte, chan error)
 	GetKeyIdList() ([][]byte, error)
+
+	SetInUseKeys(kdt KeyDataType, key string)
 }
 
 type SliceEncryptionCallbacks struct {
 	getActiveKeyIdCipher func(typename, bucketUUID string) ([]byte, string, string, error)
 	getKeyCipherById     func(keyId string) ([]byte, string, error)
-	setInUseKeys         func(kdt KeyDataType, key string) error
+	setInUseKeys         func(kdt KeyDataType, key string)
 }
 
 // cursorCtx implements IndexReaderContext and is used

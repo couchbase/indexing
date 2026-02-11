@@ -3555,12 +3555,21 @@ func (s *storageMgr) handleEncryptionGetInUseKeys(msg Message) {
 				for _, slice := range sc.GetAllSlices() {
 					keys, err := slice.GetKeyIdList()
 					if err != nil {
-						logging.Warnf("StorageMgr::handleEncryptionGetInUseKeys error while GetKeyIdList instId:%v sliceId:%v err:%v", instId, slice.Id(), err)
+						logging.Warnf("StorageMgr::handleEncryptionGetInUseKeys failed to get key from storage "+
+							"instId:%v partnId:%v err:%v", instId, partnInst.Defn.GetPartitionId(), err)
 						continue
 					}
+					keyStrSlice := make([]string, 0)
 					for _, key := range keys {
-						keyStr := string(key)
-						kdtKeyMap[kdt][keyStr] = true
+						keyStrSlice = append(keyStrSlice, string(key))
+					}
+					for _, key := range keyStrSlice {
+						kdtKeyMap[kdt][key] = true
+					}
+
+					// If GetKeyIdList doesn't return any keys, mark "" key in-use thus GetInUseKeysCallback will know that there can some un-encrypted data.
+					if len(keys) == 0 {
+						kdtKeyMap[kdt][""] = true
 					}
 				}
 			}
@@ -3622,14 +3631,17 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 		return
 	}
 	earkey := cmd.(*MsgEncryptionUpdateKey).GetEarKey()
+	errCh := make(chan error, 1)
 
 	indexInstMap := s.indexInstMap.Get()
 	indexPartnMap := s.indexPartnMap.Get()
 
+	var wg sync.WaitGroup
+
 	go func() {
 		//Storage encryption
 		for instId, inst := range indexInstMap {
-			if inst.Defn.BucketUUID != kdt.BucketUUID {
+			if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
 			partnMap, ok := indexPartnMap[instId]
@@ -3640,11 +3652,25 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 			for _, partnInst := range partnMap {
 				sc := partnInst.Sc
 				for _, slice := range sc.GetAllSlices() {
-					err := slice.SetCurrentEncryptionKey(earkey.Data, []byte(earkey.Id), earkey.Cipher)
-					if err != nil {
-						respCh <- err
-						return
-					}
+
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+
+						err := slice.SetCurrentEncryptionKey(earkey.Data, []byte(earkey.Id), earkey.Cipher)
+						if err != nil {
+							logging.Errorf("StorageMgr::handleEncryptionUpdateKey SetCurrentEncryptionKey failed for"+
+								" instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), err)
+							select {
+							case errCh <- err:
+							default:
+							}
+						} else {
+							// Set in-use key if SetCurrentEncryptionKey is successful
+							slice.SetInUseKeys(KeyDataType{TypeName: "bucket", BucketUUID: inst.Defn.BucketUUID}, earkey.Id)
+						}
+					}()
+
 				}
 			}
 		}
@@ -3652,27 +3678,33 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 		// ENCRYPT_TODO:
 		// Codebook encryption
 		//for instId, inst := range indexInstMap {
-		//	if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex {
-		//		continue
-		//	}
-		//	partnMap, ok := indexPartnMap[instId]
-		//	if !ok {
-		//		logging.Infof("StorageMgr::handleEncryptionUpdateKey No partitions found for instId %v", instId)
-		//		continue
-		//	}
-		//	for _, partnInst := range partnMap {
-		//		sc := partnInst.Sc
-		//		for _, slice := range sc.GetAllSlices() {
-		//			err := slice.SetCodebookEncryptionKey(earkey.Data, []byte(earkey.Id), earkey.Cipher)
-		//			if err != nil {
-		//				respCh <- err
-		//				return
-		//			}
-		//		}
-		//	}
+		//  if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex {
+		//      continue
+		//  }
+		//  partnMap, ok := indexPartnMap[instId]
+		//  if !ok {
+		//      logging.Infof("StorageMgr::handleEncryptionUpdateKey No partitions found for instId %v", instId)
+		//      continue
+		//  }
+		//  for _, partnInst := range partnMap {
+		//      sc := partnInst.Sc
+		//      for _, slice := range sc.GetAllSlices() {
+		//          err := slice.SetCodebookEncryptionKey(earkey.Data, []byte(earkey.Id), earkey.Cipher)
+		//          if err != nil {
+		//              respCh <- err
+		//              return
+		//          }
+		//      }
+		//  }
 		//}
 
-		respCh <- nil
+		wg.Wait()
+		select {
+		case err := <-errCh:
+			respCh <- err
+		default:
+			respCh <- nil
+		}
 	}()
 }
 
@@ -3683,6 +3715,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 	kdt := cmd.(*MsgEncryptionDropKey).GetKeyDataType()
 	dropKeyIds := cmd.(*MsgEncryptionDropKey).GetDropKeyIds()
 	respCh := cmd.(*MsgEncryptionDropKey).GetRespCh()
+	earkey := cmd.(*MsgEncryptionDropKey).GetActiveEarKey()
 	logging.Infof("StorageMgr::handleEncryptionDropKey keydatatype:%v", kdt)
 
 	dropKeyIdsBytes := make([][]byte, len(dropKeyIds))
@@ -3706,7 +3739,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 
 		//Storage encryption
 		for instId, inst := range indexInstMap {
-			if inst.Defn.BucketUUID != kdt.BucketUUID {
+			if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
 			partnMap, ok := indexPartnMap[instId]
@@ -3722,6 +3755,36 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 					go func() {
 						defer wg.Done()
 
+						// Make sure that slice book-keeping has active bucket key for data encrypted using dropKeyIds
+						skeyids, errget := slice.GetKeyIdList()
+						if errget != nil {
+							select {
+							case errCh <- errget:
+							default:
+							}
+							logging.Errorf("StorageMgr::handleEncryptionDropKey GetKeyIdList for instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), err)
+							return
+						}
+						isSliceWithActiveKey := false
+						for _, keyid := range skeyids {
+							if earkey.Id == string(keyid) {
+								isSliceWithActiveKey = true
+								break
+							}
+						}
+						if !isSliceWithActiveKey {
+							errset := slice.SetCurrentEncryptionKey(earkey.Data, []byte(earkey.Id), earkey.Cipher)
+							if errset != nil {
+								select {
+								case errCh <- errset:
+								default:
+								}
+								logging.Errorf("StorageMgr::handleEncryptionDropKey SetCurrentEncryptionKey for instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), err)
+								return
+							}
+						}
+
+						// Slice will use recent key for encrypting data encrypted with dropKeys.
 						respChSlice := make(chan error, 1)
 						slice.DropKeys(dropKeyIdsBytes, respChSlice)
 						errResp := <-respChSlice
@@ -3729,6 +3792,20 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 							select {
 							case errCh <- errResp:
 							default:
+							}
+							logging.Errorf("StorageMgr::handleEncryptionDropKey DropKeys for instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), err)
+						} else {
+							//Set in-use keys for the case of recently unused key being used for the first time for keydatatype.
+							keys, err := slice.GetKeyIdList()
+							if err != nil {
+								logging.Errorf("StorageMgr::handleEncryptionDropKey GetKeyIdList after drop for instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), err)
+							} else if len(keys) > 0 {
+								for _, key := range keys {
+									slice.SetInUseKeys(kdt, string(key))
+								}
+							} else if len(keys) == 0 {
+								// Set "" key in-use to indicate unencrypted data is present if encryption is disabled.
+								slice.SetInUseKeys(kdt, "")
 							}
 						}
 
@@ -3743,31 +3820,32 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 		case err = <-errCh:
 			respCh <- err
 		default:
+			respCh <- nil
 		}
 
 		// ENCRYPT_TODO:
 		// Codebook encryption
 		//outerLoop2:
 		//for instId, inst := range indexInstMap {
-		//	if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex  {
-		//		continue
-		//	}
-		//	partnMap, ok := indexPartnMap[instId]
-		//	if !ok {
-		//		logging.Infof("StorageMgr::handleEncryptionDropKey No partitions found for instId %v", instId)
-		//		continue
-		//	}
-		//	for _, partnInst := range partnMap {
-		//		sc := partnInst.Sc
-		//		for _, slice := range sc.GetAllSlices() {
-		//			//Handle dropKeyId==""
-		//			errResp:=slice.DropKeysCodebook(dropKeyIds)
-		//			if errResp != nil {
-		//				err = errResp
-		//				break outerLoop2
-		//			}
-		//		}
-		//	}
+		//  if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex  {
+		//      continue
+		//  }
+		//  partnMap, ok := indexPartnMap[instId]
+		//  if !ok {
+		//      logging.Infof("StorageMgr::handleEncryptionDropKey No partitions found for instId %v", instId)
+		//      continue
+		//  }
+		//  for _, partnInst := range partnMap {
+		//      sc := partnInst.Sc
+		//      for _, slice := range sc.GetAllSlices() {
+		//          //Handle dropKeyId==""
+		//          errResp:=slice.DropKeysCodebook(dropKeyIds)
+		//          if errResp != nil {
+		//              err = errResp
+		//              break outerLoop2
+		//          }
+		//      }
+		//  }
 		//}
 		//respCh <- err
 

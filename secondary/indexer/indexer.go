@@ -1869,7 +1869,6 @@ func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 
 	// ENCRYPT_TODO: Handle below types later
 	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
-	// ENCRYPT_TODO: Handle MoI Paused
 	case "log":
 	case "config":
 	case "audit":
@@ -1881,6 +1880,14 @@ func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 
 	kdt := msg.(*MsgEncryptionUpdateKey).GetKeyDataType()
+	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
+		// ENCRYPT_TODO: Revisit if required, MOI encryption APIs are not pause aware
+		logging.Infof("Indexer::handleEncryptionUpdateKey aborted keydatatype: %v", kdt)
+		respCh := msg.(*MsgEncryptionUpdateKey).GetRespCh()
+		respCh <- ErrIndexerNotActive
+		return
+	}
+
 	logging.Infof("Indexer::handleEncryptionUpdateKey keydatatype: %v", kdt)
 
 	switch kdt.TypeName {
@@ -1900,6 +1907,13 @@ func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 func (idx *indexer) handleEncryptionDropKeys(msg Message) {
 
 	kdt := msg.(*MsgEncryptionDropKey).GetKeyDataType()
+	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
+		// ENCRYPT_TODO: Revisit if required, MOI encryption APIs are not pause aware
+		logging.Infof("Indexer::handleEncryptionDropKeys aborted keydatatype: %v", kdt)
+		respCh := msg.(*MsgEncryptionDropKey).GetRespCh()
+		respCh <- ErrIndexerNotActive
+		return
+	}
 	logging.Infof("Indexer::handleEncryptionDropKeys...")
 
 	switch kdt.TypeName {
@@ -11448,7 +11462,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
 		slice, err = NewMemDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
-			partnStats[partitionId], numVBuckets)
+			partnStats[partitionId], numVBuckets, sliceEncryptionCallbacks)
 	case common.ForestDB:
 		slice, err = NewForestDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			partnStats[partitionId])

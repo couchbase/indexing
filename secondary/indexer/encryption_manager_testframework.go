@@ -244,9 +244,26 @@ func dropEncryptionKey(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, errmsg, http.StatusBadRequest)
 					return
 				}
+				earkeys := mockDataTypeKeyInfoMap[dtype].Keys
+				newearkeys := make([]EaRKey, 0)
+				for _, k := range earkeys {
+					if k.Id != keyid {
+						newearkeys = append(newearkeys, k)
+					}
+				}
+				mockDataTypeKeyInfoMap[dtype].Keys = newearkeys
 			}
 			for _, keyid := range keyids {
-				deksInfo.UnavailableKeys = append(deksInfo.UnavailableKeys, keyid)
+				add := true
+				for _, uk := range mockDataTypeKeyInfoMap[dtype].UnavailableKeys {
+					if uk == keyid {
+						add = false
+						break
+					}
+				}
+				if add {
+					mockDataTypeKeyInfoMap[dtype].UnavailableKeys = append(mockDataTypeKeyInfoMap[dtype].UnavailableKeys, keyid)
+				}
 			}
 
 			persistKeys(mockDataTypeKeyInfoMap)
@@ -336,7 +353,7 @@ func getInUseKeys(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	kbytes := []byte(strings.Join(keys, "\n"))
+	kbytes := []byte("[\n" + strings.Join(keys, "\n") + "\n]")
 
 	w.Header().Set("Content-Length", fmt.Sprintf("%v", len(kbytes)))
 	w.WriteHeader(http.StatusOK)

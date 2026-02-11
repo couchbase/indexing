@@ -791,6 +791,10 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool, ke
 	return err
 }
 
+func (s *plasmaSlice) SetInUseKeys(kdt KeyDataType, key string) {
+	s.sliceEncryptionCallbacks.setInUseKeys(kdt, key)
+}
+
 func (s *plasmaSlice) GetBucketName() string {
 	return s.idxDefn.Bucket
 }
@@ -884,7 +888,7 @@ func (s *plasmaSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, stri
 			masterEncryptionKeyBytes, rk, cipher, err = s.sliceEncryptionCallbacks.getActiveKeyIdCipher("bucket", buuid)
 			rkeyId = []byte(rk)
 		} else {
-			//Plasma instance belonging to a bucket can ask for key related to another bucket
+			// Plasma instance belonging to a bucket can ask for key related to another bucket
 			keyIdStr := string(keyId)
 			masterEncryptionKeyBytes, cipher, err = s.sliceEncryptionCallbacks.getKeyCipherById(keyIdStr)
 			rkeyId = keyId

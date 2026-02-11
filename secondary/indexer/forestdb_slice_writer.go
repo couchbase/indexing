@@ -1677,6 +1677,10 @@ func (mdb *fdbSlice) GetKeyIdList() ([][]byte, error) {
 	return [][]byte{}, nil
 }
 
+func (mdb *fdbSlice) SetInUseKeys(kdt KeyDataType, key string) {
+	// no-op
+}
+
 func (fdb *fdbSlice) updateSnapshotsMeta(infos []SnapshotInfo) error {
 	fdb.metaLock.Lock()
 	defer fdb.metaLock.Unlock()
