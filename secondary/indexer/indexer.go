@@ -14212,9 +14212,14 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		}
 	}
 
+	instVectorsMap := make(map[common.IndexInstId]int, len(samplingCandidates))
 	// Retrieve vectors from data service for training - only for instances that need it
+	// the function also updates the count of vector for each instId in instVectorsMap
+	// this is relevant as len of float32 / dimension is not true for sparse vectors.
 	if len(samplingCandidates) > 0 {
-		sampledVectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, samplingCandidates, maxSampleSize, int64(overSamplePercent))
+		sampledVectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL,
+			bucket, scope, collection, cid, samplingCandidates, maxSampleSize,
+			int64(overSamplePercent), instVectorsMap)
 		if err != nil {
 			logging.Errorf("Indexer::initiateTraining error observed while fetching training data for bucket: %v, scope: %v, coll: %v, cid: %v, err: %v",
 				bucket, scope, collection, cid, err)
@@ -14258,8 +14263,6 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	}
 
 	logging.Infof("Indexer::initiateTraining retry:%v maxSampleSize:%v maxRatio:%v multiplier:%v", retry, maxSampleSize, maxRatio, multiplier)
-
-	instVectorsMap := make(map[common.IndexInstId]int, 0)
 
 	// This map will hold serialized codebook of current training
 	// attempt for sharing on partitions of definition including replicas
@@ -14400,18 +14403,23 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				// Get vectors for this instance (will be nil/empty for already trained instances)
 				vectorSamples := vectorsByInstId[instId]
 				vectorFloatCount := len(vectorSamples)
-				vectorCount := 0
-				if vm.Dimension > 0 {
-					vectorCount = vectorFloatCount / vm.Dimension
-				}
-				instVectorsMap[instId] = vectorCount
+				vectorCount := instVectorsMap[instId]
 
 				// Skip vector count validation only if we actually have a codebook to use.
 				// Note: We check defnCodebook, not skipSamplingInstMap, because if SerializeCodebook
 				// fails after instHasTrainedCodebook returned true, we need to surface the error.
-				if defnCodebook == nil && vectorCount < minCentroids {
-					errStr := c.ERR_TRAINING + fmt.Sprintf("Number of qualifying or valid vectors / dimension = %v/%v = %v  are less than the number "+
-						"of %v centroids. Retry will happen in background.", vectorFloatCount, vm.Dimension, vectorCount, minCentroids)
+				if defnCodebook == nil && (vectorCount < minCentroids) {
+					errStr := c.ERR_TRAINING
+					if !idxInst.Defn.HasSparseVector() {
+						errStr += fmt.Sprintf("Number of qualifying or valid vectors / dimension "+
+							"= %v/%v = %v are less than the number of %v centroids. Retry will "+
+							"happen in background.",
+							vectorFloatCount, vm.Dimension, vectorCount, minCentroids)
+					} else {
+						errStr += fmt.Sprintf("Number of qualifying or valid vectors %v are less "+
+							"than the number of %v centroids. Retry will happen in background.",
+							vectorCount, minCentroids)
+					}
 
 					//Add instance for training retry
 					if vectorFloatCount == 0 || vectorCount == 0 {
