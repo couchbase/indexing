@@ -285,7 +285,9 @@ func (b *RequestBroker) SetRetry(retry bool) {
 	b.retry = retry
 }
 
-func (b *RequestBroker) InitScanReport(requestId string, defnID common.IndexDefnId, enableScanReporting bool) {
+func (b *RequestBroker) SetScanReport(requestId string,
+	defnID common.IndexDefnId, enableScanReporting bool) {
+
 	if !enableScanReporting {
 		b.scanReport = nil
 		return
@@ -296,6 +298,24 @@ func (b *RequestBroker) InitScanReport(requestId string, defnID common.IndexDefn
 		DefnID:         defnID,
 		HostScanReport: make(map[string]*report.HostScanReport),
 	}
+}
+
+func (b *RequestBroker) GetScanReport() *report.ScanReportState {
+	return b.scanReport
+}
+
+func (b *RequestBroker) SetPerHostReportIds(ids []string) {
+	if b.scanReport == nil {
+		return
+	}
+	b.perHostReportIds = ids
+}
+
+func (b *RequestBroker) GetPerHostReportIds() []string {
+	if b.scanReport == nil {
+		return nil
+	}
+	return b.perHostReportIds
 }
 
 func (b *RequestBroker) AttachIndexerScanReport(hostReport *report.HostScanReport, i int) {
@@ -786,7 +806,8 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 	var tmpbufPoolIdx uint32
 	c.tmpbufs = make([]*[]byte, len(client))
 	c.tmpbufsPoolIdx = make([]uint32, len(client))
-	c.perHostReportIds = make([]string, len(client))
+
+	perHostReportIds := make([]string, len(client))
 	if c.scanReport != nil {
 		c.scanReport.PopulatePartns(index, targetInstId, partition)
 	}
@@ -797,7 +818,7 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 		c.tmpbufsPoolIdx[i] = tmpbufPoolIdx
 		if c.scanReport != nil {
 			id := report.GenPerClientReportId(targetInstId[i], partition[i])
-			c.perHostReportIds[i] = id
+			perHostReportIds[i] = id
 
 			// Pre-create all PerHostDetail entries so no concurrent write to the map
 			// is needed while attaching per host reports
@@ -809,6 +830,7 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 			}
 		}
 	}
+	c.SetPerHostReportIds(perHostReportIds)
 
 	if c.useGather() {
 		c.queues = make([]*Queue, len(client))
