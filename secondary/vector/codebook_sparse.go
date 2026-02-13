@@ -70,7 +70,10 @@ func NewCodebookSparse(dim, nlist int) (c.SparseCodebook, error) {
 
 // Train the codebook using input vectors.
 // For Sparse, input vector is expected in SparseJL format.
-// Clustering is done using spherical k-means.
+// Clustering is done using spherical k-means. Faiss automatically
+// uses spherical k-means when the metric is inner product
+// (see faiss/IndexIVF.cpp). Faiss normalizes centroids but not input
+// vectors, so we normalize them here before training.
 func (cb *codebookSparse) Train(vecs []float32) error {
 
 	c.AcquireTraining()
@@ -80,31 +83,37 @@ func (cb *codebookSparse) Train(vecs []float32) error {
 		return c.ErrCodebookClosed
 	}
 
-	//If number of centroids is equal to the number of input
-	//vectors for training, then clustering is not required.
-	//Add the centroids directly to the quantizer from the list
-	//of input vectors. Faiss considers this as a valid case to
-	//skip training the quantizer. The sub-quantizer training will
-	//still happen.
 	nvecs := len(vecs) / cb.dim
+
+	// Normalize input vectors for spherical k-means.
+	// Faiss only normalizes centroids, not input vectors.
+	normalizedVecs := make([]float32, len(vecs))
+	copy(normalizedVecs, vecs)
+	faiss.RenormL2(cb.dim, nvecs, normalizedVecs)
+
+	// If number of centroids is equal to the number of input
+	// vectors for training, then clustering is not required.
+	// Add the centroids directly to the quantizer from the list
+	// of input vectors. Faiss considers this as a valid case to
+	// skip training the quantizer.
 	if cb.nlist == nvecs {
 		quantizer, err := cb.index.Quantizer()
 		if err != nil {
 			return err
 		}
-		err = quantizer.Add(vecs)
+
+		err = quantizer.Add(normalizedVecs)
 		if err != nil {
 			return err
 		}
 	}
 
-	//SPARSE_TODO Use spherical k-means to train the codebook.
-	err := cb.index.Train(vecs)
+	err := cb.index.Train(normalizedVecs)
 	if err == nil {
 		cb.isTrained = true
 	}
 
-	return nil
+	return err
 }
 
 // IsTrained returns true if codebook has been trained.
