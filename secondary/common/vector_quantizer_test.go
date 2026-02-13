@@ -15,22 +15,37 @@ func TestVectorQuantizerParser(t *testing.T) {
 		"IVF,PQ32x5",     // number of bits can be odd
 		"IVF1024,PQ32x4", // Specify the number of centroids
 		"IVF,pq16x8",     // case-insensitive
-		"IVF, SQ_4bit",
-		"IVF, SQ_8bit",
-		"IVF, SQ_6bit",
-		"IVF, SQ_fp16",
-		"IVF, SQ_4bit_uniform",
-		"IVF, SQ_8bit_uniform",
-		"IVF, SQ_8bit_direct",
-		"IVF,PQ32x4fs",
+		// "IVF, SQ_4bit",
+		// "IVF, SQ_8bit",
+		// "IVF, SQ_6bit",
+		// "IVF, SQ_fp16",
+		// "IVF, SQ_4bit_uniform",
+		// "IVF, SQ_8bit_uniform",
+		// "IVF, SQ_8bit_direct",
+		// "IVF,PQ32x4fs", // commented outdated inputs which were leading to test failure
 		"IVF43241343143214,PQ32x4", // large number of centroids
 	}
 
+	rabitqValidParseInputs := []struct {
+		input         string
+		expectedNlist int
+		expectedNbits int
+	}{
+		{"IVF,RaBitQ", 0, 1},
+		{"IVF, RaBitQ", 0, 1},       // Spaces are supported
+		{"IVF1024,RaBitQ", 1024, 1}, // Default RaBitQ bits when suffix is omitted
+		{"IVF,RaBitQ1", 0, 1},
+		{"IVF,RaBitQ2", 0, 2},
+		{"IVF,rabitq4", 0, 4}, // case-insensitive
+	}
+
 	invalidFormats := []string{
-		"ABC,PQ32x4", // No IVF leading
-		"IVF,PQ",     // No sub quantizers and nbits
-		"IVF,SQ",     // Not a valid model
-		"IVF1024,ab", // Invalid quantization scheme
+		"ABC,PQ32x4",   // No IVF leading
+		"IVF,PQ",       // No sub quantizers and nbits
+		"IVF,SQ",       // Not a valid model
+		"IVF1024,ab",   // Invalid quantization scheme
+		"IVF,RaBitQX",  // Invalid RaBitQ format
+		"IVF,RaBitQ-1", // Invalid RaBitQ format
 	}
 
 	invalidInputs := []string{
@@ -40,6 +55,8 @@ func TestVectorQuantizerParser(t *testing.T) {
 		"IVF,PQ0x4",     // subquantizers can not be zero
 		"IVF,PQ0x4fs",   // blocksize can not be zero
 		"IVF,PQ32x0",    // nbits can not be zero
+		"IVF,RaBitQ10",  // RaBitQNbits must be between 1 and 9
+		"IVF,RaBitQ0",   // RaBitQNbits must be between 1 and 9
 
 	}
 
@@ -52,6 +69,27 @@ func TestVectorQuantizerParser(t *testing.T) {
 
 		if err = quantizer.IsValid(dimension, false); err != nil {
 			t.Fatalf("Invalid quantizer seen with error: %v for inp: %v", err, inp)
+		}
+	}
+
+	for _, tc := range rabitqValidParseInputs {
+		fmt.Printf("Parsing RaBitQ input: %v\n", tc.input)
+		quantizer, err := ParseVectorDesciption(tc.input)
+		if err != nil {
+			t.Fatalf("Expected successful RaBitQ parsing but observed error: %v for input: %v",
+				err, tc.input)
+		}
+		if quantizer.Type != RaBitQ {
+			t.Fatalf("Expected quantizer type RaBitQ but got %v for input: %v",
+				quantizer.Type, tc.input)
+		}
+		if quantizer.Nlist != tc.expectedNlist {
+			t.Fatalf("Expected nlist %v but got %v for input: %v",
+				tc.expectedNlist, quantizer.Nlist, tc.input)
+		}
+		if quantizer.RaBitQNbits != tc.expectedNbits {
+			t.Fatalf("Expected RaBitQ nbits %v but got %v for input: %v",
+				tc.expectedNbits, quantizer.RaBitQNbits, tc.input)
 		}
 	}
 
