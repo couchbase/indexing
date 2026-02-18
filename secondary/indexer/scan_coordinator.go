@@ -469,7 +469,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 		}
 
 		if req.srvrScanReport != nil && req.srvrScanReport.SrvrNs != nil {
-			req.srvrScanReport.SrvrNs.TotalDur = time.Now().Sub(ttime).Milliseconds()
+			req.srvrScanReport.SrvrNs.TotalDur = time.Since(ttime).Nanoseconds()
 		}
 	}()
 
@@ -709,6 +709,26 @@ func (s *scanCoordinator) handleVectorScanRequest(req *ScanRequest, w ScanRespon
 
 	err := scanPipeline.Execute()
 	scanTime := time.Now().Sub(t0)
+
+	if req.srvrScanReport != nil && req.srvrScanReport.SrvrNs != nil &&
+		req.srvrScanReport.SrvrCounts != nil {
+
+		req.srvrScanReport.SrvrNs.WaitDur = waitTime.Nanoseconds()
+		req.srvrScanReport.SrvrNs.ScanDur = scanTime.Nanoseconds()
+		req.srvrScanReport.SrvrCounts.RowsReturn = scanPipeline.RowsReturned()
+		req.srvrScanReport.SrvrCounts.RowsScan = scanPipeline.RowsScanned()
+		req.srvrScanReport.SrvrCounts.BytesRead = scanPipeline.BytesRead()
+		cacheHitRatio := scanPipeline.CacheHitRatio()
+		if cacheHitRatio >= 0 {
+			req.srvrScanReport.SrvrCounts.CacheHitPer = uint64(cacheHitRatio)
+		}
+
+		// Vector index specific stats
+		req.srvrScanReport.SrvrCounts.RowsReranked = scanPipeline.RowsReranked()
+		req.srvrScanReport.SrvrCounts.RowsFiltered = scanPipeline.RowsFiltered()
+		req.srvrScanReport.SrvrNs.AvgDecodeDur = scanPipeline.AvgDecodeDur().Nanoseconds()
+		req.srvrScanReport.SrvrNs.AvgDistCompDur = scanPipeline.AvgDistCmpDur().Nanoseconds()
+	}
 
 	stats := s.stats.Get()
 

@@ -68,19 +68,21 @@ func packageReport(srvrScanReport *report.HostScanReport) *protobuf.SrvrScanRepo
 
 	report := &protobuf.SrvrScanReport{
 		ServerTimings: &protobuf.ServerTimings{
-			TotalDur:          proto.Int64(srvrScanReport.SrvrNs.TotalDur),
-			WaitDur:           proto.Int64(srvrScanReport.SrvrNs.WaitDur),
-			ScanDur:           proto.Int64(srvrScanReport.SrvrNs.ScanDur),
-			GetSeqnosDur:      proto.Int64(srvrScanReport.SrvrNs.GetSeqnosDur),
-			DiskReadDur:       proto.Int64(srvrScanReport.SrvrNs.DiskReadDur),
-			DistCompDur:       proto.Int64(srvrScanReport.SrvrNs.DistCompDur),
-			CentroidAssignDur: proto.Int64(srvrScanReport.SrvrNs.CentroidAssignDur),
+			TotalDur:       proto.Int64(srvrScanReport.SrvrNs.TotalDur),
+			WaitDur:        proto.Int64(srvrScanReport.SrvrNs.WaitDur),
+			ScanDur:        proto.Int64(srvrScanReport.SrvrNs.ScanDur),
+			GetSeqnosDur:   proto.Int64(srvrScanReport.SrvrNs.GetSeqnosDur),
+			DiskReadDur:    proto.Int64(srvrScanReport.SrvrNs.DiskReadDur),
+			AvgDistCompDur: proto.Int64(srvrScanReport.SrvrNs.AvgDistCompDur),
+			AvgDecodeDur:   proto.Int64(srvrScanReport.SrvrNs.AvgDecodeDur),
 		},
 		ServerCounts: &protobuf.ServerCounts{
-			RowsReturn:  proto.Uint64(srvrScanReport.SrvrCounts.RowsReturn),
-			RowsScan:    proto.Uint64(srvrScanReport.SrvrCounts.RowsScan),
-			BytesRead:   proto.Uint64(srvrScanReport.SrvrCounts.BytesRead),
-			CacheHitPer: proto.Uint64(srvrScanReport.SrvrCounts.CacheHitPer),
+			RowsReturn:   proto.Uint64(srvrScanReport.SrvrCounts.RowsReturn),
+			RowsScan:     proto.Uint64(srvrScanReport.SrvrCounts.RowsScan),
+			BytesRead:    proto.Uint64(srvrScanReport.SrvrCounts.BytesRead),
+			CacheHitPer:  proto.Uint64(srvrScanReport.SrvrCounts.CacheHitPer),
+			RowsFiltered: proto.Uint64(srvrScanReport.SrvrCounts.RowsFiltered),
+			RowsReranked: proto.Uint64(srvrScanReport.SrvrCounts.RowsReranked),
 		},
 	}
 
