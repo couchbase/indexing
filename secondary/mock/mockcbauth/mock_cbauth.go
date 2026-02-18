@@ -108,3 +108,7 @@ func (a *AuthImpl) RegisterEncryptionKeysCallbacks(
 func (a *AuthImpl) KeysDropComplete(_ cbauth.KeyDataType, _ error) error {
 	return nil
 }
+
+func (a *AuthImpl) ImportEncryptionKeys(_ []string, _ cbauth.KeyDataType, _ int) error {
+	return nil
+}

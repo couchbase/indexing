@@ -122,13 +122,13 @@ reset_worktree() {
 
 # Function to install golangci-lint if not present
 ensure_golangci_lint() {
+  # Install golangci-lint v2.8.0 when missing
+  GOLANGCI_VERSION="v2.8.0"
   if ! command -v golangci-lint &> /dev/null; then
-    echo "Installing golangci-lint (with v2 config format support)..."
+    echo "Installing golangci-lint $GOLANGCI_VERSION (with v2 config format support)..."
     if command -v go &> /dev/null; then
       GOPATH_BIN="$(go env GOROOT)/bin"
-      # Install latest version (supports v2 config format)
-      # The config file uses version: "2" format, which is supported by recent versions
-      curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$GOPATH_BIN" latest
+      curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$GOPATH_BIN" "$GOLANGCI_VERSION"
       export PATH="$PATH:$GOPATH_BIN"
     else
       echo "Error: go command not found, cannot install golangci-lint"
