@@ -99,21 +99,23 @@ func (cb *codebookSparse) Train(vecs []float32) error {
 	if cb.nlist == nvecs {
 		quantizer, err := cb.index.Quantizer()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get quantizer: %w", err)
 		}
 
 		err = quantizer.Add(normalizedVecs)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to add centroids to quantizer: %w", err)
 		}
 	}
 
 	err := cb.index.Train(normalizedVecs)
 	if err == nil {
 		cb.isTrained = true
+	} else {
+		return fmt.Errorf("failed to train sparse codebook: %w", err)
 	}
 
-	return err
+	return nil
 }
 
 // IsTrained returns true if codebook has been trained.
@@ -148,25 +150,31 @@ func (cb *codebookSparse) FindNearestCentroids(vec []float32, k int64) ([]int64,
 	}
 	quantizer, err := cb.index.Quantizer()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get quantizer: %w", err)
 	}
 
-	//If k is greater than default (efSearch=16), then set it
-	//to be 2x more than k. This ensures that the required number of
-	//centroids are always returned. If efSearch is smaller,
-	//assign may not be able to find enough centroids.
+	// Normalize the input vector to match the normalized centroids
+	// from spherical k-means training.
+	normalizedVec := make([]float32, len(vec))
+	copy(normalizedVec, vec)
+	faiss.RenormL2(cb.dim, 1, normalizedVec)
+
+	// If k is greater than default (efSearch=16), then set it
+	// to be 2x more than k. This ensures that the required number of
+	// centroids are always returned. If efSearch is smaller,
+	// assign may not be able to find enough centroids.
 	if k > faiss.DEFAULT_EF_SEARCH {
 		ps, err := faiss.NewParameterSpace()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create parameter space: %w", err)
 		}
 		ps.SetIndexParameter(quantizer, "efSearch", float64(k*2))
 		ps.Delete()
 	}
 
-	labels, err := quantizer.Assign(vec, k)
+	labels, err := quantizer.Assign(normalizedVec, k)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to assign vector to centroids: %w", err)
 	}
 	return labels, nil
 
@@ -183,14 +191,16 @@ func (cb *codebookSparse) ComputeDistance(qvec []float32, fvecs []float32, dist 
 	defer c.ReleaseGlobal(token)
 
 	err := faiss.InnerProductsNy(dist, qvec, fvecs, len(qvec))
-	// InnnerProduct is a similarity measure,
-	// to convert to distance measure negate it.
-	if err == nil {
-		for i := range dist {
-			dist[i] = -1 * dist[i]
-		}
+	if err != nil {
+		return fmt.Errorf("failed to compute inner products: %w", err)
 	}
-	return err
+
+	// InnerProduct is a similarity measure,
+	// to convert to distance measure negate it.
+	for i := range dist {
+		dist[i] = -1 * dist[i]
+	}
+	return nil
 }
 
 // Size returns the memory size in bytes.
@@ -244,7 +254,7 @@ func (cb *codebookSparse) Marshal() ([]byte, error) {
 
 	data, err := faiss.WriteIndexIntoBuffer(cb.index)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to write index to buffer: %w", err)
 	}
 
 	cbio.Index = data
@@ -267,7 +277,7 @@ func recoverCodebookSparse(data []byte) (c.SparseCodebook, error) {
 	cbio := new(codebookSparse_IO)
 
 	if err := json.Unmarshal(data, cbio); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal codebook data: %w", err)
 	}
 
 	if cbio.CodebookVer != CodebookVer1 {
@@ -289,7 +299,7 @@ func recoverCodebookSparse(data []byte) (c.SparseCodebook, error) {
 	var err error
 	cb.index, err = faiss.ReadIndexFromBuffer(cbio.Index, faiss.IOFlagMmap)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read index from buffer: %w", err)
 	}
 
 	return cb, nil
