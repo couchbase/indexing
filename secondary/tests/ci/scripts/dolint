@@ -203,6 +203,7 @@ ensure_golangci_lint
 lint_cfg="$WORKSPACE/goproj/src/github.com/couchbase/indexing/.golangci.yml"
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
+go mod tidy
 indexing_output=$(golangci-lint run --config $lint_cfg -j 12 --new --new-from-merge-base=couchbase/unstable --output.html.path "$WORKSPACE/indexing-lint.html" 2>&1)
 index_lint_status=$?
 
@@ -214,6 +215,7 @@ else
 fi
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
+go mod tidy
 gometa_output=$(golangci-lint run --config $lint_cfg -j 12 --new --new-from-merge-base=couchbase/master --output.html.path "$WORKSPACE/gometa-lint.html" 2>&1)
 gometa_lint_status=$?
 
