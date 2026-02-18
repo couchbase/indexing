@@ -76,6 +76,15 @@ func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (cb codebook.Code
 			"metric: %v, useCosine: %v",
 			vectorMeta.Dimension, vectorMeta.Quantizer.SQRange, nlist, metric, useCosine)
 
+	case common.NO_QUANTIZATION_SPARSE:
+		cb, err = NewCodebookSparse(vectorMeta.Dimension, nlist)
+		if err != nil {
+			return nil, err
+		}
+		logging.Infof("NewCodebookSparse: Initialized codebook with dimension: %v, "+
+			"nlist: %v, metric: %v", vectorMeta.Dimension, nlist, metric)
+		return cb, nil
+
 	default:
 		return nil, errors.New("Unsupported quantisation type")
 	}

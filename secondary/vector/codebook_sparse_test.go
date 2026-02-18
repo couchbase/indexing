@@ -39,8 +39,8 @@ func TestCodebookSparse(t *testing.T) {
 	for _, tc := range codebookSparseTestCases {
 		t.Run(tc.name, func(t *testing.T) {
 
-			codebook, err := NewCodebookSparse(tc.dim, tc.nlist)
-			if err != nil || codebook == nil {
+			sparseCB, err := NewCodebookSparse(tc.dim, tc.nlist)
+			if err != nil || sparseCB == nil {
 				t.Errorf("Unable to create index. Err %v", err)
 			}
 
@@ -49,28 +49,29 @@ func TestCodebookSparse(t *testing.T) {
 
 			//t.Logf("Sample sparse vector %v", vecs[0])
 			//set verbose log level
-			cb := codebook.(*codebookSparse)
+			cb := sparseCB.(*codebookSparse)
 			cb.index.SetVerbose(1)
 
-			//convert to sparse JL format
+			//convert to sparse JL format using SparseCodebook interface
+
 			vecs_jl := make([][]float32, tc.num_vecs)
 			for i := 0; i < tc.num_vecs; i++ {
 				vecs_jl[i] = make([]float32, tc.dim)
-				err = cb.Concise2SparseJL(vecs_s[i], vecs_jl[i])
+				err = sparseCB.Concise2SparseJL(vecs_s[i], vecs_jl[i])
 				if err != nil {
 					t.Errorf("Error converting to sparse JL format %v", err)
 				}
 			}
 			//t.Logf("Sample sparse JL vector %v", vecs_jl[0])
 
-			//train the codebook using 10000 vecs
+			//train the sparseCB using 10000 vecs
 			tvecs_jl := convertTo1D(vecs_jl[:tc.trainlist])
 			t0 := time.Now()
-			err = codebook.Train(tvecs_jl)
+			err = sparseCB.Train(tvecs_jl)
 			delta := time.Now().Sub(t0)
 			t.Logf("Train timing %v vectors %v", tc.trainlist, delta)
 
-			if err != nil || !codebook.IsTrained() {
+			if err != nil || !sparseCB.IsTrained() {
 				t.Errorf("Unable to train index. Err %v", err)
 			}
 
@@ -87,7 +88,7 @@ func TestCodebookSparse(t *testing.T) {
 			//find the nearest centroid
 			qvec_jl := convertTo1D(vecs_jl[:1])
 			t0 = time.Now()
-			label, err := codebook.FindNearestCentroids(qvec_jl, 100)
+			label, err := sparseCB.FindNearestCentroids(qvec_jl, 100)
 			delta = time.Now().Sub(t0)
 			t.Logf("Assign results %v %v", label, err)
 			t.Logf("Assign timing %v", delta)
@@ -106,7 +107,7 @@ func TestCodebookSparse(t *testing.T) {
 			//t.Logf("Random sparse vector %v", rand_vec_s)
 
 			tvec := make([]float32, len(qvec_s))
-			found := cb.Transpose(qvec_s, rand_vec_s, tvec)
+			found := sparseCB.Transpose(qvec_s, rand_vec_s, tvec)
 
 			t.Logf("Matching term found = %v, result = %v", found, tvec)
 
@@ -116,7 +117,7 @@ func TestCodebookSparse(t *testing.T) {
 			//create a slice with only values for dist computation
 			qvec_s_d := qvec_s[1+tc.size : 1+2*tc.size]
 
-			err = codebook.ComputeDistance(qvec_s_d, tvec, dist)
+			err = sparseCB.ComputeDistance(qvec_s_d, tvec, dist)
 			if err != nil {
 				t.Errorf("Error computing distance %v", err)
 			}
@@ -124,24 +125,24 @@ func TestCodebookSparse(t *testing.T) {
 			t.Logf("Computed distance %v", dist)
 
 			//check the size
-			pSize := codebook.Size()
+			pSize := sparseCB.Size()
 			if pSize == 0 {
 				t.Errorf("Unexpected codebook memory size %v", pSize)
 			}
 			t.Logf("Codebook Memory Size %v", pSize)
 
-			data, err := codebook.Marshal()
+			data, err := sparseCB.Marshal()
 			if err != nil {
 				t.Errorf("Error marshalling codebook %v", err)
 			}
 
-			err = codebook.Close()
+			err = sparseCB.Close()
 			if err != nil {
 				t.Errorf("Error closing codebook %v", err)
 			}
 
 			//close again
-			err = codebook.Close()
+			err = sparseCB.Close()
 			if err != cbpkg.ErrCodebookClosed {
 				t.Errorf("Expected err while double closing codebook")
 			}

@@ -1520,6 +1520,29 @@ func (mdb *bhiveSlice) Train(vecs []float32) error {
 		return ErrorCodebookNotInitialized
 	}
 
+	//TODO: handle cases of malformed vecs. Where nextIdx >= len(vecs)
+	if mdb.idxDefn.HasSparseVector() {
+		sparseCb, ok := mdb.codebook.(codebook.SparseCodebook)
+		if !ok {
+			return codebook.ErrIncorrectCodebook
+		}
+		totalVecs := common.FindTotalVectorsInSparse(vecs)
+		sparseJLDim := mdb.codebook.Dimension()
+		outVecs := make([]float32, sparseJLDim*totalVecs)
+		idx := 0
+		for vecNum := 0; vecNum < totalVecs && idx < len(vecs); vecNum++ {
+			size := int(vecs[idx])
+			nextIdx := idx + (2 * size) + 1
+			if err := sparseCb.Concise2SparseJL(
+				vecs[idx:nextIdx],
+				outVecs[vecNum*sparseJLDim:(vecNum+1)*sparseJLDim]); err != nil {
+				return err
+			}
+			idx = nextIdx
+		}
+		vecs = outVecs
+	}
+
 	err := mdb.codebook.Train(vecs)
 	if err != nil {
 		return err

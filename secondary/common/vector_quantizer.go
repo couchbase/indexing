@@ -11,10 +11,11 @@ import (
 type QuantizationType string
 
 const (
-	// NO_QUANTIZATION is used only for sparse vectors
-	NO_QUANTIZATION QuantizationType = "NONE"
-	PQ              QuantizationType = "PQ"
-	SQ              QuantizationType = "SQ"
+	// NO_QUANTIZATION_SPARSE is used only for sparse vectors
+	NO_QUANTIZATION_SPARSE QuantizationType = "SPARSE"
+	PQ                     QuantizationType = "PQ"
+	SQ                     QuantizationType = "SQ"
+	RaBitQ                 QuantizationType = "RaBitQ"
 )
 
 type ScalarQuantizerRange string
@@ -33,6 +34,10 @@ const (
 var DEFAULT_VECTOR_DESCRIPTION = "IVF,SQ8"
 var DEFAULT_SPARSE_VECTOR_DESCRIPTION = "IVF"
 
+var (
+	ErrRaBitQNbitsOutOfRange = errors.New("RaBitQ nb_bits must be between 1 and 9")
+)
+
 type VectorQuantizer struct {
 	Type QuantizationType `json:"quantization_type,omitempty"`
 
@@ -46,6 +51,9 @@ type VectorQuantizer struct {
 	// Product quantizer related information
 	SubQuantizers int `json:"subquantizers,omitempty"`
 	Nbits         int `json:"nbits,omitempty"`
+
+	// RaBitQ (Binary Quantizer) related information
+	RaBitQNbits int `json:"rabitqNbits,omitempty"`
 
 	FastScan  bool `json:"fastScan,omitempty"`
 	BlockSize int  `json:"blockSize,omitempty"`
@@ -64,6 +72,7 @@ func (vq *VectorQuantizer) Clone() *VectorQuantizer {
 		Nlist:         vq.Nlist,
 		SubQuantizers: vq.SubQuantizers,
 		Nbits:         vq.Nbits,
+		RaBitQNbits:   vq.RaBitQNbits,
 		FastScan:      vq.FastScan,
 		BlockSize:     vq.BlockSize,
 		SQRange:       vq.SQRange,
@@ -85,6 +94,10 @@ func (vq *VectorQuantizer) IsEquivalent(uq *VectorQuantizer) bool {
 	}
 
 	if vq.Nbits != uq.Nbits {
+		return false
+	}
+
+	if vq.RaBitQNbits != uq.RaBitQNbits {
 		return false
 	}
 
@@ -130,7 +143,18 @@ func (vq *VectorQuantizer) String() string {
 		} else {
 			return fmt.Sprintf("IVF,%v", vq.SQRange)
 		}
-	case NO_QUANTIZATION:
+	case RaBitQ:
+		// Build the string: IVF[<nlist>],RaBitQ[<nbits>]
+		prefix := "IVF"
+		if vq.Nlist > 0 {
+			prefix = fmt.Sprintf("IVF%v", vq.Nlist)
+		}
+		suffix := "RaBitQ"
+		if vq.RaBitQNbits > 1 {
+			suffix = fmt.Sprintf("RaBitQ%v", vq.RaBitQNbits)
+		}
+		return fmt.Sprintf("%s,%s", prefix, suffix)
+	case NO_QUANTIZATION_SPARSE:
 		if vq.Nlist > 0 {
 			return fmt.Sprintf("IVF%v", vq.Nlist)
 		} else {
@@ -150,6 +174,10 @@ func (vq *VectorQuantizer) String() string {
 // by "ScalarQuantizerType". E.g., IVFSQ_8bit represents IVF index with scalar
 // quantization on 8bit scale
 //
+// c. RaBitQ (Binary Quantization) - IVF<num_centroids>,RaBitQ<nb_bits> where
+// nb_bits is the number of bits per dimension. E.g., IVF,RaBitQ4 represents
+// IVF index with RaBitQ quantization with 4 bits per dimension
+//
 // The num_centroids value is optional. If not specified, indexer will compute
 // the number of centroids required at the time of build index.
 // In all other cases, indexer should return error
@@ -159,11 +187,12 @@ func ParseVectorDesciption(inp string) (*VectorQuantizer, error) {
 
 	quantizer := &VectorQuantizer{}
 
-	re := regexp.MustCompile(`(IVF)(\d*),( *)(PQ(\d+)X(\d+)(FS)?$|SQFP16$|SQ4$|SQ6$|SQ8$|SQ_4BIT_UNIFORM$|SQ_8BIT_UNIFORM$|SQ_8BIT_DIRECT$)`)
+	re := regexp.MustCompile(`^(IVF)(\d*),( *)(PQ(\d+)X(\d+)(FS)?$|SQFP16$|SQ4$|SQ6$|SQ8$|` +
+		`SQ_4BIT_UNIFORM$|SQ_8BIT_UNIFORM$|SQ_8BIT_DIRECT$|RABITQ(\d*)$)`)
 	matches := re.FindStringSubmatch(inp)
 
-	// On a successful match, there will be 8 substrings in matches
-	if len(matches) == 0 || len(matches) != 8 {
+	// On a successful match, there will be 9 substrings in matches
+	if len(matches) == 0 || len(matches) != 9 {
 		return nil, fmt.Errorf("Invalid format for description")
 	}
 
@@ -217,6 +246,17 @@ func ParseVectorDesciption(inp string) (*VectorQuantizer, error) {
 		default:
 			return nil, fmt.Errorf("Invalid format for scalar quantization. Expected one of `SQ4`,`SQ6`,`SQ8`,`SQfp16`,`SQ_8bit_DIRECT`,`SQ_8bit_UNIFORM`,`SQ_4bit_UNIFORM`. Observed different format")
 		}
+	} else if strings.HasPrefix(matches[4], "RABITQ") {
+		quantizer.Type = RaBitQ
+		if len(matches[8]) == 0 {
+			quantizer.RaBitQNbits = 1
+		} else if rabitqNbits, err := strconv.ParseInt(matches[8], 10, 32); err != nil {
+			return nil, fmt.Errorf(
+				"Error observed while parsing number of bits per RaBitQ quantizer: %w",
+				err)
+		} else {
+			quantizer.RaBitQNbits = int(rabitqNbits)
+		}
 	} else {
 		return nil, fmt.Errorf("Invalid format for description")
 	}
@@ -230,7 +270,7 @@ func ParseSparseVectorDescription(inp string) (*VectorQuantizer, error) {
 	inp = strings.ToUpper(inp)
 
 	quantizer := &VectorQuantizer{}
-	quantizer.Type = NO_QUANTIZATION
+	quantizer.Type = NO_QUANTIZATION_SPARSE
 
 	re := regexp.MustCompile(`^(IVF)(\d*)$`)
 	matches := re.FindStringSubmatch(inp)
@@ -260,7 +300,7 @@ func (vq *VectorQuantizer) IsValid(dimension int, isSparseVector bool) error {
 
 	// Add validation for sparse vector quantizer
 	if isSparseVector {
-		if vq.Type != NO_QUANTIZATION {
+		if vq.Type != NO_QUANTIZATION_SPARSE {
 			return errors.New("quantizer is supported only for dense vectors. Observed it for sparse vector")
 		}
 		return nil
@@ -295,5 +335,13 @@ func (vq *VectorQuantizer) IsValid(dimension int, isSparseVector bool) error {
 			return nil
 		}
 	}
+
+	if vq.Type == RaBitQ {
+		if vq.RaBitQNbits < 1 || vq.RaBitQNbits > 9 {
+			return fmt.Errorf("%w, got %d", ErrRaBitQNbitsOutOfRange, vq.RaBitQNbits)
+		}
+		return nil
+	}
+
 	return errors.New("Invalid quantization scheme seen")
 }

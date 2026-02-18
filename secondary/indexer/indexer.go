@@ -2918,9 +2918,10 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 			// Update index maps with this index
 			msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 			msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{inst})
-			// update index map in storage manager so that the "checkForLostPartitionsAndLostReplica" that index
-			// service performs will not ignore the newly moved instance
-			if err := idx.sendMessageToWorker(msgUpdateIndexInstMap, idx.storageMgrCmdCh, "StorageMgr"); err != nil {
+			// broadcast to all workers
+			// update index map in storage manager so that the "checkForLostPartitionsAndLostReplica"
+			// service will not ignore the newly moved instance
+			if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 				logging.Errorf("Indexer::updateRStateOrMergePartition error observed when updating "+
 					"RState of inst: %v, err: %v", inst.InstId, err) // Log error but do not act on it yet
 			}
@@ -7469,6 +7470,16 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 
 	inst.RState = rstate
 	idx.indexInstMap[instId] = inst
+
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{inst})
+	// broadcast to all workers
+	// imp for storage mngr so that the "checkForLostPartitionsAndLostReplica"
+	// service will not read stale data and ignore newly moved instances
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+		logging.Errorf("Indexer::handleUpdateIndexRState error observed when updating "+
+			"RState of inst: %v, err: %v", inst.InstId, err)
+	}
 
 	instIds := []common.IndexInstId{instId}
 	if err := idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, false, nil, respCh); err != nil {
@@ -14201,9 +14212,14 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		}
 	}
 
+	instVectorsMap := make(map[common.IndexInstId]int, len(samplingCandidates))
 	// Retrieve vectors from data service for training - only for instances that need it
+	// the function also updates the count of vector for each instId in instVectorsMap
+	// this is relevant as len of float32 / dimension is not true for sparse vectors.
 	if len(samplingCandidates) > 0 {
-		sampledVectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, samplingCandidates, maxSampleSize, int64(overSamplePercent))
+		sampledVectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL,
+			bucket, scope, collection, cid, samplingCandidates, maxSampleSize,
+			int64(overSamplePercent), instVectorsMap)
 		if err != nil {
 			logging.Errorf("Indexer::initiateTraining error observed while fetching training data for bucket: %v, scope: %v, coll: %v, cid: %v, err: %v",
 				bucket, scope, collection, cid, err)
@@ -14247,8 +14263,6 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	}
 
 	logging.Infof("Indexer::initiateTraining retry:%v maxSampleSize:%v maxRatio:%v multiplier:%v", retry, maxSampleSize, maxRatio, multiplier)
-
-	instVectorsMap := make(map[common.IndexInstId]int, 0)
 
 	// This map will hold serialized codebook of current training
 	// attempt for sharing on partitions of definition including replicas
@@ -14389,18 +14403,23 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				// Get vectors for this instance (will be nil/empty for already trained instances)
 				vectorSamples := vectorsByInstId[instId]
 				vectorFloatCount := len(vectorSamples)
-				vectorCount := 0
-				if vm.Dimension > 0 {
-					vectorCount = vectorFloatCount / vm.Dimension
-				}
-				instVectorsMap[instId] = vectorCount
+				vectorCount := instVectorsMap[instId]
 
 				// Skip vector count validation only if we actually have a codebook to use.
 				// Note: We check defnCodebook, not skipSamplingInstMap, because if SerializeCodebook
 				// fails after instHasTrainedCodebook returned true, we need to surface the error.
-				if defnCodebook == nil && vectorCount < minCentroids {
-					errStr := c.ERR_TRAINING + fmt.Sprintf("Number of qualifying or valid vectors / dimension = %v/%v = %v  are less than the number "+
-						"of %v centroids. Retry will happen in background.", vectorFloatCount, vm.Dimension, vectorCount, minCentroids)
+				if defnCodebook == nil && (vectorCount < minCentroids) {
+					errStr := c.ERR_TRAINING
+					if !idxInst.Defn.HasSparseVector() {
+						errStr += fmt.Sprintf("Number of qualifying or valid vectors / dimension "+
+							"= %v/%v = %v are less than the number of %v centroids. Retry will "+
+							"happen in background.",
+							vectorFloatCount, vm.Dimension, vectorCount, minCentroids)
+					} else {
+						errStr += fmt.Sprintf("Number of qualifying or valid vectors %v are less "+
+							"than the number of %v centroids. Retry will happen in background.",
+							vectorCount, minCentroids)
+					}
 
 					//Add instance for training retry
 					if vectorFloatCount == 0 || vectorCount == 0 {
@@ -15533,22 +15552,26 @@ func (idx *indexer) checkForLostReplicas(
 				// Should not hit into this. Handling edge case
 				continue
 			}
-			// expected replicas are present for this partition
-			if len(replicaIndexInfo) == expectedInstReplicaMap[defnId] {
-				continue
+
+			// GetNumReplica() returns the number of replicas specified when
+			// the index was created, NOT including the original instance.
+			// add 1 to count all replica instances.
+			totalExpectedInstances := expectedInstReplicaMap[defnId] + 1
+			if len(replicaIndexInfo) == totalExpectedInstances {
+				continue // expected instances are present for this partition
 			}
-
 			key := fmt.Sprintf("%v:%v", replicaIndexInfo[0].IndexName, partnId)
-			indexesWithLostReplica[key] = expectedInstReplicaMap[defnId] - len(replicaIndexInfo)
+			indexesWithLostReplica[key] = totalExpectedInstances - len(replicaIndexInfo)
 
-			presentReplica := make([]int, len(replicaIndexInfo))
+			presentReplica := make([]int, 0, len(replicaIndexInfo))
 			for _, indexInfo := range replicaIndexInfo {
 				presentReplica = append(presentReplica, indexInfo.ReplicaID)
 			}
 
-			logging.Warnf("Indexer::checkForLostReplica defnId: %v, partnId: %v has only %v(%v) replicas "+
-				"while it is expected to have %v replicas", defnId, partnId, len(presentReplica),
-				presentReplica, expectedInstReplicaMap[defnId])
+			logging.Warnf("Indexer::checkForLostReplica defnId: %v, partnId: %v "+
+				"has only %v(%v) replica instances while it is "+
+				"expected to have %v total instances", defnId, partnId, len(presentReplica),
+				presentReplica, totalExpectedInstances)
 		}
 	}
 

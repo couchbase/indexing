@@ -48,8 +48,7 @@ type codebookSparse_IO struct {
 // Create a new Sparse codebook.
 // dim is the SparseJL reduced dimension.
 // nlist is the number of IVF centroids.
-func NewCodebookSparse(dim, nlist int) (c.Codebook, error) {
-
+func NewCodebookSparse(dim, nlist int) (c.SparseCodebook, error) {
 	var err error
 
 	codebook := &codebookSparse{
@@ -255,8 +254,7 @@ func (cb *codebookSparse) MetricType() c.MetricType {
 	return cb.metric
 }
 
-func recoverCodebookSparse(data []byte) (c.Codebook, error) {
-
+func recoverCodebookSparse(data []byte) (c.SparseCodebook, error) {
 	cbio := new(codebookSparse_IO)
 
 	if err := json.Unmarshal(data, cbio); err != nil {

@@ -27,7 +27,8 @@ func FetchSampleVectorsForIndexes(cluster string,
 	cid string,
 	idxInsts []*c.IndexInst,
 	sampleSize int64,
-	overSamplePercent int64) ([][]float32, error) {
+	overSamplePercent int64,
+	instVecCountMap map[c.IndexInstId]int) ([][]float32, error) {
 
 	evaluators := make([]*protoProj.IndexEvaluator, len(idxInsts))
 
@@ -64,7 +65,8 @@ sampling:
 		select {
 		case mut, ok := <-datach:
 			if ok {
-				newBuf, err = evaluateEvent(evaluators, mut, vectors, encodeBuf)
+				newBuf, err = evaluateEvent(evaluators, mut, vectors, encodeBuf, idxInsts,
+					instVecCountMap)
 				if err != nil {
 					//even if some document evals return error, continue with
 					//evaluation as this method is only doing sampling.
@@ -100,7 +102,9 @@ sampling:
 func evaluateEvent(evaluators []*protoProj.IndexEvaluator,
 	m *memcached.DcpEvent,
 	outvecs [][]float32,
-	encodeBuf []byte) ([]byte, error) {
+	encodeBuf []byte,
+	idxInsts []*c.IndexInst,
+	instVecCountMap map[c.IndexInstId]int) ([]byte, error) {
 
 	var nvalue qvalue.Value
 	if m.IsJSON() {
@@ -126,6 +130,9 @@ func evaluateEvent(evaluators []*protoProj.IndexEvaluator,
 		if len(vectors) != 0 {
 			for _, vec := range vectors {
 				outvecs[i] = append(outvecs[i], vec...)
+				if len(vec) != 0 {
+					instVecCountMap[idxInsts[i].InstId] += 1
+				}
 			}
 		}
 	}

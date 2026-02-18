@@ -9,6 +9,7 @@
 package n1ql
 
 import (
+	"bytes"
 	"encoding/gob"
 	"fmt"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/gocbcrypto"
 	"github.com/couchbase/indexing/secondary/common"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/stats"
@@ -1620,7 +1622,6 @@ func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 				attr |= datastore.IK_MISSING
 			}
 
-
 			if si.secExprsAttrs != nil && si.secExprsAttrs[i] != 0 {
 				attr |= datastore.IkAttributes(si.secExprsAttrs[i])
 			}
@@ -2153,6 +2154,31 @@ func (si *secondaryIndex6) DefnStorageStatistics(requestid string) (
 // private functions for secondaryIndex
 //-------------------------------------
 
+func encryptBackfill(conn *datastore.IndexConnection, encrypt bool) (bool, string, []byte, string) {
+
+	// ENCRYPT_TODO: Use query function when changes are merged.
+	//ekeyid, ekey, cipher, err := conn.EncryptionKey()
+	//encryptFile := false
+	//if len(keyId) > 0 && len(key) == 32 && err == nil && cipher == "AES-256-GCM" {
+	//	encryptFile = true
+	//}
+	// Use static key until then if queryport.encryption.enable_test is set
+
+	encryptFile := false
+	ekeyid := ""
+	ekey := []byte("")
+	cipher := ""
+
+	if encrypt {
+		encryptFile = true
+		ekeyid = "abc123"
+		ekey = []byte("m4n8xv0gZ9Xv2Qq7V9cP0F1lY0mRr8y3")
+		cipher = "AES-256-GCM"
+	}
+
+	return encryptFile, ekeyid, ekey, cipher
+}
+
 func makeRequestBroker(
 	requestId string,
 	si *secondaryIndex,
@@ -2168,8 +2194,10 @@ func makeRequestBroker(
 
 	broker.SetDataEncodingFormat(dataEncFmt)
 
+	shouldEncrypt, ekeyid, ekey, cipher := encryptBackfill(conn, client.Settings().EncryptBackfill())
+
 	factory := func(id qclient.ResponseHandlerId, instId uint64, partitions []c.PartitionId) qclient.ResponseHandler {
-		return makeResponsehandler(id, requestId, si, client, conn, broker, config, waitGroup, backfillSync, instId, partitions)
+		return makeResponsehandler(id, requestId, si, client, conn, broker, config, waitGroup, backfillSync, instId, partitions, shouldEncrypt, ekeyid, ekey, cipher)
 	}
 
 	sender := func(pkey []byte, value []value.Value, skey c.ScanResultKey, tmpbuf *[]byte) (bool, *[]byte) {
@@ -2191,6 +2219,17 @@ func makeRequestBroker(
 	return broker
 }
 
+func newEncryptionCtx(cipher string, encryptionKeyId string, getKeyById func([]byte) []byte) (gocbcrypto.EncryptionContext, error) {
+
+	switch cipher {
+	case "AES-256-GCM":
+		ctx, err := gocbcrypto.NewAESGCM256Context([]byte(encryptionKeyId), getKeyById)
+		return ctx, err
+	default:
+		return nil, fmt.Errorf("invalid cipher:%v", cipher)
+	}
+}
+
 func makeResponsehandler(
 	id qclient.ResponseHandlerId,
 	requestId string,
@@ -2202,7 +2241,7 @@ func makeResponsehandler(
 	waitGroup *sync.WaitGroup,
 	backfillSync *int64,
 	instId uint64,
-	partitions []c.PartitionId) qclient.ResponseHandler {
+	partitions []c.PartitionId, shouldEncrypt bool, ekeyId string, ekey []byte, cipher string) qclient.ResponseHandler {
 
 	sender := conn.Sender()
 
@@ -2212,6 +2251,23 @@ func makeResponsehandler(
 	var backfillFin, backfillEntries int64
 
 	var tmpfile *os.File
+
+	// Backfill Encryption
+	// For unencrypted files, encoder and decoder writes/reads from file
+	// For encrypted files, encoder writes data to encbuf, encrypted buffer is written to file
+	//  and decrypted data is stored to decbuf which is later read by decoder.
+
+	var cfw *gocbcrypto.CryptFileWriter
+	var cfr *gocbcrypto.CryptFileReader
+	var bufSz = uint32(4096)
+	var aligned = false
+	var encbuf bytes.Buffer
+	var decbuf bytes.Buffer
+	encryptionKeyId := ekeyId
+	encryptionKey := ekey
+	getKeyById := func(keyid []byte) []byte {
+		return encryptionKey
+	}
 
 	backfillLimit := si.gsi.getTmpSpaceLimit()
 	primed, starttm, ticktm := false, time.Now(), time.Now()
@@ -2248,6 +2304,13 @@ func makeResponsehandler(
 				"%v %q finished reading from temp file for %v ...\n",
 				lprefix, requestId, name)
 
+			if cfr != nil{
+				cfr.Reset()
+			}
+			if cfw != nil{
+				cfw.Reset()
+			}
+
 			if r := recover(); r != nil {
 				l.Errorf("%v %q Error %v during temp file read", lprefix, requestId, r)
 			}
@@ -2278,6 +2341,22 @@ func makeResponsehandler(
 				return
 			}
 
+			if shouldEncrypt {
+				//Read block from file, dec/decbuf is initialized before starting backfill
+				bs, err := cfr.ReadAndDecryptBlock()
+				if err != nil {
+					if gocbcrypto.IsDecryptionError(err) {
+						err = fmt.Errorf("fatal - %w", err)
+					}
+					conn.Error(n1qlError(client, err))
+					broker.Error(err, instId, partitions)
+					return
+				}
+
+				//write decrypted block to decoder
+				decbuf.Write(bs)
+			}
+
 			if err := dec.Decode(&skeys); err != nil {
 				fmsg := "%v %q decoding from temp file %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
@@ -2293,6 +2372,12 @@ func makeResponsehandler(
 				broker.Error(err, instId, partitions)
 				return
 			}
+
+			// After reading keys, buffer can be reset so that newer data can be read
+			if shouldEncrypt {
+				decbuf.Reset()
+			}
+
 			l.Tracef("%v temp file read %v entries\n", lprefix, skeys.GetLength())
 			if primed == false {
 				si.gsi.primedur.Add(int64(time.Since(starttm)))
@@ -2399,11 +2484,52 @@ func makeResponsehandler(
 				return false
 
 			} else {
-				fmsg := "%v %v new temp file ... %v\n"
-				l.Infof(fmsg, lprefix, requestId, name)
+				fmsg := "%v %v new temp file isEncrypted:%v ... %v\n"
+				l.Infof(fmsg, lprefix, requestId, shouldEncrypt, name)
 				broker.AddBackfill(tmpfile)
 				// encoder
-				enc = gob.NewEncoder(tmpfile)
+				if shouldEncrypt {
+					enc = gob.NewEncoder(&encbuf)
+					ctx, err := newEncryptionCtx(cipher, encryptionKeyId, getKeyById)
+					if err != nil {
+						fmsg := "%v newEncryptionCtx err:%v"
+						err := fmt.Errorf(fmsg, requestId, err)
+						conn.Error(n1qlError(client, err))
+						broker.Error(err, instId, partitions)
+						return false
+					}
+					cfw, err = gocbcrypto.NewCryptFileWriter(tmpfile, ctx, bufSz, aligned, nil)
+					if err != nil {
+						fmsg := "%v NewCryptFileWriter err:%v"
+						err := fmt.Errorf(fmsg, requestId, err)
+						conn.Error(n1qlError(client, err))
+						broker.Error(err, instId, partitions)
+						return false
+					}
+
+					_, err = cfw.WriteHeader()
+					if err != nil {
+						fmsg := "%v CryptFileWriter writeHeader err:%v"
+						err := fmt.Errorf(fmsg, requestId, err)
+						conn.Error(n1qlError(client, err))
+						broker.Error(err, instId, partitions)
+						return false
+					}
+
+					// WriteHeader call doesn't persist the header to file thus explicit flush
+					err = cfw.Flush()
+					if err != nil {
+						fmsg := "%v CryptFileWriter flush err:%v"
+						err := fmt.Errorf(fmsg, requestId, err)
+						conn.Error(n1qlError(client, err))
+						broker.Error(err, instId, partitions)
+						return false
+					}
+
+				} else {
+					enc = gob.NewEncoder(tmpfile)
+				}
+
 				readfd, err = iowrap.Os_OpenFile(name, os.O_RDONLY, 0666)
 				if err != nil {
 					fmsg := "%v %v reading temp file %v: %v\n"
@@ -2413,7 +2539,21 @@ func makeResponsehandler(
 					return false
 				}
 				// decoder
-				dec = gob.NewDecoder(readfd)
+				if shouldEncrypt {
+					// Read and decrypt temp file and load result to decbuf and reset the buffer
+					cfr, err = gocbcrypto.NewCryptFileReader(readfd, getKeyById, bufSz, aligned, nil)
+					if err != nil {
+						fmsg := "%v crypt file reader err:%v"
+						err := fmt.Errorf(fmsg, requestId, err)
+						conn.Error(n1qlError(client, err))
+						broker.Error(err, instId, partitions)
+						return false
+					}
+					dec = gob.NewDecoder(&decbuf)
+				} else {
+					dec = gob.NewDecoder(readfd)
+				}
+
 				waitGroup.Add(1)
 				go backfill()
 			}
@@ -2444,6 +2584,22 @@ func makeResponsehandler(
 				broker.Error(err, instId, partitions)
 				return false
 			}
+
+			if shouldEncrypt {
+				// Encrypt and reset buffer
+				// Write it to the file
+				_, err = cfw.EncryptAndWriteBlock(encbuf.Bytes())
+				if err != nil {
+					fmsg := "%v %q EncryptAndWriteBlock err:%v"
+					l.Errorf(fmsg, lprefix, requestId, err)
+					conn.Error(n1qlError(client, err))
+					broker.Error(err, instId, partitions)
+					return false
+				}
+
+				encbuf.Reset()
+			}
+
 			atomic.AddInt64(&backfillEntries, 1)
 
 		} else {

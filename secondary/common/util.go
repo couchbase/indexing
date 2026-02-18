@@ -2176,6 +2176,17 @@ func GetMinPartnsPerShardFromMap(memQuota uint64, minPartnsPerShardMap map[uint6
 	return result
 }
 
+func FindTotalVectorsInSparse(vecs []float32) int {
+	totalVecs := 0
+	for idx := 0; idx < len(vecs); {
+		size := int(vecs[idx])
+		nextIdx := idx + 2*size + 1
+		totalVecs += 1
+		idx = nextIdx
+	}
+	return totalVecs
+}
+
 // RefreshSecurityContextOnTopology refreshes the security context on the topology updates
 func RefreshSecurityContextOnTopology(clusterAddr string) error {
 
@@ -2338,7 +2349,6 @@ func GetStorageDirs(cfg Config, se StorageEngine) (string, string) {
 	return baseDir, engineDir
 }
 
-
 func ToString(v interface{}) (string, error) {
 	switch val := v.(type) {
 	case string:
@@ -2404,4 +2414,3 @@ func ToFloat64(v interface{}) (float64, error) {
 		return 0, fmt.Errorf("unsupported type %T for float64", v)
 	}
 }
-
