@@ -146,7 +146,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	if storageMode == common.StorageMode(common.FORESTDB) {
 		mgr.quota = mgr.calcBufCacheFromMemQuota(config)
 	} else {
-		mgr.quota = 1 * 1024 * 1024 //1 MB
+		mgr.quota = max(1*1024*1024, config["metadata.memory_quota"].Uint64())
 	}
 
 	// Initialize the event manager.  This is non-blocking.  The event manager can be

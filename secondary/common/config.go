@@ -3950,6 +3950,13 @@ var SystemConfig = Config{
 		false,   // mutable
 		false,   // case-insensitive
 	},
+	"indexer.metadata.memory_quota": ConfigValue{
+		uint64(4 * 1024 * 1024),
+		"Total buffer cache memory quota for the metadata stores.",
+		uint64(4 * 1024 * 1024), // default - 4kb
+		false,                   // mutable
+		false,                   // case-insensitive
+	},
 	"indexer.memcachedTimeout": ConfigValue{
 		120, // In Seconds
 		"Timeout for indexer to memcached communication (In Seconds)",
