@@ -1088,7 +1088,13 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 		}
 		s.info.IndexStats = snapshotStats
 
-		go func() {
+		// Capture mainstore reference before launching goroutine to ensure both
+		// PreparePersistence and StoreToDisk operate on the same MemDB instance.
+		// This prevents WaitGroup accounting split if rollback swaps mdb.mainstore
+		// while persistence goroutine is blocked on semaphore (MB-70528).
+		store := mdb.mainstore
+
+		go func(store *memdb.MemDB) {
 			defer atomic.StoreInt32(&mdb.isPersistorActive, 0)
 
 			t0 := time.Now()
@@ -1098,7 +1104,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 			iowrap.Os_RemoveAll(tmpdir)
 
 			// Prepare for persistence.
-			if err := mdb.mainstore.PreparePersistence(tmpdir, s.info.MainSnap); err != nil {
+			if err := store.PreparePersistence(tmpdir, s.info.MainSnap); err != nil {
 				logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v failed to"+
 					" prepare persistence for create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, dir, err)
 
@@ -1127,6 +1133,13 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 				concurrency = int(math.Ceil(float64(maxThreads) * float64(indexCount) / float64(total)))
 			}
 
+			// Clamp concurrency to minimum 1. GetCommittedCount() can return 0 if rollback
+			// resets committedCount while this goroutine is running, which would cause
+			// Visitor to launch zero workers and silently skip all data persistence.
+			if concurrency < 1 {
+				concurrency = 1
+			}
+
 			moiWriterSemaphoreLk.RLock()
 			if concurrency > moiWritersAllowed {
 				// semaphore capacity has changed, due to change in maxThreads. If it had increased and there was enough
@@ -1148,7 +1161,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 				moiWriterSemaphoreLk.RUnlock()
 			}()
 
-			err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
+			err := store.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
 			if err == nil {
 				// Add details to snapshot info
 				s.info.Version = SNAPSHOT_META_VERSION_MOI_1
@@ -1187,7 +1200,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 				// we can cleanup the snapshots in this iteration.
 				mdb.cleanupOldSnapshotFiles(mdb.maxRollbacks, s.info, logOncePerBucket)
 			}
-		}()
+		}(store)
 	} else {
 		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v Skipping ondisk"+
 			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId, mdb.idxPartnId)
