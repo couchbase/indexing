@@ -14410,6 +14410,14 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					minCentroids = max(1<<vm.Quantizer.Nbits, idxInst.Nlist[partnId])
 				}
 
+				// When user specifies train_list, use it as the effective minimum if it's larger
+				// than minCentroids. This ensures retry mechanism works for both centroid and
+				// train_list requirements.
+				effectiveMinVectors := minCentroids
+				if defnCodebook == nil && vm.TrainList > minCentroids {
+					effectiveMinVectors = vm.TrainList
+				}
+
 				// Get vectors for this instance (will be nil/empty for already trained instances)
 				vectorSamples := vectorsByInstId[instId]
 				vectorFloatCount := len(vectorSamples)
@@ -14418,9 +14426,13 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				// Skip vector count validation only if we actually have a codebook to use.
 				// Note: We check defnCodebook, not skipSamplingInstMap, because if SerializeCodebook
 				// fails after instHasTrainedCodebook returned true, we need to surface the error.
-				if defnCodebook == nil && (vectorCount < minCentroids) {
+				if defnCodebook == nil && (vectorCount < effectiveMinVectors) {
 					errStr := c.ERR_TRAINING
-					if !idxInst.Defn.HasSparseVector() {
+					if vm.TrainList > minCentroids {
+						errStr += fmt.Sprintf("Number of qualifying or valid vectors %v are less "+
+							"than the required train_list: %v. Retry will happen in background.",
+							vectorCount, vm.TrainList)
+					} else if !idxInst.Defn.HasSparseVector() {
 						errStr += fmt.Sprintf("Number of qualifying or valid vectors / dimension "+
 							"= %v/%v = %v are less than the number of %v centroids. Retry will "+
 							"happen in background.",
@@ -14435,7 +14447,10 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					if vectorFloatCount == 0 || vectorCount == 0 {
 						retryTrainingInstRatioMap[instId] = 1
 					} else {
-						retryTrainingInstRatioMap[instId] = int(math.Ceil(float64(minCentroids) / float64(vectorCount) * float64(maxSampleSize) / float64(initialSampleSize)))
+						retryTrainingInstRatioMap[instId] = int(math.Ceil(
+							float64(effectiveMinVectors) / float64(vectorCount) *
+								float64(maxSampleSize) / float64(initialSampleSize),
+						))
 					}
 
 					logging.Errorf("Indexer::initiateTraining instId: %v, partnId: %v err: %v", instId, partnId, errStr)
@@ -14457,15 +14472,6 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					if retryTrainingInstRatioMap != nil || len(retryTrainingInstRatioMap) > 0 {
 						delete(retryTrainingInstRatioMap, instId)
 					}
-				}
-
-				// Qualifying vectors are less than user provided TrainList, change idx state to err.
-				// Skip this check for instances which have trained codebook from defn
-				if defnCodebook == nil && vectorCount < vm.TrainList {
-					errStr := c.ERR_TRAINING + fmt.Sprintf("The number train_list: %v in keyspace: %v "+
-						"is greater than the number of qualifying documents: %v", vm.TrainList, keyspaceId, instVectorsMap[instId])
-					updateErrMap(instId, partnId, errors.New(errStr))
-					continue
 				}
 
 				if slice.IsTrained() {
