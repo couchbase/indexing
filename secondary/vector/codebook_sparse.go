@@ -15,11 +15,21 @@ import (
 	"hash/crc32"
 	"math"
 
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/vector/codebook"
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
 const DEFAULT_SPARSEJL_DIM = 128
+
+// getSparseNormalizationEnabled returns whether L2 normalization is enabled
+// for sparse vector training and query operations.
+// [SPARSE_TODO] this config is currently being added for perf testing only.
+// If required for production, needs to be integrated properly in codebook
+// lifecycle.
+func getSparseNormalizationEnabled() bool {
+	return common.SystemConfig["indexer.vector.sparse.enableNormalization"].Bool()
+}
 
 type codebookSparse struct {
 	dim   int //SparseJL reduced dimension
@@ -73,7 +83,7 @@ func NewCodebookSparse(dim, nlist int) (c.SparseCodebook, error) {
 // Clustering is done using spherical k-means. Faiss automatically
 // uses spherical k-means when the metric is inner product
 // (see faiss/IndexIVF.cpp). Faiss normalizes centroids but not input
-// vectors, so we normalize them here before training.
+// vectors, so we normalize them here before training if enabled.
 func (cb *codebookSparse) Train(vecs []float32) error {
 
 	c.AcquireTraining()
@@ -84,12 +94,16 @@ func (cb *codebookSparse) Train(vecs []float32) error {
 	}
 
 	nvecs := len(vecs) / cb.dim
+	trainVecs := vecs
 
-	// Normalize input vectors for spherical k-means.
+	// Normalize input vectors for spherical k-means if enabled.
 	// Faiss only normalizes centroids, not input vectors.
-	normalizedVecs := make([]float32, len(vecs))
-	copy(normalizedVecs, vecs)
-	faiss.RenormL2(cb.dim, nvecs, normalizedVecs)
+	if getSparseNormalizationEnabled() {
+		normalizedVecs := make([]float32, len(vecs))
+		copy(normalizedVecs, vecs)
+		faiss.RenormL2(cb.dim, nvecs, normalizedVecs)
+		trainVecs = normalizedVecs
+	}
 
 	// If number of centroids is equal to the number of input
 	// vectors for training, then clustering is not required.
@@ -102,13 +116,13 @@ func (cb *codebookSparse) Train(vecs []float32) error {
 			return fmt.Errorf("failed to get quantizer: %w", err)
 		}
 
-		err = quantizer.Add(normalizedVecs)
+		err = quantizer.Add(trainVecs)
 		if err != nil {
 			return fmt.Errorf("failed to add centroids to quantizer: %w", err)
 		}
 	}
 
-	err := cb.index.Train(normalizedVecs)
+	err := cb.index.Train(trainVecs)
 	if err == nil {
 		cb.isTrained = true
 	} else {
@@ -153,11 +167,16 @@ func (cb *codebookSparse) FindNearestCentroids(vec []float32, k int64) ([]int64,
 		return nil, fmt.Errorf("failed to get quantizer: %w", err)
 	}
 
+	queryVec := vec
+
 	// Normalize the input vector to match the normalized centroids
-	// from spherical k-means training.
-	normalizedVec := make([]float32, len(vec))
-	copy(normalizedVec, vec)
-	faiss.RenormL2(cb.dim, 1, normalizedVec)
+	// from spherical k-means training if enabled.
+	if getSparseNormalizationEnabled() {
+		normalizedVec := make([]float32, len(vec))
+		copy(normalizedVec, vec)
+		faiss.RenormL2(cb.dim, 1, normalizedVec)
+		queryVec = normalizedVec
+	}
 
 	// If k is greater than default (efSearch=16), then set it
 	// to be 2x more than k. This ensures that the required number of
@@ -172,7 +191,7 @@ func (cb *codebookSparse) FindNearestCentroids(vec []float32, k int64) ([]int64,
 		ps.Delete()
 	}
 
-	labels, err := quantizer.Assign(normalizedVec, k)
+	labels, err := quantizer.Assign(queryVec, k)
 	if err != nil {
 		return nil, fmt.Errorf("failed to assign vector to centroids: %w", err)
 	}

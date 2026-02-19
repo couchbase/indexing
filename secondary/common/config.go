@@ -4931,6 +4931,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.vector.sparse.enableNormalization": ConfigValue{
+		true,
+		"Enable L2 normalization for sparse vector training and query in spherical k-means clustering",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.encryption.enable_test": ConfigValue{
 		Value:         false,
 		Help:          "Enable testing by using encryption test REST apis",
