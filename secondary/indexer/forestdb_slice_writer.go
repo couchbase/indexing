@@ -1672,9 +1672,9 @@ func (mdb *fdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 	doneCh <- nil
 }
 
-func (mdb *fdbSlice) GetKeyIdList() []string {
+func (mdb *fdbSlice) GetKeyIdList() ([][]byte, error) {
 	// no-op
-	return []string{}
+	return [][]byte{}, nil
 }
 
 func (fdb *fdbSlice) updateSnapshotsMeta(infos []SnapshotInfo) error {

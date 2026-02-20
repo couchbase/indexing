@@ -896,7 +896,7 @@ func (s *plasmaSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, stri
 			break
 		}
 
-		retry+=1
+		retry += 1
 		time.Sleep(5 * time.Second)
 	}
 
@@ -927,9 +927,9 @@ func (mdb *plasmaSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 	doneCh <- nil
 }
 
-func (mdb *plasmaSlice) GetKeyIdList() []string {
+func (mdb *plasmaSlice) GetKeyIdList() ([][]byte, error) {
 	// ENCRYPT_TODO: Update after storage changes
-	return []string{}
+	return [][]byte{}, nil
 }
 
 type plasmaReaderCtx struct {

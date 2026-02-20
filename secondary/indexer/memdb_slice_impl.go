@@ -1965,9 +1965,9 @@ func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 	doneCh <- nil
 }
 
-func (mdb *memdbSlice) GetKeyIdList() []string {
+func (mdb *memdbSlice) GetKeyIdList() ([][]byte, error) {
 	// ENCRYPT_TODO: Update after storage changes
-	return []string{}
+	return [][]byte{}, nil
 }
 
 func tryDeletememdbSlice(mdb *memdbSlice) {

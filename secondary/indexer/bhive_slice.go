@@ -2962,9 +2962,9 @@ func (mdb *bhiveSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 	doneCh <- nil
 }
 
-func (mdb *bhiveSlice) GetKeyIdList() []string {
+func (mdb *bhiveSlice) GetKeyIdList() ([][]byte, error) {
 	// ENCRYPT_TODO: Update after storage changes
-	return []string{}
+	return [][]byte{}, nil
 }
 
 func tryDeleteBhiveSlice(mdb *bhiveSlice) {
