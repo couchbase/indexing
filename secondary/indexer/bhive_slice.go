@@ -1502,7 +1502,10 @@ func (mdb *bhiveSlice) InitCodebookFromSerialized(content []byte) error {
 	}
 
 	mdb.codebook = codebook
-	mdb.codeSize, err = mdb.codebook.CodeSize()
+	mdb.codeSize = 0
+	if !mdb.idxDefn.HasSparseVector() {
+		mdb.codeSize, err = mdb.codebook.CodeSize()
+	}
 	if err != nil {
 		mdb.ResetCodebook()
 		return err
@@ -1548,7 +1551,10 @@ func (mdb *bhiveSlice) Train(vecs []float32) error {
 		return err
 	}
 
-	mdb.codeSize, err = mdb.codebook.CodeSize()
+	mdb.codeSize = 0
+	if !mdb.idxDefn.HasSparseVector() {
+		mdb.codeSize, err = mdb.codebook.CodeSize()
+	}
 	if err != nil {
 		mdb.codeSize = 0
 		return err
@@ -1680,7 +1686,10 @@ func (mdb *bhiveSlice) recoverCodebook(codebookPath string) error {
 	}
 
 	mdb.codebook = codebook
-	mdb.codeSize, err = mdb.codebook.CodeSize()
+	mdb.codeSize = 0
+	if !mdb.idxDefn.HasSparseVector() {
+		mdb.codeSize, err = mdb.codebook.CodeSize()
+	}
 	if err != nil {
 		mdb.ResetCodebook() // Ignore error for now
 		return err
