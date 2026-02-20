@@ -131,13 +131,14 @@ type ScanRequest struct {
 	User             string // For read metering
 	SkipReadMetering bool
 
-	nprobes                  int
-	topNScan                 int
-	vectorPos                int
-	isVectorScan             bool
-	isBhiveScan              bool
-	queryVector              []float32
-	sparseQueryVector        *common.SparseVector
+	nprobes           int
+	topNScan          int
+	vectorPos         int
+	isVectorScan      bool
+	isBhiveScan       bool
+	queryVector       []float32
+	sparseQueryVector common.ConciseSparseVector // Concise format: [N, idx1, ..., idxN, val1, ..., valN]
+
 	codebookMap              map[common.PartitionId]codebook.Codebook
 	centroidMap              map[common.PartitionId][]int64
 	protoScans               []*protobuf.Scan
@@ -561,17 +562,9 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			}
 			// Populate query vector in req
 			if r.IsSparseVectorIndexScan() {
-				nFloat32Bits := ivec.GetQueryVector()[0]
-				n := math.Float32bits(nFloat32Bits)
-				sqv := &common.SparseVector{
-					Indices: make([]uint32, n),
-					Values:  make([]float32, n),
-				}
-				for i := 0; i < int(n); i++ {
-					sqv.Indices[i] = uint32(math.Float32bits(ivec.GetQueryVector()[i+1]))
-					sqv.Values[i] = ivec.GetQueryVector()[i+1+int(n)]
-				}
-				r.sparseQueryVector = sqv
+				// Query vector is already in concise format: [N, index1, index2, ..., value1, value2, ...]
+				qvec := ivec.GetQueryVector()
+				r.sparseQueryVector = append(r.sparseQueryVector, qvec...)
 			} else {
 				qvec := ivec.GetQueryVector()
 				r.queryVector = append(r.queryVector, qvec...)
@@ -779,6 +772,40 @@ func (r *ScanRequest) getNearestCentroids() error {
 		return centroids[:index]
 	}
 
+	// For sparse vectors, convert the query vector to SparseJL format
+	// before finding nearest centroids
+	if r.IsSparseVectorIndexScan() && len(r.sparseQueryVector) > 0 {
+		// Get a sparse codebook to perform the projection. All partitions use
+		// the same JL dimension, so any entry from the map is sufficient.
+		var sparseCb codebook.SparseCodebook
+		for _, cb := range r.codebookMap {
+			sparseCb = cb.(codebook.SparseCodebook)
+			break
+		}
+		if sparseCb == nil {
+			return fmt.Errorf("no sparse codebook available for sparse vector projection")
+		}
+		sparseJLDim := sparseCb.Dimension()
+		jlVec := make([]float32, sparseJLDim)
+		if err := sparseCb.Concise2SparseJL([]float32(r.sparseQueryVector), jlVec); err != nil {
+			return fmt.Errorf("error projecting sparse query vector to SparseJL: %v", err)
+		}
+
+		for pid, cb := range r.codebookMap {
+			t0 := time.Now()
+			centroids, err := cb.FindNearestCentroids(jlVec, int64(r.nprobes))
+			if err != nil {
+				return err
+			}
+			if r.Stats != nil {
+				r.Stats.Timings.vtAssign.Put(time.Now().Sub(t0))
+			}
+			centroids = pruneInvalidCentroids(centroids)
+			r.centroidMap[pid] = centroids
+		}
+		return nil
+	}
+
 	for pid, cb := range r.codebookMap {
 		t0 := time.Now()
 		centroids, err := cb.FindNearestCentroids(r.queryVector, int64(r.nprobes))
@@ -841,12 +868,21 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 
 	if r.isBhiveScan {
 		scansForPartns := make(map[common.PartitionId]map[int64][]Scan)
+
+		// For sparse vectors, use the SparseJL query vector for scan.High
+		var qvBytes []byte
+		if r.IsSparseVectorIndexScan() && r.sparseQueryVector != nil {
+			qvBytes = Float32ToByteSlice(r.sparseQueryVector)
+		} else {
+			qvBytes = Float32ToByteSlice(r.queryVector)
+		}
+
 		for partnId, centroidIdList := range r.centroidMap {
 			scansForCentroids := make(map[int64][]Scan)
 			for _, cid := range centroidIdList {
 				bcid := NewBhiveCentroidId(uint64(cid))
 
-				qv := bhiveCentroidId(Float32ToByteSlice(r.queryVector))
+				qv := bhiveCentroidId(qvBytes)
 				scan := Scan{Low: bcid, High: qv, Incl: Both, ScanType: LookupReq}
 				scansForCentroids[cid] = append(scansForCentroids[cid], scan)
 			}
