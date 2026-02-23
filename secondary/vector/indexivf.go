@@ -50,6 +50,23 @@ func NewIndexIVFSQ_HNSW(dim, nlist, metric int, sqRange common.ScalarQuantizerRa
 
 }
 
+func NewIndexIVFRaBitQ_HNSW(dim, nlist, nbits, metric int) (*faiss.IndexImpl, error) {
+	var description string
+
+	if nbits <= 1 {
+		description = fmt.Sprintf("IVF%v_HNSW,RaBitQ", nlist)
+	} else {
+		description = fmt.Sprintf("IVF%v_HNSW,RaBitQ%v", nlist, nbits)
+	}
+
+	index, err := faiss.IndexFactory(dim, description, metric)
+	if err != nil {
+		return nil, fmt.Errorf("NewIndexIVFRaBitQ_HNSW: %w", err)
+	}
+
+	return index, nil
+}
+
 func NewIndexIVF_HNSW(dim, nlist, metric int) (*faiss.IndexImpl, error) {
 
 	description := fmt.Sprintf("IVF%v_HNSW,Flat", nlist)
