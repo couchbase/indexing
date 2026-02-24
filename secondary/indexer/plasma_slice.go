@@ -5827,6 +5827,17 @@ func resizeQuantizedCodeBuf(quantizedCodeBuf []byte, numVecs, codeSize int, doRe
 	return quantizedCodeBuf
 }
 
+func resizeSparseJLBuf(sparseJLBuf []float32, dimension int, doResize bool) []float32 {
+	if doResize && dimension > cap(sparseJLBuf) {
+		sparseJLBuf = make([]float32, dimension)
+	} else {
+		// Concise2SparseJL expects the size to be exact to the dimension
+		sparseJLBuf = sparseJLBuf[:dimension]
+		clear(sparseJLBuf) // Concise2SparseJL expects zero values
+	}
+	return sparseJLBuf
+}
+
 func (mdb *plasmaSlice) recoverCodebook(codebookPath string) error {
 	// Construct codebook path
 	newFilePath := filepath.Join(mdb.storageDir, codebookPath)

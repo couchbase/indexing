@@ -147,6 +147,8 @@ type bhiveSlice struct {
 
 	// buffer
 	quantizedCodeBuf [][]byte // For vector index, used for quantized code computation of vectors
+	// For Sparse vector index, used for sparseJL representation of concise vector
+	sparseJLBuf [][]float32
 
 	//
 	// vector index related metadata
@@ -914,6 +916,9 @@ func (slice *bhiveSlice) setupWriters() {
 
 	// initialize buffer
 	slice.quantizedCodeBuf = make([][]byte, 0, slice.maxNumWriters)
+	if slice.idxDefn.HasSparseVector() {
+		slice.sparseJLBuf = make([][]float32, 0, slice.maxNumWriters)
+	}
 
 	// initialize comand handler
 	slice.cmdCh = make([]chan *indexMutation, 0, slice.maxNumWriters)
@@ -939,6 +944,13 @@ func (slice *bhiveSlice) initWriters(numWriters int) {
 	for i := curNumWriters; i < numWriters; i++ {
 		if slice.idxDefn.IsVectorIndex {
 			slice.quantizedCodeBuf[i] = make([]byte, 0) // After training is completed, the codebuf will be resized
+		}
+	}
+	if slice.idxDefn.IsVectorIndex && slice.idxDefn.HasSparseVector() {
+		slice.sparseJLBuf = slice.sparseJLBuf[:numWriters]
+		for i := curNumWriters; i < numWriters; i++ {
+			// After training is completed, the sparse JL vector buffer will be resized
+			slice.sparseJLBuf[i] = make([]float32, 0)
 		}
 	}
 
@@ -1515,6 +1527,9 @@ func (mdb *bhiveSlice) InitCodebookFromSerialized(content []byte) error {
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
+	if mdb.idxDefn.HasSparseVector() {
+		mdb.initSparseJLBuf()
+	}
 	return nil
 }
 
@@ -1564,6 +1579,9 @@ func (mdb *bhiveSlice) Train(vecs []float32) error {
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
+	if mdb.idxDefn.HasSparseVector() {
+		mdb.initSparseJLBuf()
+	}
 	return nil
 }
 
@@ -1591,6 +1609,13 @@ func (mdb *bhiveSlice) initQuantizedCodeBuf() {
 	numWriters := mdb.numWriters
 	for i := 0; i < numWriters; i++ {
 		mdb.quantizedCodeBuf[i] = resizeQuantizedCodeBuf(mdb.quantizedCodeBuf[i], 1, mdb.codeSize, true)
+	}
+}
+
+func (mdb *bhiveSlice) initSparseJLBuf() {
+	numWriters := mdb.numWriters
+	for i := 0; i < numWriters; i++ {
+		mdb.sparseJLBuf[i] = resizeSparseJLBuf(mdb.sparseJLBuf[i], mdb.codebook.Dimension(), true)
 	}
 }
 
@@ -1699,6 +1724,9 @@ func (mdb *bhiveSlice) recoverCodebook(codebookPath string) error {
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
+	if mdb.idxDefn.HasSparseVector() {
+		mdb.initSparseJLBuf()
+	}
 	return nil
 }
 
@@ -2435,6 +2463,9 @@ func (mdb *bhiveSlice) RollbackToZero(initialBuild bool) error {
 	// During rollback to zero, initialise the quantizedCodeBuf. Rest of the metadata is still valid
 	if mdb.idxDefn.IsVectorIndex {
 		mdb.initQuantizedCodeBuf()
+		if mdb.idxDefn.HasSparseVector() {
+			mdb.initSparseJLBuf()
+		}
 	}
 
 	return nil
