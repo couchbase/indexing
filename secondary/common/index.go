@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/couchbase/indexing/secondary/logging"
@@ -1195,9 +1194,9 @@ type SparseVector struct {
 }
 
 // ConciseSparseVector is a sparse vector in concise float32 format:
-// [math.Float32frombits(uint32(N)), math.Float32frombits(uint32(idx1)), ..., math.Float32frombits(uint32(idxN)), val1, ..., valN]
-// N and indices are stored via math.Float32frombits(uint32(x)) (bit-reinterpretation) to
-// preserve exact integer values. Values are stored as plain float32.
+// [float32(N), float32(idx1), ..., float32(idxN), val1, ..., valN]
+// N and indices are stored as plain float32 casts of their integer values.
+// Values are stored as plain float32.
 type ConciseSparseVector []float32
 
 // NNZ returns the number of non-zero elements in the sparse vector.
@@ -1205,7 +1204,7 @@ func (v ConciseSparseVector) NNZ() int {
 	if len(v) == 0 {
 		return 0
 	}
-	return int(math.Float32bits(v[0]))
+	return int(v[0])
 }
 
 // Size returns the number of float32 elements occupied by this sparse vector
@@ -1226,7 +1225,7 @@ func (v ConciseSparseVector) Indices() []uint32 {
 	}
 	indices := make([]uint32, nnz)
 	for i := 0; i < nnz; i++ {
-		indices[i] = math.Float32bits(v[1+i])
+		indices[i] = uint32(v[1+i])
 	}
 	return indices
 }
