@@ -2211,7 +2211,7 @@ func makeRequestBroker(
 	}
 
 	isScanReportingEnabled := si.gsi.gsiClient.Settings().EnableScanReporting()
-	broker.InitScanReport(requestId, common.IndexDefnId(si.defnID), isScanReportingEnabled)
+	broker.SetScanReport(requestId, common.IndexDefnId(si.defnID), isScanReportingEnabled)
 	broker.SetResponseHandlerFactory(factory)
 	broker.SetResponseSender(sender)
 	broker.SetBackfillWaiter(backfillWaiter)

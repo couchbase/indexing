@@ -15,11 +15,21 @@ import (
 	"hash/crc32"
 	"math"
 
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/vector/codebook"
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
 const DEFAULT_SPARSEJL_DIM = 128
+
+// getSparseNormalizationEnabled returns whether L2 normalization is enabled
+// for sparse vector training and query operations.
+// [SPARSE_TODO] this config is currently being added for perf testing only.
+// If required for production, needs to be integrated properly in codebook
+// lifecycle.
+func getSparseNormalizationEnabled() bool {
+	return common.SystemConfig["indexer.vector.sparse.enableNormalization"].Bool()
+}
 
 type codebookSparse struct {
 	dim   int //SparseJL reduced dimension
@@ -70,7 +80,10 @@ func NewCodebookSparse(dim, nlist int) (c.SparseCodebook, error) {
 
 // Train the codebook using input vectors.
 // For Sparse, input vector is expected in SparseJL format.
-// Clustering is done using spherical k-means.
+// Clustering is done using spherical k-means. Faiss automatically
+// uses spherical k-means when the metric is inner product
+// (see faiss/IndexIVF.cpp). Faiss normalizes centroids but not input
+// vectors, so we normalize them here before training if enabled.
 func (cb *codebookSparse) Train(vecs []float32) error {
 
 	c.AcquireTraining()
@@ -80,28 +93,40 @@ func (cb *codebookSparse) Train(vecs []float32) error {
 		return c.ErrCodebookClosed
 	}
 
-	//If number of centroids is equal to the number of input
-	//vectors for training, then clustering is not required.
-	//Add the centroids directly to the quantizer from the list
-	//of input vectors. Faiss considers this as a valid case to
-	//skip training the quantizer. The sub-quantizer training will
-	//still happen.
 	nvecs := len(vecs) / cb.dim
+	trainVecs := vecs
+
+	// Normalize input vectors for spherical k-means if enabled.
+	// Faiss only normalizes centroids, not input vectors.
+	if getSparseNormalizationEnabled() {
+		normalizedVecs := make([]float32, len(vecs))
+		copy(normalizedVecs, vecs)
+		faiss.RenormL2(cb.dim, nvecs, normalizedVecs)
+		trainVecs = normalizedVecs
+	}
+
+	// If number of centroids is equal to the number of input
+	// vectors for training, then clustering is not required.
+	// Add the centroids directly to the quantizer from the list
+	// of input vectors. Faiss considers this as a valid case to
+	// skip training the quantizer.
 	if cb.nlist == nvecs {
 		quantizer, err := cb.index.Quantizer()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get quantizer: %w", err)
 		}
-		err = quantizer.Add(vecs)
+
+		err = quantizer.Add(trainVecs)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to add centroids to quantizer: %w", err)
 		}
 	}
 
-	//SPARSE_TODO Use spherical k-means to train the codebook.
-	err := cb.index.Train(vecs)
+	err := cb.index.Train(trainVecs)
 	if err == nil {
 		cb.isTrained = true
+	} else {
+		return fmt.Errorf("failed to train sparse codebook: %w", err)
 	}
 
 	return nil
@@ -139,25 +164,36 @@ func (cb *codebookSparse) FindNearestCentroids(vec []float32, k int64) ([]int64,
 	}
 	quantizer, err := cb.index.Quantizer()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get quantizer: %w", err)
 	}
 
-	//If k is greater than default (efSearch=16), then set it
-	//to be 2x more than k. This ensures that the required number of
-	//centroids are always returned. If efSearch is smaller,
-	//assign may not be able to find enough centroids.
+	queryVec := vec
+
+	// Normalize the input vector to match the normalized centroids
+	// from spherical k-means training if enabled.
+	if getSparseNormalizationEnabled() {
+		normalizedVec := make([]float32, len(vec))
+		copy(normalizedVec, vec)
+		faiss.RenormL2(cb.dim, 1, normalizedVec)
+		queryVec = normalizedVec
+	}
+
+	// If k is greater than default (efSearch=16), then set it
+	// to be 2x more than k. This ensures that the required number of
+	// centroids are always returned. If efSearch is smaller,
+	// assign may not be able to find enough centroids.
 	if k > faiss.DEFAULT_EF_SEARCH {
 		ps, err := faiss.NewParameterSpace()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create parameter space: %w", err)
 		}
 		ps.SetIndexParameter(quantizer, "efSearch", float64(k*2))
 		ps.Delete()
 	}
 
-	labels, err := quantizer.Assign(vec, k)
+	labels, err := quantizer.Assign(queryVec, k)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to assign vector to centroids: %w", err)
 	}
 	return labels, nil
 
@@ -174,14 +210,16 @@ func (cb *codebookSparse) ComputeDistance(qvec []float32, fvecs []float32, dist 
 	defer c.ReleaseGlobal(token)
 
 	err := faiss.InnerProductsNy(dist, qvec, fvecs, len(qvec))
-	// InnnerProduct is a similarity measure,
-	// to convert to distance measure negate it.
-	if err == nil {
-		for i := range dist {
-			dist[i] = -1 * dist[i]
-		}
+	if err != nil {
+		return fmt.Errorf("failed to compute inner products: %w", err)
 	}
-	return err
+
+	// InnerProduct is a similarity measure,
+	// to convert to distance measure negate it.
+	for i := range dist {
+		dist[i] = -1 * dist[i]
+	}
+	return nil
 }
 
 // Size returns the memory size in bytes.
@@ -235,7 +273,7 @@ func (cb *codebookSparse) Marshal() ([]byte, error) {
 
 	data, err := faiss.WriteIndexIntoBuffer(cb.index)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to write index to buffer: %w", err)
 	}
 
 	cbio.Index = data
@@ -258,7 +296,7 @@ func recoverCodebookSparse(data []byte) (c.SparseCodebook, error) {
 	cbio := new(codebookSparse_IO)
 
 	if err := json.Unmarshal(data, cbio); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal codebook data: %w", err)
 	}
 
 	if cbio.CodebookVer != CodebookVer1 {
@@ -280,7 +318,7 @@ func recoverCodebookSparse(data []byte) (c.SparseCodebook, error) {
 	var err error
 	cb.index, err = faiss.ReadIndexFromBuffer(cbio.Index, faiss.IOFlagMmap)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read index from buffer: %w", err)
 	}
 
 	return cb, nil

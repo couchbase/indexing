@@ -3553,9 +3553,14 @@ func (s *storageMgr) handleEncryptionGetInUseKeys(msg Message) {
 			for _, partnInst := range partnMap {
 				sc := partnInst.Sc
 				for _, slice := range sc.GetAllSlices() {
-					keys := slice.GetKeyIdList()
+					keys, err := slice.GetKeyIdList()
+					if err != nil {
+						logging.Warnf("StorageMgr::handleEncryptionGetInUseKeys error while GetKeyIdList instId:%v sliceId:%v err:%v", instId, slice.Id(), err)
+						continue
+					}
 					for _, key := range keys {
-						kdtKeyMap[kdt][key] = true
+						keyStr := string(key)
+						kdtKeyMap[kdt][keyStr] = true
 					}
 				}
 			}

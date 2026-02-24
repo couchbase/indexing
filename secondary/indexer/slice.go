@@ -76,7 +76,7 @@ type Slice interface {
 
 	SetCurrentEncryptionKey([]byte, []byte, string) error
 	DropKeys([][]byte, chan error)
-	GetKeyIdList() []string
+	GetKeyIdList() ([][]byte, error)
 }
 
 type SliceEncryptionCallbacks struct {
