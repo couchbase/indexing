@@ -77,7 +77,10 @@ func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (cb codebook.Code
 			vectorMeta.Dimension, vectorMeta.Quantizer.SQRange, nlist, metric, useCosine)
 
 	case common.NO_QUANTIZATION_SPARSE:
-		cb, err = NewCodebookSparse(vectorMeta.Dimension, nlist)
+		// TODO SPARSE: For sparse codebook, change the hard coded dimension to be read from
+		// VectorMetadata. This will require introduction of a new parameter in VectorMetadata
+		// for sparseJL dimension during DDL
+		cb, err = NewCodebookSparse(DEFAULT_SPARSEJL_DIM, nlist)
 		if err != nil {
 			return nil, err
 		}
