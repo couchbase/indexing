@@ -215,3 +215,152 @@ func decodeCollateJSON(bs []byte) string {
 	out, _ := codec.Decode(bs, make([]byte, 0, 10000))
 	return string(out)
 }
+
+func TestSortSparseByIndices(t *testing.T) {
+	tests := []struct {
+		name            string
+		indices         []uint32
+		values          []float32
+		expectedIndices []uint32
+		expectedValues  []float32
+	}{
+		{
+			name:            "already sorted",
+			indices:         []uint32{1, 2, 3},
+			values:          []float32{0.1, 0.2, 0.3},
+			expectedIndices: []uint32{1, 2, 3},
+			expectedValues:  []float32{0.1, 0.2, 0.3},
+		},
+		{
+			name:            "reverse order",
+			indices:         []uint32{3, 2, 1},
+			values:          []float32{0.3, 0.2, 0.1},
+			expectedIndices: []uint32{1, 2, 3},
+			expectedValues:  []float32{0.1, 0.2, 0.3},
+		},
+		{
+			name:            "random order",
+			indices:         []uint32{5, 1, 3, 2, 4},
+			values:          []float32{0.5, 0.1, 0.3, 0.2, 0.4},
+			expectedIndices: []uint32{1, 2, 3, 4, 5},
+			expectedValues:  []float32{0.1, 0.2, 0.3, 0.4, 0.5},
+		},
+		{
+			name:            "single element",
+			indices:         []uint32{42},
+			values:          []float32{1.5},
+			expectedIndices: []uint32{42},
+			expectedValues:  []float32{1.5},
+		},
+		{
+			name:            "empty slices",
+			indices:         []uint32{},
+			values:          []float32{},
+			expectedIndices: []uint32{},
+			expectedValues:  []float32{},
+		},
+		{
+			name:            "large indices",
+			indices:         []uint32{1000000, 100, 500000},
+			values:          []float32{1.0, 0.1, 0.5},
+			expectedIndices: []uint32{100, 500000, 1000000},
+			expectedValues:  []float32{0.1, 0.5, 1.0},
+		},
+		{
+			name:            "two elements swapped",
+			indices:         []uint32{200, 100},
+			values:          []float32{2.0, 1.0},
+			expectedIndices: []uint32{100, 200},
+			expectedValues:  []float32{1.0, 2.0},
+		},
+		{
+			name:            "duplicate values different indices",
+			indices:         []uint32{30, 10, 20},
+			values:          []float32{0.5, 0.5, 0.5},
+			expectedIndices: []uint32{10, 20, 30},
+			expectedValues:  []float32{0.5, 0.5, 0.5},
+		},
+		{
+			name:            "negative values",
+			indices:         []uint32{3, 1, 2},
+			values:          []float32{-0.3, -0.1, -0.2},
+			expectedIndices: []uint32{1, 2, 3},
+			expectedValues:  []float32{-0.1, -0.2, -0.3},
+		},
+		{
+			name:            "mixed positive negative values",
+			indices:         []uint32{50, 10, 30, 20, 40},
+			values:          []float32{-5.0, 1.0, -3.0, 2.0, -4.0},
+			expectedIndices: []uint32{10, 20, 30, 40, 50},
+			expectedValues:  []float32{1.0, 2.0, -3.0, -4.0, -5.0},
+		},
+		{
+			name:            "zero index included",
+			indices:         []uint32{5, 0, 3},
+			values:          []float32{0.5, 0.0, 0.3},
+			expectedIndices: []uint32{0, 3, 5},
+			expectedValues:  []float32{0.0, 0.3, 0.5},
+		},
+		{
+			name:            "max uint32 index",
+			indices:         []uint32{math.MaxUint32, 0, math.MaxUint32 - 1},
+			values:          []float32{3.0, 1.0, 2.0},
+			expectedIndices: []uint32{0, math.MaxUint32 - 1, math.MaxUint32},
+			expectedValues:  []float32{1.0, 2.0, 3.0},
+		},
+		{
+			name:            "sparse high-dimensional indices",
+			indices:         []uint32{999999, 1, 500000, 250000, 750000},
+			values:          []float32{5.0, 1.0, 3.0, 2.0, 4.0},
+			expectedIndices: []uint32{1, 250000, 500000, 750000, 999999},
+			expectedValues:  []float32{1.0, 2.0, 3.0, 4.0, 5.0},
+		},
+		{
+			name:            "special float values",
+			indices:         []uint32{3, 1, 2},
+			values:          []float32{math.MaxFloat32, -math.MaxFloat32, 0.0},
+			expectedIndices: []uint32{1, 2, 3},
+			expectedValues:  []float32{-math.MaxFloat32, 0.0, math.MaxFloat32},
+		},
+		{
+			name:            "very small float values",
+			indices:         []uint32{3, 1, 2},
+			values:          []float32{1e-38, 1e-37, 1e-39},
+			expectedIndices: []uint32{1, 2, 3},
+			expectedValues:  []float32{1e-37, 1e-39, 1e-38},
+		},
+		{
+			name:            "nearly sorted with one swap needed",
+			indices:         []uint32{1, 3, 2, 4, 5},
+			values:          []float32{0.1, 0.3, 0.2, 0.4, 0.5},
+			expectedIndices: []uint32{1, 2, 3, 4, 5},
+			expectedValues:  []float32{0.1, 0.2, 0.3, 0.4, 0.5},
+		},
+		{
+			name:            "interleaved pattern",
+			indices:         []uint32{9, 1, 7, 3, 5},
+			values:          []float32{0.9, 0.1, 0.7, 0.3, 0.5},
+			expectedIndices: []uint32{1, 3, 5, 7, 9},
+			expectedValues:  []float32{0.1, 0.3, 0.5, 0.7, 0.9},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sortSparseByIndices(tc.indices, tc.values)
+
+			if len(tc.indices) != len(tc.expectedIndices) {
+				t.Fatalf("indices length mismatch: got %d, expected %d", len(tc.indices), len(tc.expectedIndices))
+			}
+
+			for i := range tc.indices {
+				if tc.indices[i] != tc.expectedIndices[i] {
+					t.Errorf("indices[%d] = %d, expected %d", i, tc.indices[i], tc.expectedIndices[i])
+				}
+				if tc.values[i] != tc.expectedValues[i] {
+					t.Errorf("values[%d] = %f, expected %f", i, tc.values[i], tc.expectedValues[i])
+				}
+			}
+		})
+	}
+}

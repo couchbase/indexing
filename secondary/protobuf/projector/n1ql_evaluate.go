@@ -3,6 +3,7 @@ package protoProjector
 import (
 	"errors"
 	math "math"
+	"sort"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
@@ -561,7 +562,11 @@ func validateSparseVector(vector qvalue.Value) ([]float32, error) {
 		return nil, ErrInvalidSparseVector
 	}
 
-	// Merge indices and values into a sigle float32 array
+	// Sorts the indices slice in ascending order while keeping each value paired with its
+	// corresponding index (values are reordered alongside indices).
+	sortSparseByIndices(indices, values)
+
+	// Merge indices and values into a single float32 array
 	// Format will be [N, index0, index1, ....., indexN-1, value0, value1, ....., valueN-1]
 	// Store N and indices as numeric float32 values
 	n := len(indices)
@@ -632,4 +637,30 @@ func getValidVectorsFromArray(vectors qvalue.Values, dimension int, isCosine, is
 		}
 	}
 	return outVec, outVal
+}
+
+type sortByIndices struct {
+	indices []uint32
+	values  []float32
+}
+
+func (p sortByIndices) Len() int {
+	return len(p.indices)
+}
+
+func (p sortByIndices) Less(i, j int) bool {
+	return p.indices[i] < p.indices[j]
+}
+
+func (p sortByIndices) Swap(i, j int) {
+	p.indices[i], p.indices[j] = p.indices[j], p.indices[i]
+	p.values[i], p.values[j] = p.values[j], p.values[i]
+}
+
+// Sorts the indices slice in ascending order while keeping each value paired with its
+// corresponding index (values are reordered alongside indices).
+// It updates the underlying array passed to the function itself.
+func sortSparseByIndices(indices []uint32, values []float32) {
+	// TODO SPARSE : test if a fast path exists for already sorted indices to avoid overhead of sort
+	sort.Sort(sortByIndices{indices, values})
 }
