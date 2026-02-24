@@ -343,6 +343,10 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 
 	defer func() {
 		s.handleError(req.LogPrefix, w.Done(readUnits, clientVersion, req.srvrScanReport))
+		if stats != nil && req.srvrScanReport != nil {
+			stats.numScanReportsGen.Add(1)
+		}
+
 		req.Done()
 	}()
 

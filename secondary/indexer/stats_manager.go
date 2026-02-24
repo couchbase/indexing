@@ -923,6 +923,7 @@ type IndexerStats struct {
 	avgDiskBps          stats.Int64Val
 	totalDataSize       stats.Int64Val
 	totalDiskSize       stats.Int64Val
+	numScanReportsGen   stats.Int64Val
 
 	numGoroutine stats.Int64Val
 	numCgoCall   stats.Int64Val
@@ -1004,6 +1005,7 @@ func (s *IndexerStats) Init() {
 	s.avgMutationRate.Init()
 	s.avgDrainRate.Init()
 	s.avgDiskBps.Init()
+	s.numScanReportsGen.Init()
 	s.totalDataSize.Init()
 	s.totalDiskSize.Init()
 
@@ -1104,6 +1106,7 @@ func (s *IndexerStats) SetSummaryFilters() {
 	s.totalDiskSize.AddFilter(stats.SummaryFilter)
 	s.numStorageInstances.AddFilter(stats.SummaryFilter)
 	s.numIndexes.AddFilter(stats.SummaryFilter)
+	s.numScanReportsGen.AddFilter(stats.SummaryFilter)
 
 	s.storageMode.AddFilter(stats.SummaryFilter)
 	s.indexerStateHolder.AddFilter(stats.SummaryFilter)
@@ -1374,6 +1377,7 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("total_disk_size", &is.totalDiskSize)
 	statMap.AddStatValueFiltered("num_storage_instances", &is.numStorageInstances)
 	statMap.AddStatValueFiltered("num_indexes", &is.numIndexes)
+	statMap.AddStatValueFiltered("num_scan_reports_gen", &is.numScanReportsGen)
 
 	if common.IsServerlessDeployment() {
 		statMap.AddStatValueFiltered("memory_used_actual", &is.memoryUsedActual)
@@ -3711,6 +3715,9 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_drain_rate gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_drain_rate %v\n", METRICS_PREFIX, is.avgDrainRate.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_scan_reports_gen gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_scan_reports_gen %v\n", METRICS_PREFIX, is.numScanReportsGen.Value()))...)
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_disk_bps gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vavg_disk_bps %v\n", METRICS_PREFIX, is.avgDiskBps.Value()))...)
