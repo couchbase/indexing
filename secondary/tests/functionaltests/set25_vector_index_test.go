@@ -966,6 +966,44 @@ func TestVectorIndexRetry2(t *testing.T) {
 	vectorSetup(t, bucket, "", "", 40000)
 }
 
+// This test covers the case where train_list is specified and is larger than centroids.
+// Scenario: train_list(200) > centroids(8), numVectorDocs(1000) sparse in 5K total docs.
+// Initial sample of 200 docs gets ~40 vectors (safely passes centroids but fails train_list).
+// Before the fix: terminal error when vectorCount >= centroids but < train_list (no retry).
+// After the fix: retry mechanism samples more docs (~1000) to get ~200 vectors and succeeds.
+func TestVectorIndexRetryTrainList(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	// Setup: 1000 vector docs in 5000 total docs (selectivity = 0.2)
+	// Initial sample = train_list = 200 docs -> 200 * 0.2 = ~40 vectors
+	// 40 > centroids(8) (deterministically safe margin) but 40 < train_list(200)
+	numVectorFieldDocs := 1000
+	totalDocs := 5000
+
+	vectorSetup2(t, numVectorFieldDocs)
+
+	docsToCreate := generateDocs(totalDocs-numVectorFieldDocs, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	kv.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	time.Sleep(2 * time.Second)
+	log.Printf("Executing Create Index with train_list(200) where initial sample gets insufficient vectors...")
+
+	// 1000 vector docs exist but initial sample of 200 docs only gets ~40 vectors
+	// This tests the fix where train_list underflow triggers retry to sample more docs
+	stmt := "CREATE INDEX idx_trainlist " +
+		" ON default(gender, sift VECTOR, docnum)" +
+		" WITH { \"dimension\":128, \"description\": \"IVF8,SQ8\", " +
+		"\"similarity\":\"L2_SQUARED\", \"train_list\":200};"
+
+	if _, err := execN1QL(bucket, stmt); err != nil {
+		log.Printf("Error while creating index : %v", err)
+		FailTestIfError(err, "Error in creating idx_trainlist", t)
+	}
+
+	vectorSetup(t, bucket, "", "", 40000)
+}
+
 // This test ensures that if build fails due to non availability of qualifying documents, rebalance doesn't wait indefinitely.
 // Rebalance should not wait/fail & index should be in error state.
 func TestVectorIndexRebalTrainFail(t *testing.T) {
