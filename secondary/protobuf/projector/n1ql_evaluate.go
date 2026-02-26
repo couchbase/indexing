@@ -3,6 +3,7 @@ package protoProjector
 import (
 	"errors"
 	math "math"
+	"slices"
 	"sort"
 	"time"
 
@@ -665,6 +666,8 @@ func (p sortByIndices) Swap(i, j int) {
 // corresponding index (values are reordered alongside indices).
 // It updates the underlying array passed to the function itself.
 func sortSparseByIndices(indices []uint32, values []float32) {
-	// TODO SPARSE : test if a fast path exists for already sorted indices to avoid overhead of sort
+	if slices.IsSorted(indices) {
+		return
+	}
 	sort.Sort(sortByIndices{indices, values})
 }
