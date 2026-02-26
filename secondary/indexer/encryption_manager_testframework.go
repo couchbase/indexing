@@ -13,9 +13,11 @@ package indexer
 
 import (
 	"encoding/base64"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 
@@ -49,6 +51,8 @@ type EaRKey struct {
 var mockDataTypeKeyInfoMap = make(map[KeyDataType]*DeksInfo)
 var mu sync.Mutex
 var cbsTest *EncryptionCallbacks
+var keyPersistPath string
+var keyPersistFile = "testKeysPersistFile"
 
 type Entry struct {
 	Datatype KeyDataType `json:"datatype"`
@@ -72,13 +76,14 @@ func cbmockGetEncryptionKeysBlocking(dtype KeyDataType) *DeksInfo {
 		mu.Lock()
 		defer mu.Unlock()
 		deksInfo, ok = mockDataTypeKeyInfoMap[dtype]
+
+		if !ok {
+			deksInfo = &DeksInfo{ActiveKey: "", Keys: make([]EaRKey, 0), UnavailableKeys: make([]string, 0)}
+			mockDataTypeKeyInfoMap[dtype] = deksInfo
+		}
 	}()
 
-	if !ok {
-		return nil
-	} else {
-		return deksInfo
-	}
+	return deksInfo
 }
 
 func validateAuth(w http.ResponseWriter, r *http.Request) bool {
@@ -108,6 +113,47 @@ func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 		}
 	}
 	return true
+}
+
+func getPersistPath() string {
+	return keyPersistPath + "/" + keyPersistFile
+}
+
+func persistKeys(data map[KeyDataType]*DeksInfo) error {
+
+	logging.Infof("EncryptionMgrTest:updated %v ", getPersistPath())
+	file, err := os.Create(getPersistPath())
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := gob.NewEncoder(file)
+	return encoder.Encode(data)
+}
+
+func recoverPersistedKeys() {
+	file, err := os.Open(getPersistPath())
+	if err != nil {
+		logging.Warnf("EncryptionMgrTest:Recover keys failed err:%v", err)
+		return
+	}
+
+	defer file.Close()
+
+	var decodedMap map[KeyDataType]*DeksInfo
+	decoder := gob.NewDecoder(file)
+	err = decoder.Decode(&decodedMap)
+	if err != nil {
+		logging.Warnf("EncryptionMgrTest:Recover keys failed err:%v", err)
+		return
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	mockDataTypeKeyInfoMap = decodedMap
+	logging.Infof("EncryptionMgrTest:Recovered keys from %v", getPersistPath())
 }
 
 // For /test/RefreshKeysCallback
@@ -151,6 +197,7 @@ func addEncryptionKey(w http.ResponseWriter, r *http.Request) {
 				deksInfo.ActiveKey = earkey.Id
 				deksInfo.Keys = append(deksInfo.Keys, earkey)
 			}
+			persistKeys(mockDataTypeKeyInfoMap)
 		}()
 
 		go cbsTest.RefreshKeysCallback(dtype)
@@ -202,6 +249,7 @@ func dropEncryptionKey(w http.ResponseWriter, r *http.Request) {
 				deksInfo.UnavailableKeys = append(deksInfo.UnavailableKeys, keyid)
 			}
 
+			persistKeys(mockDataTypeKeyInfoMap)
 			go cbsTest.DropKeysCallback(dtype, keyids)
 		}
 	}()
@@ -257,6 +305,7 @@ func disableEncryption(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			persistKeys(mockDataTypeKeyInfoMap)
 			go cbsTest.DropKeysCallback(kdt, []string{activeKey})
 		}
 	}()
@@ -289,7 +338,7 @@ func getInUseKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	kbytes := []byte(strings.Join(keys, "\n"))
 
-	w.Header().Set("Content-Length", fmt.Sprintf("%v", len(keys)))
+	w.Header().Set("Content-Length", fmt.Sprintf("%v", len(kbytes)))
 	w.WriteHeader(http.StatusOK)
 	w.Write(kbytes)
 	return
