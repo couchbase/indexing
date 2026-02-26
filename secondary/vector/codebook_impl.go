@@ -30,6 +30,8 @@ func RecoverCodebook(data []byte, qType string) (codebook.Codebook, error) {
 		return recoverCodebookIVFPQ(data)
 	case "SQ":
 		return recoverCodebookIVFSQ(data)
+	case string(common.RaBitQ):
+		return recoverCodebookIVFRaBitQ(data)
 	case "SPARSE":
 		return recoverCodebookSparse(data)
 	}
@@ -75,6 +77,22 @@ func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (cb codebook.Code
 		logging.Infof("NewCodebookIVFSQ: Initialized codebook with dimension: %v, range: %v, nlist: %v, "+
 			"metric: %v, useCosine: %v",
 			vectorMeta.Dimension, vectorMeta.Quantizer.SQRange, nlist, metric, useCosine)
+
+	case common.RaBitQ:
+		nbits := vectorMeta.Quantizer.RaBitQNbits
+		if nbits == 0 {
+			nbits = 1
+		}
+
+		cb, err = NewCodebookIVFRaBitQ(vectorMeta.Dimension, nlist, nbits,
+			metric, useCosine)
+		if err != nil {
+			return nil, err
+		}
+		logging.Infof(
+			"NewCodebookIVFRaBitQ: Initialized codebook with dimension: %v, nbits: %v, nlist: %v, "+
+				"metric: %v, useCosine: %v",
+			vectorMeta.Dimension, nbits, nlist, metric, useCosine)
 
 	case common.NO_QUANTIZATION_SPARSE:
 		// TODO SPARSE: For sparse codebook, change the hard coded dimension to be read from
