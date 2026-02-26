@@ -30,12 +30,14 @@ import (
 var version = 1
 
 var (
-	ErrMaxSnapshotsLimitReached = fmt.Errorf("Maximum snapshots limit reached")
-	ErrShutdown                 = fmt.Errorf("MemDB instance has been shutdown")
-	ErrCorruptSnapshot          = fmt.Errorf("MemDB snapshot checksum failed")
-	ErrSnapshotBusy             = fmt.Errorf("MemDB snapshot is busy either due to cleanup or key rotation")
-	ErrKeyRotationRestore       = fmt.Errorf("MemDB snapshot key rotation restore error")
-	ErrInvalid                  = fmt.Errorf("invalid arguments")
+	ErrMaxSnapshotsLimitReached = errors.New("MemDB Maximum snapshots limit reached")
+	ErrShutdown                 = errors.New("MemDB instance has been shutdown")
+	ErrCorruptSnapshot          = errors.New("MemDB snapshot checksum failed")
+	ErrSnapshotBusy             = errors.New("MemDB snapshot is busy either due to cleanup or key rotation")
+	ErrKeyRotationRestore       = errors.New("MemDB snapshot key rotation restore error")
+	ErrInvalid                  = errors.New("MemDB invalid arguments")
+	ErrInvalidRotationType      = errors.New("MemDB invalid rotation type")
+	ErrUnsupportedFileType      = errors.New("MemDB unsupported file type")
 )
 
 type KeyCompare func([]byte, []byte) int
@@ -1714,19 +1716,21 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 }
 
 func (m *MemDB) DumpStats() string {
-	encSts, _ := m.GetEncryptionStatsCached()
 	str := "{\n"
 	str += `"skiplist stats":` + m.aggrStoreStats().String()
-	str += ",\n"
-	str += `"encryption stats":` + "\n" + encSts.String()
+	if encSts, err := m.GetEncryptionStatsCached(); err == nil {
+		str += ",\n"
+		str += `"encryption stats":` + "\n" + encSts.String()
+	}
 	str += "\n}"
 	return str
 }
 
 func (m *MemDB) DumpStatsMap() map[string]interface{} {
-	encSts, _ := m.GetEncryptionStatsCached()
 	mp := m.aggrStoreStats().Map()
-	mp["encryptionStats"] = encSts
+	if encSts, err := m.GetEncryptionStatsCached(); err == nil {
+		mp["encryptionStats"] = encSts
+	}
 	return mp
 }
 

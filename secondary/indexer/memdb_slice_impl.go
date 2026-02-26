@@ -360,7 +360,7 @@ func (mdb *memdbSlice) initStores() error {
 	if err != nil {
 		logging.Errorf("MemDBSlice::initStores Id %v IndexInstId %v "+
 			"error: %v", mdb.id, mdb.idxInstId, err)
-		return err
+		return fmt.Errorf("init memdb mainstore: %w", err)
 	}
 
 	mdb.main = make([]*memdb.Writer, mdb.numWriters)
@@ -1197,10 +1197,10 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 					if len(keyId) > 0 {
 						var ctx gocbcrypto.EncryptionContext
 						if ctx, err = store.NewEncryptionContext(keyId, cipher); err == nil {
-							err = gocbcrypto.WriteFile(manifest, bs, 0755, ctx, iowrap.CountDiskFailures)
+							err = gocbcrypto.WriteFile(manifest, bs, memdb.FilePermMode, ctx, iowrap.CountDiskFailures)
 						}
 					} else {
-						err = common.WriteFileWithSync(manifest, bs, 0755)
+						err = common.WriteFileWithSync(manifest, bs, memdb.FilePermMode)
 					}
 				}
 
@@ -1360,7 +1360,7 @@ func (mdb *memdbSlice) getSnapshotManifests() []string {
 
 func (mdb *memdbSlice) getSnapshotDirs() []string {
 	manifests := mdb.getSnapshotManifests()
-	var dirs []string
+	dirs := make([]string, 0, len(manifests))
 	for _, f := range manifests {
 		dirs = append(dirs, filepath.Dir(f))
 	}
@@ -2110,7 +2110,10 @@ func (mdb *memdbSlice) GetCodebook() (codebook.Codebook, error) {
 func (mdb *memdbSlice) SetCurrentEncryptionKey(key []byte, keyId []byte, cipher string) error {
 	if mdb.CheckAndIncrRef() {
 		defer mdb.DecrRef()
-		return mdb.mainstore.SetCurrentEncryptionKey(key, keyId, cipher)
+		if err := mdb.mainstore.SetCurrentEncryptionKey(key, keyId, cipher); err != nil {
+			return fmt.Errorf("memdbSlice:SetCurrentEncryptionKey error: %w", err)
+		}
+		return nil
 	}
 
 	return nil
@@ -2173,7 +2176,7 @@ func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 			snapDirs := mdb.getSnapshotDirs()
 			for i := range snapDirs {
 				if er := mdb.mainstore.DropKeyIdsFromSnapshot(kids, snapDirs[i]); er != nil {
-					if errors.Is(err, memdb.ErrSnapshotBusy) {
+					if errors.Is(er, memdb.ErrSnapshotBusy) {
 						continue
 					}
 
@@ -2181,7 +2184,9 @@ func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 						// snapshot cannot be recovered, remove snapshot
 						logging.Errorf("memdbSlice:DropKeys IndexInstId %v PartitionId %v error %v, removing snapshot",
 							mdb.idxInstId, mdb.idxPartnId, er)
-						mdb.mainstore.RemoveSnapshot(snapDirs[i])
+						if rmErr := mdb.mainstore.RemoveSnapshot(snapDirs[i]); rmErr != nil {
+							logging.Errorf("memdbSlice:DropKeys failed removing snapshot %v: %v", snapDirs[i], rmErr)
+						}
 						err = er
 						// log error for notification
 					} else if err == nil {
@@ -2193,10 +2198,9 @@ func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 	}
 }
 
-/////////////////////////////
+// ///////////////////////////
 // Snapshot
-/////////////////////////////
-
+// ///////////////////////////
 func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }

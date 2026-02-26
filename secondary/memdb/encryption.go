@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,10 +27,15 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
-// extension for encrypted files
 const (
+	// extension for encrypted files
 	rencrypt_tmp_ext = ".aes.tmp"
 	encrypt_bak_ext  = ".bak"
+
+	// encryption status for stats
+	StatusEncrypted     = "encrypted"
+	StatusNotEncrypted  = "not_encrypted"
+	StatusPartEncrypted = "partially_encrypted"
 )
 
 var (
@@ -88,7 +94,7 @@ type EncryptionStats struct {
 
 func (e *EncryptionStats) String() string {
 	if e != nil {
-		if bs, _ := json.MarshalIndent(e, "", " "); len(bs) > 0 {
+		if bs, err := json.MarshalIndent(e, "", " "); err == nil && len(bs) > 0 {
 			return string(bs)
 		}
 	}
@@ -171,16 +177,15 @@ func (m *MemDB) initEncryption(snapDirs []string) (err error) {
 		return err
 	}
 
-	if err := m.cleanupStaleDropKeyFilesFromSnapshot(); err != nil {
-		logging.Errorf("MemDB::%v cleanupStaleDropKeyFilesFromSnapshot error:%v", m.Path, err)
+	if err2 := m.cleanupStaleDropKeyFilesFromSnapshot(); err2 != nil {
+		logging.Errorf("MemDB::%v cleanupStaleDropKeyFilesFromSnapshot error:%v", m.Path, err2)
 	}
 
-	if _, snapKeyIds, err = m.getActiveKeyIdsFromSnapshots(snapDirs); err != nil {
-		return err
+	if _, snapKeyIds, err = m.getActiveKeyIdsFromSnapshots(snapDirs); err == nil {
+		m.snapKeyIds = snapKeyIds
 	}
-	m.snapKeyIds = snapKeyIds
 
-	return nil
+	return err
 }
 
 // current key id is not persisted. recover it using callback.
@@ -210,31 +215,35 @@ func (m *MemDB) encryptFileByItem(ctx context.Context, src, dst string, keyId []
 
 	r, err := m.newFileReader(m.fileType, version, src)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("new filereader: %w", err)
 	}
 
 	err = r.Open(src)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("open filereader: %w", err)
 	}
 
 	defer func() {
-		r.Close()
+		if err2 := r.Close(); err2 != nil {
+			logging.Warnf("close filereader %v failed: %v", src, err2)
+		}
 	}()
 
 	d, err := m.newFileWriter(m.fileType, dst, keyId, cipher)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("new filewriter: %w", err)
 	}
 
 	err = d.Open()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("open filewriter: %w", err)
 	}
 
 	defer func() {
 		if err != nil {
-			d.Close(true)
+			if err2 := d.Close(true); err2 != nil {
+				logging.Warnf("close filewriter %v failed: %v", dst, err2)
+			}
 		}
 	}()
 
@@ -249,7 +258,7 @@ func (m *MemDB) encryptFileByItem(ctx context.Context, src, dst string, keyId []
 
 		itm, err := r.ReadItem()
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("read item: %w", err)
 		}
 
 		// Terminator
@@ -259,7 +268,7 @@ func (m *MemDB) encryptFileByItem(ctx context.Context, src, dst string, keyId []
 
 		if err = d.WriteItem(itm); err != nil {
 			m.freeItem(itm)
-			return 0, err
+			return 0, fmt.Errorf("write item: %w", err)
 		}
 
 		bytesWritten += uint64(len(itm.Bytes()))
@@ -267,12 +276,12 @@ func (m *MemDB) encryptFileByItem(ctx context.Context, src, dst string, keyId []
 	}
 
 	if err = d.FlushAndClose(true); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("flush and close writer: %w", err)
 	}
 
 	// re-opens and writes the Terminator
 	if err = d.Close(true); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("close writer: %w", err)
 	}
 
 	return bytesWritten, nil
@@ -446,7 +455,7 @@ func (v *keyIdVisitor) skip(fpath string) bool {
 // encryption key. The api is blocking and is called asynchrously by a groutine.
 // It can be cancelled by concurrent snapshot cleanup operation or instance close
 func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
-	if len(keyIds) == 0 || len(snapDir) == 0 {
+	if len(keyIds) == 0 {
 		return ErrInvalid
 	}
 
@@ -502,7 +511,7 @@ func (v *keyRotationVisitor) visit(ctx context.Context, fpath string) error {
 	var fkeyId []byte
 
 	if ok, err := gocbcrypto.IsFileEncrypted(fpath); err != nil {
-		return err
+		return fmt.Errorf("keyRotationVisitor %s: %w", fpath, err)
 	} else if ok {
 		if fkeyId, err = ReadFileKeyId(fpath, v.db.GetEncryptionKeyById); err != nil {
 			return err
@@ -523,8 +532,7 @@ func (v *keyRotationVisitor) visit(ctx context.Context, fpath string) error {
 func (v *keyRotationVisitor) getRotationType(fpath string, tgtKeyId []byte) (rt RotationType, err error) {
 	encrypted, err := gocbcrypto.IsFileEncrypted(fpath)
 	if err != nil {
-		logging.Errorf("MemDB::getRotationType failed to check encryption status for %v: %v", fpath, err)
-		return NoRotation, err
+		return NoRotation, fmt.Errorf("keyRotationVisitor %s: %w", fpath, err)
 	}
 
 	if encrypted {
@@ -613,12 +621,27 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 	tmpDst := file + rencrypt_tmp_ext
 	backup := file + encrypt_bak_ext
 
-	iowrap.Os_Remove(tmpDst)
-	iowrap.Os_Remove(backup)
+	if err := iowrap.Os_Remove(tmpDst); err != nil && !os.IsNotExist(err) {
+		logging.Errorf("MemDB::rotateSingleFile remove tmp %v failed: %v", tmpDst, err)
+		return err
+	}
 
-	defer iowrap.Dir_Sync(filepath.Dir(file), 0755)
-	defer iowrap.Os_Remove(tmpDst)
-	defer iowrap.Os_Remove(backup)
+	if err := iowrap.Os_Remove(backup); err != nil && !os.IsNotExist(err) {
+		logging.Errorf("MemDB::rotateSingleFile remove backup %v failed: %v", backup, err)
+		return err
+	}
+
+	defer func() {
+		if err := iowrap.Os_Remove(backup); err != nil && !os.IsNotExist(err) {
+			logging.Warnf("MemDB::rotateSingleFile cleanup backup %v failed: %v", backup, err)
+		}
+		if err := iowrap.Os_Remove(tmpDst); err != nil && !os.IsNotExist(err) {
+			logging.Warnf("MemDB::rotateSingleFile cleanup tmp %v failed: %v", tmpDst, err)
+		}
+		if syncErr := iowrap.Dir_Sync(filepath.Dir(file), 0o755); syncErr != nil {
+			logging.Warnf("MemDB::rotateSingleFile dir sync for %v failed: %v", file, syncErr)
+		}
+	}()
 
 	rotType, err := v.getRotationType(file, keyId)
 	if err != nil {
@@ -627,7 +650,7 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 
 	defer func() {
 		if err != nil {
-			logging.Errorf("MemDB::DropKeys %v rotation:%v error:%v",
+			logging.Errorf("MemDB::rotateSingleFile %v rotation:%v error:%v",
 				file, rotTypString(rotType), err)
 		}
 	}()
@@ -665,7 +688,7 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 		}
 
 	default:
-		return fmt.Errorf("invalid rotation type")
+		return ErrInvalidRotationType
 	}
 
 	if err != nil {
@@ -835,23 +858,26 @@ func (m *MemDB) GetEncryptionStatsCached() (EncryptionStats, error) {
 		kids = appendUniqueKeyId(kids, m.encKeyId)
 	}
 
-	numKeys := uint32(len(kids))
+	numKeys := ^uint32(0)
+	if len(kids) <= math.MaxUint32 {
+		numKeys = uint32(len(kids))
+	}
 	if emptyKey {
 		numKeys-- // do not count unencrypted state as a key
 	}
 
-	status := "encrypted"
+	status := StatusEncrypted
 	if len(snapkeyIds) == 0 || (len(snapkeyIds) == 1 && emptyKey) {
-		status = "not_encrypted"
+		status = StatusNotEncrypted
 	}
 
 	if len(m.encKeyId) > 0 {
 		if len(snapkeyIds) > 1 && emptyKey {
-			status = "partially_encrypted"
+			status = StatusPartEncrypted
 		}
 	} else {
 		if len(snapkeyIds) > 1 {
-			status = "partially_encrypted"
+			status = StatusPartEncrypted
 		}
 	}
 
@@ -884,21 +910,21 @@ func (m *MemDB) GetEncryptionStatsFromDisk() (EncryptionStats, error) {
 		return EncryptionStats{}, err
 	}
 
-	v.Status = "encrypted"
+	v.Status = StatusEncrypted
 	if len(v.keyId) > 0 {
 		if pending := v.numFilesPendingRencrypt + v.numFilesPendingEncrypt; pending > 0 {
 			if v.numFilesPendingRencrypt == 0 {
-				v.Status = "not_encrypted" // offline upgrade/recovery or encryption enabled
+				v.Status = StatusNotEncrypted // offline upgrade/recovery or encryption enabled
 			} else if v.numFilesPendingEncrypt > 0 {
-				v.Status = "partially_encrypted"
+				v.Status = StatusPartEncrypted
 			}
 		}
 	} else {
 		// encryption disabled
 		if v.numFilesPendingDecrypt == 0 {
-			v.Status = "not_encrypted"
+			v.Status = StatusNotEncrypted
 		} else if v.numFilesPendingDecrypt < v.numFiles {
-			v.Status = "partially_encrypted"
+			v.Status = StatusPartEncrypted
 		}
 	}
 
@@ -907,7 +933,11 @@ func (m *MemDB) GetEncryptionStatsFromDisk() (EncryptionStats, error) {
 		encSts = *m.encSts
 	}
 
-	encSts.NumActiveKeys = uint32(len(v.keyIds))
+	if len(v.keyIds) > math.MaxUint32 {
+		encSts.NumActiveKeys = math.MaxUint32
+	} else {
+		encSts.NumActiveKeys = uint32(len(v.keyIds))
+	}
 	encSts.numFiles = v.numFiles
 	encSts.numFilesPendingRencrypt = v.numFilesPendingRencrypt
 	encSts.numFilesPendingEncrypt = v.numFilesPendingEncrypt
@@ -941,7 +971,7 @@ func (m *MemDB) walkEncryptedFiles(dir string, ctx context.Context, visitor encr
 		// Check for context cancellation to enable preemption
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("walk cancelled: %w", ctx.Err())
 		default:
 		}
 
@@ -968,12 +998,14 @@ func ReadFileKeyId(filepath string, getKeyId func([]byte) []byte) ([]byte, error
 	}
 
 	defer func() {
-		iowrap.File_Close(fd)
+		if err2 := iowrap.File_Close(fd); err2 != nil {
+			logging.Warnf("MemDB::ReadFileKeyId close file %s failed: %v", filepath, err2)
+		}
 	}()
 
 	rd, err := gocbcrypto.NewCryptFileReaderWithLabel(fd, getKeyId, KDFLabelCtx, gocbcrypto.ChunkSize, false, iowrap.CountDiskFailures)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("MemDB::ReadFileKeyId %s: %w", filepath, err)
 	}
 
 	defer rd.Reset()
@@ -1015,6 +1047,7 @@ func (g *dirOpGuard) Acquire(dir string, ctx context.Context) *dirOpCtx {
 	}
 
 	for {
+		// retry on error
 		if dCtx, _ := g.TryAcquire(dir, ctx); dCtx != nil {
 			return dCtx
 		}

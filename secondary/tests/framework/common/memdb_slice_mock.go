@@ -3,6 +3,7 @@ package common
 import (
 	"container/list"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,8 @@ import (
 )
 
 const tmpDirName = ".tmp" // Same as indexer.tmpDirName
+
+var errNilGetKeyByIDCallback = errors.New("nil GetKeyById callback")
 
 type MemdbSnapshotInfo struct {
 	DataPath string
@@ -92,7 +95,7 @@ func GetMemDBSnapshots(slicePath string, retry bool, getKeyById memdb.GetKeyById
 							}
 							bs, err = gocbcrypto.ReadFile(f, fn, memdb.KDFLabelCtx, nil)
 						} else {
-							err = fmt.Errorf("nil GetKeyById callback")
+							err = fmt.Errorf("read encrypted manifest %s: %w", f, errNilGetKeyByIDCallback)
 						}
 					}
 				}

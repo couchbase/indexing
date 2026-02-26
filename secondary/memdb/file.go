@@ -15,6 +15,8 @@ import (
 
 const DiskBlockSize = 4 * 1024 // 4K is ok for page cache writes
 
+const FilePermMode = 0o755
+
 var (
 	ErrNotEnoughSpace = errors.New("Not enough space in the buffer")
 	forestdbConfig    *forestdb.Config
@@ -46,11 +48,12 @@ func (m *MemDB) newFileWriter(t FileType, path string, keyId []byte, cipher stri
 	var w FileWriter
 	var err error
 	if t == RawdbFile {
-		w = &rawFileWriter{db: m, path: path}
+		rw := &rawFileWriter{db: m, path: path}
+		w = rw
 		if len(keyId) > 0 {
 			var ctx gocbcrypto.EncryptionContext
 			if ctx, err = m.NewEncryptionContext(keyId, cipher); err == nil {
-				w = &rawFileWriterEncrypted{w.(*rawFileWriter), ctx, nil, sync.Once{}}
+				w = &rawFileWriterEncrypted{rw, ctx, nil, sync.Once{}}
 			} else {
 				w = nil
 			}
@@ -58,7 +61,7 @@ func (m *MemDB) newFileWriter(t FileType, path string, keyId []byte, cipher stri
 	} else if t == ForestdbFile {
 		w = &forestdbFileWriter{db: m, path: path}
 	} else {
-		err = fmt.Errorf("unsupported file type")
+		err = ErrUnsupportedFileType
 	}
 
 	return w, err
@@ -68,10 +71,11 @@ func (m *MemDB) newFileReader(t FileType, ver int, file string) (FileReader, err
 	var r FileReader
 	var err error
 	if t == RawdbFile {
-		r = &rawFileReader{db: m, version: ver}
+		rr := &rawFileReader{db: m, version: ver}
+		r = rr
 		var ok bool
 		if ok, err = gocbcrypto.IsFileEncrypted(file); ok {
-			r = &rawFileReaderEncrypted{r.(*rawFileReader), m.GetEncryptionKeyById, nil}
+			r = &rawFileReaderEncrypted{rr, m.GetEncryptionKeyById, nil}
 		}
 	} else if t == ForestdbFile {
 		r = &forestdbFileReader{db: m}
@@ -92,7 +96,7 @@ type rawFileWriter struct {
 
 func (f *rawFileWriter) Open() error {
 	var err error
-	f.fd, err = iowrap.Os_OpenFile(f.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0755)
+	f.fd, err = iowrap.Os_OpenFile(f.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, FilePermMode)
 	if err == nil {
 		if f.buf == nil {
 			f.buf = make([]byte, encodeBufSize)
@@ -145,7 +149,7 @@ func (f *rawFileWriter) syncAndClose(sync bool) (reterr error) {
 
 func (f *rawFileWriter) WriteItem(itm *Item) error {
 	checksum, err := f.db.EncodeItem(itm, f.buf, f.w)
-	f.checksum = f.checksum ^ checksum
+	f.checksum ^= checksum
 	return err
 }
 
@@ -205,7 +209,7 @@ func (f *rawFileReader) Open(path string) error {
 func (f *rawFileReader) ReadItem() (*Item, error) {
 	itm, checksum, err := f.db.DecodeItem(f.version, f.buf, f.r)
 	if itm != nil { // StoreToDisk checksum excludes terminal nil item
-		f.checksum = f.checksum ^ checksum
+		f.checksum ^= checksum
 	}
 	return itm, err
 }
@@ -362,12 +366,12 @@ func (f *rawFileWriterEncrypted) Open() error {
 	var err error
 	defer func() {
 		if err != nil && f.fd != nil {
-			f.fd.Close()
+			_ = iowrap.File_Close(f.fd)
 			f.fd = nil
 		}
 	}()
 
-	f.fd, err = iowrap.Os_OpenFile(f.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0755)
+	f.fd, err = iowrap.Os_OpenFile(f.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, FilePermMode)
 	if err == nil {
 		if f.buf == nil {
 			f.buf = make([]byte, encodeBufSize)
@@ -377,7 +381,9 @@ func (f *rawFileWriterEncrypted) Open() error {
 		// store file encryption metadata on first open by writer
 		f.firstOpen.Do(func() {
 			if err == nil {
-				_, err = f.cw.WriteHeader()
+				if _, err = f.cw.WriteHeader(); err != nil {
+					err = fmt.Errorf("write encrypted file header: %w", err)
+				}
 			}
 		})
 	}
@@ -407,7 +413,7 @@ func (f *rawFileWriterEncrypted) FlushAndClose(sync bool) (reterr error) {
 func (f *rawFileWriterEncrypted) WriteItem(itm *Item) error {
 	checksum, err := f.db.EncodeItem(itm, f.buf, f.cw)
 	if err == nil {
-		f.checksum = f.checksum ^ checksum
+		f.checksum ^= checksum
 	}
 	return err
 }
@@ -445,7 +451,7 @@ func (f *rawFileReaderEncrypted) Open(path string) error {
 	var err error
 	defer func() {
 		if err != nil && f.fd != nil {
-			f.fd.Close()
+			_ = iowrap.File_Close(f.fd)
 			f.fd = nil
 		}
 	}()
