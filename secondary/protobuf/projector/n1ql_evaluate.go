@@ -25,6 +25,7 @@ var ErrDataOutOfBounds = errors.New("Value of the vector exceeds float32 range")
 var ErrZeroVectorForCosine = errors.New("Zero vector for cosine distance")
 var ErrZeroSparseVector = errors.New("Zero sparse vector")
 var ErrInvalidSparseVector = errors.New("Invalid sparse vector")
+var ErrDuplicateIndicesSparseVector = errors.New("Sparse vector contains duplicate indices")
 
 func getVectorStatStr(err error) string {
 	switch err {
@@ -573,6 +574,9 @@ func validateSparseVector(vector qvalue.Value) ([]float32, error) {
 	res := make([]float32, 2*n+1)
 	res[0] = float32(n)
 	for i := 0; i < n; i++ {
+		if i < n-1 && indices[i] == indices[i+1] {
+			return nil, ErrDuplicateIndicesSparseVector
+		}
 		res[i+1] = float32(indices[i])
 		res[n+i+1] = values[i]
 	}
