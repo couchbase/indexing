@@ -1797,6 +1797,45 @@ func testEncryptionStats(t *testing.T, conf Config) {
 	})
 }
 
+func testEncryptionUnsupportedCipher(t *testing.T, conf Config) {
+	snapDir := "db.dump"
+	os.RemoveAll(snapDir)
+	conf.Path = snapDir
+	conf.UseDeltaInterleaving()
+
+	db, err := NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+
+	var wg sync.WaitGroup
+	n := 1000000
+
+	wg.Add(1)
+	w := db.NewWriter()
+	doInsertSafe(w, &wg, n, false)
+	wg.Wait()
+
+	snap, _ := db.NewSnapshot()
+	wg.Add(1)
+	doDeleteSafe(w, &wg, n)
+	wg.Wait()
+
+	snap.Open()
+	keyId, cipher := db.GetEncryptionInfo()
+	assert.NoError(t, db.PreparePersistence(snapDir, snap, keyId, cipher))
+	assert.NoError(t, db.StoreToDisk(snapDir, snap, runtime.GOMAXPROCS(0), keyId, cipher, nil))
+	snap.Close()
+	db.Close()
+
+	// unsupported cipher
+	conf.GetKeyById = func(id []byte) ([]byte, []byte, string) {
+		return nil, nil, ""
+	}
+
+	db, err = NewWithEncryptionConfig(conf, []string{snapDir})
+	assert.Error(t, err)
+	assert.Nil(t, db)
+}
+
 func TestDirOpGuardWithCancel(t *testing.T) {
 	runTest(t, "TestDirOpGuardWithCancel", testDirOpGuardWithCancel, "encryption")
 }
@@ -1879,4 +1918,8 @@ func TestEncryptionStats(t *testing.T) {
 
 func TestEncryptionEmptyIndex(t *testing.T) {
 	runTest(t, "TestEncryptionEmptyIndex", testEncryptionEmptyIndex, "encryption")
+}
+
+func TestEncryptionUnsupportedCipher(t *testing.T) {
+	runTest(t, "TestEncryptionUnsupportedCipher", testEncryptionUnsupportedCipher, "encryption")
 }

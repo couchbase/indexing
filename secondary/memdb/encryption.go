@@ -159,10 +159,9 @@ func (m *MemDB) NewEncryptionContext(keyId []byte, cipher string) (gocbcrypto.En
 	return nil, gocbcrypto.ErrCipherUnsupported
 }
 
-// snapshotDirs are needed to restore active key IDs in use by snapshots.
-// It is called during startup before any encryption operations.
+// snapshotDirs are used to preload active snapshot key IDs
+// so keys are not deleted before snapshots are loaded.
 func (m *MemDB) initEncryption(snapDirs []string) (err error) {
-	var snapKeyIds map[string][][]byte
 	m.dirGuard = newDirOpGuard()
 	m.encCtx, m.cancelCtx = context.WithCancel(context.Background())
 
@@ -181,11 +180,13 @@ func (m *MemDB) initEncryption(snapDirs []string) (err error) {
 		logging.Errorf("MemDB::%v cleanupStaleDropKeyFilesFromSnapshot error:%v", m.Path, err2)
 	}
 
-	if _, snapKeyIds, err = m.getActiveKeyIdsFromSnapshots(snapDirs); err == nil {
+	// do not fail initialization if there is an error. memDbSlice openSnapshot error handling
+	// retries LoadFromDisk from successive snapshots on error
+	if _, snapKeyIds, _ := m.getActiveKeyIdsFromSnapshots(snapDirs); len(snapKeyIds) > 0 {
 		m.snapKeyIds = snapKeyIds
 	}
 
-	return err
+	return nil
 }
 
 // current key id is not persisted. recover it using callback.
@@ -367,6 +368,7 @@ func (m *MemDB) GetActiveKeyIdList() [][]byte {
 // called only during startup
 // result will have an empty keyId if snapshot is not encrypted
 func (m *MemDB) getActiveKeyIdsFromSnapshots(snapDirs []string) ([][]byte, map[string][][]byte, error) {
+	var firstErr error
 	result := make([][]byte, 0)
 	snapKeyIds := make(map[string][][]byte)
 
@@ -376,12 +378,12 @@ func (m *MemDB) getActiveKeyIdsFromSnapshots(snapDirs []string) ([][]byte, map[s
 				result = appendUniqueKeyId(result, keyId)
 			}
 			snapKeyIds[snapDirs[i]] = keyIds
-		} else {
-			return nil, nil, err
+		} else if firstErr == nil { // continue
+			firstErr = err
 		}
 	}
 
-	return result, snapKeyIds, nil
+	return result, snapKeyIds, firstErr
 }
 
 // returns unique encryption key IDs currently in use by snapshot.
@@ -734,10 +736,6 @@ func (v *keyRotationVisitor) isFatalError(err error) bool {
 }
 
 func (m *MemDB) RemoveSnapshot(snapDir string) error {
-	if len(snapDir) == 0 {
-		return ErrInvalid
-	}
-
 	g := m.dirGuard.Acquire(snapDir, m.encCtx)
 	if g == nil {
 		return ErrInvalid
@@ -1005,10 +1003,14 @@ func ReadFileKeyId(filepath string, getKeyId func([]byte) []byte) ([]byte, error
 
 	rd, err := gocbcrypto.NewCryptFileReaderWithLabel(fd, getKeyId, KDFLabelCtx, gocbcrypto.ChunkSize, false, iowrap.CountDiskFailures)
 	if err != nil {
-		return nil, fmt.Errorf("MemDB::ReadFileKeyId %s: %w", filepath, err)
+		logging.Errorf("MemDB::ReadFileKeyId %s: %v", filepath, err)
+		if errors.Is(err, gocbcrypto.ErrCipherKeyLookup) {
+			return nil, ErrSnapshotKeyIdMissing
+		}
+		return nil, err
 	}
-
 	defer rd.Reset()
+
 	return rd.GetCtx().KeyID(), nil
 }
 

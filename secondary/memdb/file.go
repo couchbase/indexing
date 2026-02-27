@@ -459,6 +459,9 @@ func (f *rawFileReaderEncrypted) Open(path string) error {
 	if f.fd, err = iowrap.Os_Open(path); err == nil {
 		f.buf = make([]byte, encodeBufSize)
 		f.cr, err = gocbcrypto.NewCryptFileReaderWithLabel(f.fd, f.getKey, KDFLabelCtx, f.db.encryptChunkSize, false, iowrap.CountDiskFailures)
+		if errors.Is(err, gocbcrypto.ErrCipherKeyLookup) {
+			return ErrSnapshotKeyIdMissing
+		}
 	}
 
 	return err
