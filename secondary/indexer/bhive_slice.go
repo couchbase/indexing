@@ -408,6 +408,7 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 
 	cfg.Parallelism = 1
 	cfg.Dimension = slice.idxDefn.VectorMeta.Dimension
+	cfg.IsSparse = slice.idxDefn.HasSparseVector()
 
 	cfg.EfNumNeighbors = slice.sysconf["bhive.vanama.efNumNeighbors"].Int()
 	cfg.EfConstruction = slice.sysconf["bhive.vanama.efConstruction"].Int()
