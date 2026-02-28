@@ -563,12 +563,12 @@ func validateSparseVector(vector qvalue.Value) ([]float32, error) {
 
 	// Merge indices and values into a sigle float32 array
 	// Format will be [N, index0, index1, ....., indexN-1, value0, value1, ....., valueN-1]
-	// Store N and Indices using math.Float32frombits(uint32(N)) to prevent loss of precision
+	// Store N and indices as numeric float32 values
 	n := len(indices)
 	res := make([]float32, 2*n+1)
-	res[0] = math.Float32frombits(uint32(n))
+	res[0] = float32(n)
 	for i := 0; i < n; i++ {
-		res[i+1] = math.Float32frombits(uint32(indices[i]))
+		res[i+1] = float32(indices[i])
 		res[n+i+1] = values[i]
 	}
 	return res, nil

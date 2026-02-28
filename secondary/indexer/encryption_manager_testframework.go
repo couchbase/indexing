@@ -12,6 +12,7 @@
 package indexer
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -130,6 +131,9 @@ func addEncryptionKey(w http.ResponseWriter, r *http.Request) {
 	for _, entry := range e.Entries {
 		dtype := entry.Datatype
 		earkey := entry.Earkey
+
+		encoded := base64.StdEncoding.EncodeToString(earkey.Data)
+		earkey.Data = []byte(encoded)
 
 		func() {
 			mu.Lock()

@@ -1192,3 +1192,49 @@ type SparseVector struct {
 	Indices []uint32
 	Values  []float32
 }
+
+// ConciseSparseVector is a sparse vector in concise float32 format:
+// [float32(N), float32(idx1), ..., float32(idxN), val1, ..., valN]
+// N and indices are stored as plain float32 casts of their integer values.
+// Values are stored as plain float32.
+type ConciseSparseVector []float32
+
+// NNZ returns the number of non-zero elements in the sparse vector.
+func (v ConciseSparseVector) NNZ() int {
+	if len(v) == 0 {
+		return 0
+	}
+	return int(v[0])
+}
+
+// Size returns the number of float32 elements occupied by this sparse vector
+// (= 1 + 2*NNZ). Returns 0 if the slice is too short.
+func (v ConciseSparseVector) Size() int {
+	nnz := v.NNZ()
+	if len(v) < 1+2*nnz {
+		return 0
+	}
+	return 1 + 2*nnz
+}
+
+// Indices returns the sparse vector's non-zero indices.
+func (v ConciseSparseVector) Indices() []uint32 {
+	nnz := v.NNZ()
+	if len(v) < 1+2*nnz {
+		return nil
+	}
+	indices := make([]uint32, nnz)
+	for i := 0; i < nnz; i++ {
+		indices[i] = uint32(v[1+i])
+	}
+	return indices
+}
+
+// Values returns the sparse vector's non-zero values as a zero-copy slice.
+func (v ConciseSparseVector) Values() []float32 {
+	nnz := v.NNZ()
+	if len(v) < 1+2*nnz {
+		return nil
+	}
+	return []float32(v[1+nnz:])
+}

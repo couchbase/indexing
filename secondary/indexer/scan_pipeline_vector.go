@@ -153,9 +153,10 @@ type ScanWorker struct {
 	logPrefix string
 	startTime time.Time
 
-	vectorDim int
-	heapSize  int
-	codeSize  int
+	vectorDim      int
+	sparseQueryDim int
+	heapSize       int
+	codeSize       int
 
 	//local heap for each worker
 	heap *TopKRowHeap
@@ -167,6 +168,9 @@ type ScanWorker struct {
 	codes []byte
 	fvecs []float32
 	dists []float32
+
+	// Cached sparse query vector values once per worker.
+	sparseQueryValues []float32
 
 	cktmp [][]byte
 
@@ -223,7 +227,6 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		w.inccktmp = make([][]byte, len(r.IndexInst.Defn.Include))
 	}
 
-	//init temp buffers
 	w.vectorDim = r.getVectorDim()
 	w.codeSize = r.getVectorCodeSize()
 
@@ -231,8 +234,14 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 
 	w.currBatchRows = make([]*Row, 0, bufferInitBatchSize)
 	w.codes = make([]byte, 0, bufferInitBatchSize*r.getVectorCodeSize())
-	w.fvecs = make([]float32, bufferInitBatchSize*r.getVectorDim())
 	w.dists = make([]float32, bufferInitBatchSize)
+
+	fvecsDim := bufferInitBatchSize * r.getVectorDim()
+	if r.IsSparseVectorIndexScan() && len(r.sparseQueryVector) > 0 {
+		w.sparseQueryDim = r.sparseQueryVector.NNZ()
+		fvecsDim = bufferInitBatchSize * w.sparseQueryDim
+	}
+	w.fvecs = make([]float32, 0, fvecsDim)
 
 	for i := len(r.IndexInst.Defn.SecExprs); i < len(r.IndexInst.Defn.SecExprs)+len(r.IndexInst.Defn.Include); i++ {
 		index := i - len(r.IndexInst.Defn.SecExprs)
@@ -466,98 +475,6 @@ func (w *ScanWorker) finishJob() {
 	w.currJob = nil
 }
 
-func (w *ScanWorker) Sender() {
-	defer close(w.senderErrCh)
-	defer func() {
-		if r := recover(); r != nil {
-			l.Fatalf("%v - panic(%v) detected while processing %s", w.logPrefix, r, w.r)
-			l.Fatalf("%s", l.StackTraceAll())
-			w.senderErrCh <- fmt.Errorf("%v panic %v", w.logPrefix, r)
-		}
-	}()
-
-	batchSize := w.senderBatchSize
-	logging.Verbosef("%v ChannelSize: %v BatchSize: %v", w.logPrefix, cap(w.senderCh), batchSize)
-
-	var err error
-	var ok bool
-
-	for {
-		vecCount := 0
-		lastRowReceived := false
-		for ; vecCount < batchSize; vecCount++ {
-			w.currBatchRows[vecCount], ok = <-w.senderCh
-			if !ok {
-				return
-			}
-
-			if w.currBatchRows[vecCount].last {
-				lastRowReceived = true
-				break // Finish the data gathered till ensemble
-			}
-		}
-
-		// If we did not even get one valid Row before last
-		if vecCount == 0 {
-			return
-		}
-
-		// Make list of vectors to calculate distance
-		for i := 0; i < vecCount; i++ {
-			codei := w.currBatchRows[i].value
-			w.codes = append(w.codes, codei...)
-		}
-
-		// Decode vectors
-		t0 := time.Now()
-		err = w.currJob.codebook.DecodeVectors(vecCount, w.codes, w.fvecs[:vecCount*w.vectorDim])
-		if err != nil {
-			logging.Verbosef("%v Sender got error: %v from DecodeVectors", w.logPrefix, err)
-			w.senderErrCh <- err
-			return
-		}
-		atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
-		atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
-
-		// Compute distance from query vector using codebook
-		t0 = time.Now()
-		qvec := w.r.queryVector
-		w.dists = w.dists[:vecCount]
-		err = w.currJob.codebook.ComputeDistance(qvec, w.fvecs[:vecCount*w.vectorDim], w.dists)
-		if err != nil {
-			logging.Verbosef("%v Sender got error: %v from ComputeDistance", w.logPrefix, err)
-			w.senderErrCh <- err
-			return
-		}
-		atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
-		atomic.AddInt64(&w.currJob.distCmpCnt, int64(vecCount))
-
-		// Substitue distance in place centroidId and send to outCh
-		for i := 0; i < vecCount; i++ {
-			w.currBatchRows[i].dist = w.dists[i] // Add distance for sorting in heap
-			w.currBatchRows[i].workerId = w.id
-			select {
-			case <-w.stopCh:
-			case w.outCh <- w.currBatchRows[i]:
-				w.rowsReturned++
-				w.currJob.rowsReturned++
-			}
-
-			w.currBatchRows[i] = nil
-		}
-
-		if lastRowReceived {
-			return
-		}
-
-		//re-init for the next batch
-		w.codes = w.codes[:0]
-		w.fvecs = w.fvecs[:0]
-		w.dists = w.dists[:0]
-
-	}
-}
-
 // flushLocalHeap makes a copy of the rows in the local heap and
 // sends it to the next stage of the scan pipeline.
 func (w *ScanWorker) flushLocalHeap() {
@@ -616,27 +533,100 @@ func (w *ScanWorker) finishCallback() {
 
 }
 
-// processCurrentBatch decodes current batch of rows, computes
-// the distance from query vector and either stores in local heap(limit pushdown)
-// or sends it to the next stage of scan pipeline.
-func (w *ScanWorker) processCurrentBatch() (err error) {
+// processSparseVectorBatch decodes sparse vectors, performs query term matching
+// using Transpose, and computes distances.
+func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
+	sparseCb := w.currJob.codebook.(codebook.SparseCodebook)
 
-	defer func() {
-		if r := recover(); r != nil {
-			l.Fatalf("%v - panic(%v) detected while processing %s", w.logPrefix, r, w.r)
-			l.Fatalf("%s", l.StackTraceAll())
-			err = fmt.Errorf("processCurrentBatch panic occurred: %v", r)
-		}
-	}()
-
-	logging.Verbosef("%v processCurrentBatch %v %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid, w.currJob.cid)
-
-	if len(w.currBatchRows) == 0 {
-		return
+	qvec := w.r.sparseQueryVector
+	queryDim := w.sparseQueryDim
+	if w.sparseQueryValues == nil {
+		w.sparseQueryValues = qvec.Values()
 	}
 
-	vecCount := len(w.currBatchRows)
+	t0 := time.Now()
+	// Pre-allocate fvecs for the whole batch upfront to avoid per-vector allocations.
+	needed := vecCount * queryDim
+	if cap(w.fvecs) < needed {
+		w.fvecs = make([]float32, needed)
+	} else {
+		w.fvecs = w.fvecs[:needed]
+	}
 
+	// Track valid vectors (those with matching query terms)
+	validCount := 0
+	for i := 0; i < vecCount; i++ {
+		valBytes := w.currBatchRows[i].value
+
+		if len(valBytes) < 4 {
+			return errors.New("sparse vector too short")
+		}
+
+		// Zero-copy reinterpret the raw bytes as ConciseSparseVector and use NNZ() to decode N.
+		concise := common.ConciseSparseVector(ByteSliceToFloat32(valBytes))
+		nnz := concise.NNZ()
+		expectedSize := 4 * concise.Size() // Size() returns element count; bytes = 4 * elements
+		if len(valBytes) < expectedSize {
+			return fmt.Errorf("sparse vector size %d less than expected %d for %d elements",
+				len(valBytes), expectedSize, nnz)
+		}
+
+		result := w.fvecs[validCount*queryDim : (validCount+1)*queryDim]
+		// Zero the slot - Transpose only writes matching terms; unmatched positions must be 0.
+		for j := range result {
+			result[j] = 0
+		}
+
+		keep := sparseCb.Transpose([]float32(qvec), []float32(concise), result)
+		if !keep {
+			// No matching terms between query and document vector - skip this document
+			w.currBatchRows[i].free() // Return row to pool to prevent pool exhaustion
+			w.currBatchRows[i] = nil
+			continue
+		}
+
+		// Keep this row - move it to the validCount position if needed
+		if validCount != i {
+			w.currBatchRows[validCount] = w.currBatchRows[i]
+		}
+		validCount++
+	}
+
+	// Update currBatchRows and fvecs to only contain valid rows
+	w.currBatchRows = w.currBatchRows[:validCount]
+	w.fvecs = w.fvecs[:validCount*queryDim]
+
+	atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
+	atomic.AddInt64(&w.currJob.decodeCnt, int64(validCount))
+
+	// Compute distance using the transposed vectors (all queryDim size)
+	t0 = time.Now()
+
+	// Ensure w.dists has sufficient capacity for validCount distances
+	if cap(w.dists) < validCount {
+		w.dists = make([]float32, validCount)
+	} else {
+		w.dists = w.dists[:validCount]
+	}
+
+	// For ComputeDistance, pass only the values portion of the concise query vector.
+	// concise format: [nnz, idx1, ..., idxN, val1, ..., valN]
+	// After Transpose, each fvec block is queryDim values aligned to query term positions.
+	// Using the full concise qvec (length 1+2*queryDim) would make MockCodebook use the
+	// wrong stride, causing out-of-bounds panics. Pass qvecValues (length queryDim) so
+	// ComputeDistance correctly strides fvecs in queryDim-sized blocks.
+	err := sparseCb.ComputeDistance(w.sparseQueryValues, w.fvecs[:validCount*queryDim], w.dists)
+	if err != nil {
+		logging.Verbosef("%v processSparseVectorBatch ComputeDistance error: %v", w.logPrefix, err)
+		return err
+	}
+	atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
+	atomic.AddInt64(&w.currJob.distCmpCnt, int64(validCount))
+
+	return nil
+}
+
+func (w *ScanWorker) processDenseVectorBatch(vecCount int) (err error) {
 	metric := w.currJob.codebook.MetricType()
 
 	useDistEncoded := func() bool {
@@ -677,7 +667,7 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 				w.dtable = make([]float32, subQuantizers*(1<<nbits))
 				err = w.currJob.codebook.ComputeDistanceTable(qvec, w.dtable)
 				if err != nil {
-					logging.Verbosef("%v Sender got error: %v from ComputeDistanceTable", w.logPrefix, err)
+					logging.Verbosef("%v processDenseVectorBatch got error: %v from ComputeDistanceTable", w.logPrefix, err)
 					return
 				}
 			}
@@ -687,7 +677,7 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		err = w.currJob.codebook.ComputeDistanceEncoded(qvec, vecCount, w.codes,
 			w.dists, w.dtable, w.currJob.cid)
 		if err != nil {
-			logging.Verbosef("%v Sender got error: %v from ComputeDistance", w.logPrefix, err)
+			logging.Verbosef("%v processDenseVectorBatch got error: %v from ComputeDistance", w.logPrefix, err)
 			return
 		}
 		atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
@@ -702,7 +692,7 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		t0 := time.Now()
 		err = w.currJob.codebook.DecodeVectors(vecCount, w.codes, w.fvecs[:vecCount*w.vectorDim])
 		if err != nil {
-			logging.Verbosef("%v Sender got error: %v from DecodeVectors", w.logPrefix, err)
+			logging.Verbosef("%v processDenseVectorBatch got error: %v from DecodeVectors", w.logPrefix, err)
 			return
 		}
 		atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
@@ -714,14 +704,51 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		w.dists = w.dists[:vecCount]
 		err = w.currJob.codebook.ComputeDistance(qvec, w.fvecs[:vecCount*w.vectorDim], w.dists)
 		if err != nil {
-			logging.Verbosef("%v Sender got error: %v from ComputeDistance", w.logPrefix, err)
+			logging.Verbosef("%v processDenseVectorBatch got error: %v from ComputeDistance", w.logPrefix, err)
 			return
 		}
 
 		atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
 		atomic.AddInt64(&w.currJob.distCmpCnt, int64(vecCount))
-
 	}
+	return nil
+}
+
+// processCurrentBatch decodes current batch of rows, computes
+// the distance from query vector and either stores in local heap(limit pushdown)
+// or sends it to the next stage of scan pipeline.
+func (w *ScanWorker) processCurrentBatch() (err error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			l.Fatalf("%v - panic(%v) detected while processing %s", w.logPrefix, r, w.r)
+			l.Fatalf("%s", l.StackTraceAll())
+			err = fmt.Errorf("processCurrentBatch panic occurred: %v", r)
+		}
+	}()
+
+	logging.Verbosef("%v processCurrentBatch %v %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid, w.currJob.cid)
+
+	if len(w.currBatchRows) == 0 {
+		return
+	}
+
+	vecCount := len(w.currBatchRows)
+
+	if w.r.IsSparseVectorIndexScan() {
+		err = w.processSparseVectorBatch(vecCount)
+		if err != nil {
+			return err
+		}
+		// Update vecCount after filtering - some vectors may have been dropped
+		vecCount = len(w.currBatchRows)
+	} else {
+		err = w.processDenseVectorBatch(vecCount)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Substitue distance in place centroidId and send to outCh or store in local heap
 	for i := 0; i < vecCount; i++ {
 		w.currBatchRows[i].dist = w.dists[i] // Add distance for sorting in heap
@@ -890,7 +917,16 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 		return false, errors.New("Include column filtering is only supported with BHIVE indexes")
 	}
 
-	includeColumn := meta[w.codeSize:]
+	// For sparse vectors, the meta starts with the variable-length sparse vector
+	// data followed by include columns. For dense, the first codeSize bytes are
+	// the quantized code.
+	var includeColumn []byte
+	if w.r.IsSparseVectorIndexScan() {
+		vecSize := sparseVectorSizeFromMeta(meta)
+		includeColumn = meta[vecSize:]
+	} else {
+		includeColumn = meta[w.codeSize:]
+	}
 
 	w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(includeColumn))
 
@@ -933,7 +969,13 @@ func (w *ScanWorker) inlineFilterCb2(meta []byte, docid []byte) (bool, error) {
 		return false, errors.New("Include column filtering is only supported with BHIVE indexes")
 	}
 
-	includeColumn := meta[w.codeSize:]
+	var includeColumn []byte
+	if w.r.IsSparseVectorIndexScan() {
+		vecSize := sparseVectorSizeFromMeta(meta)
+		includeColumn = meta[vecSize:]
+	} else {
+		includeColumn = meta[w.codeSize:]
+	}
 	w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(includeColumn))
 
 	compositeKeys, _, err := jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
@@ -997,19 +1039,34 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	codeSize := w.codeSize
 	storeId, recordId, meta := w.currJob.snap.Snapshot().DecodeMeta(value)
 
-	// The minimum length of decoded meta has to be "codeSize"
-	// If it is less - Then there is a bug in decode meta logic
-	if len(meta) == 0 || len(meta) < codeSize {
-		logging.Fatalf("ScanWorker::bhiveIteratorCallback len(meta) is less than expected size. value: %v, len(value): %v, "+
-			"meta: %v, len(meta): %v, codeSize: %v, docid: %v for indexInst: %v, partnId: %v, cid: %v, storeId: %v, recordId: %v",
-			value, len(value), meta, len(meta), codeSize, entry, w.r.IndexInstId, w.currJob.pid, w.currJob.cid, storeId, recordId)
-	}
+	var includeColumn []byte
 
-	// The value field will contain both quantized codes and include column fields.
-	// The first "codeSize" bytes contain quantized codes. Remaining bytes contain
-	// the "includeColumn" value
-	includeColumn := meta[codeSize:]
-	value = meta[:codeSize]
+	if w.r.IsSparseVectorIndexScan() {
+		// For sparse vectors, codeSize is 0. The meta contains:
+		// [sparse_vector_bytes | include_column_bytes]
+		vecSize := sparseVectorSizeFromMeta(meta)
+		if vecSize == 0 && len(meta) > 0 {
+			logging.Fatalf("ScanWorker::bhiveIteratorCallback invalid sparse vector in meta."+
+				"meta len: %v, docid: %v for indexInst: %v, partnId: %v, cid: %v, storeId: %v, recordId: %v vector size: %v",
+				len(meta), entry, w.r.IndexInstId, w.currJob.pid, w.currJob.cid, storeId, recordId, vecSize)
+		}
+		includeColumn = meta[vecSize:]
+		value = meta[:vecSize]
+	} else {
+		// The minimum length of decoded meta has to be "codeSize"
+		// If it is less - Then there is a bug in decode meta logic
+		if len(meta) == 0 || len(meta) < codeSize {
+			logging.Fatalf("ScanWorker::bhiveIteratorCallback len(meta) is less than expected size. value: %v, len(value): %v, "+
+				"meta: %v, len(meta): %v, codeSize: %v, docid: %v for indexInst: %v, partnId: %v, cid: %v, storeId: %v, recordId: %v",
+				value, len(value), meta, len(meta), codeSize, entry, w.r.IndexInstId, w.currJob.pid, w.currJob.cid, storeId, recordId)
+		}
+
+		// The value field will contain both quantized codes and include column fields.
+		// The first "codeSize" bytes contain quantized codes. Remaining bytes contain
+		// the "includeColumn" value
+		includeColumn = meta[codeSize:]
+		value = meta[:codeSize]
+	}
 
 	var newRow *Row
 	if w.r.useHeapForVectorIndex() {
@@ -2381,4 +2438,23 @@ func (q *AtomicRowBuffer) Get() *Row {
 			atomic.AddInt64(&q.count, 1)
 		}
 	}
+}
+
+// sparseVectorSizeFromMeta returns the number of bytes occupied by a sparse
+// vector at the beginning of a byte buffer.
+// Format: [float32(N), float32(idx1), ..., float32(idxN), val1, ..., valN]
+// N and indices are stored as plain float32 casts of their integer values;
+// values are stored as plain float32. Total elements = 1 + 2*N.
+// Returns 0 if the buffer is too small or invalid.
+func sparseVectorSizeFromMeta(meta []byte) int {
+	if len(meta) < 4 {
+		return 0
+	}
+	// Zero-copy reinterpret as ConciseSparseVector and use NNZ()/Size() to decode N.
+	cv := common.ConciseSparseVector(ByteSliceToFloat32(meta))
+	size := 4 * cv.Size() // Size() returns element count (1+2*N); bytes = 4 * elements
+	if size == 0 || size > len(meta) {
+		return 0
+	}
+	return size
 }

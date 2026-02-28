@@ -398,3 +398,21 @@ func Float32ToByteSlice(v []float32) []byte {
 
 	return b
 }
+
+// ByteSliceToFloat32 reinterprets a byte slice as a float32 slice (zero-copy).
+// The byte slice length must be a multiple of 4. This is the symmetric inverse of
+// Float32ToByteSlice and relies on the same native-endian memory layout.
+func ByteSliceToFloat32(b []byte) []float32 {
+	var ft float32
+	size := int(reflect.TypeOf(ft).Size())
+
+	var v []float32
+	bsh := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	vsh := (*reflect.SliceHeader)(unsafe.Pointer(&v))
+
+	vsh.Data = bsh.Data
+	vsh.Len = bsh.Len / size
+	vsh.Cap = bsh.Cap / size
+
+	return v
+}

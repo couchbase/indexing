@@ -1739,6 +1739,11 @@ func (s *scanCoordinator) fillCodebookMap(r *ScanRequest) (cbErr error) {
 		if cbErr != nil {
 			return fmt.Errorf("partitionid: %v err: %v", partnId, cbErr)
 		}
+		if r.IsSparseVectorIndexScan() {
+			if _, ok := r.codebookMap[partnId].(codebook.SparseCodebook); !ok {
+				return fmt.Errorf("partitionid: %v codebook is not a SparseCodebook", partnId)
+			}
+		}
 	}
 
 	return nil

@@ -44,6 +44,7 @@ require (
 	github.com/couchbase/go-couchbase v0.1.1
 	github.com/couchbase/go-slab v0.0.0-20220303011136-e47646b420b3
 	github.com/couchbase/gocb/v2 v2.9.4
+	github.com/couchbase/gocbcrypto v0.0.0-00010101000000-000000000000
 	github.com/couchbase/goforestdb v0.0.0-20161215171854-0b501227de0e
 	github.com/couchbase/gometa v0.0.0-20220803182802-05cb6b2e299f
 	github.com/couchbase/goutils v0.1.2

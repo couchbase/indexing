@@ -147,6 +147,8 @@ type bhiveSlice struct {
 
 	// buffer
 	quantizedCodeBuf [][]byte // For vector index, used for quantized code computation of vectors
+	// For Sparse vector index, used for sparseJL representation of concise vector
+	sparseJLBuf [][]float32
 
 	//
 	// vector index related metadata
@@ -914,6 +916,9 @@ func (slice *bhiveSlice) setupWriters() {
 
 	// initialize buffer
 	slice.quantizedCodeBuf = make([][]byte, 0, slice.maxNumWriters)
+	if slice.idxDefn.HasSparseVector() {
+		slice.sparseJLBuf = make([][]float32, 0, slice.maxNumWriters)
+	}
 
 	// initialize comand handler
 	slice.cmdCh = make([]chan *indexMutation, 0, slice.maxNumWriters)
@@ -939,6 +944,13 @@ func (slice *bhiveSlice) initWriters(numWriters int) {
 	for i := curNumWriters; i < numWriters; i++ {
 		if slice.idxDefn.IsVectorIndex {
 			slice.quantizedCodeBuf[i] = make([]byte, 0) // After training is completed, the codebuf will be resized
+		}
+	}
+	if slice.idxDefn.IsVectorIndex && slice.idxDefn.HasSparseVector() {
+		slice.sparseJLBuf = slice.sparseJLBuf[:numWriters]
+		for i := curNumWriters; i < numWriters; i++ {
+			// After training is completed, the sparse JL vector buffer will be resized
+			slice.sparseJLBuf[i] = make([]float32, 0)
 		}
 	}
 
@@ -1188,7 +1200,8 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
 	}
 
-	if mdb.codebook.IsTrained() == false || mdb.codeSize <= 0 {
+	isSparseVector := mdb.idxDefn.HasSparseVector()
+	if mdb.codebook.IsTrained() == false || (!isSparseVector && mdb.codeSize <= 0) {
 		err := fmt.Errorf("Fatal - Mutation processing should not happen on an untrained codebook. "+
 			"docId: %s, Index instId: %v", logging.TagUD(docid), mdb.IndexInstId())
 		logging.Fatalf("bhiveSlice::insertVectorIndex %v", err)
@@ -1197,11 +1210,36 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 	}
 
 	vec := vecs[0]
-	metalen := mdb.codeSize + len(includeColumn)
+	var err error
+	var centroidId int64
+	// space taken by quantized code or the concise vector
+	var metaVecLen int
+	if !isSparseVector {
+		metaVecLen = mdb.codeSize
+	} else {
+		metaVecLen = 4 * len(vec)
+	}
+
+	metalen := metaVecLen + len(includeColumn)
 	mdb.quantizedCodeBuf[workerId] = resizeQuantizedCodeBuf(mdb.quantizedCodeBuf[workerId], 1, metalen, true)
 
 	// compute centroidId and quantized code
-	_, centroidId, err := mdb.getQuantizedCodeForVector(vec, mdb.codeSize, mdb.quantizedCodeBuf[workerId])
+	if !isSparseVector {
+		_, centroidId, err = mdb.getQuantizedCodeForVector(
+			vec,
+			metaVecLen,
+			mdb.quantizedCodeBuf[workerId])
+	} else {
+		copy(mdb.quantizedCodeBuf[workerId][:metaVecLen], ((bhive.Vector)(vec)).Bytes())
+		mdb.sparseJLBuf[workerId] = resizeSparseJLBuf(
+			mdb.sparseJLBuf[workerId],
+			mdb.codebook.Dimension(),
+			true)
+		if _, err = mdb.getSparseJLVec(vec, mdb.sparseJLBuf[workerId]); err == nil {
+			centroidId, err = mdb.getNearestCentroidId(mdb.sparseJLBuf[workerId])
+		}
+	}
+
 	if err != nil {
 		logging.Errorf("bhiveSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
 			"Skipping docid:%s  due to error in computing centroidId and quantized code.  Error: %v",
@@ -1210,15 +1248,16 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
 	}
 
-	// First "codeSize" of quantizedCodeBuf will be the quantized code.
-	// Re-use that buffer to stitch include columns and quantized code together
+	// First "metaVecLen" of quantizedCodeBuf will be the quantized code for Dense Vector
+	// or it will the concise vector for sparse vector.
+	// Re-use that buffer to stitch include columns and quantized code/concise vector together
 	// This will help avoid new memory allocations
 	var bhiveMeta []byte
 	if len(includeColumn) > 0 {
-		copy(mdb.quantizedCodeBuf[workerId][mdb.codeSize:metalen], includeColumn)
+		copy(mdb.quantizedCodeBuf[workerId][metaVecLen:metalen], includeColumn)
 		bhiveMeta = mdb.quantizedCodeBuf[workerId][:metalen]
 	} else {
-		bhiveMeta = mdb.quantizedCodeBuf[workerId][:mdb.codeSize]
+		bhiveMeta = mdb.quantizedCodeBuf[workerId][:metaVecLen]
 	}
 
 	if vec != nil {
@@ -1502,7 +1541,10 @@ func (mdb *bhiveSlice) InitCodebookFromSerialized(content []byte) error {
 	}
 
 	mdb.codebook = codebook
-	mdb.codeSize, err = mdb.codebook.CodeSize()
+	mdb.codeSize = 0
+	if !mdb.idxDefn.HasSparseVector() {
+		mdb.codeSize, err = mdb.codebook.CodeSize()
+	}
 	if err != nil {
 		mdb.ResetCodebook()
 		return err
@@ -1512,6 +1554,9 @@ func (mdb *bhiveSlice) InitCodebookFromSerialized(content []byte) error {
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
+	if mdb.idxDefn.HasSparseVector() {
+		mdb.initSparseJLBuf()
+	}
 	return nil
 }
 
@@ -1548,7 +1593,10 @@ func (mdb *bhiveSlice) Train(vecs []float32) error {
 		return err
 	}
 
-	mdb.codeSize, err = mdb.codebook.CodeSize()
+	mdb.codeSize = 0
+	if !mdb.idxDefn.HasSparseVector() {
+		mdb.codeSize, err = mdb.codebook.CodeSize()
+	}
 	if err != nil {
 		mdb.codeSize = 0
 		return err
@@ -1558,6 +1606,9 @@ func (mdb *bhiveSlice) Train(vecs []float32) error {
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
+	if mdb.idxDefn.HasSparseVector() {
+		mdb.initSparseJLBuf()
+	}
 	return nil
 }
 
@@ -1585,6 +1636,13 @@ func (mdb *bhiveSlice) initQuantizedCodeBuf() {
 	numWriters := mdb.numWriters
 	for i := 0; i < numWriters; i++ {
 		mdb.quantizedCodeBuf[i] = resizeQuantizedCodeBuf(mdb.quantizedCodeBuf[i], 1, mdb.codeSize, true)
+	}
+}
+
+func (mdb *bhiveSlice) initSparseJLBuf() {
+	numWriters := mdb.numWriters
+	for i := 0; i < numWriters; i++ {
+		mdb.sparseJLBuf[i] = resizeSparseJLBuf(mdb.sparseJLBuf[i], mdb.codebook.Dimension(), true)
 	}
 }
 
@@ -1637,6 +1695,23 @@ func (mdb *bhiveSlice) getQuantizedCodeForVector(vec []float32, codeSize int, bu
 	return buf, centroidId[0], nil
 }
 
+func (mdb *bhiveSlice) getSparseJLVec(vec []float32, sparseJLVecBuf []float32) ([]float32, error) {
+
+	sparseCb, ok := mdb.codebook.(codebook.SparseCodebook)
+	if !ok {
+		return nil, codebook.ErrIncorrectCodebook
+	}
+
+	t0 := time.Now()
+	err := sparseCb.Concise2SparseJL(vec, sparseJLVecBuf)
+	if err != nil {
+		return nil, err
+	}
+	mdb.idxStats.Timings.vtEncode.Put(time.Now().Sub(t0))
+
+	return sparseJLVecBuf, nil
+}
+
 // Similar to getQuantizedCodeForVector() but processes array of vectors
 func (mdb *bhiveSlice) getQuantizedCodeForVectors(vecs [][]float32, codeSize int, buf []byte) ([]byte, error) {
 	offset := 0
@@ -1680,7 +1755,10 @@ func (mdb *bhiveSlice) recoverCodebook(codebookPath string) error {
 	}
 
 	mdb.codebook = codebook
-	mdb.codeSize, err = mdb.codebook.CodeSize()
+	mdb.codeSize = 0
+	if !mdb.idxDefn.HasSparseVector() {
+		mdb.codeSize, err = mdb.codebook.CodeSize()
+	}
 	if err != nil {
 		mdb.ResetCodebook() // Ignore error for now
 		return err
@@ -1690,6 +1768,9 @@ func (mdb *bhiveSlice) recoverCodebook(codebookPath string) error {
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
+	if mdb.idxDefn.HasSparseVector() {
+		mdb.initSparseJLBuf()
+	}
 	return nil
 }
 
@@ -2426,6 +2507,9 @@ func (mdb *bhiveSlice) RollbackToZero(initialBuild bool) error {
 	// During rollback to zero, initialise the quantizedCodeBuf. Rest of the metadata is still valid
 	if mdb.idxDefn.IsVectorIndex {
 		mdb.initQuantizedCodeBuf()
+		if mdb.idxDefn.HasSparseVector() {
+			mdb.initSparseJLBuf()
+		}
 	}
 
 	return nil
