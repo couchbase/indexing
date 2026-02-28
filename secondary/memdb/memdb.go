@@ -1312,12 +1312,6 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, keyId []byt
 		}
 	}()
 
-	defer func() {
-		m.encMu.Lock()
-		defer m.encMu.Unlock()
-		m.snapKeyIds[dir] = [][]byte{append([]byte(nil), m.encKeyId...)}
-	}()
-
 	m.Lock()
 
 	if m.useMemoryMgmt {

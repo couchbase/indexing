@@ -336,7 +336,7 @@ func (m *MemDB) GetEncryptionKeyById(keyID []byte) []byte {
 }
 
 // returns a copy of current encryption key ID and cipher
-func (m *MemDB) GetEncryptionInfo() ([]byte, string) {
+func (m *MemDB) GetCurrentKeyId() ([]byte, string) {
 	m.encMu.RLock()
 	defer m.encMu.RUnlock()
 
@@ -347,6 +347,49 @@ func (m *MemDB) GetEncryptionInfo() ([]byte, string) {
 	}
 
 	return nil, gocbcrypto.CipherNameNone
+}
+
+// registers current keyId for a snapshot. It is called during snapshot creation
+// and key rotation to keep track of active keys for snapshots.
+func (m *MemDB) RegisterSnapshotKeyId(snapDir string) (keyId []byte, cipher string, exists bool) {
+	m.encMu.Lock()
+	defer m.encMu.Unlock()
+
+	if len(m.encKeyId) > 0 {
+		keyId = make([]byte, len(m.encKeyId))
+		copy(keyId, m.encKeyId)
+		cipher = gocbcrypto.CipherNameAES256GCM
+	} else {
+		keyId = m.encKeyId
+		cipher = gocbcrypto.CipherNameNone
+	}
+
+	// register only once per snapshot
+	if exists = keyIdExists(m.snapKeyIds[snapDir], keyId); !exists {
+		m.snapKeyIds[snapDir] = append(m.snapKeyIds[snapDir], keyId)
+	}
+
+	return
+}
+
+func (m *MemDB) DeregisterSnapshotKeyId(snapDir string, keyId []byte) {
+	m.encMu.Lock()
+	defer m.encMu.Unlock()
+
+	if keyIds, ok := m.snapKeyIds[snapDir]; ok {
+		if rem := removeKeyIdFromList(keyIds, keyId); len(rem) == 0 {
+			delete(m.snapKeyIds, snapDir)
+		} else {
+			m.snapKeyIds[snapDir] = rem
+		}
+	}
+}
+
+func (m *MemDB) DeregisterSnapshot(snapDir string) {
+	m.encMu.Lock()
+	defer m.encMu.Unlock()
+
+	delete(m.snapKeyIds, snapDir)
 }
 
 func (m *MemDB) GetActiveKeyIdList() [][]byte {
@@ -468,7 +511,9 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 	}
 	defer m.dirGuard.Release(g)
 
-	keyId, cipher := m.GetEncryptionInfo()
+	// add current key
+	keyId, cipher, exists := m.RegisterSnapshotKeyId(snapDir)
+
 	r := &keyRotationVisitor{
 		db:             m,
 		dropKeyIds:     keyIds,
@@ -477,35 +522,16 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 		cipher:         cipher,
 	}
 
-	err = m.walkEncryptedFiles(snapDir, g.cancelCtx, r)
-
-	m.encMu.Lock()
-	defer m.encMu.Unlock()
-
-	if err != nil {
-		// preserve older keys for safety on partial rotation.
-		if r.NumFilesRotated > 0 {
-			m.snapKeyIds[snapDir] = appendUniqueKeyId(m.snapKeyIds[snapDir], keyId)
+	if err = m.walkEncryptedFiles(snapDir, g.cancelCtx, r); err != nil {
+		if r.NumFilesRotated == 0 && !exists {
+			m.DeregisterSnapshotKeyId(snapDir, keyId) // remove current key if no files were encrypted with it
 		}
 		return err
 	}
 
-	// Remove dropped keys and add current key
-	var newKeyIds [][]byte
-	for _, existingKeyId := range m.snapKeyIds[snapDir] {
-		found := false
-		for _, dropKey := range keyIds {
-			if bytes.Equal(existingKeyId, dropKey) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			newKeyIds = appendUniqueKeyId(newKeyIds, existingKeyId)
-		}
+	for _, dropKey := range keyIds {
+		m.DeregisterSnapshotKeyId(snapDir, dropKey)
 	}
-	newKeyIds = appendUniqueKeyId(newKeyIds, keyId)
-	m.snapKeyIds[snapDir] = newKeyIds
 	return nil
 }
 
@@ -747,10 +773,7 @@ func (m *MemDB) RemoveSnapshot(snapDir string) error {
 		return err
 	}
 
-	m.encMu.Lock()
-	defer m.encMu.Unlock()
-
-	delete(m.snapKeyIds, snapDir)
+	m.DeregisterSnapshot(snapDir)
 	return nil
 }
 
@@ -899,7 +922,7 @@ func (m *MemDB) GetEncryptionStatsFromDisk() (EncryptionStats, error) {
 	}
 
 	// needed to derive rencryption stats
-	if keyId, _ := m.GetEncryptionInfo(); len(keyId) > 0 {
+	if keyId, _ := m.GetCurrentKeyId(); len(keyId) > 0 {
 		v.keyId = keyId
 		v.keyIds = append(v.keyIds, keyId)
 	}
@@ -1029,6 +1052,32 @@ func appendUniqueKeyId(result [][]byte, newId []byte) [][]byte {
 	}
 
 	return result
+}
+
+func keyIdExists(keyIds [][]byte, keyId []byte) bool {
+	for _, existing := range keyIds {
+		if bytes.Equal(existing, keyId) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func removeKeyIdFromList(keyIds [][]byte, keyIdToDrop []byte) [][]byte {
+	if len(keyIds) == 0 {
+		return nil
+	}
+
+	rem := make([][]byte, 0, len(keyIds))
+	for _, keyId := range keyIds {
+		if bytes.Equal(keyId, keyIdToDrop) {
+			continue
+		}
+		rem = append(rem, keyId)
+	}
+
+	return rem
 }
 
 // ////////////////

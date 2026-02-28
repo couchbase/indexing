@@ -340,7 +340,7 @@ func testLoadStoreDisk(t *testing.T, testConf Config) {
 	var wg sync.WaitGroup
 	db, err := NewWithEncryptionConfig(testConf, nil)
 	assert.NoError(t, err)
-	keyId, cipher := db.GetEncryptionInfo()
+	keyId, cipher := db.GetCurrentKeyId()
 
 	n := 1000000
 	t0 := time.Now()
@@ -430,7 +430,7 @@ func testConcurrentLoadCloseFragmentation(t *testing.T, n int, testConf Config) 
 
 	db, err := NewWithEncryptionConfig(testConf, nil)
 	assert.NoError(t, err)
-	keyId, cipher := db.GetEncryptionInfo()
+	keyId, cipher := db.GetCurrentKeyId()
 
 	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
 		wg.Add(1)
@@ -505,7 +505,7 @@ func testStoreDiskShutdown(t *testing.T, testConf Config) {
 	var wg sync.WaitGroup
 	db, err := NewWithEncryptionConfig(testConf, nil)
 	assert.NoError(t, err)
-	keyId, cipher := db.GetEncryptionInfo()
+	keyId, cipher := db.GetCurrentKeyId()
 
 	n := 1000000
 	t0 := time.Now()
@@ -762,7 +762,7 @@ func testLoadDeltaStoreDisk(t *testing.T, conf Config) {
 	conf.UseDeltaInterleaving()
 	db, err := NewWithEncryptionConfig(conf, nil)
 	assert.NoError(t, err)
-	keyId, cipher := db.GetEncryptionInfo()
+	keyId, cipher := db.GetCurrentKeyId()
 
 	var writers []*Writer
 	for i := 0; i < runtime.GOMAXPROCS(0); i++ {

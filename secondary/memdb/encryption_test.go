@@ -122,7 +122,7 @@ func testEncryptedVsUnencryptedDiskSize(t *testing.T, testConf Config) {
 		snap, _ := db.NewSnapshot()
 		t.Log("snap item count", snap.count)
 		snap.Open()
-		keyId, cipher := db.GetEncryptionInfo()
+		keyId, cipher, _ := db.RegisterSnapshotKeyId(dir)
 		assert.NoError(t, db.PreparePersistence(dir, snap, keyId, cipher))
 		assert.NoError(t, db.StoreToDisk(dir, snap, runtime.GOMAXPROCS(0), keyId, cipher, callb))
 		dataSz1 := itmDataSz
@@ -191,7 +191,7 @@ func testEncryptedVsUnencryptedDiskSizeWithDeltaFiles(t *testing.T, testConf Con
 		wg.Wait()
 
 		snap.Open()
-		keyId, cipher := db.GetEncryptionInfo()
+		keyId, cipher, _ := db.RegisterSnapshotKeyId(dir)
 		assert.NoError(t, db.PreparePersistence(dir, snap, keyId, cipher))
 		snap.Close() // this updates snapshot gc list
 
@@ -253,7 +253,7 @@ func testEncryptionGetActiveKeyIds(t *testing.T, testConf Config) {
 		snap, _ := db.NewSnapshot()
 		snapPath := filepath.Join(db.Path, fmt.Sprintf("snap:%v", i))
 		snap.Open()
-		keyId, cipher := db.GetEncryptionInfo()
+		keyId, cipher, _ := db.RegisterSnapshotKeyId(snapPath)
 		if err = db.PreparePersistence(snapPath, snap, keyId, cipher); err == nil {
 			err = db.StoreToDisk(snapPath, snap, 8, keyId, cipher, nil)
 		}
@@ -392,7 +392,7 @@ func testEncryptionGetActiveKeyIdsWithDeltaFiles(t *testing.T, conf Config) {
 
 	snapPath := filepath.Join(db.Path, fmt.Sprintf("snap"))
 	snap.Open()
-	keyId, cipher := db.GetEncryptionInfo()
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(snapPath)
 	if err := db.PreparePersistence(snapPath, snap, keyId, cipher); err != nil {
 		t.Errorf("Error while preparing %v", err)
 		return
@@ -445,7 +445,7 @@ func testEncryptionGetActiveKeyIdsManySnapshots(t *testing.T, testConf Config) {
 	wg.Wait()
 
 	// Get the initial key ID used for encryption
-	initialKeyId, _ := db.GetEncryptionInfo()
+	initialKeyId, _ := db.GetCurrentKeyId()
 	assert.NotNil(t, initialKeyId, "Initial key ID should not be nil")
 
 	// Create multiple snapshots with the same key
@@ -459,7 +459,7 @@ func testEncryptionGetActiveKeyIdsManySnapshots(t *testing.T, testConf Config) {
 		snapPaths = append(snapPaths, snapPath)
 
 		snap.Open()
-		keyId, cipher := db.GetEncryptionInfo()
+		keyId, cipher, _ := db.RegisterSnapshotKeyId(snapPath)
 		err = db.PreparePersistence(snapPath, snap, keyId, cipher)
 		assert.NoError(t, err)
 
@@ -556,6 +556,66 @@ func testEncryptionGetActiveKeyIdsManySnapshots(t *testing.T, testConf Config) {
 	})
 }
 
+// test disabling encryption and then getting active key ids from encrypted and unencrypted snapshots.
+func testEncryptionGetActiveKeyIdsEncryptedUnencryptedSnapshot(t *testing.T, testConf Config) {
+	defer ValidateNoMemLeaks()
+
+	os.RemoveAll("db.dump")
+
+	testConf.Path = "db.dump"
+	db, err := NewWithEncryptionConfig(testConf, nil)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	n := 100000
+	var wg sync.WaitGroup
+	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+		wg.Add(1)
+		w := db.NewWriter()
+		go doInsertSafe(w, &wg, n/runtime.GOMAXPROCS(0), true)
+	}
+	wg.Wait()
+
+	var snapPaths []string
+	snap, err := db.NewSnapshot()
+	assert.NoError(t, err)
+
+	defer snap.Close()
+
+	snapPath := filepath.Join(db.Path, fmt.Sprintf("snap:%v", 0))
+	snapPaths = append(snapPaths, snapPath)
+
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(snapPath)
+	snap.Open()
+	err = db.PreparePersistence(snapPath, snap, keyId, cipher)
+	assert.NoError(t, err)
+
+	err = db.StoreToDisk(snapPath, snap, 8, keyId, cipher, nil)
+	assert.NoError(t, err)
+
+	err = db.SetCurrentEncryptionKey(nil, nil, gocbcrypto.CipherNameNone)
+	assert.NoError(t, err)
+
+	snapPath2 := filepath.Join(db.Path, fmt.Sprintf("snap:%v", 1))
+	snapPaths = append(snapPaths, snapPath2)
+
+	keyId, cipher, _ = db.RegisterSnapshotKeyId(snapPath2)
+	snap.Open()
+	err = db.PreparePersistence(snapPath2, snap, keyId, cipher)
+	assert.NoError(t, err)
+
+	err = db.StoreToDisk(snapPath2, snap, 8, keyId, cipher, nil)
+	assert.NoError(t, err)
+
+	snap.Close()
+
+	keyIds := db.GetActiveKeyIdList()
+	assert.Equal(t, 2, len(keyIds))
+
+	cached, _ := db.GetEncryptionStatsCached()
+	assert.Equal(t, StatusPartEncrypted, cached.Status)
+}
+
 // verfies that concurrent snapshot removal and get active key ids operations can be performed safely.
 func testEncryptionGetActiveKeyIdsWithConcurrentRemoveSnapshot(t *testing.T, testConf Config) {
 	defer ValidateNoMemLeaks()
@@ -580,7 +640,7 @@ func testEncryptionGetActiveKeyIdsWithConcurrentRemoveSnapshot(t *testing.T, tes
 		snap, _ := db.NewSnapshot()
 		snapPath := filepath.Join(db.Path, fmt.Sprintf("snap:%v", i))
 		snap.Open()
-		keyId, cipher := db.GetEncryptionInfo()
+		keyId, cipher, _ := db.RegisterSnapshotKeyId(snapPath)
 		err = db.PreparePersistence(snapPath, snap, keyId, cipher)
 		assert.NoError(t, err)
 		err = db.StoreToDisk(snapPath, snap, 8, keyId, cipher, nil)
@@ -640,7 +700,7 @@ func testEncryptionDropKeyIdsFromSnapshot(t *testing.T, conf Config) {
 	wg.Wait()
 
 	snap.Open()
-	keyId, cipher := db.GetEncryptionInfo()
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(conf.Path)
 	assert.NoError(t, db.PreparePersistence(conf.Path, snap, keyId, cipher))
 	snap.Close() // this updates snapshot gc list
 
@@ -719,6 +779,79 @@ func testEncryptionDropKeyIdsFromSnapshot(t *testing.T, conf Config) {
 	assert.ElementsMatch(t, keyIds, keyIds2)
 }
 
+// verifies that all key ids can be dropped from a snapshot when encryption is disabled
+func testEncryptionDropAllKeyIdsFromSnapshot(t *testing.T, conf Config) {
+	os.RemoveAll("db.dump")
+	conf.Path = "db.dump"
+	conf.UseDeltaInterleaving()
+	db, err := NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+
+	var wg sync.WaitGroup
+	n := 1000000
+
+	// insert n items
+	wg.Add(1)
+	w := db.NewWriter()
+	doInsertSafe(w, &wg, n, false)
+	wg.Wait()
+
+	snap, _ := db.NewSnapshot()
+	// delete n items. This adds dead items to the writer gc list but does not delete them from the index.
+	wg.Add(1)
+	doDeleteSafe(w, &wg, n)
+	wg.Wait()
+
+	snap.Open()
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(conf.Path)
+	assert.NoError(t, db.PreparePersistence(conf.Path, snap, keyId, cipher))
+	assert.NoError(t, db.StoreToDisk(conf.Path, snap, runtime.GOMAXPROCS(0), keyId, cipher, nil))
+	snap.Close()
+
+	// get key ids from snapshot before dropping
+	keyIds, err := db.getActiveKeyIdsFromSnapshot(conf.Path)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(keyIds))
+
+	// disable encryption
+	assert.NoError(t, db.SetCurrentEncryptionKey(nil, []byte{}, gocbcrypto.CipherNameNone))
+
+	// set new key id and cipher
+	assert.NoError(t, db.DropKeyIdsFromSnapshot(keyIds, conf.Path))
+	t.Log(db.encSts.String())
+
+	assert.Greater(t, db.encSts.NumFilesRotated, uint64(0))
+	assert.Equal(t, uint64(0), db.encSts.NumFilesErrEncrypt+
+		db.encSts.NumFilesErrRencrypt+db.encSts.NumFilesErrDecrypt)
+
+	// empty keyId from snapshot after dropping
+	keyIds, err = db.getActiveKeyIdsFromSnapshot(conf.Path)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(keyIds))
+	assert.ElementsMatch(t, []byte{}, keyIds[0])
+
+	sts, err := db.GetEncryptionStatsCached()
+	assert.NoError(t, err)
+	assert.Equal(t, StatusNotEncrypted, sts.Status)
+	t.Log(sts.String())
+
+	db.Close()
+
+	if t.Failed() {
+		return
+	}
+
+	db, err = NewWithEncryptionConfig(conf, []string{conf.Path})
+	assert.NoError(t, err)
+	defer db.Close()
+
+	// get key ids from snapshot after re-encrypting
+	keyIds2, err2 := db.getActiveKeyIdsFromSnapshot(conf.Path)
+	assert.NoError(t, err2)
+	assert.Equal(t, len(keyIds), len(keyIds2))
+	assert.ElementsMatch(t, keyIds, keyIds2)
+}
+
 // verifies that concurrent snapshot cleanup and key id rotation operations can be performed safely.
 // The snapshot cleanup operation should be able to preempt the key id rotation operation.
 func testEncryptionDropKeyIdsFromSnapshotWithConcurrentRemoveSnapshot(t *testing.T, conf Config) {
@@ -745,7 +878,7 @@ func testEncryptionDropKeyIdsFromSnapshotWithConcurrentRemoveSnapshot(t *testing
 	wg.Wait()
 
 	snap.Open()
-	keyId, cipher := db.GetEncryptionInfo()
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(conf.Path)
 	assert.NoError(t, db.PreparePersistence(conf.Path, snap, keyId, cipher))
 	snap.Close() // this updates snapshot gc list
 
@@ -833,7 +966,7 @@ func testEncryptionDropKeyIdsConcurrent(t *testing.T, conf Config) {
 	wg.Wait()
 
 	snap.Open()
-	keyId, cipher := db.GetEncryptionInfo()
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(snapDir)
 	assert.NoError(t, db.PreparePersistence(snapDir, snap, keyId, cipher))
 	snap.Close()
 
@@ -967,8 +1100,8 @@ func testEncryptionDropKeyIdsConcurrentManyInstances(t *testing.T, testConf Conf
 			snap.Open()
 
 			// Persist snapshot
-			keyID, cipher := db.GetEncryptionInfo()
 			snapDir := filepath.Join(dir, fmt.Sprintf("snap-%d", j))
+			keyID, cipher, _ := db.RegisterSnapshotKeyId(snapDir)
 			os.MkdirAll(snapDir, 0755)
 
 			err := db.PreparePersistence(snapDir, snap, keyID, cipher)
@@ -1076,7 +1209,7 @@ func testEncryptionDropKeyIdsCorruptSnapshot(t *testing.T, conf Config) {
 	wg.Wait()
 
 	snap.Open()
-	keyId, cipher := db.GetEncryptionInfo()
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(snapDir)
 	assert.NoError(t, db.PreparePersistence(snapDir, snap, keyId, cipher))
 	snap.Close()
 
@@ -1152,7 +1285,7 @@ func testEncryptionCleanupDropKeyFiles(t *testing.T, conf Config) {
 	wg.Wait()
 
 	snap.Open()
-	keyId, cipher := db.GetEncryptionInfo()
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(conf.Path)
 	assert.NoError(t, db.PreparePersistence(conf.Path, snap, keyId, cipher))
 	snap.Close() // this updates snapshot gc list
 
@@ -1161,7 +1294,7 @@ func testEncryptionCleanupDropKeyFiles(t *testing.T, conf Config) {
 
 	// Helper to create test encrypted files
 	createEncFile := func(path string, content []byte) error {
-		keyId, cipher := db.GetEncryptionInfo()
+		keyId, cipher := db.GetCurrentKeyId()
 		ctx, err := db.NewEncryptionContext(keyId, cipher)
 		if err != nil {
 			return err
@@ -1208,6 +1341,49 @@ func testEncryptionCleanupDropKeyFiles(t *testing.T, conf Config) {
 	assert.NoFileExists(t, bakFile2)
 }
 
+// verifies that if a snapshot is left in a failed state, it is cleaned up from
+// snapKeyIds
+func testEncryptionCleanupStaleSnapshotFromSnapKeys(t *testing.T, conf Config) {
+	snapDir := "db.dump"
+	os.RemoveAll(snapDir)
+	conf.Path = snapDir
+	conf.UseDeltaInterleaving()
+
+	db, err := NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	var wg sync.WaitGroup
+	n := 10000
+
+	wg.Add(1)
+	w := db.NewWriter()
+	doInsertSafe(w, &wg, n, false)
+	wg.Wait()
+
+	snap, _ := db.NewSnapshot()
+	defer snap.Close()
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(snapDir)
+
+	wg.Add(1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Logf("(expected) recovered from panic: %v", r)
+				db.DeregisterSnapshotKeyId(snapDir, keyId)
+
+			}
+			wg.Done()
+		}()
+		snap.Open()
+		assert.NoError(t, db.PreparePersistence(snapDir, snap, keyId, cipher))
+		assert.NoError(t, db.StoreToDisk(snapDir, nil, runtime.GOMAXPROCS(0), keyId, cipher, nil))
+	}()
+
+	wg.Wait()
+	assert.Equal(t, 0, len(db.snapKeyIds), "snapshot has failed and should be cleaned up from snapKeyIds")
+}
+
 // tests encryption of an empty index (no items inserted)
 func testEncryptionEmptyIndex(t *testing.T, conf Config) {
 	defer ValidateNoMemLeaks()
@@ -1221,7 +1397,7 @@ func testEncryptionEmptyIndex(t *testing.T, conf Config) {
 	assert.NoError(t, err)
 
 	// Verify encryption is enabled
-	keyId, _ := db.GetEncryptionInfo()
+	keyId, _ := db.GetCurrentKeyId()
 	assert.NotNil(t, keyId, "Encryption should be enabled")
 
 	// Create a snapshot without inserting any items
@@ -1230,7 +1406,7 @@ func testEncryptionEmptyIndex(t *testing.T, conf Config) {
 
 	snapPath := filepath.Join(db.Path, "snap:empty")
 	snap.Open()
-	keyId, cipher := db.GetEncryptionInfo()
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(snapPath)
 	err = db.PreparePersistence(snapPath, snap, keyId, cipher)
 	assert.NoError(t, err)
 
@@ -1349,7 +1525,7 @@ func testEncryptionStats(t *testing.T, conf Config) {
 
 		snap, _ := db.NewSnapshot()
 		snap.Open()
-		keyId, cipher := db.GetEncryptionInfo()
+		keyId, cipher, _ := db.RegisterSnapshotKeyId(conf.Path)
 		assert.NoError(t, db.PreparePersistence(conf.Path, snap, keyId, cipher))
 		snap.Close()
 
@@ -1477,7 +1653,7 @@ func testEncryptionStats(t *testing.T, conf Config) {
 
 		snap, _ := db.NewSnapshot()
 		snap.Open()
-		keyId, cipher := db.GetEncryptionInfo()
+		keyId, cipher, _ := db.RegisterSnapshotKeyId(conf.Path)
 		assert.NoError(t, db.PreparePersistence(conf.Path, snap, keyId, cipher))
 		snap.Close()
 
@@ -1589,7 +1765,7 @@ func testEncryptionStats(t *testing.T, conf Config) {
 		snap, _ := db.NewSnapshot()
 		snap.Open()
 		snapDir1 := filepath.Join(conf.Path, "snap1")
-		keyId, cipher := db.GetEncryptionInfo()
+		keyId, cipher, _ := db.RegisterSnapshotKeyId(snapDir1)
 		assert.NoError(t, db.PreparePersistence(snapDir1, snap, keyId, cipher))
 		snap.Close()
 		assert.NoError(t, db.StoreToDisk(snapDir1, snap, runtime.GOMAXPROCS(0), keyId, cipher, nil))
@@ -1605,7 +1781,7 @@ func testEncryptionStats(t *testing.T, conf Config) {
 		snap2, _ := db.NewSnapshot()
 		snap2.Open()
 		snapDir2 := filepath.Join(conf.Path, "snap2")
-		keyId2, cipher2 := db.GetEncryptionInfo()
+		keyId2, cipher2, _ := db.RegisterSnapshotKeyId(snapDir2)
 		assert.NoError(t, db.PreparePersistence(snapDir2, snap2, keyId2, cipher2))
 		snap2.Close()
 		assert.NoError(t, db.StoreToDisk(snapDir2, snap2, runtime.GOMAXPROCS(0), keyId2, cipher2, nil))
@@ -1739,7 +1915,7 @@ func testEncryptionStats(t *testing.T, conf Config) {
 		snap, _ := db.NewSnapshot()
 		snap.Open()
 		snapDir := filepath.Join(conf.Path, "snap-partial")
-		keyID, cipher := db.GetEncryptionInfo()
+		keyID, cipher, _ := db.RegisterSnapshotKeyId(snapDir)
 		assert.NoError(t, db.PreparePersistence(snapDir, snap, keyID, cipher))
 		snap.Close()
 		assert.NoError(t, db.StoreToDisk(snapDir, snap, runtime.GOMAXPROCS(0), keyID, cipher, nil))
@@ -1820,7 +1996,7 @@ func testEncryptionUnsupportedCipher(t *testing.T, conf Config) {
 	wg.Wait()
 
 	snap.Open()
-	keyId, cipher := db.GetEncryptionInfo()
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(snapDir)
 	assert.NoError(t, db.PreparePersistence(snapDir, snap, keyId, cipher))
 	assert.NoError(t, db.StoreToDisk(snapDir, snap, runtime.GOMAXPROCS(0), keyId, cipher, nil))
 	snap.Close()
@@ -1834,6 +2010,63 @@ func testEncryptionUnsupportedCipher(t *testing.T, conf Config) {
 	db, err = NewWithEncryptionConfig(conf, []string{snapDir})
 	assert.Error(t, err)
 	assert.Nil(t, db)
+}
+
+func testEncryptionLoadSnapshotDecryptionError(t *testing.T, conf Config) {
+	t.Skip("skipping due to MB-70620")
+
+	snapDir := "db.dump"
+	os.RemoveAll(snapDir)
+	conf.Path = snapDir
+	conf.UseDeltaInterleaving()
+
+	db, err := NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+
+	var wg sync.WaitGroup
+	n := 1000000
+
+	wg.Add(1)
+	w := db.NewWriter()
+	doInsertSafe(w, &wg, n, false)
+	wg.Wait()
+
+	snap, _ := db.NewSnapshot()
+	wg.Add(1)
+	doDeleteSafe(w, &wg, n)
+	wg.Wait()
+
+	snap.Open()
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(snapDir)
+	assert.NoError(t, db.PreparePersistence(snapDir, snap, keyId, cipher))
+	assert.NoError(t, db.StoreToDisk(snapDir, snap, runtime.GOMAXPROCS(0), keyId, cipher, nil))
+	snap.Close()
+
+	db.Close()
+
+	// corrupt
+	shard0 := filepath.Join(snapDir, "data", "shard-0")
+	cwr, err := os.OpenFile(shard0, os.O_WRONLY, 0755)
+	assert.NoError(t, err)
+	off := gocbcrypto.FILEHDR_SZ + 4
+	cwr.WriteAt([]byte("corrupt"), int64(off))
+	cwr.Close()
+
+	db, err = NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	// simulate decryption error
+	db.Config.GetKeyById = func(id []byte) ([]byte, []byte, string) {
+		r := rand.New(rand.NewSource(time.Now().UnixNano()))
+		randomKey := make([]byte, 32)
+		_, _ = r.Read(randomKey)
+		return randomKey, id, gocbcrypto.CipherNameAES256GCM
+	}
+
+	snap, err = db.LoadFromDisk(snapDir, runtime.GOMAXPROCS(0), nil)
+	assert.Error(t, err)
+	assert.NoError(t, db.RemoveSnapshot(snapDir))
 }
 
 func TestDirOpGuardWithCancel(t *testing.T) {
@@ -1884,12 +2117,20 @@ func TestEncryptionGetActiveKeyIdsManySnapshots(t *testing.T) {
 	runTest(t, "TestEncryptionGetActiveKeyIdsManySnapshots", testEncryptionGetActiveKeyIdsManySnapshots, "encryption")
 }
 
+func TestEncryptionGetActiveKeyIdsEncryptedUnencryptedSnapshot(t *testing.T) {
+	runTest(t, "TestEncryptionGetActiveKeyIdsEncryptedUnencryptedSnapshot", testEncryptionGetActiveKeyIdsEncryptedUnencryptedSnapshot, "encryption")
+}
+
 func TestEncryptionGetActiveKeyIdsWithConcurrentRemoveSnapshot(t *testing.T) {
 	runTest(t, "TestEncryptionGetActiveKeyIdsWithConcurrentRemoveSnapshot", testEncryptionGetActiveKeyIdsWithConcurrentRemoveSnapshot, "encryption")
 }
 
 func TestEncryptionDropKeyIdsFromSnapshot(t *testing.T) {
 	runTest(t, "TestEncryptionDropKeyIdsFromSnapshot", testEncryptionDropKeyIdsFromSnapshot, "encryption")
+}
+
+func TestEncryptionDropAllKeyIdsFromSnapshot(t *testing.T) {
+	runTest(t, "TestEncryptionDropAllKeyIdsFromSnapshot", testEncryptionDropAllKeyIdsFromSnapshot, "encryption")
 }
 
 func TestEncryptionDropKeyIdsFromSnapshotWithConcurrentRemoveSnapshot(t *testing.T) {
@@ -1912,6 +2153,10 @@ func TestEncryptionCleanupDropKeyFiles(t *testing.T) {
 	runTest(t, "TestEncryptionCleanupDropKeyFiles", testEncryptionCleanupDropKeyFiles, "encryption")
 }
 
+func TestEncryptionStaleSnapshotCleanup(t *testing.T) {
+	runTest(t, "TestEncryptionStaleSnapshotCleanup", testEncryptionCleanupStaleSnapshotFromSnapKeys, "encryption")
+}
+
 func TestEncryptionStats(t *testing.T) {
 	runTest(t, "TestEncryptionStats", testEncryptionStats, "encryption")
 }
@@ -1922,4 +2167,8 @@ func TestEncryptionEmptyIndex(t *testing.T) {
 
 func TestEncryptionUnsupportedCipher(t *testing.T) {
 	runTest(t, "TestEncryptionUnsupportedCipher", testEncryptionUnsupportedCipher, "encryption")
+}
+
+func TestEncryptionLoadFromDiskDecryptionError(t *testing.T) {
+	runTest(t, "TestEncryptionLoadFromDiskDecryptionError", testEncryptionLoadSnapshotDecryptionError, "encryption")
 }
