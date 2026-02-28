@@ -432,6 +432,14 @@ func (m *MemDB) getActiveKeyIdsFromSnapshots(snapDirs []string) ([][]byte, map[s
 // returns unique encryption key IDs currently in use by snapshot.
 // If a snapshot is not encrypted, it returns an empty list.
 func (m *MemDB) getActiveKeyIdsFromSnapshot(snapDir string) ([][]byte, error) {
+	m.encMu.RLock()
+	if keyIds, ok := m.snapKeyIds[snapDir]; ok {
+		res := deepCopyKeyIds(keyIds)
+		m.encMu.RUnlock()
+		return res, nil
+	}
+	m.encMu.RUnlock()
+
 	g, err := m.dirGuard.TryAcquire(snapDir, m.encCtx)
 	if err != nil {
 		return nil, err // snapshot is being cleaned up or rotated
@@ -502,6 +510,19 @@ func (v *keyIdVisitor) skip(fpath string) bool {
 func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 	if len(keyIds) == 0 {
 		return ErrInvalid
+	}
+
+	if keyIdList, err := m.getActiveKeyIdsFromSnapshot(snapDir); err == nil {
+		hasDropKey := false
+		for _, keyId := range keyIds {
+			if keyIdExists(keyIdList, keyId) {
+				hasDropKey = true
+				break
+			}
+		}
+		if !hasDropKey {
+			return nil
+		}
 	}
 
 	// cleanup could be in progress
@@ -1078,6 +1099,19 @@ func removeKeyIdFromList(keyIds [][]byte, keyIdToDrop []byte) [][]byte {
 	}
 
 	return rem
+}
+
+func deepCopyKeyIds(keyIds [][]byte) [][]byte {
+	if keyIds == nil {
+		return nil
+	}
+
+	out := make([][]byte, len(keyIds))
+	for i := range keyIds {
+		out[i] = append([]byte(nil), keyIds[i]...)
+	}
+
+	return out
 }
 
 // ////////////////

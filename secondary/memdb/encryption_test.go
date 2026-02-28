@@ -1920,8 +1920,6 @@ func testEncryptionStats(t *testing.T, conf Config) {
 		snap.Close()
 		assert.NoError(t, db.StoreToDisk(snapDir, snap, runtime.GOMAXPROCS(0), keyID, cipher, nil))
 
-		assert.NoError(t, db.SetCurrentEncryptionKey(newKey, newKeyID, gocbcrypto.CipherNameAES256GCM))
-
 		var encryptedFiles []string
 		err = filepath.WalkDir(snapDir, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
@@ -1944,13 +1942,11 @@ func testEncryptionStats(t *testing.T, conf Config) {
 			t.Fatalf("expected encrypted files in snapshot %s", snapDir)
 		}
 
-		rotatedFile := encryptedFiles[0]
-		copyFile := rotatedFile + ".oldcopy"
-		contents, err := os.ReadFile(rotatedFile)
-		assert.NoError(t, err)
-		assert.NoError(t, os.WriteFile(copyFile, contents, 0644))
+		assert.NoError(t, db.SetCurrentEncryptionKey(newKey, newKeyID, gocbcrypto.CipherNameAES256GCM))
+		db.RegisterCurrentKeyIdForSnapshot(snapDir)
 
 		visitor := &keyRotationVisitor{db: db}
+		rotatedFile := encryptedFiles[0]
 		assert.NoError(t, visitor.rotateSingleFile(context.Background(), rotatedFile, newKeyID, gocbcrypto.CipherNameAES256GCM))
 
 		activeKeys, err := db.getActiveKeyIdsFromSnapshot(snapDir)
