@@ -10,6 +10,7 @@ package indexer
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"hash/crc32"
 	"math"
 	"net/http"
+	"os"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -30,6 +32,7 @@ import (
 	"unsafe"
 
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/cbauth/cbauthimpl"
 	repo "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
@@ -3463,6 +3466,12 @@ func (l *statLogger) writeMetadataStats() {
 }
 
 // statsManager manages both indexer and index stats. Indexer creates a singleton at boot.
+// StatsEncryptionCallbacks holds encryption-related callbacks from EncryptionMgr.
+type StatsEncryptionCallbacks struct {
+	getKeyCipherById func(keyId string) ([]byte, string)
+	setInUseKeys     func(kdt cbauth.KeyDataType, key string)
+}
+
 type statsManager struct {
 	sync.Mutex
 	config                common.ConfigHolder
@@ -3483,6 +3492,8 @@ type statsManager struct {
 
 	stReqRecCount uint64
 	meteringMgr   *MeteringThrottlingMgr
+
+	encCallbacks StatsEncryptionCallbacks // encryption callbacks from EncryptionMgr
 }
 
 // NewStatsManager is the constructor for statsManager.
@@ -4836,6 +4847,15 @@ loop:
 				case STATS_LOG_AT_EXIT:
 					s.loggerReqCh <- cmd
 					s.supvCmdch <- &MsgSuccess{}
+
+				case ENCRYPTION_GET_INUSE_KEYS:
+					s.handleGetInUseKeys(cmd)
+
+				case ENCRYPTION_UPDATE_KEY:
+					s.handleEncryptionUpdateKey(cmd)
+
+				case ENCRYPTION_DROP_KEY:
+					s.handleEncryptionDropKey(cmd)
 				}
 			} else {
 				break loop
@@ -5112,7 +5132,7 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 		}
 	}()
 
-	persistedStats, err := s.statsPersister.ReadPersistedStats()
+	persistedStats, err := s.statsPersister.ReadPersistedStats(&s.encCallbacks)
 	if err != nil {
 		logging.Warnf("Encountered error while reading persisted stats. Skipping read. Error: %v", err)
 		return
@@ -5301,13 +5321,26 @@ func positiveNum(n int64) int64 {
 // STATS PERSISITER INTERFACE
 type StatsPersister interface {
 	PersistStats(stats map[string]interface{}) error
-	ReadPersistedStats() (map[string]interface{}, error)
+	ReadPersistedStats(encCallbacks *StatsEncryptionCallbacks) (map[string]interface{}, error)
 	SetConfig(key string, value interface{})
 	GetConfig(key string) interface{}
 	Close() error
 }
 
 const STATS_DATA_DIR = "indexstats"
+
+const statsFileMode os.FileMode = 0755 // file permission for persisted stats files
+const statsFileHeaderSize = 8          // minimum valid size (bytes) of a persisted stats file
+
+var statsKDFLabelCtx = []byte("indexing/persisted_stats") // NIST.SP.800-108r1 KDF label for stats encryption
+
+var (
+	errEncryptedNoKeyLookup    = errors.New("stats file is encrypted but no key lookup available")
+	errKeyContextNotRestored   = errors.New("stats file read ok but key context not restored")
+	errUnsupportedCipher       = errors.New("unsupported cipher")
+	errStatsHeaderIncomplete   = errors.New("stats file content truncated or missing header")
+	errUnexpectedPersisterType = errors.New("unexpected persister type")
+)
 
 // FlatFileStatsPersister implements the StatsPersister interface.
 // It handles periodic stats persistence to files on disk.
@@ -5317,6 +5350,9 @@ type FlatFileStatsPersister struct {
 	newFilePath string // temporary stats filename while writing
 
 	config map[string]interface{}
+
+	encCtx         EncryptionCtx // nil = plaintext mode; set = encrypt writes
+	reportKeyInUse func() error  // called after each encrypted write; nil in plaintext mode
 }
 
 func NewFlatFilePersister(dir string, chunksz int, fileName, newFileName string) *FlatFileStatsPersister {
@@ -5333,6 +5369,18 @@ func NewFlatFilePersister(dir string, chunksz int, fileName, newFileName string)
 	return &fp
 }
 
+func (fp *FlatFileStatsPersister) setEncryptionContextForKey(
+	keyID string, keyData []byte, cipher string,
+) error {
+
+	ctx, err := NewEncryptionCtx(keyID, keyData, cipher, statsKDFLabelCtx)
+	if err != nil {
+		return fmt.Errorf("FlatFileStatsPersister::setEncryptionContextForKey: %w", err)
+	}
+	fp.encCtx = ctx
+	return nil
+}
+
 // PersistStats is called by runStatsPersister to write statsMap to disk in compressed, checksummed
 // binary form.
 func (fp *FlatFileStatsPersister) PersistStats(statsMap map[string]interface{}) error {
@@ -5340,18 +5388,31 @@ func (fp *FlatFileStatsPersister) PersistStats(statsMap map[string]interface{}) 
 	if err != nil {
 		return err
 	}
-
 	// Improvement: Implement chunking for large file sizes
-	// chunkSize := fp.GetConfig("statsPersistenceChunkSize")
-
-	// Write the stats to disk
 	if content != nil {
-		err := common.WriteFileWithSync(fp.newFilePath, content, 0755)
-		if err != nil {
-			return err
+		logging.Infof("FlatFileStatsPersister::PersistStats encCtx=%v path=%v", fp.encCtx != nil, fp.newFilePath)
+		if fp.encCtx != nil {
+			err := WriteEncryptedFile(fp.newFilePath, content, statsFileMode, fp.encCtx, nil)
+			if err != nil {
+				return fmt.Errorf("FlatFileStatsPersister::PersistStats encrypted write: %w", err)
+			}
+			if fp.reportKeyInUse != nil {
+				if err := fp.reportKeyInUse(); err != nil {
+					logging.Errorf("FlatFileStatsPersister::PersistStats reportKeyInUse: %v", err)
+				}
+			}
+		} else {
+			err := common.WriteFileWithSync(fp.newFilePath, content, statsFileMode)
+			if err != nil {
+				return fmt.Errorf("FlatFileStatsPersister::PersistStats plaintext write: %w", err)
+			}
+			if fp.reportKeyInUse != nil {
+				if err := fp.reportKeyInUse(); err != nil {
+					logging.Errorf("FlatFileStatsPersister::PersistStats reportKeyInUse: %v", err)
+				}
+			}
 		}
 
-		// If the write succeeded, rename the file from temp to permanent name
 		err = iowrap.Os_Rename(fp.newFilePath, fp.filePath)
 		if err != nil {
 			return err
@@ -5360,11 +5421,84 @@ func (fp *FlatFileStatsPersister) PersistStats(statsMap map[string]interface{}) 
 	return nil
 }
 
-func (fp *FlatFileStatsPersister) ReadPersistedStats() (map[string]interface{}, error) {
+func (fp *FlatFileStatsPersister) ReadPersistedStats(
+	encCallbacks *StatsEncryptionCallbacks) (map[string]interface{}, error) {
 
-	content, err := iowrap.Ioutil_ReadFile(fp.filePath)
+	var content []byte
+	var err error
+	// Reset the encryption context to nil before reading.
+	// This is safe because ReadPersistedStats is only called
+	// once, at startup , before the indexer is fully up
+	// and before any key rotation messages
+	// (UpdateKey / DropKey) can arrive. So fp.encCtx cannot have
+	// been set to a valid key yet.
+	// If the file is encrypted, fp.encCtx is restored below after
+	// successful decryption so future writes stay encrypted.
+	fp.encCtx = nil
+
+	isEncrypted, encErr := IsFileEncrypted(fp.filePath)
+	switch {
+	case encErr != nil:
+		// File doesn't exist or can't be read — fall through to existing error handling
+		logging.Infof(
+			"FlatFileStatsPersister::ReadPersistedStats file check error (likely not found): %v",
+			encErr,
+		)
+		content, err = iowrap.Ioutil_ReadFile(fp.filePath)
+	case isEncrypted:
+
+		if encCallbacks == nil || encCallbacks.getKeyCipherById == nil {
+			return nil, errEncryptedNoKeyLookup
+		}
+		var getKeyCalled bool
+		var resolvedKeyID string
+		var resolvedKeyData []byte
+		var resolvedCipher string
+		getKey := func(keyId []byte) []byte {
+			var data []byte
+			var cipher string
+			keyIDStr := string(keyId)
+			defer func() {
+				if r := recover(); r != nil {
+					logging.Errorf(
+						"ReadPersistedStats: key lookup panicked for %s: %v",
+						keyIDStr, r,
+					)
+					data = nil
+					cipher = ""
+				}
+			}()
+
+			getKeyCalled = true
+			data, cipher = encCallbacks.getKeyCipherById(keyIDStr)
+			resolvedKeyID = keyIDStr
+			resolvedKeyData = data
+			resolvedCipher = cipher
+			return data
+		}
+		content, err = ReadEncryptedFile(fp.filePath, getKey, statsKDFLabelCtx, nil)
+		if err == nil {
+			if !getKeyCalled || len(resolvedKeyData) == 0 || resolvedCipher == "" {
+				return nil, errKeyContextNotRestored
+			}
+			if err := fp.setEncryptionContextForKey(
+				resolvedKeyID, resolvedKeyData, resolvedCipher,
+			); err != nil {
+				return nil, fmt.Errorf(
+					"ReadPersistedStats: unable to restore encryption context: %w", err,
+				)
+			}
+		}
+	default:
+		logging.Infof("FlatFileStatsPersister::ReadPersistedStats file is plaintext, encCtx stays nil")
+		content, err = iowrap.Ioutil_ReadFile(fp.filePath)
+	}
+
 	if err != nil {
 		return nil, err
+	}
+	if len(content) < statsFileHeaderSize {
+		return nil, fmt.Errorf("%w: %d bytes", errStatsHeaderIncomplete, len(content))
 	}
 
 	var statsJson []byte
@@ -5493,4 +5627,294 @@ func fetchLostReplicasFromNode(addr, uri, handlerName string) (*LostReplicasResp
 	}
 
 	return &nodeResp, nil
+}
+
+func (s *statsManager) handleGetInUseKeys(cmd Message) {
+	s.supvCmdch <- &MsgSuccess{}
+
+	msg, ok := cmd.(*MsgEncryptionGetInuseKeys)
+	if !ok {
+		logging.Errorf("StatsManager::handleGetInUseKeys unexpected message type")
+
+		return
+	}
+
+	respMapCh := msg.GetKeyMapCh()
+	result := make(map[cbauth.KeyDataType][]string)
+
+	fp, ok := s.statsPersister.(*FlatFileStatsPersister)
+	if !ok {
+		logging.Errorf("StatsManager::handleGetInUseKeys: %v", errUnexpectedPersisterType)
+		respMapCh <- result
+		return
+	}
+
+	if fp.encCtx != nil {
+		kdt := msg.GetKeyDataType()
+		result[kdt] = []string{string(fp.encCtx.KeyID())}
+	}
+
+	respMapCh <- result
+}
+
+// handleEncryptionUpdateKey sets the encryption context for future writes.
+// No file re-encryption happens here — that is handled by handleEncryptionDropKey.
+func (s *statsManager) handleEncryptionUpdateKey(cmd Message) {
+	s.supvCmdch <- &MsgSuccess{}
+
+	msg, ok := cmd.(*MsgEncryptionUpdateKey)
+	if !ok {
+		logging.Errorf("StatsManager::handleEncryptionUpdateKey unexpected message type")
+
+		return
+	}
+
+	earkey := msg.GetEarKey()
+	respCh := msg.GetRespCh()
+
+	ctx, err := s.createEncryptionContext(earkey)
+	if err != nil {
+		logging.Errorf("StatsManager::handleEncryptionUpdateKey error: %v", err)
+		respCh <- err
+		return
+	}
+
+	fp, ok := s.statsPersister.(*FlatFileStatsPersister)
+	if !ok {
+		err := fmt.Errorf("StatsManager::handleEncryptionUpdateKey: %w", errUnexpectedPersisterType)
+		logging.Errorf("%v", err)
+		respCh <- err
+		return
+	}
+	fp.encCtx = ctx
+	kdt := msg.GetKeyDataType()
+	if ctx == nil {
+		fp.reportKeyInUse = func() error {
+			if s.encCallbacks.setInUseKeys == nil {
+				return nil
+			}
+			s.encCallbacks.setInUseKeys(kdt, "")
+			return nil
+		}
+	} else {
+		fp.reportKeyInUse = func() error {
+			if s.encCallbacks.setInUseKeys == nil {
+				return nil
+			}
+			s.encCallbacks.setInUseKeys(kdt, string(fp.encCtx.KeyID()))
+			return nil
+		}
+	}
+
+	logging.Infof("StatsManager::handleEncryptionUpdateKey key:%v encCtx_set=%v", earkey.Id, fp.encCtx != nil)
+	respCh <- nil
+}
+
+// handleEncryptionDropKey handles encrypt, decrypt, and re-encrypt scenarios
+// for the persisted stats file.
+func (s *statsManager) handleEncryptionDropKey(cmd Message) {
+	s.supvCmdch <- &MsgSuccess{}
+
+	msg, ok := cmd.(*MsgEncryptionDropKey)
+	if !ok {
+		logging.Errorf("StatsManager::handleEncryptionDropKey unexpected message type")
+
+		return
+	}
+	activeEarKey := msg.GetActiveEarKey()
+	dropKeyIds := msg.GetDropKeyIds()
+	respCh := msg.GetRespCh()
+	kdt := msg.GetKeyDataType()
+
+	fp, ok := s.statsPersister.(*FlatFileStatsPersister)
+	if !ok {
+		err := fmt.Errorf("StatsManager::handleEncryptionDropKey: %w", errUnexpectedPersisterType)
+		logging.Errorf("%v", err)
+		respCh <- err
+		return
+	}
+	var err error
+
+	emptyDropKeys := len(dropKeyIds) == 0 || (len(dropKeyIds) == 1 && dropKeyIds[0] == "")
+	switch {
+	case activeEarKey.Id != "" && emptyDropKeys:
+		// Scenario 1: Encrypt currently unencrypted data with activeKey.
+		// Treat both an empty drop-key list and empty-string as
+		// "encrypt the existing plaintext file with the current active key".
+		err = s.encryptAndPersistStats(fp, activeEarKey, kdt)
+	case activeEarKey.Id == "" && len(dropKeyIds) > 0:
+		// Scenario 2: Decrypt back to plaintext
+		err = s.decryptAndPersistStats(fp, kdt)
+	case activeEarKey.Id != "" && len(dropKeyIds) > 0:
+		// Scenario 3: Re-encrypt from old key(s) to new key
+		err = s.reencryptAndPersistStats(fp, activeEarKey, kdt)
+	}
+
+	if err != nil {
+		logging.Errorf("StatsManager::handleEncryptionDropKey error: %v", err)
+	}
+	respCh <- err
+}
+
+// encryptAndPersistStats encrypts an existing plaintext stats file with the given key.
+func (s *statsManager) encryptAndPersistStats(fp *FlatFileStatsPersister,
+	activeKey cbauthimpl.EaRKey, kdt cbauth.KeyDataType) error {
+
+	ctx, err := s.createEncryptionContext(activeKey)
+	if err != nil {
+		return err
+	}
+
+	// If the file is already encrypted
+	// re-encrypt it with the current active key
+	isEncrypted, checkErr := IsFileEncrypted(fp.filePath)
+	if checkErr == nil && isEncrypted {
+		logging.Infof(
+			"StatsManager::encryptAndPersistStats file already encrypted, re-encrypting with key:%v",
+			activeKey.Id,
+		)
+		return s.reencryptAndPersistStats(fp, activeKey, kdt)
+	}
+
+	content, err := iowrap.Ioutil_ReadFile(fp.filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// No file yet — set context and so the next periodic write
+			// creates the file encrypted and reports the key as in-use.
+			fp.encCtx = ctx
+			fp.reportKeyInUse = func() error {
+				if s.encCallbacks.setInUseKeys == nil {
+					return nil
+				}
+				s.encCallbacks.setInUseKeys(kdt, activeKey.Id)
+				return nil
+			}
+			return nil
+		}
+		return fmt.Errorf("StatsManager::encryptAndPersistStats read: %w", err)
+	}
+
+	if err = WriteEncryptedFile(fp.newFilePath, content, statsFileMode, ctx, nil); err != nil {
+		return fmt.Errorf("StatsManager::encryptAndPersistStats write: %w", err)
+	}
+
+	if err = iowrap.Os_Rename(fp.newFilePath, fp.filePath); err != nil {
+		return fmt.Errorf("StatsManager::encryptAndPersistStats rename: %w", err)
+	}
+
+	fp.encCtx = ctx
+	fp.reportKeyInUse = func() error {
+		if s.encCallbacks.setInUseKeys == nil {
+			return nil
+		}
+		s.encCallbacks.setInUseKeys(kdt, activeKey.Id)
+		return nil
+	}
+	if err = fp.reportKeyInUse(); err != nil {
+		logging.Errorf("StatsManager::encryptAndPersistStats setInUseKeys: %v", err)
+	}
+	logging.Infof("StatsManager::encryptAndPersistStats encrypted with key:%v", activeKey.Id)
+	return nil
+}
+
+func (s *statsManager) decryptAndPersistStats(fp *FlatFileStatsPersister, kdt cbauth.KeyDataType) error {
+	switchToPlaintextMode := func() {
+		fp.encCtx = nil
+		fp.reportKeyInUse = func() error {
+			if s.encCallbacks.setInUseKeys == nil {
+				return nil
+			}
+			s.encCallbacks.setInUseKeys(kdt, "")
+			return nil
+		}
+	}
+
+	isEncrypted, err := IsFileEncrypted(fp.filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// No file yet — nothing to decrypt
+			switchToPlaintextMode()
+			return nil
+		}
+		return fmt.Errorf("StatsManager::decryptAndPersistStats unable to check file: %w", err)
+	}
+	if !isEncrypted {
+		switchToPlaintextMode()
+		return nil
+	}
+
+	getKey := s.makeGetKeyByIdFunc()
+	if _, err = DecryptFileByChunk(context.TODO(),
+		fp.filePath, fp.newFilePath, getKey, statsKDFLabelCtx, nil); err != nil {
+		return fmt.Errorf("StatsManager::decryptAndPersistStats decrypt: %w", err)
+	}
+
+	if err = iowrap.Os_Rename(fp.newFilePath, fp.filePath); err != nil {
+		return fmt.Errorf("StatsManager::decryptAndPersistStats rename: %w", err)
+	}
+
+	switchToPlaintextMode()
+	logging.Infof("StatsManager::decryptAndPersistStats decrypted to plaintext")
+	return nil
+}
+
+// reencryptAndPersistStats re-encrypts the stats file from old key to new key.
+func (s *statsManager) reencryptAndPersistStats(fp *FlatFileStatsPersister,
+	activeKey cbauthimpl.EaRKey, kdt cbauth.KeyDataType) error {
+
+	newCtx, err := s.createEncryptionContext(activeKey)
+	if err != nil {
+		return err
+	}
+
+	getKey := s.makeGetKeyByIdFunc()
+	var n uint64
+	if n, err = ReencryptFileByChunk(context.TODO(),
+		fp.filePath, fp.newFilePath, newCtx, getKey, statsKDFLabelCtx, nil); err != nil {
+		return fmt.Errorf("StatsManager::reencryptAndPersistStats reencrypt: %w", err)
+	}
+	if n == 0 {
+		// already encrypted with the target key — no temp file was created
+		return nil
+	}
+
+	if err = iowrap.Os_Rename(fp.newFilePath, fp.filePath); err != nil {
+		return fmt.Errorf("StatsManager::reencryptAndPersistStats rename: %w", err)
+	}
+
+	fp.encCtx = newCtx
+	fp.reportKeyInUse = func() error {
+		if s.encCallbacks.setInUseKeys == nil {
+			return nil
+		}
+		s.encCallbacks.setInUseKeys(kdt, activeKey.Id)
+		return nil
+	}
+	if err = fp.reportKeyInUse(); err != nil {
+		logging.Errorf("StatsManager::reencryptAndPersistStats setInUseKeys: %v", err)
+	}
+	logging.Infof("StatsManager::reencryptAndPersistStats re-encrypted with key:%v", activeKey.Id)
+	return nil
+}
+
+// typecasting
+func (s *statsManager) makeGetKeyByIdFunc() func([]byte) []byte {
+	return func(keyId []byte) []byte {
+		defer func() {
+			if r := recover(); r != nil {
+				logging.Errorf("StatsManager::makeGetKeyByIdFunc key lookup panicked for %s: %v",
+					string(keyId), r)
+			}
+		}()
+		data, _ := s.encCallbacks.getKeyCipherById(string(keyId))
+		return data
+	}
+}
+
+func (s *statsManager) createEncryptionContext(earkey cbauthimpl.EaRKey) (EncryptionCtx, error) {
+	ctx, err := NewEncryptionCtx(earkey.Id, earkey.Key, earkey.Cipher, statsKDFLabelCtx)
+	if err != nil {
+		return nil, fmt.Errorf("StatsManager::createEncryptionContext: %w", err)
+	}
+	return ctx, nil
 }
