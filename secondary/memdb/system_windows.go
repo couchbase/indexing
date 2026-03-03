@@ -6,9 +6,12 @@
 // software will be governed by the Apache License, Version 2.0, included in
 // the file licenses/APL2.txt.
 
+//go:build windows
 // +build windows
 
 package memdb
+
+import "os"
 
 func GetDefaultNumFD() int {
 	// window - default 512 file descriptor per process
@@ -37,4 +40,13 @@ func GetIOConcurrency(concurrency float64) int {
 	}
 
 	return limit
+}
+
+///
+// Dir operations
+//
+
+// O_DIRECTORY is not supported : file handle invalid
+func Dir_Sync(dir string, perm os.FileMode) error {
+	return nil
 }

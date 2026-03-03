@@ -640,7 +640,7 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 		if err := iowrap.Os_Remove(tmpDst); err != nil && !os.IsNotExist(err) {
 			logging.Warnf("MemDB::rotateSingleFile cleanup tmp %v failed: %v", tmpDst, err)
 		}
-		if syncErr := iowrap.Dir_Sync(filepath.Dir(file), 0o755); syncErr != nil {
+		if syncErr := Dir_Sync(filepath.Dir(file), 0o755); syncErr != nil {
 			logging.Warnf("MemDB::rotateSingleFile dir sync for %v failed: %v", file, syncErr)
 		}
 	}()
