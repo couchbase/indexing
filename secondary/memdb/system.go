@@ -6,6 +6,7 @@
 // software will be governed by the Apache License, Version 2.0, included in
 // the file licenses/APL2.txt.
 
+//go:build !windows
 // +build !windows
 
 package memdb
@@ -13,10 +14,14 @@ package memdb
 import (
 	"fmt"
 	"math"
+	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/couchbase/indexing/secondary/iowrap"
 )
 
 func GetDefaultNumFD() int {
@@ -74,4 +79,30 @@ func GetMaxProc() (int, error) {
 	}
 
 	return n, nil
+}
+
+///
+// Dir operations
+//
+
+// sync dentries of a directory inode: to make a file durable, we need to sync
+// both the file and parent directory.
+// open in O_DIRECTORY mode supports only Readonly mode
+// EISDIR: https://man7.org/linux/man-pages/man2/open.2.html
+func Dir_Sync(dir string, perm os.FileMode) error {
+	if runtime.GOOS == "linux" {
+		f, err := iowrap.Os_OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY, perm)
+		if err != nil {
+			return err
+		}
+
+		if err = iowrap.File_Sync(f); err != nil {
+			iowrap.File_Close(f)
+			return err
+		}
+
+		return iowrap.File_Close(f)
+	}
+
+	return nil
 }

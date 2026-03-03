@@ -14,7 +14,6 @@ import (
 	"io/fs"
 	"io/ioutil"
 	"os"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -326,30 +325,4 @@ func Os_Stat(name string) (os.FileInfo, error) {
 		countDiskFailures(err)
 	}
 	return fileInfo, err
-}
-
-///
-// Dir operations
-//
-
-// sync dentries of a directory inode: to make a file durable, we need to sync
-// both the file and parent directory.
-// open in O_DIRECTORY mode supports only Readonly mode
-// EISDIR: https://man7.org/linux/man-pages/man2/open.2.html
-func Dir_Sync(dir string, perm os.FileMode) error {
-	if runtime.GOOS == "linux" {
-		f, err := Os_OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY, perm)
-		if err != nil {
-			return err
-		}
-
-		if err = File_Sync(f); err != nil {
-			File_Close(f)
-			return err
-		}
-
-		return File_Close(f)
-	}
-
-	return nil
 }
