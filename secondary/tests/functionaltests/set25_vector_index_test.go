@@ -40,6 +40,7 @@ var expectedVectorPosTop100 = []uint32{2176, 3752, 882, 4009, 2837, 190, 3615, 8
 
 var vectorsLoaded = false       // represents the dense vector
 var sparseVectorsLoaded = false // represents the sparse vector
+var sparseSmallVectorsLoaded = false
 var vecIndexCreated = false
 var vecPartnIndexCreated = false
 var multiIndexerConfig = false
@@ -47,6 +48,7 @@ var multiIndexerConfig = false
 func resetVectorDataSetupFlags() {
 	vectorsLoaded = false
 	sparseVectorsLoaded = false
+	sparseSmallVectorsLoaded = false
 }
 
 // Load Data
@@ -108,7 +110,7 @@ func loadVectorData(t *testing.T, bucket, scope, coll string, numDocs int) error
 	return randdocs.Run(cfg)
 }
 
-func vectorSetupSparse(t *testing.T, bucket, scope, coll string, numDocs int) {
+func vectorSetupSparse(t *testing.T, bucket, scope, coll string, numDocs int, randomDimensions bool) {
 	skipIfNotPlasma(t)
 
 	// Drop all indexes from earlier tests
@@ -118,13 +120,13 @@ func vectorSetupSparse(t *testing.T, bucket, scope, coll string, numDocs int) {
 	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	resetVectorDataSetupFlags()
 
-	e = loadSparseVectorData(t, bucket, scope, coll, numDocs)
+	e = loadSparseVectorData(t, bucket, scope, coll, numDocs, randomDimensions)
 	FailTestIfError(e, "Error in loading sparse vector data", t)
 
 	sparseVectorsLoaded = true
 }
 
-func loadSparseVectorData(t *testing.T, bucket, scope, coll string, numDocs int) error {
+func loadSparseVectorData(t *testing.T, bucket, scope, coll string, numDocs int, randomDimensions bool) error {
 	if scope == "" {
 		scope = c.DEFAULT_SCOPE
 	}
@@ -133,6 +135,11 @@ func loadSparseVectorData(t *testing.T, bucket, scope, coll string, numDocs int)
 	}
 	if numDocs == 0 {
 		numDocs = 10000
+	}
+
+	sparseVecDim := SPARSE_DIMENSION
+	if randomDimensions {
+		sparseVecDim = 0 // variable dimension for random data
 	}
 
 	cfg := randdocs.Config{
@@ -147,7 +154,7 @@ func loadSparseVectorData(t *testing.T, bucket, scope, coll string, numDocs int)
 		OpsPerSec:        100000,
 		SkipNormalData:   false,
 		GenSparseVectors: true,
-		SparseVecDim:     SPARSE_DIMENSION,
+		SparseVecDim:     sparseVecDim,
 	}
 	return randdocs.Run(cfg)
 }
