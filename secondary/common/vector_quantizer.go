@@ -279,15 +279,18 @@ func ParseSparseVectorDescription(inp string) (*VectorQuantizer, error) {
 		return nil, fmt.Errorf("Invalid format for sparse vector description")
 	}
 
-	nlist, err := strconv.Atoi(matches[2])
-	if err != nil {
-		return nil, fmt.Errorf("Error observed while parsing number of centroids, err: %v", err)
-	}
+	// nlist is optional; if omitted the indexer computes it at build time (Nlist stays 0)
+	if len(matches[2]) > 0 {
+		nlist, err := strconv.Atoi(matches[2])
+		if err != nil {
+			return nil, fmt.Errorf("Error observed while parsing number of centroids, err: %v", err)
+		}
 
-	if nlist == 0 {
-		return nil, fmt.Errorf("number of centroids can not be equal to zero")
+		if nlist == 0 {
+			return nil, fmt.Errorf("number of centroids can not be equal to zero")
+		}
+		quantizer.Nlist = nlist
 	}
-	quantizer.Nlist = nlist
 
 	return quantizer, nil
 }
