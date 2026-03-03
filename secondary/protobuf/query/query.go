@@ -58,7 +58,7 @@ func (r *ResponseStream) GetReadUnits() uint64 {
 	return 0
 }
 
-func (r *ResponseStream) GetServerScanReport() (*report.HostScanReport) {
+func (r *ResponseStream) GetServerScanReport() *report.HostScanReport {
 	return nil
 }
 
@@ -78,23 +78,25 @@ func (r *StreamEndResponse) Error() error {
 	return nil
 }
 
-func (r *StreamEndResponse) GetServerScanReport() (*report.HostScanReport) {
+func (r *StreamEndResponse) GetServerScanReport() *report.HostScanReport {
 	if sr := r.GetSrvrScanReport(); sr != nil {
 		return &report.HostScanReport{
 			SrvrNs: &report.ServerTimings{
-				TotalDur:          sr.GetServerTimings().GetTotalDur(),
-				WaitDur:           sr.GetServerTimings().GetWaitDur(),
-				ScanDur:           sr.GetServerTimings().GetScanDur(),
-				GetSeqnosDur:      sr.GetServerTimings().GetGetSeqnosDur(),
-				DiskReadDur:       sr.GetServerTimings().GetDiskReadDur(),
-				DistCompDur:       sr.GetServerTimings().GetDistCompDur(),
-				CentroidAssignDur: sr.GetServerTimings().GetCentroidAssignDur(),
+				TotalDur:       sr.GetServerTimings().GetTotalDur(),
+				WaitDur:        sr.GetServerTimings().GetWaitDur(),
+				ScanDur:        sr.GetServerTimings().GetScanDur(),
+				GetSeqnosDur:   sr.GetServerTimings().GetGetSeqnosDur(),
+				DiskReadDur:    sr.GetServerTimings().GetDiskReadDur(),
+				AvgDistCompDur: sr.GetServerTimings().GetAvgDistCompDur(),
+				AvgDecodeDur:   sr.GetServerTimings().GetAvgDecodeDur(),
 			},
 			SrvrCounts: &report.ServerCounts{
-				RowsReturn:  sr.GetServerCounts().GetRowsReturn(),
-				RowsScan:    sr.GetServerCounts().GetRowsScan(),
-				BytesRead:   sr.GetServerCounts().GetBytesRead(),
-				CacheHitPer: sr.GetServerCounts().GetCacheHitPer(),
+				RowsReturn:   sr.GetServerCounts().GetRowsReturn(),
+				RowsScan:     sr.GetServerCounts().GetRowsScan(),
+				BytesRead:    sr.GetServerCounts().GetBytesRead(),
+				CacheHitPer:  sr.GetServerCounts().GetCacheHitPer(),
+				RowsFiltered: sr.GetServerCounts().GetRowsFiltered(),
+				RowsReranked: sr.GetServerCounts().GetRowsReranked(),
 			},
 		}
 	}

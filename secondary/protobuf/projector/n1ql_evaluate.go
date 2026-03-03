@@ -3,6 +3,8 @@ package protoProjector
 import (
 	"errors"
 	math "math"
+	"slices"
+	"sort"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
@@ -24,6 +26,7 @@ var ErrDataOutOfBounds = errors.New("Value of the vector exceeds float32 range")
 var ErrZeroVectorForCosine = errors.New("Zero vector for cosine distance")
 var ErrZeroSparseVector = errors.New("Zero sparse vector")
 var ErrInvalidSparseVector = errors.New("Invalid sparse vector")
+var ErrDuplicateIndicesSparseVector = errors.New("Sparse vector contains duplicate indices")
 
 func getVectorStatStr(err error) string {
 	switch err {
@@ -561,13 +564,20 @@ func validateSparseVector(vector qvalue.Value) ([]float32, error) {
 		return nil, ErrInvalidSparseVector
 	}
 
-	// Merge indices and values into a sigle float32 array
+	// Sorts the indices slice in ascending order while keeping each value paired with its
+	// corresponding index (values are reordered alongside indices).
+	sortSparseByIndices(indices, values)
+
+	// Merge indices and values into a single float32 array
 	// Format will be [N, index0, index1, ....., indexN-1, value0, value1, ....., valueN-1]
 	// Store N and indices as numeric float32 values
 	n := len(indices)
 	res := make([]float32, 2*n+1)
 	res[0] = float32(n)
 	for i := 0; i < n; i++ {
+		if i < n-1 && indices[i] == indices[i+1] {
+			return nil, ErrDuplicateIndicesSparseVector
+		}
 		res[i+1] = float32(indices[i])
 		res[n+i+1] = values[i]
 	}
@@ -632,4 +642,32 @@ func getValidVectorsFromArray(vectors qvalue.Values, dimension int, isCosine, is
 		}
 	}
 	return outVec, outVal
+}
+
+type sortByIndices struct {
+	indices []uint32
+	values  []float32
+}
+
+func (p sortByIndices) Len() int {
+	return len(p.indices)
+}
+
+func (p sortByIndices) Less(i, j int) bool {
+	return p.indices[i] < p.indices[j]
+}
+
+func (p sortByIndices) Swap(i, j int) {
+	p.indices[i], p.indices[j] = p.indices[j], p.indices[i]
+	p.values[i], p.values[j] = p.values[j], p.values[i]
+}
+
+// Sorts the indices slice in ascending order while keeping each value paired with its
+// corresponding index (values are reordered alongside indices).
+// It updates the underlying array passed to the function itself.
+func sortSparseByIndices(indices []uint32, values []float32) {
+	if slices.IsSorted(indices) {
+		return
+	}
+	sort.Sort(sortByIndices{indices, values})
 }

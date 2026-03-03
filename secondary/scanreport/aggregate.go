@@ -291,8 +291,6 @@ func copyServerTimings(st *ServerTimings) *ServerTimings {
 		ScanDur:           st.ScanDur,
 		GetSeqnosDur:      st.GetSeqnosDur,
 		DiskReadDur:       st.DiskReadDur,
-		DistCompDur:       st.DistCompDur,
-		CentroidAssignDur: st.CentroidAssignDur,
 	}
 }
 

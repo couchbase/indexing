@@ -2,6 +2,7 @@ package memdb
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -17,19 +18,27 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/couchbase/gocbcrypto"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb/skiplist"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
+	"golang.org/x/sync/semaphore"
 )
 
 var version = 1
 
 var (
-	ErrMaxSnapshotsLimitReached = fmt.Errorf("Maximum snapshots limit reached")
-	ErrShutdown                 = fmt.Errorf("MemDB instance has been shutdown")
-	ErrCorruptSnapshot          = fmt.Errorf("MemDB snapshot checksum failed")
+	ErrMaxSnapshotsLimitReached = errors.New("MemDB Maximum snapshots limit reached")
+	ErrShutdown                 = errors.New("MemDB instance has been shutdown")
+	ErrCorruptSnapshot          = errors.New("MemDB snapshot checksum failed")
+	ErrSnapshotKeyIdMissing     = errors.New("MemDB snapshot keyId missing")
+	ErrSnapshotBusy             = errors.New("MemDB snapshot is busy either due to cleanup or key rotation")
+	ErrKeyRotationRestore       = errors.New("MemDB snapshot key rotation restore error")
+	ErrInvalid                  = errors.New("MemDB invalid arguments")
+	ErrInvalidRotationType      = errors.New("MemDB invalid rotation type")
+	ErrUnsupportedFileType      = errors.New("MemDB unsupported file type")
 )
 
 type KeyCompare func([]byte, []byte) int
@@ -77,10 +86,12 @@ var (
 	dbInstancesCount         int64
 	gWriteBarrier            *writeBarrier
 	gWriteBarrierInitializer sync.Once
+	gDropKeySem              *semaphore.Weighted // limit number of concurrent files during key rotation
 )
 
 func init() {
 	dbInstances = skiplist.New()
+	gDropKeySem = semaphore.NewWeighted(int64(runtime.GOMAXPROCS(0)))
 }
 
 func CompareMemDB(this unsafe.Pointer, that unsafe.Pointer) int {
@@ -383,6 +394,8 @@ func (w *Writer) DeleteNode(x *skiplist.Node) (success bool) {
 }
 
 type Config struct {
+	Path string
+
 	keyCmp      KeyCompare
 	insCmp      skiplist.CompareFn
 	iterCmp     skiplist.CompareFn
@@ -401,6 +414,10 @@ type Config struct {
 	exposeItemCopy bool
 
 	ioConcurrency float64
+
+	// encryption at rest
+	GetKeyById       GetKeyByIdCb // it should be thread safe
+	encryptChunkSize uint32
 }
 
 func (cfg *Config) SetKeyComparator(cmp KeyCompare) {
@@ -412,6 +429,28 @@ func (cfg *Config) SetKeyComparator(cmp KeyCompare) {
 
 func (cfg *Config) SetIOConcurrency(c float64) {
 	cfg.ioConcurrency = c
+}
+
+func (cfg *Config) SetEncryption(getKeyId GetKeyByIdCb, chunkSz uint32) {
+	cfg.GetKeyById = getKeyId
+	cfg.encryptChunkSize = chunkSz
+	if chunkSz == 0 {
+		cfg.encryptChunkSize = gocbcrypto.ChunkSize
+	}
+}
+
+// only for testing
+func (cfg *Config) SetTestEncryption() {
+	cfg.SetEncryption(func(keyId []byte) (masterKey []byte, outKeyId []byte, cipher string) {
+		masterKey = make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
+		cipher = gocbcrypto.CipherNameAES256GCM
+		if keyId == nil {
+			outKeyId = make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
+		} else {
+			outKeyId = keyId
+		}
+		return
+	}, gocbcrypto.ChunkSize)
 }
 
 func (cfg *Config) SetFileType(t FileType) error {
@@ -477,6 +516,21 @@ type MemDB struct {
 
 	Config
 	restoreStats
+
+	// encryption
+	encMu      sync.RWMutex
+	encKeyId   []byte              // current keyId
+	snapKeyIds map[string][][]byte // snapshot dir -> keyIds mapping
+
+	// context to manage encryption goroutines
+	encCtx    context.Context
+	cancelCtx context.CancelFunc
+
+	// safeguard directory operations
+	dirGuard *dirOpGuard
+
+	// statistics
+	encSts *EncryptionStats
 }
 
 func NewWithConfig(cfg Config) *MemDB {
@@ -487,6 +541,8 @@ func NewWithConfig(cfg Config) *MemDB {
 		Config:      cfg,
 		gcchan:      make(chan *skiplist.Node, gcchanBufSize),
 		id:          int(atomic.AddInt64(&dbInstancesCount, 1)),
+		snapKeyIds:  make(map[string][][]byte),
+		encSts:      &EncryptionStats{},
 	}
 
 	m.initWriteBarrier(cfg.ioConcurrency)
@@ -500,7 +556,19 @@ func NewWithConfig(cfg Config) *MemDB {
 	dbInstances.Insert(unsafe.Pointer(m), CompareMemDB, buf, &dbInstances.Stats)
 
 	return m
+}
 
+func NewWithEncryptionConfig(cfg Config, snapDirs []string) (*MemDB, error) {
+	m := NewWithConfig(cfg)
+
+	if err := m.initEncryption(snapDirs); err != nil {
+		logging.Errorf("MemDB::%v encryption init error:%v", m.Path, err)
+		m.Close()
+		return nil, err
+	}
+
+	logging.Infof("MemDB::%v encryption enabled:%v", m.Path, len(m.encKeyId) > 0)
+	return m, nil
 }
 
 func (m *MemDB) newStoreConfig() skiplist.Config {
@@ -589,6 +657,8 @@ func (m *MemDB) Close2(concurr int) {
 		time.Sleep(time.Millisecond)
 	}
 	close(m.gcchan)
+
+	m.stopEncryption()
 
 	buf := dbInstances.MakeBuf()
 	defer dbInstances.FreeBuf(buf)
@@ -1175,7 +1245,7 @@ func (m *MemDB) changeDeltaWrState(state int,
 	return err
 }
 
-func (m *MemDB) PreparePersistence(dir string, snap *Snapshot) (err error) {
+func (m *MemDB) PreparePersistence(dir string, snap *Snapshot, keyId []byte, cipher string) (err error) {
 
 	m.Lock()
 
@@ -1207,7 +1277,10 @@ func (m *MemDB) PreparePersistence(dir string, snap *Snapshot) (err error) {
 		for id := 0; id < m.numWriters(); id++ {
 			file := fmt.Sprintf("shard-%d", id)
 			deltafile := filepath.Join(deltadir, file)
-			dw := m.newFileWriter(m.fileType, deltafile)
+			var dw FileWriter
+			if dw, err = m.newFileWriter(m.fileType, deltafile, keyId, cipher); err != nil {
+				return err
+			}
 			m.deltaWriters[id] = dw
 			m.deltaFiles[id] = file
 		}
@@ -1230,13 +1303,19 @@ func (m *MemDB) PreparePersistence(dir string, snap *Snapshot) (err error) {
 
 // StoreToDisk writes an index snapshot to disk. It is run in a child goroutine of doPersistSnapshot
 // (memdb_slice_impl.go). dir passed in is a temporary directory that caller will rename on success.
-func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback ItemCallback) (err error) {
+func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, keyId []byte, cipher string, itmCallback ItemCallback) (err error) {
 
 	var snapClosed bool
 	defer func() {
 		if !snapClosed {
 			snap.Close()
 		}
+	}()
+
+	defer func() {
+		m.encMu.Lock()
+		defer m.encMu.Unlock()
+		m.snapKeyIds[dir] = [][]byte{append([]byte(nil), m.encKeyId...)}
 	}()
 
 	m.Lock()
@@ -1276,7 +1355,10 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 	for shard := 0; shard < shards; shard++ {
 		file := fmt.Sprintf("shard-%d", shard)
 		datafile := filepath.Join(datadir, file)
-		w := m.newFileWriter(m.fileType, datafile)
+		w, err := m.newFileWriter(m.fileType, datafile, keyId, cipher)
+		if err != nil {
+			return err
+		}
 		if err := w.Open(); err != nil {
 			return err
 		}
@@ -1285,7 +1367,6 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 		files[shard] = file
 	}
 
-	// Initialize and setup delta processing
 	if m.useDeltaFiles {
 		defer func() {
 			for _, w := range m.deltaWriters {
@@ -1454,8 +1535,11 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 	for i, file := range files {
 		segments[i] = b.NewSegment()
 		segments[i].SetNodeCallback(nodeCallb)
-		r := m.newFileReader(m.fileType, version)
 		datafile := filepath.Join(datadir, file)
+		r, err := m.newFileReader(m.fileType, version, datafile)
+		if err != nil {
+			return nil, err
+		}
 		if err := r.Open(datafile); err != nil {
 			return nil, err
 		}
@@ -1492,7 +1576,6 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 			}
 		}(&wg)
 	}
-
 	for i, _ := range files {
 		wchan <- i
 	}
@@ -1500,6 +1583,9 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 	wg.Wait()
 	for i, rdr := range readers {
 		if checksums[i] != 0 && checksums[i] != rdr.Checksum() {
+			if errors[i] != nil {
+				logging.Errorf("MemDBSlice::LoadFromDisk:%v datadir:%v error:%v", m.Path, datadir, errors[i])
+			}
 			return nil, ErrCorruptSnapshot
 		}
 	}
@@ -1549,8 +1635,11 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 		}()
 
 		for i, file := range files {
-			r := m.newFileReader(m.fileType, version)
 			deltafile := filepath.Join(deltadir, file)
+			r, err := m.newFileReader(m.fileType, version, deltafile)
+			if err != nil {
+				return nil, err
+			}
 			if err := r.Open(deltafile); err != nil {
 				return nil, err
 			}
@@ -1609,6 +1698,9 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 
 		for i, rdr := range readers {
 			if deltaChecksums[i] != 0 && deltaChecksums[i] != rdr.Checksum() {
+				if errors[i] != nil {
+					logging.Errorf("MemDBSlice::LoadFromDisk: %v deltadir: %v error:%v", m.Path, deltadir, errors[i])
+				}
 				return nil, ErrCorruptSnapshot
 			}
 		}
@@ -1626,11 +1718,22 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 }
 
 func (m *MemDB) DumpStats() string {
-	return m.aggrStoreStats().String()
+	str := "{\n"
+	str += `"skiplist stats":` + m.aggrStoreStats().String()
+	if encSts, err := m.GetEncryptionStatsCached(); err == nil {
+		str += ",\n"
+		str += `"encryption stats":` + "\n" + encSts.String()
+	}
+	str += "\n}"
+	return str
 }
 
 func (m *MemDB) DumpStatsMap() map[string]interface{} {
-	return m.aggrStoreStats().Map()
+	mp := m.aggrStoreStats().Map()
+	if encSts, err := m.GetEncryptionStatsCached(); err == nil {
+		mp["encryptionStats"] = encSts
+	}
+	return mp
 }
 
 func (m *MemDB) aggrStoreStats() skiplist.StatsReport {

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/couchbase/gocbcrypto"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/iowrap"
@@ -192,6 +194,9 @@ type memdbSlice struct {
 	exposeItemCopy bool
 
 	readersReserve
+
+	// encryption
+	dropKeyMu sync.Mutex
 }
 
 // NewMemDBSlice is the constructor for memdbSlice.
@@ -267,7 +272,12 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		return nil, err
 	}
 
-	mdb.initStores()
+	// this should error only if unsupported cipher
+	if err = mdb.initStores(); err != nil {
+		logging.Errorf("memdbSlice:NewMemDBSlice Id %v IndexInstId %v "+
+			"error occured: %v", sliceId, idxInstId, err)
+		return nil, err
+	}
 
 	// Array related initialization
 	_, mdb.isArrayDistinct, mdb.isArrayFlattened, mdb.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
@@ -323,7 +333,8 @@ func init() {
 	moiWriterSemaphoreCh = make(chan bool, moiWritersAllowed)
 }
 
-func (mdb *memdbSlice) initStores() {
+func (mdb *memdbSlice) initStores() error {
+	var err error
 
 	mdb.confLock.RLock()
 	useMemMgmt := mdb.sysconf["moi.useMemMgmt"].Bool()
@@ -344,7 +355,17 @@ func (mdb *memdbSlice) initStores() {
 	cfg.SetIOConcurrency(ioConcurrency)
 
 	cfg.SetKeyComparator(byteItemCompare)
-	mdb.mainstore = memdb.NewWithConfig(cfg)
+
+	// GSI place holder for encryption callback setup
+	// cfg.SetTestEncryption()
+
+	cfg.Path = mdb.path
+
+	mdb.mainstore, err = memdb.NewWithEncryptionConfig(cfg, mdb.getSnapshotDirs())
+	if err != nil {
+		return fmt.Errorf("init memdb mainstore: %w", err)
+	}
+
 	mdb.main = make([]*memdb.Writer, mdb.numWriters)
 	for i := 0; i < mdb.numWriters; i++ {
 		mdb.main[i] = mdb.mainstore.NewWriter()
@@ -356,6 +377,8 @@ func (mdb *memdbSlice) initStores() {
 			mdb.back[i] = nodetable.New(hashDocId, nodeEquality)
 		}
 	}
+
+	return nil
 }
 
 func (mdb *memdbSlice) checkStorageCorruptionError() error {
@@ -1103,8 +1126,10 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 			manifest := filepath.Join(tmpdir, "manifest.json")
 			iowrap.Os_RemoveAll(tmpdir)
 
+			keyId, cipher := store.GetEncryptionInfo()
+
 			// Prepare for persistence.
-			if err := store.PreparePersistence(tmpdir, s.info.MainSnap); err != nil {
+			if err := store.PreparePersistence(tmpdir, s.info.MainSnap, keyId, cipher); err != nil {
 				logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v failed to"+
 					" prepare persistence for create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, dir, err)
 
@@ -1161,7 +1186,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 				moiWriterSemaphoreLk.RUnlock()
 			}()
 
-			err := store.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
+			err := store.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, keyId, cipher, nil)
 			if err == nil {
 				// Add details to snapshot info
 				s.info.Version = SNAPSHOT_META_VERSION_MOI_1
@@ -1172,7 +1197,14 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 				var bs []byte // declare to avoid shadowing err with :=
 				bs, err = json.Marshal(s.info)
 				if err == nil {
-					err = common.WriteFileWithSync(manifest, bs, 0755)
+					if len(keyId) > 0 {
+						var ctx gocbcrypto.EncryptionContext
+						if ctx, err = store.NewEncryptionContext(keyId, cipher); err == nil {
+							err = gocbcrypto.WriteFile(manifest, bs, memdb.FilePermMode, ctx, iowrap.CountDiskFailures)
+						}
+					} else {
+						err = common.WriteFileWithSync(manifest, bs, memdb.FilePermMode)
+					}
 				}
 
 				// If everything succeeded, rename the temp dir to the final dir
@@ -1265,7 +1297,7 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotIn
 				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 					"Removing disk snapshot %v. Num snapshots %v.", mdb.id, mdb.idxInstId,
 					mdb.idxPartnId, dir, len(manifests)-i)
-				err := iowrap.Os_RemoveAll(dir)
+				err := mdb.mainstore.RemoveSnapshot(dir)
 				if err != nil {
 					logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 						"Error: %v while removing disk snapshot %v. Num snapshots %v.", err, mdb.id, mdb.idxInstId,
@@ -1299,7 +1331,9 @@ func (mdb *memdbSlice) cleanupAllOldSnapshotFiles() {
 	for _, m := range manifests {
 		dir := filepath.Dir(m)
 		logging.Infof("MemDBSlice Removing disk snapshot %v", dir)
-		iowrap.Os_RemoveAll(dir)
+		if err := mdb.mainstore.RemoveSnapshot(dir); err != nil {
+			logging.Errorf("MemDBSlice Removing disk snapshot %v error %v", dir, err)
+		}
 	}
 }
 
@@ -1327,6 +1361,15 @@ func (mdb *memdbSlice) getSnapshotManifests() []string {
 	return files
 }
 
+func (mdb *memdbSlice) getSnapshotDirs() []string {
+	manifests := mdb.getSnapshotManifests()
+	dirs := make([]string, 0, len(manifests))
+	for _, f := range manifests {
+		dirs = append(dirs, filepath.Dir(f))
+	}
+	return dirs
+}
+
 // Returns snapshot info list in reverse sorted order
 func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	var infos []SnapshotInfo
@@ -1346,17 +1389,30 @@ func (mdb *memdbSlice) getSnapshots() ([]SnapshotInfo, []string, error) {
 		info := &memdbSnapshotInfo{dataPath: filepath.Dir(f)}
 		fd, err := iowrap.Os_Open(f)
 		if err == nil {
-			defer iowrap.File_Close(fd)
 			bs, err := iowrap.Ioutil_ReadAll(fd)
+			iowrap.File_Close(fd)
 			if err == nil {
-				err = json.Unmarshal(bs, info)
-				if err == nil {
+				if gocbcrypto.IsBytesEncrypted(bs) {
+					bs, err = gocbcrypto.ReadFile(f, mdb.mainstore.GetEncryptionKeyById, memdb.KDFLabelCtx, iowrap.CountDiskFailures)
+					// TBD: we never return error even before encryption changes; need to revisit
+					if err != nil && !errors.Is(err, fs.ErrNotExist) {
+						if errors.Is(err, gocbcrypto.ErrCipherKeyLookup) {
+							err = fmt.Errorf("%v: %w", memdb.ErrSnapshotKeyIdMissing, err)
+						}
+						logging.Errorf("MemDB::%v getSnapshots file:%v error:%v", mdb.Path, f, err)
+					}
+				}
+			}
+
+			if err == nil {
+				if err = json.Unmarshal(bs, info); err == nil {
 					infos = append(infos, info)
 					outfiles = append(outfiles, f)
 				}
 			}
 		}
 	}
+
 	return infos, outfiles, nil
 }
 
@@ -1371,7 +1427,7 @@ func (mdb *memdbSlice) GetCommittedCount() uint64 {
 	return atomic.LoadUint64(&mdb.committedCount)
 }
 
-func (mdb *memdbSlice) resetStores() {
+func (mdb *memdbSlice) resetStores() error {
 	// This is blocking call if snap refcounts != 0
 	go mdb.mainstore.Close2(runtime.GOMAXPROCS(0))
 	if !mdb.isPrimary {
@@ -1380,13 +1436,16 @@ func (mdb *memdbSlice) resetStores() {
 		}
 	}
 
-	mdb.initStores()
+	if err := mdb.initStores(); err != nil {
+		return err
+	}
 
 	prev := atomic.LoadUint64(&mdb.committedCount)
 	atomic.AddInt64(&totalMemDBItems, -int64(prev))
 	mdb.committedCount = 0
 
 	mdb.resetStats()
+	return nil
 }
 
 func (mdb *memdbSlice) resetStats() {
@@ -1438,12 +1497,14 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 			break
 		}
 
-		if err := iowrap.Os_RemoveAll(si.dataPath); err != nil {
+		if err := mdb.mainstore.RemoveSnapshot(si.dataPath); err != nil {
 			return err
 		}
 	}
 
-	mdb.resetStores()
+	if err = mdb.resetStores(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -1486,12 +1547,13 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v PartitionId %v failed to recover from the snapshot %v (err=%v,%v)",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo.dataPath, r, err)
 			if err != errStorageCorrupted {
-				iowrap.Os_RemoveAll(snapInfo.dataPath)
+				mdb.mainstore.RemoveSnapshot(snapInfo.dataPath)
 				os.Exit(1)
 			} else {
 				// Persist error in a file. Next time indexer comes up, required cleanup will happen.
-				iowrap.Os_RemoveAll(snapInfo.dataPath)
+				mdb.mainstore.RemoveSnapshot(snapInfo.dataPath)
 				msg := fmt.Sprintf("%v", errStorageCorrupted)
+				// error file is not encrypted as currently it does not contains any instance information
 				iowrap.Ioutil_WriteFile(filepath.Join(mdb.path, "error"), []byte(msg), 0755)
 			}
 		} else {
@@ -1573,12 +1635,19 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 
 	var snap *memdb.Snapshot
 	snap, err = mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
-	if err == memdb.ErrCorruptSnapshot {
+	// key-material error is a corruption error
+	if err == memdb.ErrCorruptSnapshot || err == memdb.ErrSnapshotKeyIdMissing {
+		err2 := err
 		err = errStorageCorrupted
-		logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to load snapshot %v error(%v).",
-			mdb.id, mdb.idxInstId, snapInfo.dataPath, err)
+		logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to load snapshot %v error(%v : %v).",
+			mdb.id, mdb.idxInstId, snapInfo.dataPath, err, err2)
 		waitForShardBuild()
-		mdb.resetStores()
+		// remove snapshot to discard keys from corrupted snapshot
+		mdb.mainstore.RemoveSnapshot(snapInfo.dataPath)
+		if err2 = mdb.resetStores(); err2 != nil {
+			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to reset stores error(%v).",
+				mdb.id, mdb.idxInstId, err2)
+		}
 		return
 	}
 
@@ -1610,12 +1679,14 @@ func (mdb *memdbSlice) RollbackToZero(initialBuild bool) error {
 	//are no flush workers before calling rollback.
 	mdb.waitPersist()
 
-	mdb.resetStores()
+	// perform cleanup before resetStores so that old encrypted snapshots keys are not loaded.
 	mdb.cleanupAllOldSnapshotFiles()
+
+	err := mdb.resetStores()
 
 	mdb.lastRollbackTs = nil
 
-	return nil
+	return err
 }
 
 func (mdb *memdbSlice) LastRollbackTs() *common.TsVbuuid {
@@ -1914,7 +1985,7 @@ func (mdb *memdbSlice) SerializeCodebook() ([]byte, error) {
 	return nil, nil
 }
 
-func (ms *memdbSlice) InitCodebookFromSerialized(content []byte) error {
+func (mdb *memdbSlice) InitCodebookFromSerialized(content []byte) error {
 	return nil
 }
 
@@ -1966,21 +2037,6 @@ func (mdb *memdbSlice) String() string {
 
 	return str
 
-}
-
-func (mdb *memdbSlice) SetCurrentEncryptionKey(masterEncryptionKey []byte, keyId []byte, cipher string) error {
-	// ENCRYPT_TODO: Update after storage changes
-	return nil
-}
-
-func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
-	// ENCRYPT_TODO: Update after storage changes
-	doneCh <- nil
-}
-
-func (mdb *memdbSlice) GetKeyIdList() ([][]byte, error) {
-	// ENCRYPT_TODO: Update after storage changes
-	return [][]byte{}, nil
 }
 
 func tryDeletememdbSlice(mdb *memdbSlice) {
@@ -2059,6 +2115,112 @@ func (mdb *memdbSlice) GetCodebook() (codebook.Codebook, error) {
 	return nil, ErrorNotImplemented
 }
 
+//////////////////////////////////
+// encryption
+//////////////////////////////////
+
+// sets encryption key ID and cipher for new snapshots.
+// Existing snapshots retain original encryption keys until re-encrypted
+// via DropKeys.
+//
+// Params:
+// - keyId: Encryption key identifier. Pass nil to disable encryption.
+// - cipher: Encryption cipher name (e.g., gocbcrypto.CipherNameAES256GCM
+// or gocbcrypto.CipherNameNone).
+func (mdb *memdbSlice) SetCurrentEncryptionKey(key []byte, keyId []byte, cipher string) error {
+	if mdb.CheckAndIncrRef() {
+		defer mdb.DecrRef()
+		if err := mdb.mainstore.SetCurrentEncryptionKey(key, keyId, cipher); err != nil {
+			return fmt.Errorf("memdbSlice:SetCurrentEncryptionKey error: %w", err)
+		}
+		return nil
+	}
+
+	return nil
+}
+
+// returns all unique encryption key IDs currently used across all snapshots
+//
+// Returns:
+//
+//   - [][]byte: List of unique key IDs in use.
+//     It also includes current active key even though no snapshots are created yet.
+//     If at least one snapshot is unencrypted, keyIds will have an empty keyId - []byte
+//
+//   - error: Error if any snapshot fails to be read.
+//
+//   - The api is atomic. Key change cannot happen during the api call
+//
+// Note: performs disk I/O (encryption header read per file) as list is not cached
+func (mdb *memdbSlice) GetKeyIdList() ([][]byte, error) {
+	if mdb.CheckAndIncrRef() {
+		defer mdb.DecrRef()
+		return mdb.mainstore.GetActiveKeyIdList(), nil
+	}
+
+	return nil, nil
+}
+
+// asynchronously re-encrypts/encrypts/decrypts all files encrypted with the specified key IDs
+// using the current encryption key (set via SetCurrentEncryptionKey).
+// - The call can fail if there is concurrent snapshot removal.
+// - The call may also fail if there is another concurrent drop key
+//
+// Params:
+//   - keyIds: List of key IDs to be rotated/dropped.
+//   - doneCh: error channel to receive completion/error notification.
+//
+// Note: To verify completion, use GetKeyIdList() to check if old key IDs are still present.
+func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
+	kids := make([][]byte, len(keyIds))
+	for i := range keyIds {
+		kids[i] = make([]byte, len(keyIds[i]))
+		copy(kids[i], keyIds[i])
+	}
+
+	// protect concurrent dropKey with different target keyIds
+	mdb.dropKeyMu.Lock()
+	defer mdb.dropKeyMu.Unlock()
+
+	if mdb.CheckAndIncrRef() {
+		go func() {
+			var err error
+
+			defer func() {
+				mdb.DecrRef()
+				if doneCh != nil {
+					doneCh <- err
+				}
+			}()
+
+			snapDirs := mdb.getSnapshotDirs()
+			for i := range snapDirs {
+				if er := mdb.mainstore.DropKeyIdsFromSnapshot(kids, snapDirs[i]); er != nil {
+					if errors.Is(er, memdb.ErrSnapshotBusy) {
+						continue
+					}
+
+					if strings.Contains(er.Error(), "fatal") {
+						// snapshot cannot be recovered, remove snapshot
+						logging.Errorf("memdbSlice:DropKeys IndexInstId %v PartitionId %v error %v, removing snapshot",
+							mdb.idxInstId, mdb.idxPartnId, er)
+						if rmErr := mdb.mainstore.RemoveSnapshot(snapDirs[i]); rmErr != nil {
+							logging.Errorf("memdbSlice:DropKeys failed removing snapshot %v: %v", snapDirs[i], rmErr)
+						}
+						err = er
+						// log error for notification
+					} else if err == nil {
+						err = er
+					}
+				}
+			}
+		}()
+	}
+}
+
+// ///////////////////////////
+// Snapshot
+// ///////////////////////////
 func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }

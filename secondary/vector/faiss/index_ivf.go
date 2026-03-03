@@ -292,6 +292,16 @@ func (idx *IndexImpl) EncodeAndAssignSQ(x []float32, codes []byte,
 	return
 }
 
+// EncodeAndAssignRaBitQ computes the quantized code for a given list of
+// vectors and decodes the list_no from the code into labels. Kept as a
+// separate entry-point from EncodeAndAssignSQ to allow RaBitQ-specific
+// pre/post-processing (e.g. rotation) in future without changing the SQ path.
+func (idx *IndexImpl) EncodeAndAssignRaBitQ(x []float32, codes []byte,
+	labels []int64, nlist int) error {
+
+	return idx.EncodeAndAssignSQ(x, codes, labels, nlist)
+}
+
 func (idx *IndexImpl) DecodeVectors(nx int, codes []byte, x []float32) (err error) {
 
 	// runtime.LockOSThread()

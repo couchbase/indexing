@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/couchbase/gocbcrypto"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
+	"github.com/stretchr/testify/assert"
 )
 
 var testConf Config
@@ -22,6 +24,51 @@ func init() {
 	testConf.UseMemoryMgmt(mm.Malloc, mm.Free)
 	testConf.UseDeltaInterleaving()
 	Debug(true)
+}
+
+var testCfgArray = map[string]Config{
+	"default":    testDefaultConfig(),
+	"encryption": testEncryptionConfig(),
+}
+
+func testDefaultConfig() Config {
+	testConf := DefaultConfig()
+	testConf.UseMemoryMgmt(mm.Malloc, mm.Free)
+	testConf.UseDeltaInterleaving()
+	testConf.SetTestEncryption()
+	Debug(true)
+	return testConf
+}
+
+func testEncryptionConfig() Config {
+	testConf := DefaultConfig()
+	testConf.UseMemoryMgmt(mm.Malloc, mm.Free)
+	testConf.UseDeltaInterleaving()
+	testConf.SetTestEncryption()
+	Debug(true)
+	return testConf
+}
+
+func ValidateNoMemLeaks() {
+	a, b := mm.GetAllocStats()
+	if a-b != 0 {
+		fmt.Printf("0: Found memory leak of %d allocs. allocs[%d] frees[%d]\n", a-b, a, b)
+		panic("Fatal Error: TEST STOPPED. Please fix memory leak first")
+	}
+}
+
+func runTest(t *testing.T, testName string, testFunc func(*testing.T, Config), testCfgName string) {
+	defer ValidateNoMemLeaks()
+
+	fmt.Println(fmt.Sprintf("----------- running %v", testName))
+	testCfg := testCfgArray[testCfgName]
+	cleanup := func() {
+		os.RemoveAll("db.dump")
+	}
+
+	cleanup()
+	testFunc(t, testCfg)
+	cleanup()
 }
 
 func TestInsert(t *testing.T) {
@@ -66,6 +113,7 @@ func TestInsert(t *testing.T) {
 	}
 }
 
+// this function is suspectible to race as NewWriter and NewSnapshot are not thread safe
 func doInsert(db *MemDB, wg *sync.WaitGroup, n int, isRand bool, shouldSnap bool) {
 	defer wg.Done()
 	w := db.NewWriter()
@@ -87,7 +135,105 @@ func doInsert(db *MemDB, wg *sync.WaitGroup, n int, isRand bool, shouldSnap bool
 	}
 }
 
-func TestInsertPerf(t *testing.T) {
+func doInsertSafe(w *Writer, wg *sync.WaitGroup, n int, isRand bool) {
+	defer wg.Done()
+	rnd := rand.New(rand.NewSource(int64(rand.Int())))
+	for i := 0; i < n; i++ {
+		var val int
+		if isRand {
+			val = rnd.Int()
+		} else {
+			val = i
+		}
+		buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf, uint64(val))
+		w.Put(buf)
+	}
+}
+
+func doDeleteSafe(w *Writer, wg *sync.WaitGroup, n int) {
+	defer wg.Done()
+	for i := 0; i < n; i++ {
+		buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf, uint64(i))
+		if !w.Delete(buf) {
+			panic("delete failed")
+		}
+	}
+}
+
+func doGet(t *testing.T, db *MemDB, snap *Snapshot, wg *sync.WaitGroup, n int) {
+	defer wg.Done()
+	rnd := rand.New(rand.NewSource(int64(rand.Int())))
+
+	buf := make([]byte, 8)
+	itr := db.NewIterator(snap)
+	defer itr.Close()
+	for i := 0; i < n; i++ {
+		val := rnd.Int() % n
+		binary.BigEndian.PutUint64(buf, uint64(val))
+		itr.Seek(buf)
+		if !itr.Valid() {
+			t.Errorf("Expected to find %v", val)
+		}
+	}
+}
+
+func VerifyCount(snap *Snapshot, n int, t *testing.T) {
+
+	if c := CountItems(snap); c != n {
+		t.Errorf("Expected count %d, got %d", n, c)
+	}
+}
+
+func CountItems(snap *Snapshot) int {
+	var count int
+	itr := snap.NewIterator()
+	for itr.SeekFirst(); itr.Valid(); itr.Next() {
+		count++
+	}
+	itr.Close()
+	return count
+}
+
+func frag() float64 {
+	mm.FreeOSMemory()
+	rss := float64(mm.Size())
+	all := float64(mm.AllocSize())
+	fragPercent := (1.0 - all/rss) * 100
+	fmt.Printf("frag = %.2f%%\n", fragPercent)
+
+	return fragPercent
+}
+
+func doReplace(wg *sync.WaitGroup, t *testing.T, w *Writer, start, end int) {
+	defer wg.Done()
+
+	for ; start < end; start++ {
+		w.Delete([]byte(fmt.Sprintf("%010d", start)))
+		w.Put([]byte(fmt.Sprintf("%010d", start)))
+	}
+}
+
+func doUpdate(db *MemDB, wg *sync.WaitGroup, w *Writer, start, end int, version int) {
+	defer wg.Done()
+	for ; start < end; start++ {
+		oldval := uint64(start) + uint64(version-1)*10000000
+		val := uint64(start) + uint64(version)*10000000
+		buf1 := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf1, uint64(val))
+		buf2 := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf2, uint64(oldval))
+		if version > 1 {
+			if !w.Delete(buf2) {
+				panic("delete failed")
+			}
+		}
+		w.Put(buf1)
+	}
+}
+
+func testInsertPerf(t *testing.T, testConf Config) {
 	var wg sync.WaitGroup
 	db := NewWithConfig(testConf)
 	defer db.Close()
@@ -108,24 +254,7 @@ func TestInsertPerf(t *testing.T) {
 		total, dur, float64(total)/float64(dur.Seconds()), db.GetCurrSn(), len(db.GetSnapshots()))
 }
 
-func doGet(t *testing.T, db *MemDB, snap *Snapshot, wg *sync.WaitGroup, n int) {
-	defer wg.Done()
-	rnd := rand.New(rand.NewSource(int64(rand.Int())))
-
-	buf := make([]byte, 8)
-	itr := db.NewIterator(snap)
-	defer itr.Close()
-	for i := 0; i < n; i++ {
-		val := rnd.Int() % n
-		binary.BigEndian.PutUint64(buf, uint64(val))
-		itr.Seek(buf)
-		if !itr.Valid() {
-			t.Errorf("Expected to find %v", val)
-		}
-	}
-}
-
-func TestInsertDuplicates(t *testing.T) {
+func testInsertDuplicates(t *testing.T, testConf Config) {
 	db := NewWithConfig(testConf)
 	defer db.Close()
 
@@ -181,7 +310,7 @@ func TestInsertDuplicates(t *testing.T) {
 	}
 }
 
-func TestGetPerf(t *testing.T) {
+func testGetPerf(t *testing.T, testConf Config) {
 	var wg sync.WaitGroup
 	db := NewWithConfig(testConf)
 	defer db.Close()
@@ -204,38 +333,15 @@ func TestGetPerf(t *testing.T) {
 	fmt.Printf("%d items took %v -> %v items/s\n", total, dur, float64(total)/float64(dur.Seconds()))
 }
 
-func VerifyCount(snap *Snapshot, n int, t *testing.T) {
-
-	if c := CountItems(snap); c != n {
-		t.Errorf("Expected count %d, got %d", n, c)
-	}
-}
-
-func CountItems(snap *Snapshot) int {
-	var count int
-	itr := snap.NewIterator()
-	for itr.SeekFirst(); itr.Valid(); itr.Next() {
-		count++
-	}
-	itr.Close()
-	return count
-}
-
-func ValidateNoMemLeaks() {
-	a, b := mm.GetAllocStats()
-	if a-b != 0 {
-		fmt.Printf("0: Found memory leak of %d allocs. allocs[%d] frees[%d]\n", a-b, a, b)
-		panic("Fatal Error: TEST STOPPED. Please fix memory leak first")
-	}
-}
-
-func TestLoadStoreDisk(t *testing.T) {
+func testLoadStoreDisk(t *testing.T, testConf Config) {
 	defer ValidateNoMemLeaks()
 
 	os.RemoveAll("db.dump")
 	var wg sync.WaitGroup
-	db := NewWithConfig(testConf)
-	defer db.Close()
+	db, err := NewWithEncryptionConfig(testConf, nil)
+	assert.NoError(t, err)
+	keyId, cipher := db.GetEncryptionInfo()
+
 	n := 1000000
 	t0 := time.Now()
 	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
@@ -245,7 +351,6 @@ func TestLoadStoreDisk(t *testing.T) {
 	wg.Wait()
 	fmt.Printf("Inserting %v items took %v\n", n, time.Since(t0))
 	snap0, _ := db.NewSnapshot()
-	defer snap0.Close()
 	snap, _ := db.NewSnapshot()
 	fmt.Println(db.DumpStats())
 
@@ -253,12 +358,12 @@ func TestLoadStoreDisk(t *testing.T) {
 	fmt.Println(fmt.Sprintf("snap count = %v", n))
 
 	t0 = time.Now()
-	if err := db.PreparePersistence("db.dump", snap); err != nil {
+	if err := db.PreparePersistence("db.dump", snap, keyId, cipher); err != nil {
 		t.Errorf("Error while preparing %v", err)
 		return
 	}
 
-	err := db.StoreToDisk("db.dump", snap, 8, nil)
+	err = db.StoreToDisk("db.dump", snap, 8, keyId, cipher, nil)
 	if err != nil {
 		t.Errorf("Expected no error. got=%v", err)
 	}
@@ -266,8 +371,13 @@ func TestLoadStoreDisk(t *testing.T) {
 	fmt.Printf("Storing to disk took %v\n", time.Since(t0))
 
 	snap.Close()
-	db = NewWithConfig(testConf)
+	snap0.Close()
+	db.Close()
+
+	db, err = NewWithEncryptionConfig(testConf, []string{"db.dump"})
+	assert.NoError(t, err)
 	defer db.Close()
+
 	t0 = time.Now()
 	snap, err = db.LoadFromDisk("db.dump", 8, nil)
 	defer snap.Close()
@@ -288,29 +398,7 @@ func TestLoadStoreDisk(t *testing.T) {
 	fmt.Println(db.DumpStats())
 }
 
-func frag() float64 {
-	mm.FreeOSMemory()
-	rss := float64(mm.Size())
-	all := float64(mm.AllocSize())
-	fragPercent := (1.0 - all/rss) * 100
-	fmt.Printf("frag = %.2f%%\n", fragPercent)
-
-	return fragPercent
-}
-
-func TestConcurrentLoadCloseFragmentation(t *testing.T) {
-	testConcurrentLoadCloseFragmentation(t, 2000000)
-}
-
-func TestConcurrentLoadCloseFragmentationSmall(t *testing.T) {
-	testConcurrentLoadCloseFragmentation(t, 10)
-}
-
-func TestConcurrentLoadCloseFragmentationEmpty(t *testing.T) {
-	testConcurrentLoadCloseFragmentation(t, 0)
-}
-
-func TestConcurrentCloseSingleNode(t *testing.T) {
+func testConcurrentCloseSingleNode(t *testing.T, testConf Config) {
 	defer ValidateNoMemLeaks()
 
 	db := NewWithConfig(testConf)
@@ -333,14 +421,16 @@ func TestConcurrentCloseSingleNode(t *testing.T) {
 	db.Close2(2)
 }
 
-func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
+func testConcurrentLoadCloseFragmentation(t *testing.T, n int, testConf Config) {
 	defer ValidateNoMemLeaks()
 
 	os.RemoveAll("db.dump")
 
 	var wg sync.WaitGroup
 
-	db := NewWithConfig(testConf)
+	db, err := NewWithEncryptionConfig(testConf, nil)
+	assert.NoError(t, err)
+	keyId, cipher := db.GetEncryptionInfo()
 
 	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
 		wg.Add(1)
@@ -355,12 +445,17 @@ func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
 
 	snap, _ := db.NewSnapshot()
 
-	if err := db.PreparePersistence("db.dump", snap); err != nil {
+	if err := db.PreparePersistence("db.dump", snap, keyId, cipher); err != nil {
 		t.Errorf("Error while preparing %v", err)
 		return
 	}
 
-	db.StoreToDisk("db.dump", snap, concurr, nil)
+	err = db.StoreToDisk("db.dump", snap, concurr, keyId, cipher, nil)
+	if err != nil {
+		t.Errorf("Expected no error. got=%v", err)
+		return
+	}
+
 	fmt.Printf("Done Storing to disk\n")
 	snap.Close()
 	if f := frag(); f > initialFrag*1.5 {
@@ -374,10 +469,13 @@ func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
 		fmt.Println("Done Closing")
 	}()
 
-	db2 := NewWithConfig(testConf)
+	db2, err := NewWithEncryptionConfig(testConf, []string{"db.dump"})
+	assert.NoError(t, err)
 	defer db2.Close2(concurr)
 
-	snap2, _ := db2.LoadFromDisk("db.dump", concurr, nil)
+	snap2, err := db2.LoadFromDisk("db.dump", concurr, nil)
+	assert.NoError(t, err)
+
 	defer snap2.Close()
 	fmt.Printf("Done Loading from disk\n")
 
@@ -388,10 +486,27 @@ func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
 	}
 }
 
-func TestStoreDiskShutdown(t *testing.T) {
+func testConcurrentLoadCloseFragmentationInt(t *testing.T, cfg Config) {
+	t.Run("large", func(t *testing.T) {
+		testConcurrentLoadCloseFragmentation(t, 2000000, cfg)
+	})
+
+	t.Run("small", func(t *testing.T) {
+		testConcurrentLoadCloseFragmentation(t, 10, cfg)
+	})
+
+	t.Run("zero", func(t *testing.T) {
+		testConcurrentLoadCloseFragmentation(t, 0, cfg)
+	})
+}
+
+func testStoreDiskShutdown(t *testing.T, testConf Config) {
 	os.RemoveAll("db.dump")
 	var wg sync.WaitGroup
-	db := NewWithConfig(testConf)
+	db, err := NewWithEncryptionConfig(testConf, nil)
+	assert.NoError(t, err)
+	keyId, cipher := db.GetEncryptionInfo()
+
 	n := 1000000
 	t0 := time.Now()
 	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
@@ -410,12 +525,12 @@ func TestStoreDiskShutdown(t *testing.T) {
 	t0 = time.Now()
 	errch := make(chan error, 1)
 	go func() {
-		if err := db.PreparePersistence("db.dump", snap); err != nil {
+		if err := db.PreparePersistence("db.dump", snap, keyId, cipher); err != nil {
 			fmt.Println("Prepare returns error: ", err)
 			errch <- err
 			return
 		}
-		errch <- db.StoreToDisk("db.dump", snap, 8, nil)
+		errch <- db.StoreToDisk("db.dump", snap, 8, keyId, cipher, nil)
 	}()
 
 	snap0.Close()
@@ -427,7 +542,7 @@ func TestStoreDiskShutdown(t *testing.T) {
 	}
 }
 
-func TestDelete(t *testing.T) {
+func testDelete(t *testing.T, testConf Config) {
 	expected := 10
 	db := NewWithConfig(testConf)
 	defer db.Close()
@@ -465,16 +580,7 @@ func TestDelete(t *testing.T) {
 	fmt.Println(db.DumpStats())
 }
 
-func doReplace(wg *sync.WaitGroup, t *testing.T, w *Writer, start, end int) {
-	defer wg.Done()
-
-	for ; start < end; start++ {
-		w.Delete([]byte(fmt.Sprintf("%010d", start)))
-		w.Put([]byte(fmt.Sprintf("%010d", start)))
-	}
-}
-
-func TestGCPerf(t *testing.T) {
+func testGCPerf(t *testing.T, testConf Config) {
 	var wg sync.WaitGroup
 	var last *Snapshot
 
@@ -519,7 +625,7 @@ func TestGCPerf(t *testing.T) {
 	fmt.Printf("final_node_count = %v, average_live_node_count = %v, wait_time_for_collection = %vms\n", db.store.GetStats().NodeCount, nc/iterations, waits)
 }
 
-func TestMemoryInUse(t *testing.T) {
+func testMemoryInUse(t *testing.T, testConf Config) {
 	db := NewWithConfig(testConf)
 	defer db.Close()
 
@@ -547,7 +653,7 @@ func TestMemoryInUse(t *testing.T) {
 	dumpStats()
 }
 
-func TestFullScan(t *testing.T) {
+func testFullScan(t *testing.T, testConf Config) {
 	var wg sync.WaitGroup
 	db := NewWithConfig(testConf)
 	defer db.Close()
@@ -569,7 +675,7 @@ func TestFullScan(t *testing.T) {
 	fmt.Printf("Full iteration of %d items took %v\n", c, time.Since(t0))
 }
 
-func TestVisitor(t *testing.T) {
+func testVisitor(t *testing.T, testConf Config) {
 	const shards = 32
 	const concurrency = 8
 	const n = 1000000
@@ -626,7 +732,7 @@ func TestVisitor(t *testing.T) {
 	}
 }
 
-func TestVisitorError(t *testing.T) {
+func testVisitorError(t *testing.T, testConf Config) {
 	const n = 100000
 	var wg sync.WaitGroup
 	db := NewWithConfig(testConf)
@@ -651,29 +757,12 @@ func TestVisitorError(t *testing.T) {
 	}
 }
 
-func doUpdate(db *MemDB, wg *sync.WaitGroup, w *Writer, start, end int, version int) {
-	defer wg.Done()
-	for ; start < end; start++ {
-		oldval := uint64(start) + uint64(version-1)*10000000
-		val := uint64(start) + uint64(version)*10000000
-		buf1 := make([]byte, 8)
-		binary.BigEndian.PutUint64(buf1, uint64(val))
-		buf2 := make([]byte, 8)
-		binary.BigEndian.PutUint64(buf2, uint64(oldval))
-		if version > 1 {
-			if !w.Delete(buf2) {
-				panic("delete failed")
-			}
-		}
-		w.Put(buf1)
-	}
-}
-
-func TestLoadDeltaStoreDisk(t *testing.T) {
+func testLoadDeltaStoreDisk(t *testing.T, conf Config) {
 	os.RemoveAll("db.dump")
-	conf := DefaultConfig()
 	conf.UseDeltaInterleaving()
-	db := NewWithConfig(conf)
+	db, err := NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+	keyId, cipher := db.GetEncryptionInfo()
 
 	var writers []*Writer
 	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
@@ -742,12 +831,12 @@ func TestLoadDeltaStoreDisk(t *testing.T) {
 
 	t0 := time.Now()
 
-	if err := db.PreparePersistence("db.dump", snap); err != nil {
+	if err := db.PreparePersistence("db.dump", snap, keyId, cipher); err != nil {
 		t.Errorf("Error while preparing %v", err)
 		return
 	}
 
-	err := db.StoreToDisk("db.dump", snap, 8, callb)
+	err = db.StoreToDisk("db.dump", snap, 8, keyId, cipher, callb)
 	if err != nil {
 		t.Errorf("Expected no error. got=%v", err)
 	}
@@ -758,8 +847,10 @@ func TestLoadDeltaStoreDisk(t *testing.T) {
 	snapw.Close()
 	db.Close()
 
-	db = NewWithConfig(conf)
+	db, err = NewWithEncryptionConfig(conf, []string{"db.dump"})
+	assert.NoError(t, err)
 	defer db.Close()
+
 	t0 = time.Now()
 	snap, err = db.LoadFromDisk("db.dump", 8, nil)
 	defer snap.Close()
@@ -797,7 +888,7 @@ func TestLoadDeltaStoreDisk(t *testing.T) {
 	fmt.Println("RestoredFailed", db.DeltaRestoreFailed)
 }
 
-func TestExecuteConcurrGCWorkers(t *testing.T) {
+func testExecuteConcurrGCWorkers(t *testing.T, testConf Config) {
 	db := NewWithConfig(testConf)
 	defer db.Close()
 
@@ -842,7 +933,7 @@ func TestExecuteConcurrGCWorkers(t *testing.T) {
 	}
 }
 
-func TestCloseWithActiveIterators(t *testing.T) {
+func testCloseWithActiveIterators(t *testing.T, testConf Config) {
 	var wg sync.WaitGroup
 	db := NewWithConfig(testConf)
 
@@ -873,9 +964,12 @@ func TestCloseWithActiveIterators(t *testing.T) {
 
 }
 
-func TestDiskCorruption(t *testing.T) {
+func testDiskCorruption(t *testing.T, testConf Config) {
 	os.RemoveAll("db.dump")
 	var wg sync.WaitGroup
+
+	// TBD: enable after MB-70620 is fixed
+	testConf.useMemoryMgmt = false
 	db := NewWithConfig(testConf)
 	defer db.Close()
 	n := 100000
@@ -893,12 +987,12 @@ func TestDiskCorruption(t *testing.T) {
 
 	t0 = time.Now()
 
-	if err := db.PreparePersistence("db.dump", snap); err != nil {
+	if err := db.PreparePersistence("db.dump", snap, nil, ""); err != nil {
 		t.Errorf("Error while preparing %v", err)
 		return
 	}
 
-	err := db.StoreToDisk("db.dump", snap, 8, nil)
+	err := db.StoreToDisk("db.dump", snap, 8, nil, "", nil)
 	if err != nil {
 		t.Errorf("Expected no error. got=%v", err)
 	}
@@ -909,26 +1003,32 @@ func TestDiskCorruption(t *testing.T) {
 	// Now open a shard file and corrupt it
 	shard0 := filepath.Join("db.dump", "data")
 	shard0 = filepath.Join(shard0, "shard-0")
+
+	var off int64
 	if cwr, err := os.OpenFile(shard0, os.O_WRONLY, 0755); err != nil {
 		panic(err)
 	} else {
 		info, _ := os.Stat(shard0)
-		cwr.WriteAt([]byte("corrupt"), info.Size()/2)
+		off = int64(info.Size() / 2)
+		if testConf.GetKeyById != nil {
+			off = gocbcrypto.FILEHDR_SZ + 4 // encryption header size + blklen
+		}
+		cwr.WriteAt([]byte("corrupt"), off)
 		cwr.Close()
 	}
 
 	db2 := NewWithConfig(testConf)
 	defer db2.Close()
-	t0 = time.Now()
-	snap, err = db.LoadFromDisk("db.dump", 8, nil)
+
+	snap, err = db2.LoadFromDisk("db.dump", 8, nil)
 	if err != ErrCorruptSnapshot {
-		t.Errorf("Expected corrupted snapshot! got=%v", err)
+		t.Errorf("Expected corrupted snapshot! got=%v, snap=%p offset=%v", err, snap, off)
 		snap.Close()
 	}
-	fmt.Printf("Loading from disk took %v\n", time.Since(t0))
+	t.Log(err, off)
 }
 
-func TestSnapshotStats(t *testing.T) {
+func testSnapshotStats(t *testing.T, testConf Config) {
 	db := NewWithConfig(testConf)
 	defer db.Close()
 
@@ -976,7 +1076,7 @@ func TestSnapshotStats(t *testing.T) {
 	}
 }
 
-func TestInsertDeleteConcurrent(t *testing.T) {
+func testInsertDeleteConcurrent(t *testing.T, testConf Config) {
 	var wgInsert, wgDelete sync.WaitGroup
 	// in case of leaks from any prev test case
 	oldAllocs, oldFrees := mm.GetAllocStats()
@@ -1081,4 +1181,80 @@ func TestInsertDeleteConcurrent(t *testing.T) {
 	} else {
 		fmt.Printf("allocs: %d frees: %d\n", a, b)
 	}
+}
+
+func TestInsertPerf(t *testing.T) {
+	runTest(t, "TestInsertPerf", testInsertPerf, "default")
+}
+
+func TestInsertDuplicates(t *testing.T) {
+	runTest(t, "TestInsertDuplicates", testInsertDuplicates, "default")
+}
+
+func TestGetPerf(t *testing.T) {
+	runTest(t, "testGetPerf", testGetPerf, "default")
+}
+
+func TestLoadStoreDisk(t *testing.T) {
+	runTest(t, "TestLoadStoreDisk", testLoadStoreDisk, "default")
+}
+
+func TestConcurrentCloseSingleNode(t *testing.T) {
+	runTest(t, "testConcurrentCloseSingleNode", testConcurrentCloseSingleNode, "default")
+}
+
+func TestConcurrentLoadCloseFragmentation(t *testing.T) {
+	runTest(t, "TestConcurrentLoadCloseFragmentation", testConcurrentLoadCloseFragmentationInt, "default")
+}
+
+func TestStoreDiskShutdown(t *testing.T) {
+	runTest(t, "testStoreDiskShutdown", testStoreDiskShutdown, "default")
+}
+
+func TestDelete(t *testing.T) {
+	runTest(t, "testDelete", testDelete, "default")
+}
+
+func TestGCPerf(t *testing.T) {
+	runTest(t, "testGCPerf", testGCPerf, "default")
+}
+
+func TestMemoryInUse(t *testing.T) {
+	runTest(t, "testMemoryInUse", testMemoryInUse, "default")
+}
+
+func TestFullScan(t *testing.T) {
+	runTest(t, "testFullScan", testFullScan, "default")
+}
+
+func TestVisitor(t *testing.T) {
+	runTest(t, "testVisitor", testVisitor, "default")
+}
+
+func TestVisitorError(t *testing.T) {
+	runTest(t, "testVisitorError", testVisitorError, "default")
+}
+
+func TestLoadDeltaStoreDisk(t *testing.T) {
+	runTest(t, "testLoadDeltaStoreDisk", testLoadDeltaStoreDisk, "default")
+}
+
+func TestExecuteConcurrGCWorkers(t *testing.T) {
+	runTest(t, "TestExecuteConcurrGCWorkers", testExecuteConcurrGCWorkers, "default")
+}
+
+func TestCloseWithActiveIterators(t *testing.T) {
+	runTest(t, "TestCloseWithActiveIterators", testCloseWithActiveIterators, "default")
+}
+
+func TestSnapshotStats(t *testing.T) {
+	runTest(t, "TestSnapshotStats", testSnapshotStats, "default")
+}
+
+func TestInsertDeleteConcurrent(t *testing.T) {
+	runTest(t, "testInsertDeleteConcurrent", testInsertDeleteConcurrent, "default")
+}
+
+func TestDiskCorruption(t *testing.T) {
+	runTest(t, "TestDiskCorruption", testDiskCorruption, "default")
 }

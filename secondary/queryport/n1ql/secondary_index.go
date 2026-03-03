@@ -53,6 +53,8 @@ const DONEREQUEST = 1
 const BACKFILLPREFIX = "scan-results"
 const BACKFILLTICK = 5
 
+var scanKDFLabelCtx = []byte("indexing/n1ql")
+
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(
 	fmt.Errorf("gsi.indexEmpty"), "Fatal null reference to index")
@@ -2223,7 +2225,7 @@ func newEncryptionCtx(cipher string, encryptionKeyId string, getKeyById func([]b
 
 	switch cipher {
 	case "AES-256-GCM":
-		ctx, err := gocbcrypto.NewAESGCM256Context([]byte(encryptionKeyId), getKeyById)
+		ctx, err := gocbcrypto.NewAESGCM256ContextWithOpenSSL([]byte(encryptionKeyId), getKeyById([]byte(encryptionKeyId)), scanKDFLabelCtx, 0)
 		return ctx, err
 	default:
 		return nil, fmt.Errorf("invalid cipher:%v", cipher)
@@ -2304,10 +2306,10 @@ func makeResponsehandler(
 				"%v %q finished reading from temp file for %v ...\n",
 				lprefix, requestId, name)
 
-			if cfr != nil{
+			if cfr != nil {
 				cfr.Reset()
 			}
-			if cfw != nil{
+			if cfw != nil {
 				cfw.Reset()
 			}
 
@@ -2541,7 +2543,7 @@ func makeResponsehandler(
 				// decoder
 				if shouldEncrypt {
 					// Read and decrypt temp file and load result to decbuf and reset the buffer
-					cfr, err = gocbcrypto.NewCryptFileReader(readfd, getKeyById, bufSz, aligned, nil)
+					cfr, err = gocbcrypto.NewCryptFileReaderWithLabel(readfd, getKeyById, scanKDFLabelCtx, bufSz, aligned, nil)
 					if err != nil {
 						fmsg := "%v crypt file reader err:%v"
 						err := fmt.Errorf(fmsg, requestId, err)

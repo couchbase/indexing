@@ -15,45 +15,58 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 )
 
+// ScanReportState holds the aggregate state of scan reports.
 type ScanReportState struct {
 	ReqID string
 
-	// Final report fields
-	DefnID          common.IndexDefnId
+	HostScanReport  map[string]*HostScanReport
 	SrvrAvgNs       *ServerTimings
 	SrvrTotalCounts *ServerCounts
 	Partns          map[string][]int
+	DefnID          common.IndexDefnId
 	Retries         int
-	HostScanReport  map[string]*HostScanReport
+
+	// Padding for 8-byte alignment (4 bytes)
+	_ [4]byte
 }
+
+// HostScanReport contains per-host scan metrics.
 type HostScanReport struct {
 	SrvrNs     *ServerTimings `json:"srvr_ns,omitempty"`
 	SrvrCounts *ServerCounts  `json:"srvr_counts,omitempty"`
 	ClientNs   *ClientTimings `json:"client_ns,omitempty"`
 }
 
+// ServerTimings contains server-side timing metrics.
 type ServerTimings struct {
-	TotalDur          int64 `json:"total,omitempty"`
-	WaitDur           int64 `json:"wait,omitempty"`
-	ScanDur           int64 `json:"scan,omitempty"`
-	GetSeqnosDur      int64 `json:"getseqnos,omitempty"`
-	DiskReadDur       int64 `json:"disk_read,omitempty"`
-	DistCompDur       int64 `json:"dist_comp,omitempty"`
-	CentroidAssignDur int64 `json:"centroid_assign,omitempty"`
+	TotalDur     int64 `json:"total,omitempty"`
+	WaitDur      int64 `json:"wait,omitempty"`
+	ScanDur      int64 `json:"scan,omitempty"`
+	GetSeqnosDur int64 `json:"getseqnos,omitempty"`
+	DiskReadDur  int64 `json:"diskRead,omitempty"`
+
+	AvgDecodeDur   int64 `json:"decode,omitempty"`
+	AvgDistCompDur int64 `json:"distComp,omitempty"`
 }
 
+// ServerCounts contains server-side count metrics.
 type ServerCounts struct {
-	RowsReturn  uint64 `json:"rows_return,omitempty"`
-	RowsScan    uint64 `json:"rows_scan,omitempty"`
-	BytesRead   uint64 `json:"bytes_read,omitempty"`
-	CacheHitPer uint64 `json:"cache_hit_per,omitempty"`
+	RowsReturn  uint64 `json:"rowsReturn,omitempty"`
+	RowsScan    uint64 `json:"rowsScan,omitempty"`
+	BytesRead   uint64 `json:"bytesRead,omitempty"`
+	CacheHitPer uint64 `json:"cacheHitPer,omitempty"`
+
+	RowsFiltered uint64 `json:"rowsFiltered,omitempty"`
+	RowsReranked uint64 `json:"rowsReranked,omitempty"`
 }
 
+// ClientTimings contains client-side timing metrics.
+// Not set yet.
 type ClientTimings struct {
 	ScatterDur      uint64 `json:"scatter,omitempty"`
 	GatherDur       uint64 `json:"gather,omitempty"`
-	GetScanportDur  uint64 `json:"get_scanport,omitempty"`
-	ResponseReadDur uint64 `json:"response_read,omitempty"`
+	GetScanportDur  uint64 `json:"getScanport,omitempty"`
+	ResponseReadDur uint64 `json:"responseRead,omitempty"`
 }
 
 func NewScanReportState(reqID string, defnID common.IndexDefnId) *ScanReportState {
