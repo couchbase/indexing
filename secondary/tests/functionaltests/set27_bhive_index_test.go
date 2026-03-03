@@ -397,6 +397,40 @@ func TestPartitionSetsWithBhiveIndex(t *testing.T) {
 	}
 }
 
+// runSparseScan executes a sparse vector scan using SPARSE_DIMENSION evenly-spaced terms
+// and validates that 'limit' rows are returned and scan stats match expectedNumRequests.
+// The query vector has indices 0, 78, 156, ..., (SPARSE_DIMENSION-1)*78 with uniform value 0.5.
+func runSparseScan(t *testing.T, idxName, vecField string, nprobes int, limit, expectedNumRequests int64) {
+	idxPart := "["
+	valPart := "["
+	for i := 0; i < SPARSE_DIMENSION; i++ {
+		if i > 0 {
+			idxPart += ", "
+			valPart += ", "
+		}
+		idxPart += fmt.Sprintf("%d", i*78)
+		valPart += "0.5"
+	}
+	idxPart += "]"
+	valPart += "]"
+	queryVecStr := "[" + idxPart + ", " + valPart + "]"
+
+	annScanStmt := fmt.Sprintf(
+		"SELECT meta().id FROM default "+
+			"ORDER BY sparse_vector_distance(%s, %s, %d) "+
+			"LIMIT %d",
+		vecField, queryVecStr, nprobes, limit)
+
+	log.Printf("runSparseScan: %v", annScanStmt)
+	annScanResults, err := execN1QL(bucket, annScanStmt)
+	FailTestIfError(err, "Error during sparse vector scan on "+idxName, t)
+
+	if int64(len(annScanResults)) != limit {
+		t.Fatalf("Expected %v results from sparse vector scan, got %v", limit, len(annScanResults))
+	}
+	validateScanStats(bucket, idxName, expectedNumRequests, expectedNumRequests*limit, t)
+}
+
 func TestBhiveSparseVectorItemsCount(t *testing.T) {
 	skipIfNotPlasma(t)
 
@@ -424,4 +458,10 @@ func TestBhiveSparseVectorItemsCount(t *testing.T) {
 		t.Fatalf("Incorrect items in the index. Expected %v. Actual: %v, stats: %v",
 			numDocs, itemsCount, stats)
 	}
+
+	// Run sparse vector scans to verify the index is functional and exercises
+	// processSparseVectorBatch (including batches where validCount==0).
+	limit := int64(10)
+	nprobes := 256
+	runSparseScan(t, idx_bhive_sparse, "sparse_dim", nprobes, limit, 1)
 }
