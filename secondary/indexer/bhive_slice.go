@@ -1447,7 +1447,8 @@ func (mdb *bhiveSlice) createVectorFuncCtx() *bhive.VectorFuncCtx {
 	}
 
 	useDistEncoded := func() bool {
-		return mdb.idxDefn.VectorMeta.Quantizer.Type == common.SQ &&
+		qtype := mdb.idxDefn.VectorMeta.Quantizer.Type
+		return (qtype == common.SQ || qtype == common.RaBitQ) &&
 			mdb.codebook.MetricType() == codebook.METRIC_L2
 	}
 
