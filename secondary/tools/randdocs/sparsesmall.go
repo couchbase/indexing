@@ -35,9 +35,13 @@ type SparseData struct {
 	filename string
 
 	// Query and ground truth support
-	queryData   *SparseData
-	truthIndptr []int64
-	truthData   []int32
+	queryData     *SparseData
+	queryCount    int     // Current query counter
+	truthNQuery   int32   // Number of queries in ground truth
+	truthK        int32   // Number of nearest neighbors per query
+	truthData     []int32 // Ground truth data: truthNQuery * truthK indices
+	queryFilename string
+	truthFilename string
 }
 
 // OpenSparseData opens a CSR format sparse matrix file
@@ -90,6 +94,137 @@ func OpenSparseData(filename string) (*SparseData, error) {
 		data:     data,
 		filename: filename,
 	}, nil
+}
+
+// LoadQueryAndTruth loads query vectors and ground truth data for recall testing
+// queryCsrFile: path to queries CSR file (e.g., "queries.dev.csr")
+// groundTruthFile: path to ground truth file (e.g., "base_small.dev.gt")
+// Format of ground truth: [nquery:int32][k:int32][data:nquery*k*int32]
+func (sd *SparseData) LoadQueryAndTruth(queryCsrFile, groundTruthFile string) error {
+	// Load query vectors
+	queryData, err := OpenSparseData(queryCsrFile)
+	if err != nil {
+		return fmt.Errorf("error loading queries: %v", err)
+	}
+	sd.queryData = queryData
+	sd.queryFilename = queryCsrFile
+
+	// Load ground truth
+	gtFd, err := os.Open(groundTruthFile)
+	if err != nil {
+		return fmt.Errorf("error opening ground truth file %s: %v", groundTruthFile, err)
+	}
+	defer gtFd.Close()
+
+	// Read header: [nquery:int32][k:int32]
+	var header [2]int32
+	if err := binary.Read(gtFd, binary.LittleEndian, &header); err != nil {
+		return fmt.Errorf("error reading ground truth header: %v", err)
+	}
+
+	nquery, k := header[0], header[1]
+	fmt.Printf("GroundTruth: %d queries, %d nearest neighbors each\n", nquery, k)
+
+	// Verify query count matches
+	if int64(nquery) != queryData.nrow {
+		return fmt.Errorf("query count mismatch: ground truth has %d, queries file has %d",
+			nquery, queryData.nrow)
+	}
+
+	// Read ground truth data
+	truthData := make([]int32, int(nquery)*int(k))
+	if err := binary.Read(gtFd, binary.LittleEndian, truthData); err != nil {
+		return fmt.Errorf("error reading ground truth data: %v", err)
+	}
+
+	sd.truthNQuery = nquery
+	sd.truthK = k
+	sd.truthData = truthData
+	sd.truthFilename = groundTruthFile
+
+	fmt.Printf("Loaded %d ground truth entries (%d queries × %d neighbors)\n",
+		len(truthData), nquery, k)
+
+	return nil
+}
+
+// GetQueryAndTruth returns the next query vector and its ground truth nearest neighbors
+// Returns: query vector, nearest neighbor indices, error
+func (sd *SparseData) GetQueryAndTruth() (query SparseVector, nearestVecIndices []int32, err error) {
+	sd.Lock()
+	defer sd.Unlock()
+
+	if sd.queryData == nil || sd.truthData == nil {
+		return SparseVector{}, nil, fmt.Errorf("queries and ground truth not loaded. Call LoadQueryAndTruth first")
+	}
+
+	if sd.queryCount >= int(sd.truthNQuery) {
+		sd.queryCount = 0 // Reset to beginning
+	}
+
+	// Get query vector
+	row := sd.queryCount
+	start := sd.queryData.indptr[row]
+	end := sd.queryData.indptr[row+1]
+
+	query = SparseVector{
+		Indices: make([]int32, end-start),
+		Values:  make([]float32, end-start),
+	}
+	copy(query.Indices, sd.queryData.indices[start:end])
+	copy(query.Values, sd.queryData.data[start:end])
+
+	// Get ground truth nearest neighbors for this query
+	truthStart := sd.queryCount * int(sd.truthK)
+	truthEnd := truthStart + int(sd.truthK)
+	nearestVecIndices = make([]int32, sd.truthK)
+	copy(nearestVecIndices, sd.truthData[truthStart:truthEnd])
+
+	sd.queryCount++
+
+	return query, nearestVecIndices, nil
+}
+
+// GetQuery returns the next query vector without ground truth
+func (sd *SparseData) GetQuery() (SparseVector, error) {
+	sd.Lock()
+	defer sd.Unlock()
+
+	if sd.queryData == nil {
+		return SparseVector{}, fmt.Errorf("queries not loaded. Call LoadQueryAndTruth first")
+	}
+
+	if sd.queryCount >= int(sd.queryData.nrow) {
+		sd.queryCount = 0 // Reset to beginning
+	}
+
+	row := sd.queryCount
+	start := sd.queryData.indptr[row]
+	end := sd.queryData.indptr[row+1]
+
+	query := SparseVector{
+		Indices: make([]int32, end-start),
+		Values:  make([]float32, end-start),
+	}
+	copy(query.Indices, sd.queryData.indices[start:end])
+	copy(query.Values, sd.queryData.data[start:end])
+
+	sd.queryCount++
+
+	return query, nil
+}
+
+// GetNumQueries returns the number of query vectors loaded
+func (sd *SparseData) GetNumQueries() int {
+	if sd.queryData == nil {
+		return 0
+	}
+	return int(sd.queryData.nrow)
+}
+
+// GetGroundTruthK returns the number of nearest neighbors in ground truth (k)
+func (sd *SparseData) GetGroundTruthK() int {
+	return int(sd.truthK)
 }
 
 // GetValue returns the next sparse vector from the dataset
@@ -242,4 +377,24 @@ func getSparseData(cfg Config, sd *SparseData, cnt *int64) (string, map[string]i
 	value["docnum"] = overflow*100000 + vecnum
 
 	return docid, value, nil
+}
+
+// GetVectorByIndex directly accesses a specific vector by its index without iteration
+// This is efficient for random access using the CSR format's indptr array
+func (sd *SparseData) GetVectorByIndex(idx int) (SparseVector, error) {
+	if idx < 0 || idx >= int(sd.nrow) {
+		return SparseVector{}, fmt.Errorf("vector index %d out of range [0, %d)", idx, sd.nrow)
+	}
+
+	start := sd.indptr[idx]
+	end := sd.indptr[idx+1]
+
+	vec := SparseVector{
+		Indices: make([]int32, end-start),
+		Values:  make([]float32, end-start),
+	}
+	copy(vec.Indices, sd.indices[start:end])
+	copy(vec.Values, sd.data[start:end])
+
+	return vec, nil
 }

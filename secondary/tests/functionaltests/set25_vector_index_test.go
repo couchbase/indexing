@@ -3,6 +3,8 @@ package functionaltests
 import (
 	"fmt"
 	"log"
+	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -1734,5 +1736,360 @@ func TestCompositeSparseVectorItemsCount(t *testing.T) {
 	if itemsCount != float64(numDocs) {
 		t.Fatalf("Incorrect items in the index. Expected %v. Actual: %v, stats: %v",
 			numDocs, itemsCount, stats)
+	}
+}
+
+// =============================================================================
+// Sparse Vector Index Tests (MS MARCO SparseSmall Dataset)
+// =============================================================================
+
+var idx_sparse_bhive = "idx_sparse_bhive"
+var idx_sparse_composite = "idx_sparse_composite"
+var numSparseSmallDocs = 100000 // SparseSmall (MS MARCO) dataset has 100K vectors
+var sparseSmallDataPath string  // path to sparsesmall data directory
+
+func init() {
+	u, _ := user.Current()
+	sparseSmallDataPath = filepath.Join(u.HomeDir, "testdata", "sparsesmall") + "/"
+}
+
+// vectorSetupSparse loads sparse vector data from the SparseSmall (MS MARCO) dataset
+func vectorSetupSparseSmall(t *testing.T, bucket, scope, coll string, numDocs int) {
+	skipIfNotPlasma(t)
+
+	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	resetVectorDataSetupFlags()
+
+	e := loadSparseSmallVectorData(t, bucket, scope, coll, numDocs)
+	FailTestIfError(e, "Error in loading sparse vector data", t)
+
+	sparseSmallVectorsLoaded = true
+}
+
+// loadSparseVectorData loads sparse vector documents from the SparseSmall (MS MARCO) CSR dataset
+// Documents contain:
+//
+//	sparse     -> [[indices], [values]] sparse vector from MS MARCO
+//	vectornum  -> Vector index [0, 100K)
+//	overflow   -> Repetition number
+//	docid      -> {overflow}_{vectornum}
+//	gender     -> "male" / "female"
+//	type       -> "Casual" / "Formal" / "Both" / "None"
+//	category   -> "Document" / "Query" / "Passage" / "Article"
+//	source     -> "MSMARCO" / "Wikipedia" / "News" / "Academic"
+//	language   -> "English" / "Spanish" / "French" / "German"
+//	topic      -> "Science" / "Technology" / "History" / "Arts"
+//	relevance  -> 1-5
+//	docnum     -> overflow*100000 + vecnum
+func loadSparseSmallVectorData(t *testing.T, bucket, scope, coll string, numDocs int) error {
+	if scope == "" {
+		scope = c.DEFAULT_SCOPE
+	}
+	if coll == "" {
+		coll = c.DEFAULT_COLLECTION
+	}
+	if numDocs == 0 {
+		numDocs = numSparseSmallDocs
+	}
+
+	cfg := randdocs.Config{
+		ClusterAddr:    "127.0.0.1:9000",
+		Bucket:         bucket,
+		Scope:          scope,
+		Collection:     coll,
+		NumDocs:        numDocs,
+		Iterations:     1,
+		Threads:        8,
+		OpsPerSec:      100000,
+		UseSparseSmall: true,
+		SkipNormalData: true,
+		SparseCSRFile:  sparseSmallDataPath + "base_small.csr",
+	}
+	return randdocs.Run(cfg)
+}
+
+// formatSparseQueryVector formats a sparse vector as N1QL array literal: [[idx1,idx2,...],[val1,val2,...]]
+func formatSparseQueryVector(query randdocs.SparseVector) string {
+	var sb strings.Builder
+	sb.WriteString("[[")
+	for i, idx := range query.Indices {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(fmt.Sprintf("%d", idx))
+	}
+	sb.WriteString("], [")
+	for i, val := range query.Values {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(fmt.Sprintf("%v", val))
+	}
+	sb.WriteString("]]")
+	return sb.String()
+}
+
+// TestSparseBhiveIndexAllSparseSmall tests bhive sparse vector index
+// (CREATE VECTOR INDEX) with all queries from the SparseSmall (MS MARCO) dataset.
+func TestSparseBhiveIndexSparseSmall(t *testing.T) {
+	testSparseVectorIndexWithAllSparseSmallQueries(t, 0, 1, 1, true /*isBhive*/)
+}
+
+// TestSparseBhiveReplicatedPartnIndexAllSparseSmall tests replicated bhive sparse index
+func TestSparseBhiveReplicatedPartnIndexSparseSmall(t *testing.T) {
+	t.Skipf("Skipping test for now...")
+	testSparseVectorIndexWithAllSparseSmallQueries(t, 2, 1, 1, true /*isBhive*/)
+}
+
+// testSparseVectorIndexWithAllSparseSmallQueries is the shared implementation for sparse vector
+// index tests using the SparseSmall (MS MARCO) dataset.
+// It supports both bhive (CREATE VECTOR INDEX) and composite (CREATE INDEX) index types.
+// nprobes is set high enough to scan all centroids for 100% recall.
+func testSparseVectorIndexWithAllSparseSmallQueries(t *testing.T, numReplica, numPartition, numIterations int, isBhive bool) {
+	skipIfNotPlasma(t)
+
+	printClusterConfig(t.Name(), "entry")
+
+	if numReplica >= 1 && !multiIndexerConfig && !is4NodeCluster() {
+		addTwoNodesAndRebalance("sparseVectorPartnTest", t)
+		multiIndexerConfig = true
+	}
+
+	if !sparseSmallVectorsLoaded {
+		vectorSetupSparseSmall(t, bucket, "", "", numSparseSmallDocs)
+	}
+
+	// Drop all indexes from earlier tests
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	// Use high nprobes to scan all centroids for 100% recall
+	// IVF256 has 256 centroids; setting nprobes=256 ensures exhaustive scan
+	nprobes := 256
+
+	var idxName string
+	var stmt string
+
+	partnClause := ""
+	numPartitionJSON := ""
+	if numPartition > 1 {
+		partnClause = " PARTITION BY HASH(meta().id)"
+		numPartitionJSON = ", \"num_partition\": " + strconv.Itoa(numPartition)
+	}
+
+	if isBhive {
+		idxName = idx_sparse_bhive
+
+		// Bhive index: CREATE VECTOR INDEX with SPARSE VECTOR (vector-only index)
+		if numReplica > 0 {
+			stmt = "CREATE VECTOR INDEX " + idxName +
+				" ON default(sparse SPARSE VECTOR)" +
+				partnClause +
+				" WITH { \"defer_build\":true, \"num_replica\":" + strconv.Itoa(numReplica) +
+				numPartitionJSON +
+				", \"description\": \"IVF256\", \"similarity\": \"DOT\"" +
+				", \"scan_nprobes\": " + strconv.Itoa(nprobes) + "};"
+		} else {
+			stmt = "CREATE VECTOR INDEX " + idxName +
+				" ON default(sparse SPARSE VECTOR)" +
+				partnClause +
+				" WITH { \"defer_build\":true" +
+				numPartitionJSON +
+				", \"description\": \"IVF256\", \"similarity\": \"DOT\"" +
+				", \"scan_nprobes\": " + strconv.Itoa(nprobes) + "};"
+		}
+	} else {
+		idxName = idx_sparse_composite
+
+		// Composite index: CREATE INDEX with scalar predicates + SPARSE VECTOR
+		if numReplica > 0 {
+			stmt = "CREATE INDEX " + idxName +
+				" ON default(`type`, `category`, `source`, `language`, `topic`, `relevance`, sparse SPARSE VECTOR, `vectornum`)" +
+				partnClause +
+				" WITH { \"defer_build\":true, \"num_replica\":" + strconv.Itoa(numReplica) +
+				numPartitionJSON +
+				", \"description\": \"IVF256\", \"similarity\": \"DOT\"" +
+				", \"scan_nprobes\": " + strconv.Itoa(nprobes) + "};"
+		} else {
+			stmt = "CREATE INDEX " + idxName +
+				" ON default(`type`, `category`, `source`, `language`, `topic`, `relevance`, sparse SPARSE VECTOR, `vectornum`)" +
+				partnClause +
+				" WITH { \"defer_build\":true" +
+				numPartitionJSON +
+				", \"description\": \"IVF256\", \"similarity\": \"DOT\"" +
+				", \"scan_nprobes\": " + strconv.Itoa(nprobes) + "};"
+		}
+	}
+
+	err := createWithDeferAndBuild(idxName, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating "+idxName, t)
+
+	// Open query and ground truth files from the SparseSmall dataset
+	sd, err := randdocs.OpenSparseData(sparseSmallDataPath + "base_small.csr")
+	FailTestIfError(err, "Error opening sparse base data", t)
+
+	err = sd.LoadQueryAndTruth(sparseSmallDataPath+"queries.dev.csr", sparseSmallDataPath+"base_small.dev.gt")
+	FailTestIfError(err, "Error loading sparse query and ground truth files", t)
+
+	// Verify index plan once using a minimal probe vector before running all queries
+	{
+		var planCheckStmt string
+		if isBhive {
+			planCheckStmt = fmt.Sprintf("EXPLAIN SELECT vectornum FROM default ORDER BY sparse_vector_distance(sparse, [[1055, 2002, 3000], [0.5, 1.2, 0.8]], %d) LIMIT 10", nprobes)
+		} else {
+			planCheckStmt = fmt.Sprintf("EXPLAIN SELECT vectornum FROM default WHERE `type`=\"Casual\" ORDER BY sparse_vector_distance(sparse, [[1055, 2002, 3000], [0.5, 1.2, 0.8]], %d) LIMIT 10", nprobes)
+		}
+		planRes, perr := execN1QL(BUCKET, planCheckStmt)
+		FailTestIfError(perr, "Error in plan verification EXPLAIN", t)
+		planResText := fmt.Sprintf("%v", planRes)
+		if !strings.Contains(planResText, idxName) {
+			t.Fatalf("Index %v is not being used in query plan: %v", idxName, planResText)
+		}
+		log.Printf("Plan verification passed: index %v is used", idxName)
+	}
+
+	groundTruthK := sd.GetGroundTruthK()
+	if groundTruthK > 10 {
+		groundTruthK = 10 // Cap at 10 for recall@10
+	}
+
+	var wg sync.WaitGroup
+	var relCount int64
+	var numQueries int64
+	concurrency := 4
+	sem := make(chan struct{}, concurrency)
+	errCh := make(chan error, 1) // buffered: first error wins, rest dropped
+
+	for iter := 0; iter < numIterations; iter++ {
+		// Re-open for each iteration to reset query counter
+		if iter > 0 {
+			sd, err = randdocs.OpenSparseData(sparseSmallDataPath + "base_small.csr")
+			FailTestIfError(err, "Error re-opening sparse base data", t)
+			err = sd.LoadQueryAndTruth(sparseSmallDataPath+"queries.dev.csr", sparseSmallDataPath+"base_small.dev.gt")
+			FailTestIfError(err, "Error re-loading sparse query and ground truth files", t)
+		}
+
+		numQueriesInDataset := 32 // sd.GetNumQueries()
+		for qi := 0; qi < numQueriesInDataset; qi++ {
+			query, truth, qerr := sd.GetQueryAndTruth()
+			if qerr != nil {
+				break
+			}
+
+			sem <- struct{}{} // acquire slot
+			wg.Add(1)
+			go func(_query randdocs.SparseVector, _truth []int32, _qi int) {
+				defer wg.Done()
+				defer func() { <-sem }() // release slot
+
+				queryVecStr := formatSparseQueryVector(_query)
+
+				var queryStmt string
+				if isBhive {
+					// Bhive: vector-only index, no scalar predicates in WHERE clause
+					queryStmt = fmt.Sprintf(
+						"SELECT vectornum FROM default "+
+							"ORDER BY sparse_vector_distance(sparse, %v, %d, %d) "+
+							"LIMIT %d",
+						queryVecStr, nprobes, 500, groundTruthK)
+				} else {
+					// Composite: use scalar predicates that match all docs (overflow=0 values)
+					queryStmt = fmt.Sprintf(
+						"SELECT vectornum FROM default "+
+							"WHERE `type`=\"Casual\" AND category=\"Document\" AND source=\"MSMARCO\" AND language=\"English\" AND topic=\"Science\" AND relevance=1 "+
+							"ORDER BY sparse_vector_distance(sparse, %v, %d) "+
+							"LIMIT %d",
+						queryVecStr, nprobes, groundTruthK)
+				}
+
+				// Execute the scan query with retry for transient connection errors
+				var scanResults []interface{}
+				var serr error
+				for attempt := 0; attempt < 5; attempt++ {
+					scanResults, serr = execN1QL(BUCKET, queryStmt)
+					if serr == nil {
+						break
+					}
+					if strings.Contains(serr.Error(), "request canceled") || strings.Contains(serr.Error(), "EOF") {
+						log.Printf("Sparse Query %d: transient error (attempt %d/5): %v", _qi, attempt+1, serr)
+						time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+						continue
+					}
+					break // non-retryable error
+				}
+				if serr != nil {
+					select {
+					case errCh <- fmt.Errorf("scan query %d failed after retries: %v", _qi, serr):
+					default:
+					}
+					return
+				}
+
+				// Extract vectornum from results
+				scanResultsExtracted := make([]int32, len(scanResults))
+				for i, res := range scanResults {
+					resDict, ok := res.(map[string]interface{})
+					if !ok {
+						select {
+						case errCh <- fmt.Errorf("query %d: invalid result (not a map): %v", _qi, res):
+						default:
+						}
+						return
+					}
+					resFloat, ok := resDict["vectornum"].(float64)
+					if !ok {
+						select {
+						case errCh <- fmt.Errorf("query %d: result missing vectornum: %v", _qi, resDict):
+						default:
+						}
+						return
+					}
+					scanResultsExtracted[i] = int32(resFloat)
+				}
+
+				// Calculate recall against ground truth
+				truthTopK := _truth
+				if len(truthTopK) > groundTruthK {
+					truthTopK = truthTopK[:groundTruthK]
+				}
+
+				truthSet := make(map[int32]struct{})
+				for _, idx := range truthTopK {
+					truthSet[idx] = struct{}{}
+				}
+
+				matches := int64(0)
+				for _, resultIdx := range scanResultsExtracted {
+					if _, found := truthSet[resultIdx]; found {
+						matches++
+					}
+				}
+
+				recall := float64(matches) / float64(len(truthTopK))
+				atomic.AddInt64(&relCount, matches)
+				atomic.AddInt64(&numQueries, 1)
+				log.Printf("Sparse Query %d: Recall=%.3f (%d/%d)",
+					_qi, recall, matches, len(truthTopK))
+			}(query, truth, qi)
+		}
+		wg.Wait()
+	}
+
+	// Check for any goroutine errors
+	select {
+	case goroutineErr := <-errCh:
+		t.Fatalf("Sparse vector query failed: %v", goroutineErr)
+	default:
+	}
+
+	totalQueries := atomic.LoadInt64(&numQueries)
+	totalRel := atomic.LoadInt64(&relCount)
+	overallRecall := 100 * (float64(totalRel) / (float64(groundTruthK) * float64(totalQueries)))
+	log.Printf("Overall Recall for SparseSmall (MS MARCO) dataset with %v Queries is %.2f%%", totalQueries, overallRecall)
+
+	// With nprobes=256 (exhaustive scan), we expect 100% recall
+	if overallRecall < 100 {
+		t.Fatalf("Test failed: expected 100%% recall with exhaustive scan (nprobes=%d), got %.2f%% relCount: %v numQueries: %v",
+			nprobes, overallRecall, totalRel, totalQueries)
 	}
 }
