@@ -43,6 +43,9 @@ var (
 
 	// KDF label/context for memdb encryption
 	KDFLabelCtx = []byte("indexing/memdb")
+
+	// use empty slice for unencrypted files
+	NullKeyId = []byte{}
 )
 
 type RotationType int
@@ -196,6 +199,8 @@ func (m *MemDB) restoreCurrentEncryptionKey() error {
 		if err := m.SetCurrentEncryptionKey(key, keyId, cipher); err != nil {
 			return err
 		}
+	} else {
+		m.encKeyId = NullKeyId
 	}
 
 	return nil
@@ -313,7 +318,7 @@ func (m *MemDB) SetCurrentEncryptionKey(key []byte, keyId []byte, cipher string)
 
 	case gocbcrypto.CipherNameNone:
 		if len(keyId) == 0 {
-			m.encKeyId = nil
+			m.encKeyId = NullKeyId
 		} else {
 			return gocbcrypto.ErrInvalidArgs
 		}
@@ -360,7 +365,7 @@ func (m *MemDB) RegisterSnapshotKeyId(snapDir string) (keyId []byte, cipher stri
 		copy(keyId, m.encKeyId)
 		cipher = gocbcrypto.CipherNameAES256GCM
 	} else {
-		keyId = m.encKeyId
+		keyId = m.encKeyId // empty slice
 		cipher = gocbcrypto.CipherNameNone
 	}
 
@@ -1069,7 +1074,12 @@ func appendUniqueKeyId(result [][]byte, newId []byte) [][]byte {
 	}
 
 	if !found {
-		result = append(result, append([]byte(nil), newId...))
+		// appending empty slice just returns the original slice which is []byte(nil)
+		if len(newId) == 0 {
+			result = append(result, NullKeyId)
+		} else {
+			result = append(result, append([]byte(nil), newId...))
+		}
 	}
 
 	return result
@@ -1108,6 +1118,10 @@ func deepCopyKeyIds(keyIds [][]byte) [][]byte {
 
 	out := make([][]byte, len(keyIds))
 	for i := range keyIds {
+		if len(keyIds[i]) == 0 {
+			out[i] = NullKeyId
+			continue
+		}
 		out[i] = append([]byte(nil), keyIds[i]...)
 	}
 

@@ -593,8 +593,16 @@ func testEncryptionGetActiveKeyIdsEncryptedUnencryptedSnapshot(t *testing.T, tes
 	err = db.StoreToDisk(snapPath, snap, 8, keyId, cipher, nil)
 	assert.NoError(t, err)
 
+	oldKeyId := keyId
+	keyIds := db.GetActiveKeyIdList()
+	assert.ElementsMatch(t, [][]byte{oldKeyId}, keyIds)
+
 	err = db.SetCurrentEncryptionKey(nil, nil, gocbcrypto.CipherNameNone)
 	assert.NoError(t, err)
+	assert.ElementsMatch(t, NullKeyId, db.encKeyId)
+
+	keyIds = db.GetActiveKeyIdList()
+	assert.ElementsMatch(t, [][]byte{oldKeyId, NullKeyId}, keyIds)
 
 	snapPath2 := filepath.Join(db.Path, fmt.Sprintf("snap:%v", 1))
 	snapPaths = append(snapPaths, snapPath2)
@@ -609,8 +617,9 @@ func testEncryptionGetActiveKeyIdsEncryptedUnencryptedSnapshot(t *testing.T, tes
 
 	snap.Close()
 
-	keyIds := db.GetActiveKeyIdList()
+	keyIds = db.GetActiveKeyIdList()
 	assert.Equal(t, 2, len(keyIds))
+	assert.ElementsMatch(t, [][]byte{oldKeyId, NullKeyId}, keyIds)
 
 	cached, _ := db.GetEncryptionStatsCached()
 	assert.Equal(t, StatusPartEncrypted, cached.Status)
@@ -850,6 +859,66 @@ func testEncryptionDropAllKeyIdsFromSnapshot(t *testing.T, conf Config) {
 	assert.NoError(t, err2)
 	assert.Equal(t, len(keyIds), len(keyIds2))
 	assert.ElementsMatch(t, keyIds, keyIds2)
+}
+
+// encrypt unencrypted snapshot by dropping empty key id and verify that
+// empty key id is not present in the snapshot after rotation.
+func testEncryptionDropEmptyKeyIdsFromSnapshot(t *testing.T, conf Config) {
+	os.RemoveAll("db.dump")
+	conf.Path = "db.dump"
+	conf.UseDeltaInterleaving()
+	db := NewWithConfig(conf)
+	defer db.Close()
+
+	var wg sync.WaitGroup
+	n := 1000000
+
+	// insert n items unecrypted
+	wg.Add(1)
+	w := db.NewWriter()
+	doInsertSafe(w, &wg, n, false)
+	wg.Wait()
+
+	snap, _ := db.NewSnapshot()
+	// delete n items. This adds dead items to the writer gc list but does not delete them from the index.
+	wg.Add(1)
+	doDeleteSafe(w, &wg, n)
+	wg.Wait()
+
+	snap.Open()
+	keyId, cipher, _ := db.RegisterSnapshotKeyId(conf.Path)
+	assert.NoError(t, db.PreparePersistence(conf.Path, snap, keyId, cipher))
+	assert.NoError(t, db.StoreToDisk(conf.Path, snap, runtime.GOMAXPROCS(0), keyId, cipher, nil))
+	snap.Close()
+
+	// get empty key id from snapshot
+	keyIds, err := db.getActiveKeyIdsFromSnapshot(conf.Path)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(keyIds))
+	assert.ElementsMatch(t, [][]byte{NullKeyId}, keyIds)
+
+	// enable encryption
+	key, keyId, cipher := db.GetKeyById(nil)
+	assert.NoError(t, db.SetCurrentEncryptionKey(key, keyId, cipher))
+
+	// encrypt
+	dropEmptyKey := [][]byte{NullKeyId}
+	assert.NoError(t, db.DropKeyIdsFromSnapshot(dropEmptyKey, conf.Path))
+	t.Log(db.encSts.String())
+
+	assert.Greater(t, db.encSts.NumFilesRotated, uint64(0))
+	assert.Equal(t, uint64(0), db.encSts.NumFilesErrEncrypt+
+		db.encSts.NumFilesErrRencrypt+db.encSts.NumFilesErrDecrypt)
+
+	// no empty keyId from snapshot after dropping
+	keyIds, err = db.getActiveKeyIdsFromSnapshot(conf.Path)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(keyIds))
+	assert.NotElementsMatch(t, [][]byte{NullKeyId}, keyIds)
+	sts, err := db.GetEncryptionStatsCached()
+	assert.NoError(t, err)
+	assert.Equal(t, StatusEncrypted, sts.Status)
+	t.Log(sts.String())
 }
 
 // verifies that concurrent snapshot cleanup and key id rotation operations can be performed safely.
@@ -1943,7 +2012,7 @@ func testEncryptionStats(t *testing.T, conf Config) {
 		}
 
 		assert.NoError(t, db.SetCurrentEncryptionKey(newKey, newKeyID, gocbcrypto.CipherNameAES256GCM))
-		db.RegisterCurrentKeyIdForSnapshot(snapDir)
+		db.RegisterSnapshotKeyId(snapDir)
 
 		visitor := &keyRotationVisitor{db: db}
 		rotatedFile := encryptedFiles[0]
@@ -2127,6 +2196,10 @@ func TestEncryptionDropKeyIdsFromSnapshot(t *testing.T) {
 
 func TestEncryptionDropAllKeyIdsFromSnapshot(t *testing.T) {
 	runTest(t, "TestEncryptionDropAllKeyIdsFromSnapshot", testEncryptionDropAllKeyIdsFromSnapshot, "encryption")
+}
+
+func TestEncryptionDropEmptyKeyIdsFromSnapshot(t *testing.T) {
+	runTest(t, "TestEncryptionDropEmptyKeyIdsFromSnapshot", testEncryptionDropEmptyKeyIdsFromSnapshot, "encryption")
 }
 
 func TestEncryptionDropKeyIdsFromSnapshotWithConcurrentRemoveSnapshot(t *testing.T) {

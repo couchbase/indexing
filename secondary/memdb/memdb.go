@@ -541,7 +541,10 @@ func NewWithConfig(cfg Config) *MemDB {
 		Config:      cfg,
 		gcchan:      make(chan *skiplist.Node, gcchanBufSize),
 		id:          int(atomic.AddInt64(&dbInstancesCount, 1)),
+		encKeyId:    NullKeyId,
+		encCtx:      context.Background(),
 		snapKeyIds:  make(map[string][][]byte),
+		dirGuard:    newDirOpGuard(),
 		encSts:      &EncryptionStats{},
 	}
 
