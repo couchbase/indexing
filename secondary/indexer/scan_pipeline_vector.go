@@ -599,6 +599,11 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 	atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
 	atomic.AddInt64(&w.currJob.decodeCnt, int64(validCount))
 
+	// No valid vectors after term-matching; nothing to compute.
+	if validCount == 0 {
+		return nil
+	}
+
 	// Compute distance using the transposed vectors (all queryDim size)
 	t0 = time.Now()
 

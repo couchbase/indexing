@@ -150,6 +150,9 @@ func NewEncryptionMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 	encryptionMgr.enableTest.Store(false)
 	encryptionMgr.setEnableTest()
 
+	//ENCRYPT_TODO: Remove persisted test keys when ns-server changes are merged
+	keyPersistPath = config["storage_dir"].String()
+
 	go encryptionMgr.cacheKeysForBootstrap()
 	go encryptionMgr.recoverInUseKeys()
 	go encryptionMgr.run()
@@ -174,6 +177,7 @@ func RegisterCallbacks(e *EncryptionMgr) {
 
 	//ENCRYPT_TODO: Register callbacks when cbauth changes are merged. Until that test RESTApis will be used.
 	cbsTest = cbs
+
 	//err := cbauth.RegisterEncryptionKeysCallbacks(cbs.RefreshKeysCallback, cbs.GetInUseKeysCallback, cbs.DropKeysCallback)
 }
 
@@ -443,6 +447,9 @@ func (e *EncryptionMgr) handleIndexerReady(cmd Message) {
 }
 
 func (e *EncryptionMgr) cacheKeysForBootstrap() {
+
+	//ENCRYPT_TODO: Remove after adding ns-server interface
+	recoverPersistedKeys()
 
 	// Cache keys for buckets
 	var buckets []couchbase.BucketName
