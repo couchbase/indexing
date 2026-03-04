@@ -2348,7 +2348,8 @@ func populateShardDealerWithNode(dealer *ShardDealer, node *IndexerNode) {
 	}
 }
 
-// Direct copy of the function of codebookIVFSQ.Size() && codebookIVFPQ.Size()
+// Direct copy of the function of codebookIVFSQ.Size(), codebookIVFPQ.Size()
+// and codebookIVFRaBitQ.Size().
 func estimateCodebookMemUsage(vecMeta *common.VectorMetadata, nlist int) uint64 {
 	const float32Size = 4
 	// Size of storage_idx_t, used for internal storage of vectors (32 bits)
@@ -2356,28 +2357,31 @@ func estimateCodebookMemUsage(vecMeta *common.VectorMetadata, nlist int) uint64 
 	// Number of connections per point (set to 32 by default)
 	const numConnection = 32
 
-	if vecMeta.Quantizer.Type == common.SQ {
+	if nlist <= 0 || vecMeta.Dimension <= 0 {
+		return 0
+	}
 
-		var sqCbSize int64
-		coarseCbSize := int64(nlist * vecMeta.Dimension * float32Size)
+	switch vecMeta.Quantizer.Type {
+	case common.SQ:
+
+		var sqCbSize uint64
+		coarseCbSize := uint64(nlist) * uint64(vecMeta.Dimension) * uint64(float32Size)
 		// No quantization codebook is stored for fp16.
-		if vecMeta.Quantizer.Type == common.SQ && vecMeta.Quantizer.SQRange != common.SQ_FP16 {
+		if vecMeta.Quantizer.SQRange != common.SQ_FP16 {
 			// Memory usage for Scalar Quantization (SQ) codebook.
 			// Each dimension requires two float32 values (min and max) for range.
-			sqCbSize = int64(2 * vecMeta.Dimension * float32Size)
+			sqCbSize = uint64(2) * uint64(vecMeta.Dimension) * uint64(float32Size)
 		}
 
 		// Memory usage for HNSW graph as IVF_HNSW is used
 		// This memory is used for maintaing centroids' HNSW structure.
 		// ref: https://github.com/facebookresearch/faiss/wiki/Guidelines-to-choose-an-index#if-not-hnswm-or-ivf1024pqnx4fsrflat
-		hnswGraphSize := int64(nlist * numConnection * hnswIndexStorageSize * 2)
+		hnswGraphSize := uint64(nlist) * uint64(numConnection) * uint64(hnswIndexStorageSize) * 2
 
-		return uint64(coarseCbSize + sqCbSize + hnswGraphSize)
+		return coarseCbSize + sqCbSize + hnswGraphSize
 
-	} else if vecMeta.Quantizer.Type == common.PQ {
-
-		var pqCbSize int64
-		coarseCbSize := int64(nlist * vecMeta.Dimension * float32Size)
+	case common.PQ:
+		coarseCbSize := uint64(nlist) * uint64(vecMeta.Dimension) * uint64(float32Size)
 
 		// Memory usage for the Product Quantization (PQ) codebook
 		// PQ quantizes each sub-vector using a codebook of quantized vectors.
@@ -2385,16 +2389,27 @@ func estimateCodebookMemUsage(vecMeta *common.VectorMetadata, nlist int) uint64 
 		// - m: Number of sub-vectors, each with its own codebook.
 		// - 2^nbits: Number of quantization levels (codes) for each sub-vector.
 		// - d/m: Dimensionality of each sub-vector,
-		//since the original vector of dimension d is split into m sub-vectors.
+		// since the original vector of dimension d is split into m sub-vectors.
 		// Each codebook entry represents a vector of size d/m.
-		pqCbSize = int64((1 << vecMeta.Quantizer.Nbits) * vecMeta.Dimension * float32Size)
+		pqCbSize := uint64(1<<vecMeta.Quantizer.Nbits) *
+			uint64(vecMeta.Dimension) * uint64(float32Size)
 
 		// Memory usage for HNSW graph as IVF_HNSW is used.
 		// This memory is used for maintaing centroids' HNSW structure.
 		// ref: https://github.com/facebookresearch/faiss/wiki/Guidelines-to-choose-an-index#if-not-hnswm-or-ivf1024pqnx4fsrflat
-		hnswGraphSize := int64(nlist * numConnection * hnswIndexStorageSize * 2)
+		hnswGraphSize := uint64(nlist) * uint64(numConnection) * uint64(hnswIndexStorageSize) * 2
 
-		return uint64(coarseCbSize + pqCbSize + hnswGraphSize)
+		return coarseCbSize + pqCbSize + hnswGraphSize
+
+	case common.RaBitQ:
+		coarseCbSize := uint64(nlist) * uint64(vecMeta.Dimension) * uint64(float32Size)
+
+		// For RaBitQ, no extra quantizer codebook/range state is stored in memory
+		// (unlike SQ ranges and PQ codebooks). Planner estimate includes coarse
+		// centroids and the HNSW graph only.
+		hnswGraphSize := uint64(nlist) * uint64(numConnection) * uint64(hnswIndexStorageSize) * 2
+
+		return coarseCbSize + hnswGraphSize
 	}
 
 	return 0
