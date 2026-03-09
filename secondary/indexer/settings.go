@@ -46,6 +46,10 @@ const (
 	compactionDaysSetting  = "indexer.settings.compaction.days_of_week"
 )
 
+var errInvalidVectorScanworkerMediumBatchSize = errors.New(
+	"setting vector.scanworker_medium_batch_size should be an integer greater than 0",
+)
+
 // settingsManager implements dynamic settings management for indexer.
 type settingsManager struct {
 	supvCmdch        MsgChannel
@@ -895,6 +899,12 @@ func validateSettings(value []byte, current common.Config, internal bool) error 
 	if val, ok := newConfig["indexer.scan.vector.scanworker_batch_size"]; ok {
 		if val.Int() <= 0 {
 			return errors.New("Setting vector.scanworker_batch_size should be an integer greater than 0")
+		}
+	}
+
+	if val, ok := newConfig["indexer.scan.vector.scanworker_medium_batch_size"]; ok {
+		if val.Int() <= 0 {
+			return errInvalidVectorScanworkerMediumBatchSize
 		}
 	}
 

@@ -301,11 +301,15 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 func (w *ScanWorker) getBufferInitBatchSize() int {
 
 	batchSize := w.config["scan.vector.scanworker_batch_size"].Int()
+	mediumBatchSize := w.config["scan.vector.scanworker_medium_batch_size"].Int()
 	largeBatchSize := w.config["scan.vector.scanworker_large_batch_size"].Int()
 
 	qtype := w.r.IndexInst.Defn.VectorMeta.Quantizer.Type
 	if qtype == c.SQ {
 		return batchSize
+	} else if qtype == c.RaBitQ {
+		// use a medium batch size for RaBitQ to amortize encoded-distance call overhead
+		return mediumBatchSize
 	} else if qtype == c.PQ {
 		//use a large batch size for PQ as it is more efficient for PQ with distance table
 		return largeBatchSize
@@ -637,23 +641,24 @@ func (w *ScanWorker) processDenseVectorBatch(vecCount int) (err error) {
 	useDistEncoded := func() bool {
 
 		if w.r.isBhiveScan {
-			//keep in sync with bhive_slice.go useDistEncoded
-			return w.r.IndexInst.Defn.VectorMeta.Quantizer.Type == common.SQ &&
+			// keep in sync with bhive_slice.go useDistEncoded
+			qtype := w.r.IndexInst.Defn.VectorMeta.Quantizer.Type
+			return (qtype == common.SQ || qtype == common.RaBitQ) &&
 				metric == codebook.METRIC_L2
 		} else {
-			//ComputeDistanceEncoded is used for L2 for both PQ and SQ.
-			//For COSINE, it is only used for PQ as there is recall drop
-			//for SQ.
+			// ComputeDistanceEncoded is used for L2 for PQ, SQ and RaBitQ.
+			// For COSINE, it is only used for PQ as there is recall drop
+			// for SQ and RaBitQ.
 			qtype := w.r.IndexInst.Defn.VectorMeta.Quantizer.Type
 			return !w.currJob.scan.MultiCentroid &&
 				!w.r.IndexInst.Defn.VectorMeta.Quantizer.FastScan &&
-				(qtype == c.PQ || (qtype == c.SQ && metric == codebook.METRIC_L2))
+				(qtype == c.PQ || ((qtype == c.SQ || qtype == c.RaBitQ) && metric == codebook.METRIC_L2))
 		}
 	}()
 
-	//ComputeDistanceEncoded is only implemented for SQ currently. It can only
-	//be used if all vectors in a batch belong to the same centroid. If cid < 0,
-	//it implies that scan is spanning across centroids.
+	// ComputeDistanceEncoded is used for SQ/PQ/RaBitQ for supported metrics. It can only
+	// be used if all vectors in a batch belong to the same centroid. If cid < 0,
+	// it implies that scan is spanning across centroids.
 	if useDistEncoded {
 		// Make list of vectors to calculate distance
 		for i := 0; i < vecCount; i++ {
@@ -958,8 +963,6 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 		w.currJob.rowsFiltered++
 		return false, nil
 	}
-
-	return false, nil
 }
 
 func (w *ScanWorker) inlineFilterCb2(meta []byte, docid []byte) (bool, error) {

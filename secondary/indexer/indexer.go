@@ -14458,7 +14458,13 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 						updateErrMap(instId, partnId, errors.New(errStr))
 					} else if retry == maxRetry {
 						//Change error states of indexes which will be excluded in last retry where centroids will be modified
-						if idxInst.Defn.VectorMeta.Quantizer.Nlist > 0 || (idxInst.Defn.VectorMeta.Quantizer.Type == c.PQ && (1<<idxInst.Defn.VectorMeta.Quantizer.Nbits > instVectorsMap[instId])) || (idxInst.Defn.VectorMeta.Quantizer.Type == c.SQ && instVectorsMap[instId] == 0) {
+						if idxInst.Defn.VectorMeta.Quantizer.Nlist > 0 ||
+							(idxInst.Defn.VectorMeta.Quantizer.Type == c.PQ &&
+								(1<<idxInst.Defn.VectorMeta.Quantizer.Nbits > instVectorsMap[instId])) ||
+							((idxInst.Defn.VectorMeta.Quantizer.Type == c.SQ ||
+								idxInst.Defn.VectorMeta.Quantizer.Type == c.RaBitQ) &&
+								instVectorsMap[instId] == 0) {
+
 							updateErrMap(instId, partnId, errors.New(errStr))
 						} else {
 							updateRetryingMap(instId, partnId, true)

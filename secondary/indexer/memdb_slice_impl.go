@@ -1126,7 +1126,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 			manifest := filepath.Join(tmpdir, "manifest.json")
 			iowrap.Os_RemoveAll(tmpdir)
 
-			keyId, cipher := store.GetEncryptionInfo()
+			keyId, cipher, _ := store.RegisterSnapshotKeyId(dir)
 
 			// Prepare for persistence.
 			if err := store.PreparePersistence(tmpdir, s.info.MainSnap, keyId, cipher); err != nil {
@@ -1136,6 +1136,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 				iowrap.Os_RemoveAll(tmpdir)
 				iowrap.Os_RemoveAll(dir)
 
+				store.DeregisterSnapshotKeyId(dir, keyId)
 				return
 			}
 
@@ -1231,6 +1232,9 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 				// Clear the old snapshots in the error case too. In case fetching seqnos did not work in prev iteration
 				// we can cleanup the snapshots in this iteration.
 				mdb.cleanupOldSnapshotFiles(mdb.maxRollbacks, s.info, logOncePerBucket)
+
+				// snapshot was not persisted, remove the keyId
+				store.DeregisterSnapshotKeyId(dir, keyId)
 			}
 		}(store)
 	} else {

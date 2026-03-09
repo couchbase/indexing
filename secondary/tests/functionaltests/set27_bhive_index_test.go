@@ -397,31 +397,88 @@ func TestPartitionSetsWithBhiveIndex(t *testing.T) {
 	}
 }
 
+// runSparseScan executes a sparse vector scan using SPARSE_DIMENSION evenly-spaced terms
+// and validates that 'limit' rows are returned and scan stats match expectedNumRequests.
+// The query vector has indices 0, 78, 156, ..., (SPARSE_DIMENSION-1)*78 with uniform value 0.5.
+func runSparseScan(t *testing.T, idxName, vecField string, nprobes int, limit, expectedNumRequests int64) {
+	idxPart := "["
+	valPart := "["
+	for i := 0; i < SPARSE_DIMENSION; i++ {
+		if i > 0 {
+			idxPart += ", "
+			valPart += ", "
+		}
+		idxPart += fmt.Sprintf("%d", i*78)
+		valPart += "0.5"
+	}
+	idxPart += "]"
+	valPart += "]"
+	queryVecStr := "[" + idxPart + ", " + valPart + "]"
+
+	annScanStmt := fmt.Sprintf(
+		"SELECT meta().id FROM default "+
+			"ORDER BY sparse_vector_distance(%s, %s, %d) "+
+			"LIMIT %d",
+		vecField, queryVecStr, nprobes, limit)
+
+	log.Printf("runSparseScan: %v", annScanStmt)
+	annScanResults, err := execN1QL(bucket, annScanStmt)
+	FailTestIfError(err, "Error during sparse vector scan on "+idxName, t)
+
+	if int64(len(annScanResults)) != limit {
+		t.Fatalf("Expected %v results from sparse vector scan, got %v", limit, len(annScanResults))
+	}
+	validateScanStats(bucket, idxName, expectedNumRequests, expectedNumRequests*limit, t)
+}
+
+// createSparseVectorIndexAndVerify drops all existing indexes, creates the given sparse
+// vector index, and verifies that items_count equals expectedItems.
+func createSparseVectorIndexAndVerify(t *testing.T, idxName, stmt string, expectedItems int) {
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	err := createWithDeferAndBuild(idxName, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating "+idxName, t)
+
+	stats := secondaryindex.GetPerPartnStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	itemsCount := stats[fmt.Sprintf("%v:%v:items_count", bucket, idxName)].(float64)
+	if itemsCount != float64(expectedItems) {
+		t.Fatalf("Incorrect items in the index. Expected %v. Actual: %v, stats: %v",
+			expectedItems, itemsCount, stats)
+	}
+}
+
 func TestBhiveSparseVectorItemsCount(t *testing.T) {
 	skipIfNotPlasma(t)
 
 	if !sparseVectorsLoaded {
-		vectorSetupSparse(t, bucket, "", "", numDocs)
+		vectorSetupSparse(t, bucket, "", "", numDocs, false)
 	}
 
 	idx_bhive_sparse := "idx_bhive_sparse"
-
-	// Drop all indexes from earlier tests
-	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
-	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
-
 	stmt := "CREATE VECTOR INDEX " + idx_bhive_sparse +
 		" ON default(sparse_dim SPARSE VECTOR)" +
 		" WITH {\"description\": \"IVF256\", \"defer_build\":true};"
-	err := createWithDeferAndBuild(idx_bhive_sparse, bucket, "", "", stmt,
-		defaultIndexActiveTimeout*2)
-	FailTestIfError(err, "Error in creating "+idx_bhive_sparse, t)
+	createSparseVectorIndexAndVerify(t, idx_bhive_sparse, stmt, numDocs)
 
-	stats := secondaryindex.GetPerPartnStats(clusterconfig.Username, clusterconfig.Password,
-		kvaddress)
-	itemsCount := stats[fmt.Sprintf("%v:%v:items_count", bucket, idx_bhive_sparse)].(float64)
-	if itemsCount != float64(numDocs) {
-		t.Fatalf("Incorrect items in the index. Expected %v. Actual: %v, stats: %v",
-			numDocs, itemsCount, stats)
+	// Run sparse vector scan to verify the index is functional and exercises
+	// processSparseVectorBatch (including batches where validCount==0).
+	runSparseScan(t, idx_bhive_sparse, "sparse_dim", 256, 10, 1)
+}
+
+func TestBhiveSparseVectorRandomDocs(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	resetVectorDataSetupFlags()
+	if !sparseVectorsLoaded {
+		vectorSetupSparse(t, bucket, "", "", numDocs, true)
 	}
+
+	idx_bhive_sparse := "idx_bhive_sparse"
+	stmt := "CREATE VECTOR INDEX " + idx_bhive_sparse +
+		" ON default(sparse_random SPARSE VECTOR)" +
+		" WITH {\"description\": \"IVF10\", \"train_list\":1000, \"defer_build\":true};"
+	createSparseVectorIndexAndVerify(t, idx_bhive_sparse, stmt, numDocs)
+
+	runSparseScan(t, idx_bhive_sparse, "sparse_random", 10, 10, 1)
 }

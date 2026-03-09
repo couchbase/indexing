@@ -541,7 +541,10 @@ func NewWithConfig(cfg Config) *MemDB {
 		Config:      cfg,
 		gcchan:      make(chan *skiplist.Node, gcchanBufSize),
 		id:          int(atomic.AddInt64(&dbInstancesCount, 1)),
+		encKeyId:    NullKeyId,
+		encCtx:      context.Background(),
 		snapKeyIds:  make(map[string][][]byte),
+		dirGuard:    newDirOpGuard(),
 		encSts:      &EncryptionStats{},
 	}
 
@@ -1310,12 +1313,6 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, keyId []byt
 		if !snapClosed {
 			snap.Close()
 		}
-	}()
-
-	defer func() {
-		m.encMu.Lock()
-		defer m.encMu.Unlock()
-		m.snapKeyIds[dir] = [][]byte{append([]byte(nil), m.encKeyId...)}
 	}()
 
 	m.Lock()
