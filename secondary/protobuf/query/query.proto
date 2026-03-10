@@ -1,6 +1,7 @@
 syntax = "proto2";
 
 package protoQuery;
+option go_package = "github.com/couchbase/indexing/secondary/protobuf/query;protoQuery";
 
 // Error message can be sent back as response or
 // encapsulated in response packets.

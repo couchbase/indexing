@@ -4,6 +4,7 @@ syntax = "proto2";
 // by projector's admin-port.
 
 package protoProjector;
+option go_package = "github.com/couchbase/indexing/secondary/protobuf/projector;protoProjector";
 
 import "common.proto";
 import "index.proto";

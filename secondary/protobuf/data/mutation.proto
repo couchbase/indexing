@@ -1,6 +1,7 @@
 syntax = "proto2";
 
 package protoData;
+option go_package = "github.com/couchbase/indexing/secondary/protobuf/data;protoData";
 
 // List of possible mutation commands.
 enum Command {

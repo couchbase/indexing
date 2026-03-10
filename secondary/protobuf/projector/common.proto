@@ -3,6 +3,7 @@ syntax = "proto2";
 // Common set of definitions.
 
 package protoProjector;
+option go_package = "github.com/couchbase/indexing/secondary/protobuf/projector;protoProjector";
 
 // Error message can be sent back as response or
 // encapsulated in response packets.
