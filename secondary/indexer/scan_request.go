@@ -508,6 +508,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.generateScanReport = req.GetGenerateScanReport()
 		if r.generateScanReport {
 			r.srvrScanReport = &report.HostScanReport{
+				ReqId:      r.RequestId,
 				SrvrNs:     &report.ServerTimings{},
 				SrvrCounts: &report.ServerCounts{},
 			}

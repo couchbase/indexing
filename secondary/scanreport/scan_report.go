@@ -25,13 +25,11 @@ type ScanReportState struct {
 	Partns          map[string][]int
 	DefnID          common.IndexDefnId
 	Retries         int
-
-	// Padding for 8-byte alignment (4 bytes)
-	_ [4]byte
 }
 
 // HostScanReport contains per-host scan metrics.
 type HostScanReport struct {
+	ReqId      string         `json:"reqId,omitempty"`
 	SrvrNs     *ServerTimings `json:"srvr_ns,omitempty"`
 	SrvrCounts *ServerCounts  `json:"srvr_counts,omitempty"`
 	ClientNs   *ClientTimings `json:"client_ns,omitempty"`
@@ -120,7 +118,38 @@ func (s *ScanReportState) PopulatePartns(index *common.IndexDefn, instIds []uint
 	}
 
 	partns := BuildPartnsMap(instIds, partnIdsByInst)
-	s.Partns = partns
+	if s.Partns == nil {
+		s.Partns = partns
+		return
+	}
+
+	if s.Retries > 0 {
+		mergePartns(s.Partns, partns)
+	}
+}
+
+func mergePartns(dst, src map[string][]int) {
+	for k, v := range src {
+		existing, ok := dst[k]
+		if !ok {
+			dst[k] = v
+			continue
+		}
+		for _, newP := range v {
+			if !containsPartn(existing, newP) {
+				dst[k] = append(dst[k], newP)
+			}
+		}
+	}
+}
+
+func containsPartn(s []int, p int) bool {
+	for _, v := range s {
+		if v == p {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ScanReportState) ToMap(includeDetailed bool) map[string]interface{} {

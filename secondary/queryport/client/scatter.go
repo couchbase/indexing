@@ -140,6 +140,7 @@ type RequestBroker struct {
 	// scan report
 	scanReport       *report.ScanReportState
 	perHostReportIds []string
+	hostIdOffset     int // cumulative count of host IDs added before current scatter attempt
 }
 
 type doneStatus struct {
@@ -308,7 +309,10 @@ func (b *RequestBroker) SetPerHostReportIds(ids []string) {
 	if b.scanReport == nil {
 		return
 	}
-	b.perHostReportIds = ids
+	// Record offset before appending so AttachIndexerScanReport can use
+	// hostIdOffset + responseHandlerIndex to locate the correct entry.
+	b.hostIdOffset = len(b.perHostReportIds)
+	b.perHostReportIds = append(b.perHostReportIds, ids...)
 }
 
 func (b *RequestBroker) GetPerHostReportIds() []string {
@@ -324,7 +328,19 @@ func (b *RequestBroker) AttachIndexerScanReport(hostReport *report.HostScanRepor
 		return
 	}
 
-	hostId := b.perHostReportIds[i]
+	// Use hostIdOffset to map the response handler index (0-based per scatter
+	// attempt) to the global index in perHostReportIds which accumulates
+	// across retries.
+	globalIdx := b.hostIdOffset + i
+	if globalIdx >= len(b.perHostReportIds) {
+		logging.Errorf(
+			"AttachIndexerScanReport: globalIdx %v"+
+				" out of range (len=%v) for requestId: %v",
+			globalIdx, len(b.perHostReportIds), b.requestId,
+		)
+		return
+	}
+	hostId := b.perHostReportIds[globalIdx]
 	if b.scanReport.HostScanReport[hostId] != nil {
 		b.scanReport.HostScanReport[hostId].SrvrNs = hostReport.SrvrNs
 		b.scanReport.HostScanReport[hostId].SrvrCounts = hostReport.SrvrCounts

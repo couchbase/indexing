@@ -1617,7 +1617,9 @@ func (c *GsiScanClient) streamResponse(
 			return
 		}
 	} else if streamResp, ok := resp.(*protobuf.ResponseStream); ok {
-		if err = streamResp.Error(); err == nil {
+		// To retain the existing behaviour i.e. returning the error rather than
+		// handling in the callback, this condition is necessary.
+		if err = streamResp.Error(); err == nil || streamResp.GetServerScanReport() != nil {
 			cont = callb(streamResp)
 		}
 		healthy = true
