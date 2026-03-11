@@ -3538,8 +3538,12 @@ func (s *storageMgr) handleEncryptionGetInUseKeys(msg Message) {
 	go func() {
 		//Get keys used by storage
 		for instId, inst := range indexInstMap {
+			// ENCRYPT_TODO: Address this in plasma/bhive gsi integration. Keep only MOI for now.
+			if inst.StorageMode != common.MemDB && inst.StorageMode != common.MemoryOptimized {
+				continue
+			}
 			bucketUUID := inst.Defn.BucketUUID
-			kdt := KeyDataType{TypeName: "bucket", BucketUUID: bucketUUID}
+			kdt := KeyDataType{TypeName: "service_bucket", BucketUUID: bucketUUID}
 
 			if _, ok := kdtKeyMap[kdt]; !ok {
 				kdtKeyMap[kdt] = make(map[string]bool)
@@ -3587,7 +3591,7 @@ func (s *storageMgr) handleEncryptionGetInUseKeys(msg Message) {
 		//	}
 		//
 		//	_ = partnMap
-		//	kdt := KeyDataType{TypeName: "bucket", BucketUUID: inst.Defn.BucketUUID}
+		//	kdt := KeyDataType{TypeName: "service_bucket", BucketUUID: inst.Defn.BucketUUID}
 		//	if _, ok := kdtKeyMap[kdt]; !ok {
 		//		kdtKeyMap[kdt] = make(map[string]bool, 0)
 		//	}
@@ -3621,12 +3625,12 @@ func (s *storageMgr) handleEncryptionGetInUseKeys(msg Message) {
 
 func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 
+	kdt := cmd.(*MsgEncryptionUpdateKey).GetKeyDataType()
+	logging.Infof("StorageMgr::handleEncryptionUpdateKey keydatatype:%v", kdt)
 	s.supvCmdch <- &MsgSuccess{}
 
-	kdt := cmd.(*MsgEncryptionUpdateKey).GetKeyDataType()
 	respCh := cmd.(*MsgEncryptionUpdateKey).GetRespCh()
-	logging.Infof("StorageMgr::handleEncryptionUpdateKey keydatatype:%v", kdt)
-	if kdt.TypeName != "bucket" {
+	if kdt.TypeName != "service_bucket" {
 		respCh <- nil
 		return
 	}
@@ -3641,6 +3645,10 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 	go func() {
 		//Storage encryption
 		for instId, inst := range indexInstMap {
+			// ENCRYPT_TODO: Address this in plasma/bhive gsi integration. Keep only MOI for now.
+			if common.GetClusterStorageMode() != common.MOI {
+				continue
+			}
 			if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
@@ -3657,7 +3665,7 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 					go func() {
 						defer wg.Done()
 
-						err := slice.SetCurrentEncryptionKey(earkey.Data, []byte(earkey.Id), earkey.Cipher)
+						err := slice.SetCurrentEncryptionKey(earkey.Key, []byte(earkey.Id), earkey.Cipher)
 						if err != nil {
 							logging.Errorf("StorageMgr::handleEncryptionUpdateKey SetCurrentEncryptionKey failed for"+
 								" instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), err)
@@ -3667,7 +3675,7 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 							}
 						} else {
 							// Set in-use key if SetCurrentEncryptionKey is successful
-							slice.SetInUseKeys(KeyDataType{TypeName: "bucket", BucketUUID: inst.Defn.BucketUUID}, earkey.Id)
+							slice.SetInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: inst.Defn.BucketUUID}, earkey.Id)
 						}
 					}()
 
@@ -3726,7 +3734,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 	indexInstMap := s.indexInstMap.Get()
 	indexPartnMap := s.indexPartnMap.Get()
 
-	if kdt.TypeName != "bucket" {
+	if kdt.TypeName != "service_bucket" {
 		respCh <- nil
 		return
 	}
@@ -3739,6 +3747,10 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 
 		//Storage encryption
 		for instId, inst := range indexInstMap {
+			// ENCRYPT_TODO: Address this in plasma/bhive gsi integration. Keep only MOI for now.
+			if inst.StorageMode != common.MemDB && inst.StorageMode != common.MemoryOptimized {
+				continue
+			}
 			if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
@@ -3773,7 +3785,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 							}
 						}
 						if !isSliceWithActiveKey {
-							errset := slice.SetCurrentEncryptionKey(earkey.Data, []byte(earkey.Id), earkey.Cipher)
+							errset := slice.SetCurrentEncryptionKey(earkey.Key, []byte(earkey.Id), earkey.Cipher)
 							if errset != nil {
 								select {
 								case errCh <- errset:
@@ -3793,7 +3805,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 							case errCh <- errResp:
 							default:
 							}
-							logging.Errorf("StorageMgr::handleEncryptionDropKey DropKeys for instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), err)
+							logging.Errorf("StorageMgr::handleEncryptionDropKey DropKeys for instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), errResp)
 						} else {
 							//Set in-use keys for the case of recently unused key being used for the first time for keydatatype.
 							keys, err := slice.GetKeyIdList()

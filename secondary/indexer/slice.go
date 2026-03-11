@@ -82,8 +82,8 @@ type Slice interface {
 }
 
 type SliceEncryptionCallbacks struct {
-	getActiveKeyIdCipher func(typename, bucketUUID string) ([]byte, string, string, error)
-	getKeyCipherById     func(keyId string) ([]byte, string, error)
+	getActiveKeyIdCipher func(typename, bucketUUID string) ([]byte, string, string)
+	getKeyCipherById     func(keyId string) ([]byte, string)
 	setInUseKeys         func(kdt KeyDataType, key string)
 }
 

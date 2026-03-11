@@ -26,29 +26,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
-//TODO: Later update to import actual cbauth structs
-//KeyDataType to cbauth.KeyDataType
-//DeksInfo to cbauth.DeksInfo
-//EaRKey to cbauthimpl.EaRKey
-
-type KeyDataType struct {
-	TypeName   string `json:"type_name"`
-	BucketUUID string `json:"bucket_uuid"` // UUID is used only when Type is "bucket"
-}
-
-type DeksInfo struct {
-	ActiveKey       string   `json:"active_key_id"`
-	Keys            []EaRKey `json:"keys"`
-	UnavailableKeys []string `json:"unavailable_keys"`
-}
-
-type EaRKey struct {
-	Id     string `json:"id"`
-	Cipher string `json:"cipher"`
-	Data   []byte `json:"data"`
-}
-
-var mockDataTypeKeyInfoMap = make(map[KeyDataType]*DeksInfo)
+var mockDataTypeKeyInfoMap = make(map[KeyDataType]*EncrKeysInfo)
 var mu sync.Mutex
 var cbsTest *EncryptionCallbacks
 var keyPersistPath string
@@ -68,9 +46,9 @@ type dropKey struct {
 	Keyids   []string    `json:"keyids"`
 }
 
-func cbmockGetEncryptionKeysBlocking(dtype KeyDataType) *DeksInfo {
+func cbmockGetEncryptionKeysBlocking(dtype KeyDataType) *EncrKeysInfo {
 
-	var deksInfo *DeksInfo
+	var deksInfo *EncrKeysInfo
 	var ok bool
 	func() {
 		mu.Lock()
@@ -78,7 +56,7 @@ func cbmockGetEncryptionKeysBlocking(dtype KeyDataType) *DeksInfo {
 		deksInfo, ok = mockDataTypeKeyInfoMap[dtype]
 
 		if !ok {
-			deksInfo = &DeksInfo{ActiveKey: "", Keys: make([]EaRKey, 0), UnavailableKeys: make([]string, 0)}
+			deksInfo = &EncrKeysInfo{ActiveKeyId: "", Keys: make([]EaRKey, 0), UnavailableKeyIds: make([]string, 0)}
 			mockDataTypeKeyInfoMap[dtype] = deksInfo
 		}
 	}()
@@ -119,7 +97,7 @@ func getPersistPath() string {
 	return keyPersistPath + "/" + keyPersistFile
 }
 
-func persistKeys(data map[KeyDataType]*DeksInfo) error {
+func persistKeys(data map[KeyDataType]*EncrKeysInfo) error {
 
 	logging.Infof("EncryptionMgrTest:updated %v ", getPersistPath())
 	file, err := os.Create(getPersistPath())
@@ -141,7 +119,7 @@ func recoverPersistedKeys() {
 
 	defer file.Close()
 
-	var decodedMap map[KeyDataType]*DeksInfo
+	var decodedMap map[KeyDataType]*EncrKeysInfo
 	decoder := gob.NewDecoder(file)
 	err = decoder.Decode(&decodedMap)
 	if err != nil {
@@ -178,8 +156,8 @@ func addEncryptionKey(w http.ResponseWriter, r *http.Request) {
 		dtype := entry.Datatype
 		earkey := entry.Earkey
 
-		encoded := base64.StdEncoding.EncodeToString(earkey.Data)
-		earkey.Data = []byte(encoded)
+		encoded := base64.StdEncoding.EncodeToString(earkey.Key)
+		earkey.Key = []byte(encoded)
 
 		func() {
 			mu.Lock()
@@ -187,17 +165,17 @@ func addEncryptionKey(w http.ResponseWriter, r *http.Request) {
 
 			deksInfo, ok := mockDataTypeKeyInfoMap[dtype]
 			if !ok {
-				mockDataTypeKeyInfoMap[dtype] = &DeksInfo{ActiveKey: earkey.Id, Keys: []EaRKey{earkey}, UnavailableKeys: []string{}}
+				mockDataTypeKeyInfoMap[dtype] = &EncrKeysInfo{ActiveKeyId: earkey.Id, Keys: []EaRKey{earkey}, UnavailableKeyIds: []string{}}
 			} else {
-				if deksInfo.ActiveKey == earkey.Id {
+				if deksInfo.ActiveKeyId == earkey.Id {
 					errmsg := fmt.Sprintf("addEncryptionKey Keyid:%v can't be active key. Add new active key.", earkey.Id)
 					http.Error(w, errmsg, http.StatusBadRequest)
 					return
 				}
-				deksInfo.ActiveKey = earkey.Id
+				deksInfo.ActiveKeyId = earkey.Id
 				deksInfo.Keys = append(deksInfo.Keys, earkey)
 			}
-			persistKeys(mockDataTypeKeyInfoMap)
+			//persistKeys(mockDataTypeKeyInfoMap)
 		}()
 
 		go cbsTest.RefreshKeysCallback(dtype)
@@ -239,7 +217,7 @@ func dropEncryptionKey(w http.ResponseWriter, r *http.Request) {
 			return
 		} else {
 			for _, keyid := range keyids {
-				if deksInfo.ActiveKey == keyid {
+				if deksInfo.ActiveKeyId == keyid {
 					errmsg := fmt.Sprintf("dropEncryptionKey Keyid:%v can't be active key. Add new active key before dropping.", keyid)
 					http.Error(w, errmsg, http.StatusBadRequest)
 					return
@@ -255,18 +233,18 @@ func dropEncryptionKey(w http.ResponseWriter, r *http.Request) {
 			}
 			for _, keyid := range keyids {
 				add := true
-				for _, uk := range mockDataTypeKeyInfoMap[dtype].UnavailableKeys {
+				for _, uk := range mockDataTypeKeyInfoMap[dtype].UnavailableKeyIds {
 					if uk == keyid {
 						add = false
 						break
 					}
 				}
 				if add {
-					mockDataTypeKeyInfoMap[dtype].UnavailableKeys = append(mockDataTypeKeyInfoMap[dtype].UnavailableKeys, keyid)
+					mockDataTypeKeyInfoMap[dtype].UnavailableKeyIds = append(mockDataTypeKeyInfoMap[dtype].UnavailableKeyIds, keyid)
 				}
 			}
 
-			persistKeys(mockDataTypeKeyInfoMap)
+			//persistKeys(mockDataTypeKeyInfoMap)
 			go cbsTest.DropKeysCallback(dtype, keyids)
 		}
 	}()
@@ -296,17 +274,17 @@ func disableEncryption(w http.ResponseWriter, r *http.Request) {
 			}
 
 			//encryption already disabled in mockDataType
-			if info.ActiveKey == "" {
+			if info.ActiveKeyId == "" {
 				continue
 			}
 
 			unavailKeys := make([]string, 0)
-			for _, uk := range mockDataTypeKeyInfoMap[kdt].UnavailableKeys {
+			for _, uk := range mockDataTypeKeyInfoMap[kdt].UnavailableKeyIds {
 				unavailKeys = append(unavailKeys, uk)
 			}
 
-			activeKey := mockDataTypeKeyInfoMap[kdt].ActiveKey
-			mockDataTypeKeyInfoMap[kdt].ActiveKey = ""
+			activeKey := mockDataTypeKeyInfoMap[kdt].ActiveKeyId
+			mockDataTypeKeyInfoMap[kdt].ActiveKeyId = ""
 
 			//All non deleted keys also should not be available
 			for _, k := range info.Keys {
@@ -318,11 +296,11 @@ func disableEncryption(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				if !found {
-					mockDataTypeKeyInfoMap[kdt].UnavailableKeys = append(mockDataTypeKeyInfoMap[kdt].UnavailableKeys, k.Id)
+					mockDataTypeKeyInfoMap[kdt].UnavailableKeyIds = append(mockDataTypeKeyInfoMap[kdt].UnavailableKeyIds, k.Id)
 				}
 			}
 
-			persistKeys(mockDataTypeKeyInfoMap)
+			//persistKeys(mockDataTypeKeyInfoMap)
 			go cbsTest.DropKeysCallback(kdt, []string{activeKey})
 		}
 	}()

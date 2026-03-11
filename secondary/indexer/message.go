@@ -3482,7 +3482,6 @@ func (m *MsgBuildBhiveGraph) GetBhiveGraphStatus() map[common.PartitionId]bool {
 	return m.bhiveGraphStatus
 }
 
-// ENCRYPT_TODO: Sender and handler implementation
 type MsgEncryptionGetInuseKeys struct {
 	keyDataType KeyDataType
 	respMapCh   chan map[KeyDataType][]string
@@ -3491,6 +3490,7 @@ type MsgEncryptionGetInuseKeys struct {
 func (m *MsgEncryptionGetInuseKeys) GetMsgType() MsgType {
 	return ENCRYPTION_GET_INUSE_KEYS
 }
+
 func (m *MsgEncryptionGetInuseKeys) GetKeyDataType() KeyDataType {
 	return m.keyDataType
 }

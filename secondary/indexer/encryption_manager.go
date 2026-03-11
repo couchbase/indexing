@@ -9,16 +9,17 @@
 package indexer
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/couchbase/gocbcrypto"
 
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 
-	//"github.com/couchbase/cbauth"
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
@@ -67,16 +68,11 @@ EncryptionMgr.cbMu	: Avoid key drop/update operation race by mutually exclusive 
 
 */
 
-// Errors
-var (
-	ErrGetActiveKeyCbauth = errors.New("Error getting active key from cbauth")
-	ErrGetKeyCbauth       = errors.New("Error getting keys from cbauth")
-)
-
 type EncryptionCallbacks struct {
-	GetInUseKeysCallback func(kdt KeyDataType) ([]string, error)
-	RefreshKeysCallback  func(kdt KeyDataType) error
-	DropKeysCallback     func(kdt KeyDataType, keyids []string)
+	GetInUseKeysCallback        func(kdt KeyDataType) ([]string, error)
+	RefreshKeysCallback         func(kdt KeyDataType) error
+	DropKeysCallback            func(kdt KeyDataType, keyids []string)
+	SynchronizeKeyFilesCallback func(kdt KeyDataType) error
 }
 
 type EncryptionMgr struct {
@@ -84,7 +80,7 @@ type EncryptionMgr struct {
 	supvMsgch MsgChannel //channel to send any message to supervisor
 	config    common.Config
 
-	dataTypeKeyInfoMap map[KeyDataType]*DeksInfo         // Map holds key data received from ns-server
+	dataTypeKeyInfoMap map[KeyDataType]*EncrKeysInfo     // Map holds key data received from ns-server
 	kdtKeyidKeyMap     map[KeyDataType]map[string]EaRKey // Keeps only available keys
 	keyidKdtMap        map[string]KeyDataType            // Map helps searching keydatatype by keyid
 	mu                 sync.Mutex
@@ -119,7 +115,7 @@ func NewEncryptionMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 		supvCmdch:              supvCmdch,
 		supvMsgch:              supvMsgch,
 		config:                 config,
-		dataTypeKeyInfoMap:     make(map[KeyDataType]*DeksInfo, 0),
+		dataTypeKeyInfoMap:     make(map[KeyDataType]*EncrKeysInfo, 0),
 		kdtKeyidKeyMap:         make(map[KeyDataType]map[string]EaRKey, 0),
 		keyidKdtMap:            make(map[string]KeyDataType),
 		indexerUsedKeyIds:      make(map[KeyDataType][]string, 0),
@@ -159,18 +155,28 @@ func NewEncryptionMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 	encryptionMgr.enableTest.Store(false)
 	encryptionMgr.setEnableTest()
 
-	//ENCRYPT_TODO: Remove persisted test keys when ns-server changes are merged
-	keyPersistPath = config["storage_dir"].String()
+	//ENCRYPT_TODO: Remove persisted test keys when test-framework not required
+	//keyPersistPath = config["storage_dir"].String()
 
 	go encryptionMgr.cacheKeysForBootstrap()
 	go encryptionMgr.recoverInUseKeys()
 	go encryptionMgr.run()
 	go encryptionMgr.runQueue()
-	RegisterCallbacks(encryptionMgr)
+
+	//ENCRYPT_TODO: Address comment #174 later
+	err = RegisterCallbacks(encryptionMgr)
+	if err != nil {
+		errMsg := &MsgError{err: Error{code: ERROR_ENCRYPTION_MGR,
+			severity: FATAL,
+			category: ENCRYPTION_MGR,
+			cause:    err,
+		}}
+		return nil, errMsg
+	}
 	return encryptionMgr, &MsgSuccess{}
 }
 
-func RegisterCallbacks(e *EncryptionMgr) {
+func RegisterCallbacks(e *EncryptionMgr) error {
 
 	cbs := &EncryptionCallbacks{
 		GetInUseKeysCallback: func(kdt KeyDataType) ([]string, error) {
@@ -182,12 +188,20 @@ func RegisterCallbacks(e *EncryptionMgr) {
 		DropKeysCallback: func(kdt KeyDataType, keyids []string) {
 			e.dropKeysCallback(kdt, keyids)
 		},
+		SynchronizeKeyFilesCallback: func(kdt KeyDataType) error {
+			return e.synchronizeKeyFilesCallback(kdt)
+		},
 	}
 
-	//ENCRYPT_TODO: Register callbacks when cbauth changes are merged. Until that test RESTApis will be used.
-	cbsTest = cbs
-
-	//err := cbauth.RegisterEncryptionKeysCallbacks(cbs.RefreshKeysCallback, cbs.GetInUseKeysCallback, cbs.DropKeysCallback)
+	err := cbauth.RegisterEncryptionKeysCallbacks(cbs.RefreshKeysCallback, cbs.GetInUseKeysCallback, cbs.DropKeysCallback, cbs.SynchronizeKeyFilesCallback)
+	if err == nil {
+		return nil
+	} else {
+		logging.Warnf("EncryptionMgr:RegisterCallbacks err:%v", err)
+		return err
+	}
+	//ENCRYPT_TODO: Remove persisted test keys when test-framework not required
+	//cbsTest = cbs
 }
 
 func (e *EncryptionMgr) setEnableTest() {
@@ -280,7 +294,7 @@ func (e *EncryptionMgr) trackUpdateKeys(msg Message) {
 		logging.Infof("EncryptionMgr:trackUpdateKeys complete, enqueuing pending msg for "+
 			"keydatatype:%v msg:%v", kdt, nextPendingMsg.GetMsgType().String())
 		e.enqueue(nextPendingMsg)
-		e.setDropOrUpdateInProgress(kdt, msg)
+		e.setDropOrUpdateInProgress(kdt, nextPendingMsg)
 	}
 }
 
@@ -302,14 +316,17 @@ func (e *EncryptionMgr) trackDropKeys(msg Message) {
 	defer e.cbMu.Unlock()
 
 	e.resetDropOrUpdateProgress(kdt)
-	//ENCRYPT_TODO: call method to signal key drop when cbauth changes merged.
-	//Update e.indexerUsedKeyIds thus keyids no longer get reflected in e.GetInUseKeys()
-	//call cbauth.KeyDropComplete(kdt,err)
+
+	err2 := cbauth.KeysDropComplete(kdt, err)
+	if err2 != nil {
+		logging.Warnf("EncryptionMgr:trackDropKeys error during notifying KeysDropComplete kdt:%v err:%v", kdt, err2)
+	}
+
 	nextPendingMsg := e.getNextMessagePending(kdt)
 	if nextPendingMsg != nil {
 		logging.Infof("EncryptionMgr:trackDropKeys complete, enqueuing pending msg for keydatatype:%v msg:%v", kdt, nextPendingMsg.GetMsgType().String())
 		e.enqueue(nextPendingMsg)
-		e.setDropOrUpdateInProgress(kdt, msg)
+		e.setDropOrUpdateInProgress(kdt, nextPendingMsg)
 	}
 }
 
@@ -455,7 +472,8 @@ func (e *EncryptionMgr) handleConfigUpdate(cmd Message) {
 	e.config = cfgUpdate.GetConfig()
 
 	e.setEnableTest()
-	e.RegisterRestEndpoints()
+	//ENCRYPT_TODO: Remove persisted test keys when test-framework not required
+	//e.RegisterRestEndpoints()
 
 	e.supvCmdch <- &MsgSuccess{}
 }
@@ -468,8 +486,8 @@ func (e *EncryptionMgr) handleIndexerReady(cmd Message) {
 
 func (e *EncryptionMgr) cacheKeysForBootstrap() {
 
-	//ENCRYPT_TODO: Remove after adding ns-server interface
-	recoverPersistedKeys()
+	//ENCRYPT_TODO: Remove persisted test keys when test-framework not required
+	//recoverPersistedKeys()
 
 	// Cache keys for buckets
 	var buckets []couchbase.BucketName
@@ -485,33 +503,29 @@ func (e *EncryptionMgr) cacheKeysForBootstrap() {
 		if bucket.UUID == common.BUCKET_UUID_NIL {
 			continue
 		}
-		kdt := KeyDataType{TypeName: "bucket", BucketUUID: bucket.UUID}
-		//ENCRYPT_TODO: Use below method when cbauth changes are merged.
-		//deksInfo, err := cbauth.GetEncryptionKeysBlocking(kdt)
-		//if err != nil {
-		//	logging.Warnf("EncryptionMgr:caching keys for bucket:%v err:%v", bucket.Name, err)
-		//	continue
-		//}
-		deksInfo := cbmockGetEncryptionKeysBlocking(kdt)
-		if deksInfo == nil {
-			logging.Warnf("EncryptionMgr:caching keys for bucket:%v nil deksInfo", bucket.Name)
-			continue
+		kdt := KeyDataType{TypeName: "service_bucket", BucketUUID: bucket.UUID}
+		ctx := context.Background()
+		encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, kdt)
+		if err != nil {
+			logging.Fatalf("EncryptionMgr:caching keys for bucket:%v err:%v", bucket.Name, err)
+			panic(err)
 		}
-		e.SetClusterDeksInfo(kdt, deksInfo)
+		e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
+		logging.Infof("EncryptionMgr:cached keys for bucket %v", bucket)
 	}
 
 	// ENCRYPT_TODO: Cache keys for log, config, audit
 	//kdt := KeyDataType{TypeName: "log", BucketUUID: ""}
-	//deksInfo := cbmockGetEncryptionKeysBlocking(kdt)
-	//e.SetClusterDeksInfo(kdt, deksInfo)
+	//encrKeysInfo := cbmockGetEncryptionKeysBlocking(kdt)
+	//e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
 	//
 	//kdt = KeyDataType{TypeName: "config", BucketUUID: ""}
-	//deksInfo = cbmockGetEncryptionKeysBlocking(kdt)
-	//e.SetClusterDeksInfo(kdt, deksInfo)
+	//encrKeysInfo = cbmockGetEncryptionKeysBlocking(kdt)
+	//e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
 	//
 	//kdt = KeyDataType{TypeName: "audit", BucketUUID: ""}
-	//deksInfo = cbmockGetEncryptionKeysBlocking(kdt)
-	//e.SetClusterDeksInfo(kdt, deksInfo)
+	//encrKeysInfo = cbmockGetEncryptionKeysBlocking(kdt)
+	//e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
 
 	close(e.cachingDone)
 }
@@ -565,7 +579,7 @@ func (e *EncryptionMgr) recoverInUseKeys() {
 
 	// This message is not for specific bucket thus bucketUUID is empty. This will get keys in use for all buckets.
 	respMapCh := make(chan map[KeyDataType][]string)
-	e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: KeyDataType{TypeName: "bucket", BucketUUID: ""}, respMapCh: respMapCh}
+	e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: KeyDataType{TypeName: "service_bucket", BucketUUID: ""}, respMapCh: respMapCh}
 	kdtKeysMap := <-respMapCh
 	allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
 
@@ -587,19 +601,21 @@ func (e *EncryptionMgr) recoverInUseKeys() {
 			e.SetInUseKeys(kdt, key)
 		}
 	}
+	logging.Infof("EncryptionMgr:recoverInUseKeys done...")
 	close(e.recoveryDone)
 }
 
 func (e *EncryptionMgr) RegisterRestEndpoints() {
 
 	if e.testRunning == false && e.enableTest.Load() {
-		mux := GetHTTPMux()
-		mux.HandleFunc("/test/RefreshKeysCallback", addEncryptionKey)
-		mux.HandleFunc("/test/DropKeysCallback", dropEncryptionKey)
-		mux.HandleFunc("/test/DisableEncryption", disableEncryption)
-		mux.HandleFunc("/test/GetInUseKeys", getInUseKeys)
-		mux.HandleFunc("/test/GetToBeUsedKeys", getToBeUsedKeys)
+		//mux := GetHTTPMux()
+		//mux.HandleFunc("/test/RefreshKeysCallback", addEncryptionKey)
+		//mux.HandleFunc("/test/DropKeysCallback", dropEncryptionKey)
+		//mux.HandleFunc("/test/DisableEncryption", disableEncryption)
+		//mux.HandleFunc("/test/GetInUseKeys", getInUseKeys)
+		//mux.HandleFunc("/test/GetToBeUsedKeys", getToBeUsedKeys)
 
+		// ENCRYPT_TODO: Expose endpoint for returning in-use keys
 		e.testRunning = true
 	}
 }
@@ -669,30 +685,30 @@ func (e *EncryptionMgr) DropInUseKeys(kdt KeyDataType, dropkeys []string) {
 	}
 }
 
-func (e *EncryptionMgr) GetClusterDeksInfo(kdt KeyDataType) (DeksInfo, error) {
+func (e *EncryptionMgr) GetClusterEncrKeysInfo(kdt KeyDataType) (EncrKeysInfo, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	deksinfo, ok := e.dataTypeKeyInfoMap[kdt]
-	if ok && deksinfo != nil {
-		return *deksinfo, nil
+	encrKeysInfo, ok := e.dataTypeKeyInfoMap[kdt]
+	if ok && encrKeysInfo != nil {
+		return *encrKeysInfo, nil
 	}
-	return DeksInfo{}, fmt.Errorf("EncryptionMgr:GetClusterDeksInfo unable to find keys for type:%v uuid:%v", kdt.TypeName, kdt.BucketUUID)
+	return EncrKeysInfo{}, fmt.Errorf("EncryptionMgr:GetClusterEncrKeysInfo unable to find keys for type:%v uuid:%v", kdt.TypeName, kdt.BucketUUID)
 }
 
-func (e *EncryptionMgr) SetClusterDeksInfo(kdt KeyDataType, info *DeksInfo) {
+func (e *EncryptionMgr) SetClusterEncrKeysInfo(kdt KeyDataType, info *EncrKeysInfo) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.SetClusterDeksInfoNoLock(kdt, info)
+	e.SetClusterEncrKeysInfoNoLock(kdt, info)
 }
 
-func (e *EncryptionMgr) SetClusterDeksInfoNoLock(kdt KeyDataType, info *DeksInfo) {
-	var dkinfo DeksInfo
+func (e *EncryptionMgr) SetClusterEncrKeysInfoNoLock(kdt KeyDataType, info *EncrKeysInfo) {
+	var dkinfo EncrKeysInfo
 	dkinfo = *info
 
-	deksinfo, ok := e.dataTypeKeyInfoMap[kdt]
-	if !ok || deksinfo == nil {
+	encrKeysInfo, ok := e.dataTypeKeyInfoMap[kdt]
+	if !ok || encrKeysInfo == nil {
 		//New entry
 		e.dataTypeKeyInfoMap[kdt] = &dkinfo
 	} else {
@@ -703,7 +719,7 @@ func (e *EncryptionMgr) SetClusterDeksInfoNoLock(kdt KeyDataType, info *DeksInfo
 }
 
 // Check if caller function holds EncryptionMgr.mu mutex.
-func (e *EncryptionMgr) setKeyCacheByKeyid(kdt KeyDataType, info *DeksInfo) {
+func (e *EncryptionMgr) setKeyCacheByKeyid(kdt KeyDataType, info *EncrKeysInfo) {
 	// Caller updates entire DeksInfo in dataTypeKeyInfoMap thus new map is created
 	e.kdtKeyidKeyMap[kdt] = make(map[string]EaRKey)
 	for _, k := range info.Keys {
@@ -728,31 +744,73 @@ func (e *EncryptionMgr) getKeyCacheByKeyid(kdt KeyDataType, keyid string) (EaRKe
 
 // This call supports key search across all the key datatypes by keyId.
 // If keyId is not present in EncryptionMgr, attempt is made to get from cbauth
-func (e *EncryptionMgr) getKeyCipherById(keyId string) ([]byte, string, error) {
+func (e *EncryptionMgr) getKeyCipherById(keyId string) ([]byte, string) {
+
+	if keyId == "" {
+		return []byte{}, gocbcrypto.CipherNameNone
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	kdt, ok := e.keyidKdtMap[keyId]
 	if !ok {
-		logging.Warnf("EncryptionMgr:getKeyCipherById could not find keydatatype for key:%v", keyId)
+		// kdt for the keyid is not cached thus try getting kdt for all the possible types.
+
+		// KeyDatatype: service_bucket, try for all bucket_UUIDs
+		var buckets []couchbase.BucketName
+		func() {
+			e.cinfoProviderLock.RLock()
+			defer e.cinfoProviderLock.RUnlock()
+
+			buckets = e.cinfoProvider.GetBucketNames()
+		}()
+		kdtFound := false
+		for _, bucket := range buckets {
+			if bucket.UUID == common.BUCKET_UUID_NIL {
+				continue
+			}
+			currKdt := KeyDataType{TypeName: "service_bucket", BucketUUID: bucket.UUID}
+			ctx := context.Background()
+			encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, currKdt)
+			if err != nil {
+				logging.Fatalf("EncryptionMgr:getKeyCipherById GetEncryptionKeysBlocking for keyid:%v bucket:%v err:%v", keyId, bucket.Name, err)
+				panic(err)
+			}
+			for _, earkey := range encrKeysInfo.Keys {
+				if earkey.Id == keyId {
+					kdtFound = true
+					// Update encryptionMgr cache as keyids are unique and currKdt has key with keyId
+					e.SetClusterEncrKeysInfoNoLock(currKdt, encrKeysInfo)
+					return earkey.Key, earkey.Cipher
+				}
+			}
+		}
+
+		// ENCRYPT_TODO: Try getting keys for keydatatypes log, config, audit when being used to match with keyId.
+
+		// No keydata is available for keyId for all possible keydatatypes
+		if !kdtFound {
+			return []byte{}, gocbcrypto.CipherNameNone
+		}
+
 	} else {
 		earkey, err := e.getKeyCacheByKeyid(kdt, keyId)
 		if err != nil {
 			logging.Warnf("EncryptionMgr:getKeyCipherById for key:%v err:%v", keyId, err.Error())
 		} else {
-			return earkey.Data, earkey.Cipher, nil
+			return earkey.Key, earkey.Cipher
 		}
 	}
 
-	//ENCRYPT_TODO: Use below method when cbauth changes are merged.
-	//deksInfo, err := cbauth.GetEncryptionKeysBlocking(kdt)
-	//if err != nil {
-	//	logging.Warnf("EncryptionMgr:getKeyCipherById retry for key:%v err:%v", keyId, err.Error())
-	//	return []byte{}, "", fmt.Errorf("EncryptionMgr:getKeyCipherById could get keys from cbauth for key:%v", keyId)
-	//}
+	ctx := context.Background()
+	encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, kdt)
+	if err != nil {
+		logging.Fatalf("EncryptionMgr:getKeyCipherById retry for key:%v err:%v", keyId, err.Error())
+		panic(err)
+	}
 	// Update encryption related info
-	deksInfo := cbmockGetEncryptionKeysBlocking(kdt)
-	e.SetClusterDeksInfoNoLock(kdt, deksInfo)
+	e.SetClusterEncrKeysInfoNoLock(kdt, encrKeysInfo)
 
 	// Try getting key for keyId as keyinfo is updated
 	kdt, ok = e.keyidKdtMap[keyId]
@@ -763,65 +821,76 @@ func (e *EncryptionMgr) getKeyCipherById(keyId string) ([]byte, string, error) {
 		if err != nil {
 			logging.Warnf("EncryptionMgr:getKeyCipherById retry for key:%v err:%v", keyId, err.Error())
 		} else {
-			return earkey.Data, earkey.Cipher, nil
+			return earkey.Key, earkey.Cipher
 		}
 	}
 
-	return []byte{}, gocbcrypto.CipherNameNone, ErrGetKeyCbauth
+	return []byte{}, gocbcrypto.CipherNameNone
 }
 
 // Get active key for keydatatype
 // If key data is not present in EncryptionMgr, attempt is made to get from cbauth
-func (e *EncryptionMgr) getActiveKeyIdCipher(typename, bucketUUID string) ([]byte, string, string, error) {
+func (e *EncryptionMgr) getActiveKeyIdCipher(typename, bucketUUID string) ([]byte, string, string) {
 
 	kdt := KeyDataType{TypeName: typename, BucketUUID: bucketUUID}
-	deksinfo, err := e.GetClusterDeksInfo(kdt)
+	encrKeysInfo, err := e.GetClusterEncrKeysInfo(kdt)
 	if err != nil {
-		logging.Warnf("EncryptionMgr:getActiveKeyIdCipher no key data for keydatatype: %v", kdt)
+		logging.Warnf("EncryptionMgr:getActiveKeyIdCipher cache no key data for keydatatype: %v", kdt)
 	} else {
-		key, keyid, cipher := getActiveKeyIdCipherFromDeksInfo(deksinfo)
-		if len(key) == 0 || keyid == "" || cipher == "" {
-			logging.Warnf("EncryptionMgr:getActiveKeyIdCipher no key data keylength:%d keyid:%v cipher:%v", len(key), keyid, cipher)
+		key, keyid, cipher := getActiveKeyIdCipherFromEncrKeysInfo(encrKeysInfo)
+		if len(key) == 0 && keyid == "" && cipher == "" {
+			//Encryption disabled for keydatatype thus keydata can be empty
+			return key, keyid, gocbcrypto.CipherNameNone
+		} else if len(key) == 0 || keyid == "" || cipher == "" {
+			//Try getting latest info from cbauth
+			logging.Warnf("EncryptionMgr:getActiveKeyIdCipher cache no key data, keylength:%d keyid:%v cipher:%v", len(key), keyid, cipher)
 		} else {
-			return key, keyid, cipher, nil
+			return key, keyid, cipher
 		}
 	}
 
-	//ENCRYPT_TODO: Use below method when cbauth changes are merged.
-	//deksInfo, err := cbauth.GetEncryptionKeysBlocking(kdt)
-	//if err != nil {
-	//	logging.Warnf("EncryptionMgr:getKeyCipherById retry for key:%v err:%v", keyId, err.Error())
-	//	return []byte{}, "", fmt.Errorf("EncryptionMgr:getActiveKeyIdCipher could get keys from cbauth for keydatatype: %v", kdt)
-	//}
+	// GetEncryptionKeysBlocking normally return error only if ctx is getting cancelled otherwise errors are hard failures.
+	// Return error is those cases.
+	ctx := context.Background()
+	encrKeysInfoPtr, err := cbauth.GetEncryptionKeysBlocking(ctx, kdt)
+	if err != nil {
+		logging.Fatalf("EncryptionMgr:getActiveKeyIdCipher cbauth for keydatatype: %v err:%v", kdt, err.Error())
+		panic(err)
+	}
 	// Update encryption related info
-	deksInfo := cbmockGetEncryptionKeysBlocking(kdt)
-	e.SetClusterDeksInfo(kdt, deksInfo)
+	e.SetClusterEncrKeysInfo(kdt, encrKeysInfoPtr)
 
 	// Try getting active key as info is updated
-	deksinfo, err = e.GetClusterDeksInfo(KeyDataType{TypeName: typename, BucketUUID: bucketUUID})
+	encrKeysInfo, err = e.GetClusterEncrKeysInfo(KeyDataType{TypeName: typename, BucketUUID: bucketUUID})
 	if err != nil {
-		logging.Warnf("EncryptionMgr:getActiveKeyIdCipher retry no key data for keydatatype: %v", kdt)
+		//It is safe to assume Key data is present in encrKeysInfo from GetEncryptionKeysBlocking, still log warning if key data has some fields missing
+		logging.Warnf("EncryptionMgr:getActiveKeyIdCipher cbauth no key data for keydatatype: %v", kdt)
 	} else {
-		key, keyid, cipher := getActiveKeyIdCipherFromDeksInfo(deksinfo)
-		if len(key) == 0 || keyid == "" || cipher == "" {
-			logging.Warnf("EncryptionMgr:getActiveKeyIdCipher retry no key data keylength:%d keyid:%v cipher:%v", len(key), keyid, cipher)
+		key, keyid, cipher := getActiveKeyIdCipherFromEncrKeysInfo(encrKeysInfo)
+		if len(key) == 0 && keyid == "" && cipher == "" {
+			//Encryption disabled for keydatatype thus keydata can be empty
+			return key, keyid, gocbcrypto.CipherNameNone
+		} else if len(key) == 0 || keyid == "" || cipher == "" {
+			//It is safe to assume activeKey is present in encrKeys from GetEncryptionKeysBlocking, still log warning if key data has some fields missing
+			logging.Warnf("EncryptionMgr:getActiveKeyIdCipher cbauth no key data keylength:%d keyid:%v cipher:%v", len(key), keyid, cipher)
+			return []byte{}, "", gocbcrypto.CipherNameNone
 		} else {
-			return key, keyid, cipher, nil
+			return key, keyid, cipher
 		}
 	}
 
 	// Encryption can be disabled i.e. empty active key.
-	return []byte{}, "", gocbcrypto.CipherNameNone, nil
+	return []byte{}, "", gocbcrypto.CipherNameNone
 }
 
-func getActiveKeyIdCipherTest(typename, bucketUUID string) ([]byte, string, string, error) {
+func getActiveKeyIdCipherTest(typename, bucketUUID string) ([]byte, string, string) {
 	// empty for storage test
-	return []byte{}, "", gocbcrypto.CipherNameNone, nil
+	return []byte{}, "", gocbcrypto.CipherNameNone
 }
 
-func getKeyCipherByIdTest(keyId string) ([]byte, string, error) {
+func getKeyCipherByIdTest(keyId string) ([]byte, string) {
 	// empty for storage test
-	return []byte{}, gocbcrypto.CipherNameNone, nil
+	return []byte{}, gocbcrypto.CipherNameNone
 }
 
 func setInUseKeysTest(kdt KeyDataType, keyId string) {
@@ -845,22 +914,30 @@ func (e *EncryptionMgr) getInUseKeysCallback(kdt KeyDataType) ([]string, error) 
 func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 
 	logging.Infof("EncryptionMgr:refreshKeysCallback %v", kdt)
-	//ENCRYPT_TODO: Use below method when cbauth changes are merged.
-	//deksInfo, err := cbauth.GetEncryptionKeysBlocking(kdt)
-	//if err != nil {
-	//	return err
-	//}
-	deksInfo := cbmockGetEncryptionKeysBlocking(kdt)
 
-	e.SetClusterDeksInfo(kdt, deksInfo)
-
-	earkey, err := getActiveEarKeyFromDeksInfo(*deksInfo)
-	if err != nil {
-		logging.Warnf("EncryptionMgr:RefreshKeysCallback:could not get active key data.")
-		return ErrGetActiveKeyCbauth
+	// ENCRYPT_TODO: Enable refreshKeysCallback for other datatypes later when being used.
+	if kdt.TypeName != "service_bucket" {
+		logging.Infof("EncryptionMgr:refreshKeysCallback %v skipping...", kdt)
+		return nil
 	}
 
-	respCh := make(chan error)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, kdt)
+	if err != nil {
+		logging.Fatalf("EncryptionMgr:RefreshKeysCallback GetEncryptionKeysBlocking err:%v", err)
+		if err == context.DeadlineExceeded {
+			return err
+		}
+		// If the keys are not available when you call GetEncryptionKeys() from the refreshKeysCallback callback, it is a hard error
+		panic(err)
+	}
+	e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
+
+	earkey := getActiveEarKeyFromEncrKeysInfo(*encrKeysInfo)
+
+	respCh := make(chan error, 1)
 	msg := &MsgEncryptionUpdateKey{kdt, earkey, respCh}
 
 	e.cbMu.Lock()
@@ -869,8 +946,7 @@ func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 	//Skip sending update for active key if update is already getting processed
 	activeMsg := e.getDropOrUpdateInProgress(kdt)
 
-	// As the there is ongoing key drop/update, skip msg adding to wrkrQueue
-	// If msg is not duplicate of ongoing update or also not present in pendingMap, add it to pendingMap.
+	// As the there is ongoing key drop/update, skip msg adding to wrkrQueue and check if this can be added to pending map.
 	if activeMsg != nil {
 		logging.Warnf("EncryptionMgr:RefreshKeysCallback: drop/update in progress for keydatatype:%v keyid:%v.", kdt, earkey.Id)
 
@@ -878,21 +954,23 @@ func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 		skipMsg := e.isDuplicateMsg(msg, activeMsg)
 		if skipMsg {
 			logging.Warnf("EncryptionMgr:RefreshKeysCallback:duplicate to active msg for keydatatype:%v keyid:%v.", kdt, earkey.Id)
-			return nil
+			return fmt.Errorf("Duplicate to ongoing request")
 		}
 
-		// As the current msg is also present in pendingMap, this msg can be skipped from adding to pending map.
 		skipAddPending := e.isDuplicatePending(kdt, msg)
 		if !skipAddPending {
+			// As the current msg is not present in pendingMap and update/drop key is happening for same keydatatype, this msg can be added to pending map.
 			logging.Warnf("EncryptionMgr:RefreshKeysCallback added to pending msg for keydatatype:%v keyid:%v.", kdt, earkey.Id)
 			e.addMessagePending(kdt, msg)
 			return nil
 		}
 
+		// As the current msg is present in pendingMap and update/drop key is happening for same keydatatype, this msg can be skipped from adding to pending map.
 		logging.Warnf("EncryptionMgr:RefreshKeysCallback:duplicate to pending msg for keydatatype:%v keyid:%v.", kdt, earkey.Id)
-		return nil
+		return fmt.Errorf("Duplicate to pending request ")
 	}
 
+	// As the there is no ongoing key drop/update, adding msg to wrkrQueue
 	logging.Infof("EncryptionMgr:RefreshKeysCallback:Starting for keydatatype:%v keyid:%v", kdt, earkey.Id)
 	e.enqueue(msg)
 	e.setDropOrUpdateInProgress(kdt, msg)
@@ -903,79 +981,121 @@ func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 // If keyids contain "", it is expected to encrypt the unencrypted data
 func (e *EncryptionMgr) dropKeysCallback(kdt KeyDataType, keyids []string) {
 
-	logging.Infof("EncryptionMgr:DropKeysCallback:Starting for keydatatype:%v keyids:%v", kdt, keyids)
-	if _, err := e.GetClusterDeksInfo(kdt); err != nil {
-		//ENCRYPT_TODO: call method to signal key drop when cbauth changes merged.
-		//call cbauth.KeyDropComplete(kdt,err)
-		logging.Warnf("EncryptionMgr:DropKeysCallback:could not get key data.")
-	} else {
-		// ENCRYPT_TODO: Use below method when cbauth changes are merged.
-		// deksInfo, err := cbauth.GetEncryptionKeysBlocking(kdt)
-		// This updates unavailable keys
-		deksInfo := cbmockGetEncryptionKeysBlocking(kdt)
-		e.SetClusterDeksInfo(kdt, deksInfo)
+	logging.Infof("EncryptionMgr:DropKeysCallback:Received for keydatatype:%v dropkeyids:%v", kdt, keyids)
 
-		earkey, err := getActiveEarKeyFromDeksInfo(*deksInfo)
+	// ENCRYPT_TODO: Enable dropKeysCallback for other datatypes later when being used.
+	if kdt.TypeName != "service_bucket" {
+		logging.Infof("EncryptionMgr:dropKeysCallback %v dropkeyids:%v skipping...", kdt, keyids)
+		err := cbauth.KeysDropComplete(kdt, nil)
 		if err != nil {
-			// Encryption can be disabled, thus send earkey with cipher: gocbcrypto.CipherNameNone
-			logging.Warnf("EncryptionMgr:DropKeysCallback:could not get active key data.")
-			return
+			logging.Warnf("EncryptionMgr:DropKeysCallback error during notifying KeysDropComplete for skipped drop kdt:%v err:%v", kdt, err)
 		}
-
-		respCh := make(chan error, 1)
-		msg := &MsgEncryptionDropKey{kdt, keyids, earkey, respCh}
-
-		e.cbMu.Lock()
-		defer e.cbMu.Unlock()
-
-		//Skip sending drop for keys if drop is already getting processed
-		activeMsg := e.getDropOrUpdateInProgress(kdt)
-		// As the there is ongoing key drop/update, skip msg adding to wrkrQueue
-		// If msg is not duplicate of ongoing update or also not present in pendingMap, add it to pendingMap.
-		if activeMsg != nil {
-			logging.Warnf("EncryptionMgr:DropKeysCallback: drop/update in progress for keydatatype:%v activekeyid:%v.", kdt, earkey.Id)
-
-			// As the current msg is duplicate of ongoing drop, this msg can be skipped from enqueuing.
-			skipMsg := e.isDuplicateMsg(msg, activeMsg)
-			if skipMsg {
-				logging.Warnf("EncryptionMgr:DropKeysCallback:duplicate to active msg for keydatatype:%v keyids:%v", kdt, keyids)
-				return
-			}
-
-			// As the current msg is also present in pendingMap, this msg can be skipped from adding to pending map.
-			skipAddPending := e.isDuplicatePending(kdt, msg)
-			if !skipAddPending {
-				logging.Warnf("EncryptionMgr:DropKeysCallback added to pending msg for keydatatype:%v keyid:%v.", kdt, earkey.Id)
-				e.addMessagePending(kdt, msg)
-				return
-			}
-
-			logging.Warnf("EncryptionMgr:DropKeysCallback:duplicate to pending msg for keydatatype:%v keyid:%v.", kdt, earkey.Id)
-			return
-		}
-
-		logging.Infof("EncryptionMgr:DropKeysCallback:Starting for keydatatype:%v using active keyid:%v", kdt, earkey.Id)
-		e.enqueue(msg)
-		e.setDropOrUpdateInProgress(kdt, msg)
+		return
 	}
+
+	// Use latest key data from cbauth for dropKey of keydatatype
+	// If keys are not present, send error to cbauth using KeysDropComplete, otherwise it is expected to treat it as hard error.
+	encrKeysInfo, err := cbauth.GetEncryptionKeys(kdt)
+	if err != nil {
+		if err == cbauth.ErrKeysNotAvailable {
+			logging.Warnf("EncryptionMgr:DropKeysCallback error during GetEncryptionKeys kdt:%v err:%v", kdt, err)
+			err2 := cbauth.KeysDropComplete(kdt, err)
+			if err2 != nil {
+				logging.Warnf("EncryptionMgr:DropKeysCallback error during notifying KeysDropComplete kdt:%v err:%v", kdt, err2)
+			}
+			return
+		}
+		logging.Fatalf("EncryptionMgr:DropKeysCallback could not get key data kdt:%v err:%v", kdt, err)
+		panic(err)
+	}
+
+	// This updates keys cache
+	e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
+
+	earkey := getActiveEarKeyFromEncrKeysInfo(*encrKeysInfo)
+
+	for _, dropKey := range keyids {
+		// DropKeys should not include active keyid
+		if dropKey == earkey.Id {
+			err2 := cbauth.KeysDropComplete(kdt, fmt.Errorf("DropKey received for active keyid"))
+			if err2 != nil {
+				logging.Warnf("EncryptionMgr:DropKeysCallback error activeKeyId:%v in dropkeyids kdt:%v, error during notifying KeysDropComplete err:%v", dropKey, kdt, err2)
+			} else {
+				logging.Warnf("EncryptionMgr:DropKeysCallback error activeKeyId:%v in dropkeyids kdt:%v", earkey.Id, kdt)
+			}
+			return
+		}
+	}
+
+	respCh := make(chan error, 1)
+	msg := &MsgEncryptionDropKey{kdt, keyids, earkey, respCh}
+
+	e.cbMu.Lock()
+	defer e.cbMu.Unlock()
+
+	//Skip sending drop for keys if drop is already getting processed
+	activeMsg := e.getDropOrUpdateInProgress(kdt)
+	// As the there is ongoing key drop/update, skip msg adding to wrkrQueue
+	// If msg is not duplicate of ongoing update or also not present in pendingMap, add it to pendingMap.
+	if activeMsg != nil {
+		logging.Warnf("EncryptionMgr:DropKeysCallback: drop/update in progress for keydatatype:%v activekeyid:%v.", kdt, earkey.Id)
+
+		// As the current msg is duplicate of ongoing drop, this msg can be skipped from enqueuing.
+		skipMsg := e.isDuplicateMsg(msg, activeMsg)
+		if skipMsg {
+			logging.Warnf("EncryptionMgr:DropKeysCallback:duplicate to active msg for keydatatype:%v keyids:%v", kdt, keyids)
+			return
+		}
+
+		// As the current msg is also present in pendingMap, this msg can be skipped from adding to pending map.
+		skipAddPending := e.isDuplicatePending(kdt, msg)
+		if !skipAddPending {
+			logging.Warnf("EncryptionMgr:DropKeysCallback added to pending msg for keydatatype:%v keyid:%v.", kdt, earkey.Id)
+			e.addMessagePending(kdt, msg)
+			return
+		}
+
+		logging.Warnf("EncryptionMgr:DropKeysCallback:duplicate to pending msg for keydatatype:%v keyid:%v.", kdt, earkey.Id)
+		return
+	}
+
+	logging.Infof("EncryptionMgr:DropKeysCallback:Starting for keydatatype:%v using active keyid:%v", kdt, earkey.Id)
+	e.enqueue(msg)
+	e.setDropOrUpdateInProgress(kdt, msg)
 }
 
-func getActiveKeyIdCipherFromDeksInfo(deksinfo DeksInfo) ([]byte, string, string) {
-	activeKey := deksinfo.ActiveKey
-	for _, earkey := range deksinfo.Keys {
+func (e *EncryptionMgr) synchronizeKeyFilesCallback(kdt KeyDataType) error {
+	// ENCRYPT_TODO: Add synchronizeKeyFilesCallback for rebalance
+	logging.Infof("EncryptionMgr:synchronizeKeyFilesCallback...")
+	return nil
+}
+
+func getActiveKeyIdCipherFromEncrKeysInfo(encrKeysInfo EncrKeysInfo) ([]byte, string, string) {
+	activeKey := encrKeysInfo.ActiveKeyId
+	for _, earkey := range encrKeysInfo.Keys {
 		if activeKey == earkey.Id {
-			return earkey.Data, earkey.Id, earkey.Cipher
+			return earkey.Key, earkey.Id, earkey.Cipher
 		}
 	}
 	return []byte{}, "", ""
 }
 
-func getActiveEarKeyFromDeksInfo(deksinfo DeksInfo) (EaRKey, error) {
-	activeKey := deksinfo.ActiveKey
-	for _, earkey := range deksinfo.Keys {
+func getActiveEarKeyFromEncrKeysInfo(encrKeysInfo EncrKeysInfo) EaRKey {
+	activeKey := encrKeysInfo.ActiveKeyId
+	for _, earkey := range encrKeysInfo.Keys {
 		if activeKey == earkey.Id {
-			return earkey, nil
+			return earkey
 		}
 	}
-	return EaRKey{Cipher: gocbcrypto.CipherNameNone}, ErrGetActiveKeyCbauth
+
+	earkey := EaRKey{}
+
+	// activeKeyId is empty string "" means encryption might not be enabled and cipher field can be empty string "".
+	// gocbcrypto is used for encryption of data
+	// gocbcrypto uses cipher mode "None" for un-encrypted data
+	if encrKeysInfo.ActiveKeyId == "" {
+		earkey.Cipher = gocbcrypto.CipherNameNone
+	}
+
+	return earkey
 }
