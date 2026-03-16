@@ -50,7 +50,12 @@ type GsiScanClient struct {
 	needsAuth     *uint32
 }
 
-func NewGsiScanClient(queryport, cluster string, config common.Config, needsAuth *uint32) (*GsiScanClient, error) {
+func NewGsiScanClient(
+	queryport, cluster string,
+	config common.Config,
+	needsAuth *uint32,
+) (*GsiScanClient, error) {
+
 	t := time.Duration(config["connPoolAvailWaitTimeout"].Int())
 
 	closeActiveConnections := false
@@ -75,9 +80,19 @@ func NewGsiScanClient(queryport, cluster string, config common.Config, needsAuth
 		closeActiveConnections: closeActiveConnections,
 	}
 	c.pool = newConnectionPool(
-		queryport, c.poolSize, c.poolOverflow, c.maxPayload, c.cpTimeout,
-		c.cpAvailWaitTimeout, c.minPoolSizeWM, c.relConnBatchSize, config["keepAliveInterval"].Int(),
-		cluster, needsAuth, closeActiveConnections)
+		queryport,
+		c.poolSize,
+		c.poolOverflow,
+		c.maxPayload,
+		c.cpTimeout,
+		c.cpAvailWaitTimeout,
+		c.minPoolSizeWM,
+		c.relConnBatchSize,
+		config["keepAliveInterval"].Int(),
+		cluster,
+		needsAuth,
+		closeActiveConnections,
+	)
 	logging.Infof("%v started ...\n", c.logPrefix)
 
 	if version, err := c.Helo(); err == nil || err == io.EOF {
@@ -227,8 +242,13 @@ func (c *GsiScanClient) Lookup(
 	return c.doStreamingWithRetry(requestId, req, callb, "Lookup", retry)
 }
 
-func (c *GsiScanClient) doStreamingWithRetry(requestId string, req interface{}, callb ResponseHandler,
-	caller string, retry bool) (error, bool /*partial*/) {
+func (c *GsiScanClient) doStreamingWithRetry(
+	requestId string,
+	req interface{},
+	callb ResponseHandler,
+	caller string,
+	retry bool,
+) (error, bool /*partial*/) {
 
 	partial, healthy, closeStream := false, true, false
 
@@ -243,7 +263,14 @@ func (c *GsiScanClient) doStreamingWithRetry(requestId string, req interface{}, 
 		go func() {
 			if healthy && closeStream {
 				conn, pkt := connectn.conn, connectn.pkt
-				_, healthy = c.closeStream(conn, pkt, requestId)
+				var closeErr error
+				closeErr, healthy = c.closeStream(conn, pkt, requestId, callb)
+				if closeErr != nil {
+					logging.Errorf(
+						"%v GsiScanClient failed to close stream req(%v): %v",
+						c.logPrefix, requestId, closeErr,
+					)
+				}
 			}
 			c.pool.Return(connectn, healthy)
 		}()
@@ -254,7 +281,13 @@ func (c *GsiScanClient) doStreamingWithRetry(requestId string, req interface{}, 
 		connectn, err1, poolClosed = c.pool.Renew(connectn)
 
 		if connectn != nil && err1 == nil {
-			logging.Verbosef("%v GsiScanClient::doStreamingWithRetry req(%v) renew connection from %v to %v", c.logPrefix, requestId, connectn.conn.LocalAddr(), connectn.conn.RemoteAddr())
+			logging.Verbosef(
+				"%v GsiScanClient::doStreamingWithRetry req(%v) renew connection from %v to %v",
+				c.logPrefix,
+				requestId,
+				connectn.conn.LocalAddr(),
+				connectn.conn.RemoteAddr(),
+			)
 		}
 
 		return err1 == nil
@@ -287,7 +320,13 @@ STREAM_RETRY:
 	for cont {
 		// <--- protobuf.ResponseStream
 		var authRetry bool
-		cont, healthy, err, closeStream, authRetry = c.streamResponse(conn, pkt, callb, requestId, authRetryOnce)
+		cont, healthy, err, closeStream, authRetry = c.streamResponse(
+			conn,
+			pkt,
+			callb,
+			requestId,
+			authRetryOnce,
+		)
 		if authRetry {
 			healthy, closeStream, authRetryOnce = false, false, true
 			renew()
@@ -1173,7 +1212,9 @@ func (c *GsiScanClient) Scan(
 			for _, index := range indexVector.QuerySparseVector.Indices {
 				protoIndexVector.QueryVector = append(protoIndexVector.QueryVector, float32(index))
 			}
-			protoIndexVector.QueryVector = append(protoIndexVector.QueryVector, indexVector.QuerySparseVector.Values...)
+			protoIndexVector.QueryVector = append(
+				protoIndexVector.QueryVector,
+				indexVector.QuerySparseVector.Values...)
 		} else if indexVector.QueryVector != nil {
 			protoIndexVector.QueryVector = make([]float32, len(indexVector.QueryVector))
 			copy(protoIndexVector.QueryVector, indexVector.QueryVector)
@@ -1405,7 +1446,12 @@ func (c *GsiScanClient) doRequestResponse(req interface{}, requestId string,
 	}()
 
 	renew := func() bool {
-		logging.Verbosef("%v GsiScanClient::doRequestResponse req(%v) renew connection %v", c.logPrefix, requestId, c.pool.host)
+		logging.Verbosef(
+			"%v GsiScanClient::doRequestResponse req(%v) renew connection %v",
+			c.logPrefix,
+			requestId,
+			c.pool.host,
+		)
 
 		var err1 error
 		connectn, err1, poolClosed = c.pool.Renew(connectn)
@@ -1462,8 +1508,12 @@ REQUEST_RESPONSE_RETRY:
 
 			if rsp.GetCode() == transport.AUTH_MISSING && !authRetry {
 				// Do not count this as a "retry"
-				logging.Infof("%v GsiScanClient::doRequestResponse req(%v) server needs authentication information. Retrying "+
-					"request with auth", c.logPrefix, requestId)
+				logging.Infof(
+					"%v GsiScanClient::doRequestResponse req(%v) server needs authentication information. Retrying "+
+						"request with auth",
+					c.logPrefix,
+					requestId,
+				)
 				renew()
 				authRetry = true
 				goto REQUEST_RESPONSE_RETRY
@@ -1589,7 +1639,7 @@ func (c *GsiScanClient) streamResponse(
 
 func (c *GsiScanClient) closeStream(
 	conn net.Conn, pkt *transport.TransportPacket,
-	requestId string) (err error, healthy bool) {
+	requestId string, callb ResponseHandler) (err error, healthy bool) {
 
 	var resp interface{}
 	laddr := conn.LocalAddr()
@@ -1603,7 +1653,12 @@ func (c *GsiScanClient) closeStream(
 		return
 	}
 
-	logging.Tracef("%v GsiScanClient::closeStream req(%v) connection %q transmitted protobuf.EndStreamRequest", c.logPrefix, requestId, laddr)
+	logging.Tracef(
+		"%v GsiScanClient::closeStream req(%v) connection %q transmitted protobuf.EndStreamRequest",
+		c.logPrefix,
+		requestId,
+		laddr,
+	)
 
 	// flush the connection until stream has ended.
 	for true {
@@ -1622,7 +1677,12 @@ func (c *GsiScanClient) closeStream(
 
 		} else if resp == nil { // End of stream marker
 			return
-		} else if _, ok := resp.(*protobuf.StreamEndResponse); ok { // New End of stream marker
+		} else if resp, ok := resp.(*protobuf.StreamEndResponse); ok { // New End of stream marker
+			// For backward compatibility, we will still treat nil response and streamEndResponse as
+			// end of stream. callback will be handling the endStreamResponse in the same manner is
+			// it does when indexer sends
+			// endStreamResponse as part of normal stream response flow.
+			callb(resp)
 			return
 		}
 	}
@@ -1643,7 +1703,11 @@ func getEmptySpanForPrimary() *protobuf.Scan {
 	return &protobuf.Scan{Filters: []*protobuf.CompositeElementFilter{fl}}
 }
 
-func (c *GsiScanClient) setRequestTimeout(reqDeadline time.Time, reqDeadlineSlack time.Duration) int64 {
+func (c *GsiScanClient) setRequestTimeout(
+	reqDeadline time.Time,
+	reqDeadlineSlack time.Duration,
+) int64 {
+
 	var reqTimeout int64
 	if !reqDeadline.IsZero() {
 		if timeoutDur := time.Until(reqDeadline); timeoutDur > 0 {
