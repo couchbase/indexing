@@ -256,6 +256,22 @@ func (attr SecExprAttr) IsSparseVector() bool {
 	return attr&SEC_EXPR_ATTR_SPARSE_VECTOR != 0
 }
 
+// SecExprAttrsArray is a named slice type for SecExprAttr that provides bounds-safe access methods.
+// This is important for upgrade scenarios the SecExpressionsAttrs metadata field was introduced
+// later (e.g. non-sparse, non-vector indexes pre 8.1.0)
+type SecExprAttrsArray []SecExprAttr
+
+// IsSparseAttrAtPos returns true only if the slice has been populated for the given key position
+// AND the attribute at that position has the SPARSE_VECTOR bit set.
+// Safely returns false when keyPos is out of range (including when the slice is empty for older
+// indexes).
+func (s SecExprAttrsArray) IsSparseAttrAtPos(keyPos int) bool {
+	if keyPos < 0 || keyPos >= len(s) {
+		return false
+	}
+	return s[keyPos].IsSparseVector()
+}
+
 // IndexDefn represents the index definition as specified
 // during CREATE INDEX
 type IndexDefn struct {
@@ -356,7 +372,7 @@ type IndexDefn struct {
 	VectorMeta    *VectorMetadata `json:"vectorMeta,omitempty"`
 
 	// SPARSE_TODO: Populate this field while recovering index definition
-	SecExprsAttrs []SecExprAttr `json:"secExprsAttrs,omitempty"`
+	SecExprsAttrs SecExprAttrsArray `json:"secExprsAttrs,omitempty"`
 }
 
 // IndexInst is an instance of an Index(aka replica)

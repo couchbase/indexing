@@ -442,7 +442,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	indexMissingLeadingKey, isPrimary bool,
 	scheme c.PartitionScheme, partitionKeys []string,
 	plan map[string]interface{}, include []string, isBhive bool,
-	secExprsAttrs []c.SecExprAttr) (c.IndexDefnId, error, bool) {
+	secExprsAttrs c.SecExprAttrsArray) (c.IndexDefnId, error, bool) {
 
 	// FindIndexByName will only return valid index
 	if o.findIndexByName(name, bucket, scope, collection) != nil {
@@ -2208,7 +2208,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	indexMissingLeadingKey, isPrimary bool,
 	partitionScheme c.PartitionScheme, partitionKeys []string,
 	plan map[string]interface{}, includeExprs []string, isBhive bool,
-	secExprsAttrs []c.SecExprAttr) (*c.IndexDefn, error, bool) {
+	secExprsAttrs c.SecExprAttrsArray) (*c.IndexDefn, error, bool) {
 
 	//
 	// Validation

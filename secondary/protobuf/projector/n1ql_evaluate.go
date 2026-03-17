@@ -255,7 +255,7 @@ func N1QLTransformForVectorIndex(
 				// d. If the VECTOR entry is invalid and it is non-leading key,
 				//    the VECTOR entry will be indexed as NULL
 				if keyPos == ie.vectorPos {
-					if ie.skExprsAttrs[keyPos].IsSparseVector() {
+					if ie.skExprsAttrs.IsSparseAttrAtPos(keyPos) {
 						vector, err = validateSparseVector(key)
 					} else {
 						vector, err = validateVector(key, ie.dimension, ie.isCosine)
@@ -301,7 +301,7 @@ func N1QLTransformForVectorIndex(
 						return nil, nil, nil, nil, nil
 					}
 				} else if keyPos == ie.vectorPos { // array of vectors
-					isSparseVector := ie.skExprsAttrs[keyPos].IsSparseVector()
+					isSparseVector := ie.skExprsAttrs.IsSparseAttrAtPos(keyPos)
 					vectors, array = getValidVectorsFromArray(array, ie.dimension, ie.isCosine, isSparseVector)
 					if len(array) == 0 {
 						return nil, nil, nil, nil, nil
@@ -327,7 +327,7 @@ func N1QLTransformForVectorIndex(
 							return nil, nil, nil, nil, nil
 						}
 
-						isSparseVector := ie.skExprsAttrs[keyPos].IsSparseVector()
+						isSparseVector := ie.skExprsAttrs.IsSparseAttrAtPos(keyPos)
 						vectors, array = getValidVectorsFromArray(array, ie.dimension, ie.isCosine, isSparseVector)
 						if len(array) == 0 {
 							return nil, nil, nil, nil, nil

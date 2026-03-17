@@ -351,7 +351,7 @@ func (b *metadataClient) CreateIndex(
 	indexMissingLeadingKey, isPrimary bool,
 	scheme common.PartitionScheme, partitionKeys []string,
 	planJSON []byte, include []string, isBhive bool,
-	secExprsAttrs []common.SecExprAttr) (uint64, error) {
+	secExprsAttrs common.SecExprAttrsArray) (uint64, error) {
 
 	plan := make(map[string]interface{})
 	if planJSON != nil && len(planJSON) > 0 {

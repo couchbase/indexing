@@ -103,10 +103,10 @@ func (instance *IndexInst) GetPartitionObject() Partition {
 // definition of an index instance.
 type IndexEvaluator struct {
 	keyspaceId   string
-	skExprs      []interface{}   // compiled expression
-	skExprsAttrs []c.SecExprAttr // exploded attributes for secondary expressions
-	pkExprs      []interface{}   // compiled expression
-	whExpr       interface{}     // compiled expression
+	skExprs      []interface{}       // compiled expression
+	skExprsAttrs c.SecExprAttrsArray // exploded attributes for secondary expressions
+	pkExprs      []interface{}       // compiled expression
+	whExpr       interface{}         // compiled expression
 	instance     *IndexInst
 	version      FeedVersion
 	xattrs       []string

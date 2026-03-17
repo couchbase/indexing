@@ -787,7 +787,7 @@ func ConstructIndexExprs(defn *IndexDefn) ([]string, string) {
 		}
 
 		if vectorAttr != nil && vectorAttr[i] {
-			if secExprsAttrs[i].IsSparseVector() {
+			if secExprsAttrs.IsSparseAttrAtPos(i) {
 				exprStmt += " SPARSE VECTOR"
 			} else {
 				exprStmt += " VECTOR"
@@ -981,13 +981,13 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 // For flattened array, returns the list of secExprs and
 // the desc array before explosion
 func GetUnexplodedExprs(secExprs []string, desc []bool,
-	hasVectorAttr []bool, secExprsAttrs []SecExprAttr) (
-	[]string, []SecExprAttr, []bool, []bool, bool) {
+	hasVectorAttr []bool, secExprsAttrs SecExprAttrsArray) (
+	[]string, SecExprAttrsArray, []bool, []bool, bool) {
 
 	var isArray, isFlatten bool
 	skipFlattenExprsTillPos := 0
 	origSecExprs := make([]string, 0)
-	origSecExprsAttrs := make([]SecExprAttr, 0)
+	origSecExprsAttrs := make(SecExprAttrsArray, 0)
 	origDesc := make([]bool, 0)
 	origHasVectorAttr := make([]bool, 0)
 
@@ -1006,7 +1006,7 @@ func GetUnexplodedExprs(secExprs []string, desc []bool,
 	}
 
 	if secExprsAttrs == nil {
-		secExprsAttrs = make([]SecExprAttr, len(secExprs))
+		secExprsAttrs = make(SecExprAttrsArray, len(secExprs))
 		for i, _ := range secExprs {
 			secExprsAttrs[i] = SEC_EXPR_ATTR_NONE
 		}
