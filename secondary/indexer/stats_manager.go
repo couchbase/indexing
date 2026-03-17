@@ -1506,8 +1506,15 @@ func (is *IndexerStats) PopulateLostReplicaIndexes(statMap *StatsMap) {
 	val.Init()
 
 	for indexName, lostReplica := range lostReplicaMap {
-		lostReplicaVal, ok := lostReplica.(int64)
-		if !ok {
+		var lostReplicaVal int64
+		switch v := lostReplica.(type) {
+		case int64:
+			lostReplicaVal = v
+		case int32:
+			lostReplicaVal = int64(v)
+		case int:
+			lostReplicaVal = int64(v)
+		default:
 			continue
 		}
 		val.Set(lostReplicaVal)
@@ -2942,8 +2949,15 @@ func (is *IndexerStats) populateLostReplicaStat(out []byte) []byte {
 		if !ok {
 			continue
 		}
-		lostReplicaCount, ok := val.(int)
-		if !ok {
+		var lostReplicaCount int64
+		switch v := val.(type) {
+		case int64:
+			lostReplicaCount = v
+		case int32:
+			lostReplicaCount = int64(v)
+		case int:
+			lostReplicaCount = int64(v)
+		default:
 			continue
 		}
 
