@@ -3,6 +3,7 @@ package common
 import (
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -60,6 +61,23 @@ type VectorQuantizer struct {
 
 	// Scalar quantizer related information
 	SQRange ScalarQuantizerRange `json:"sqrange,omitempty"`
+}
+
+// computeNlistFromItemsCount returns the minimum number of IVF centroids
+// required for a keyspace with itemsCount documents. There will be at least
+// one centroid even when fewer than 1000 items are present.
+func computeNlistFromItemsCount(itemsCount uint64) int {
+	return int(math.Ceil(float64(itemsCount) / 1000))
+}
+
+// ComputeNlist returns the effective number of IVF centroids (Nlist) to use.
+// If Nlist is explicitly configured it is returned as-is; otherwise it is
+// derived from itemsCount.
+func (vq *VectorQuantizer) ComputeNlist(itemsCount uint64) int {
+	if vq == nil || vq.Nlist == 0 {
+		return computeNlistFromItemsCount(itemsCount)
+	}
+	return vq.Nlist
 }
 
 func (vq *VectorQuantizer) Clone() *VectorQuantizer {

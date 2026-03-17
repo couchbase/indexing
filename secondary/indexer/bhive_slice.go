@@ -170,6 +170,9 @@ type bhiveSlice struct {
 
 	// error
 	fatalDbErr error // TODO
+
+	// encryption
+	sliceEncryptionCallbacks SliceEncryptionCallbacks
 }
 
 type bhiveSnapshotInfo struct {
@@ -681,6 +684,10 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 	slice.persistFullVector = mCfg.PersistFullVector
 
 	return err
+}
+
+func (mdb *bhiveSlice) SetInUseKeys(kdt KeyDataType, key string) {
+	mdb.sliceEncryptionCallbacks.setInUseKeys(kdt, key)
 }
 
 func (mdb *bhiveSlice) doRecovery(initBuild bool) error {

@@ -5052,6 +5052,8 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 				val, ok := getInt64Val(value, statName)
 				if ok {
 					indexerStats.indexes[instdId].numRequests.Set(val)
+					indexerStats.indexes[instdId].numCompletedRequests.Set(val)
+					// numCompletedRequests = numRequests after restart.
 					indexerStats.TotalRequests.Add(val)
 				}
 			}
@@ -5136,7 +5138,12 @@ func (s *statsManager) handleMetaStatsRequest(w http.ResponseWriter, r *http.Req
 		r.ParseForm()
 
 		// /stats/metadata?debug=1
+		// OR
+		// /stats/metadata?store-stats=1
 		dbgStr := r.FormValue("debug")
+		storeStr := r.FormValue("store-stats")
+
+		var shouldWriteStoreSts = dbgStr == "1" || storeStr == "1"
 
 		var metastats, ok = s.getMetadataStats()
 
@@ -5156,7 +5163,7 @@ func (s *statsManager) handleMetaStatsRequest(w http.ResponseWriter, r *http.Req
 			return
 		}
 
-		if dbgStr == "1" {
+		if shouldWriteStoreSts {
 			// if debug, also send raw stats
 			var rawStats, err1 = json.Marshal(metastats.Raw) // Raw is expected to be a map => {...}
 			if err1 == nil && len(rawStats) > 2 {

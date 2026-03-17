@@ -224,7 +224,7 @@ var REQUEST_CHANNEL_COUNT = 1000
 
 var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr",
 	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio",
-	"dimension", "similarity", "description", "scan_nprobes", "train_list", "persist_full_vector"}
+	"dimension", "similarity", "description", "scan_nprobes", "train_list", "persist_full_vector", "train_list_wait"}
 
 var ErrWaitScheduleTimeout = fmt.Errorf("Timeout in checking for schedule create token.")
 
@@ -2615,6 +2615,15 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		return nil, err, false
 	}
 
+	// Get train_list_wait parameter from plan and set it in vector metadata if cluster version is 8.1 or above
+	trainListWait := false
+	if clusterVersion >= c.INDEXER_81_VERSION {
+		trainListWait, err = o.getTrainListWaitParam(plan)
+		if err != nil {
+			return nil, err, false
+		}
+	}
+
 	// For a vector index, validate the quantizer. For non-vector indexes, quantizer would be 'nil'
 	if isCompositeVectorIndex || isBhive {
 		if err := quantizer.IsValid(dimension, isSparseVector); err != nil {
@@ -2687,6 +2696,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			Nprobes:           nprobes,
 			TrainList:         trainlist,
 			PersistFullVector: persistFullVector, // set to true only for BHIVE and Dense vector
+			TrainListWait:     trainListWait,
 		}
 	}
 
@@ -3542,6 +3552,27 @@ func (o *MetadataProvider) getNprobesParam(plan map[string]interface{}, isVector
 	}
 
 	return nprobes, nil
+}
+
+func (o *MetadataProvider) getTrainListWaitParam(plan map[string]interface{}) (bool, error) {
+	keyword := "train_list_wait"
+
+	trainWait, ok := plan[keyword].(bool) // Has boolean value
+	if !ok {
+		trainWait_str, ok := plan[keyword].(string) // Has string value
+		if ok {
+			var err error
+			trainWaitParsed, err := strconv.ParseBool(trainWait_str)
+			if err != nil {
+				return false, errors.New("Fails to create index.  Parameter train_list_wait must be a boolean value of (true or false).")
+			}
+			trainWait = trainWaitParsed
+		} else if _, ok := plan[keyword]; ok { // Has value but not a boolean or string
+			return false, errors.New("Fails to create index.  Parameter train_list_wait must be a boolean value of (true or false).")
+		}
+	}
+
+	return trainWait, nil
 }
 
 func (o *MetadataProvider) getTrainlistParam(plan map[string]interface{}, isVectorIndex bool) (int, error) {

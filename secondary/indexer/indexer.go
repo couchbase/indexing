@@ -1869,7 +1869,6 @@ func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 
 	// ENCRYPT_TODO: Handle below types later
 	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
-	// ENCRYPT_TODO: Handle MoI Paused
 	case "log":
 	case "config":
 	case "audit":
@@ -1881,6 +1880,14 @@ func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 
 	kdt := msg.(*MsgEncryptionUpdateKey).GetKeyDataType()
+	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
+		// ENCRYPT_TODO: Revisit if required, MOI encryption APIs are not pause aware
+		logging.Infof("Indexer::handleEncryptionUpdateKey aborted keydatatype: %v", kdt)
+		respCh := msg.(*MsgEncryptionUpdateKey).GetRespCh()
+		respCh <- ErrIndexerNotActive
+		return
+	}
+
 	logging.Infof("Indexer::handleEncryptionUpdateKey keydatatype: %v", kdt)
 
 	switch kdt.TypeName {
@@ -1900,6 +1907,13 @@ func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 func (idx *indexer) handleEncryptionDropKeys(msg Message) {
 
 	kdt := msg.(*MsgEncryptionDropKey).GetKeyDataType()
+	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
+		// ENCRYPT_TODO: Revisit if required, MOI encryption APIs are not pause aware
+		logging.Infof("Indexer::handleEncryptionDropKeys aborted keydatatype: %v", kdt)
+		respCh := msg.(*MsgEncryptionDropKey).GetRespCh()
+		respCh <- ErrIndexerNotActive
+		return
+	}
 	logging.Infof("Indexer::handleEncryptionDropKeys...")
 
 	switch kdt.TypeName {
@@ -11448,7 +11462,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
 		slice, err = NewMemDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
-			partnStats[partitionId], numVBuckets)
+			partnStats[partitionId], numVBuckets, sliceEncryptionCallbacks)
 	case common.ForestDB:
 		slice, err = NewForestDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			partnStats[partitionId])
@@ -13683,16 +13697,6 @@ func (idx *indexer) getPartnStats(indexInst *common.IndexInst) map[common.Partit
 	return res
 }
 
-func (idx *indexer) computeCentroidsFromItemsCount(keyspaceId string, itemsCount uint64) int {
-
-	// There will be atleast one centroid incase the number of items are less than 1000
-	centroids := uint64(math.Ceil(float64(itemsCount) / 1000))
-
-	logging.Infof("Indexer::computeCentroidsFromItemsCount Number of centroids for keyspaceId: %v "+
-		"with items_count: %v are: %v", keyspaceId, itemsCount, int(centroids))
-	return int(centroids)
-}
-
 func (idx *indexer) getItemsCount(cluster, bucket, reqcid string) (uint64, error) {
 	var itemsCount uint64
 	var err error
@@ -13741,6 +13745,38 @@ func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c
 		// This value ensures that there is atleast one vector for every centroid
 		// in the keyspace at the time of build
 		minCentroidsRequired = max(1<<vm.Quantizer.Nbits, nlist)
+	}
+
+	// If cluster version is 8.1 and user asked to wait for training documents to be availble
+	// we will retry training in background if possible
+	if common.GetClusterVersion() >= common.INDEXER_81_VERSION &&
+		vm.WaitForTrainList() {
+
+		if vm.TrainList != 0 { // user specified train_list
+			// train_list value configured is greater than or equal to minCentroidsRequired
+			if vm.TrainList >= minCentroidsRequired {
+				// itemsCount is less than configured train_list value
+				if itemsCount < uint64(vm.TrainList) {
+					// send retryable error to build index in backgronud
+					return errors.New(c.ERR_TRAINING + c.ERR_RETRYABLE_TRAIN_LIST_SIZE + fmt.Sprintf("The number train_list: %v in keyspace: %v is greater than the "+
+						"number of documents: %v", vm.TrainList, keyspaceId, itemsCount))
+				}
+				// Valid itemsCount so check further
+			} else {
+				// send non retryable error to error our to user
+				return errors.New(c.ERR_TRAINING + c.INVALID_TRAIN_LIST_SIZE + fmt.Sprintf(
+					"The number train_list: %v in keyspace: %v is less than minimum centroids required: %v so cannot wait for training documents to be available and retry build. Current number of documents is %v",
+					vm.TrainList, keyspaceId, minCentroidsRequired, itemsCount))
+			}
+		} else { // user did not specify train_list
+			// itemsCount is less than minCentroidsRequired
+			if itemsCount < uint64(minCentroidsRequired) {
+				// send retryable error to build index in backgronud
+				return errors.New(c.ERR_TRAINING + c.ERR_RETRYABLE_TRAIN_LIST_SIZE + fmt.Sprintf("The number of documents: %v in keyspace: %v are less than the "+
+					"minimum number of documents: %v required for training %v centroids", itemsCount, keyspaceId, minCentroidsRequired, minCentroidsRequired))
+			}
+			// Valid itemsCount so check further
+		}
 	}
 
 	if itemsCount < uint64(vm.TrainList) {
@@ -13793,10 +13829,9 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 			continue
 		}
 
-		centroids := inst.Defn.VectorMeta.Quantizer.Nlist
-		if centroids == 0 {
-			centroids = idx.computeCentroidsFromItemsCount(keyspaceId, itemsCount)
-		}
+		centroids := inst.Defn.VectorMeta.Quantizer.ComputeNlist(itemsCount)
+		logging.Infof("Indexer::computeCentroids Number of centroids for keyspaceId: %v "+
+			"with items_count: %v are: %v", keyspaceId, itemsCount, centroids)
 
 		partnInstMap := idx.indexPartnMap[instId]
 		for partnId := range partnInstMap {

@@ -115,6 +115,11 @@ EOF
 RUN mkdir ${WORKSPACE}
 
 RUN mkdir /home/bot/bin
+RUN mkdir /home/bot/tmp
+RUN chmod -R 0777 /home/bot/tmp
+RUN chown -R bot:root /home/bot/tmp
+
+ENV TMPDIR=/home/bot/tmp
 
 WORKDIR ${WORKSPACE}
 
