@@ -21,8 +21,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/couchbase/indexing/secondary/audit"
-	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -62,35 +60,6 @@ func cbmockGetEncryptionKeysBlocking(dtype KeyDataType) *EncrKeysInfo {
 	}()
 
 	return deksInfo
-}
-
-func validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	creds, valid, err := common.IsAuthValid(r)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error() + "\n"))
-		return false
-	} else if valid == false {
-		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "EncryptionMgrTest::validateAuth", "")
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
-		return false
-	}
-
-	if creds != nil {
-		allowed, err := creds.IsAllowed("cluster.admin.internal.index!write")
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error()))
-			return false
-		} else if !allowed {
-			logging.Verbosef("EncryptionMgrTest::validateAuth not enough permissions")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write(common.HTTP_STATUS_FORBIDDEN)
-			return false
-		}
-	}
-	return true
 }
 
 func getPersistPath() string {
