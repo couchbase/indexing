@@ -4950,6 +4950,8 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 				val, ok := getInt64Val(value, statName)
 				if ok {
 					indexerStats.indexes[instdId].numRequests.Set(val)
+					indexerStats.indexes[instdId].numCompletedRequests.Set(val)
+					// numCompletedRequests = numRequests after restart.
 					indexerStats.TotalRequests.Add(val)
 				}
 			}
