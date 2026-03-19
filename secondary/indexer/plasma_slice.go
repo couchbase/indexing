@@ -1845,8 +1845,8 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
 	}
-
-	if mdb.codebook.IsTrained() == false || mdb.codeSize <= 0 {
+	isSparseVector := mdb.idxDefn.HasSparseVector()
+	if mdb.codebook.IsTrained() == false || (!isSparseVector && mdb.codeSize <= 0) {
 		err := fmt.Errorf("Fatal - Mutation processing should not happen on an untrained codebook. "+
 			"docId: %s, Index instId: %v", logging.TagUD(docid), mdb.IndexInstId())
 		logging.Fatalf("plasmaSlice::insertIntoVectorIndex %v", err)
@@ -1862,14 +1862,29 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 	minEncodeBufSize := len(key) + sha256.Size
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], minEncodeBufSize, szConf.allowLargeKeys)
 
-	var quantizedCode []byte
+	var quantizedCodeOrConciseVec []byte
 	vec := vecs[0]
 
 	if vec != nil {
 		var centroidId int64
 		var err error
 
-		quantizedCode, centroidId, err = mdb.getQuantizedCodeForVector(vec, mdb.codeSize, mdb.quantizedCodeBuf[workerId])
+		if !isSparseVector {
+			quantizedCodeOrConciseVec, centroidId, err = mdb.getQuantizedCodeForVector(
+				vec,
+				mdb.codeSize,
+				mdb.quantizedCodeBuf[workerId])
+		} else {
+			quantizedCodeOrConciseVec = Float32ToByteSlice(vec)
+			mdb.sparseJLBuf[workerId] = resizeSparseJLBuf(
+				mdb.sparseJLBuf[workerId],
+				mdb.codebook.Dimension(),
+				true)
+			if _, err = mdb.getSparseJLVec(vec, mdb.sparseJLBuf[workerId]); err == nil {
+				centroidId, err = mdb.getNearestCentroidId(mdb.sparseJLBuf[workerId])
+			}
+		}
+
 		if err != nil {
 			logging.Errorf("plasmaSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
 				"Skipping docid:%s (%v)", mdb.Id(), mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
@@ -1916,11 +1931,11 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 		mdb.back[workerId].BeginNoThrottle()
 		defer mdb.back[workerId].End()
 
-		err = mdb.main[workerId].InsertKV(mainIndexEntry, quantizedCode)
+		err = mdb.main[workerId].InsertKV(mainIndexEntry, quantizedCodeOrConciseVec)
 		if err == nil {
-			mdb.idxStats.rawDataSize.Add(int64(len(mainIndexEntry)))
+			mdb.idxStats.rawDataSize.Add(int64(len(mainIndexEntry) + len(quantizedCodeOrConciseVec)))
 			addKeySizeStat(mdb.idxStats, len(mainIndexEntry))
-			atomic.AddInt64(&mdb.insert_bytes, int64(len(mainIndexEntry)))
+			atomic.AddInt64(&mdb.insert_bytes, int64(len(mainIndexEntry)+len(quantizedCodeOrConciseVec)))
 		}
 
 		backIndexEntry := entry2VectorBackIndexEntry(mainIndexEntry, encodedSHA)
@@ -5934,6 +5949,23 @@ func resizeShaBuf(shaBuf []byte, vecLen int, doResize bool) []byte {
 		shaBuf = make([]byte, 0, newSize)
 	}
 	return shaBuf
+}
+
+func (mdb *plasmaSlice) getSparseJLVec(vec []float32, sparseJLVecBuf []float32) ([]float32, error) {
+
+	sparseCb, ok := mdb.codebook.(codebook.SparseCodebook)
+	if !ok {
+		return nil, codebook.ErrIncorrectCodebook
+	}
+
+	t0 := time.Now()
+	err := sparseCb.Concise2SparseJL(vec, sparseJLVecBuf)
+	if err != nil {
+		return nil, err
+	}
+	mdb.idxStats.Timings.vtEncode.Put(time.Now().Sub(t0))
+
+	return sparseJLVecBuf, nil
 }
 
 func resizeQuantizedCodeBuf(quantizedCodeBuf []byte, numVecs, codeSize int, doResize bool) []byte {
