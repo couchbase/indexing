@@ -216,6 +216,8 @@ type plasmaSlice struct {
 
 	// vector index related metadata
 	nlist int // number of centroids to use for training
+	// For Sparse vector index, used for sparseJL representation of concise vector
+	sparseJLBuf [][]float32
 
 	codebook codebook.Codebook
 
@@ -2986,6 +2988,9 @@ func (mdb *plasmaSlice) RollbackToZero(initialBuild bool) error {
 	// During rollback to zero, initialise the quantizedCodeBuf. Rest of the metadata is still valid
 	if mdb.idxDefn.IsVectorIndex {
 		mdb.initQuantizedCodeBuf()
+		if mdb.idxDefn.HasSparseVector() {
+			mdb.initSparseJLBuf()
+		}
 	}
 
 	return nil
@@ -5050,6 +5055,9 @@ func (slice *plasmaSlice) setupWriters() {
 	slice.quantizedCodeBuf = make([][]byte, 0, slice.maxNumWriters)
 	slice.keySzConfChanged = make([]int32, 0, slice.maxNumWriters)
 	slice.keySzConf = make([]keySizeConfig, 0, slice.maxNumWriters)
+	if slice.idxDefn.HasSparseVector() {
+		slice.sparseJLBuf = make([][]float32, 0, slice.maxNumWriters)
+	}
 
 	// initialize comand handler
 	slice.cmdCh = make([]chan *indexMutation, 0, slice.maxNumWriters)
@@ -5087,6 +5095,14 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 		slice.shaBuf = slice.shaBuf[:numWriters]
 		slice.quantizedCodeBuf = slice.quantizedCodeBuf[:numWriters]
 	}
+	if slice.idxDefn.IsVectorIndex && slice.idxDefn.HasSparseVector() {
+		slice.sparseJLBuf = slice.sparseJLBuf[:numWriters]
+		for i := curNumWriters; i < numWriters; i++ {
+			// After training is completed, the sparse JL vector buffer will be resized
+			slice.sparseJLBuf[i] = make([]float32, 0)
+		}
+	}
+
 	slice.keySzConfChanged = slice.keySzConfChanged[:numWriters]
 	slice.keySzConf = slice.keySzConf[:numWriters]
 
@@ -5716,6 +5732,9 @@ func (mdb *plasmaSlice) InitCodebookFromSerialized(content []byte) error {
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
+	if mdb.idxDefn.HasSparseVector() {
+		mdb.initSparseJLBuf()
+	}
 	return nil
 }
 
@@ -5765,6 +5784,9 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
+	if mdb.idxDefn.HasSparseVector() {
+		mdb.initSparseJLBuf()
+	}
 	return nil
 }
 
@@ -5792,6 +5814,13 @@ func (mdb *plasmaSlice) initQuantizedCodeBuf() {
 	numWriters := mdb.numWritersPerPartition()
 	for i := 0; i < numWriters; i++ {
 		mdb.quantizedCodeBuf[i] = resizeQuantizedCodeBuf(mdb.quantizedCodeBuf[i], 1, mdb.codeSize, true)
+	}
+}
+
+func (mdb *plasmaSlice) initSparseJLBuf() {
+	numWriters := mdb.numWritersPerPartition()
+	for i := 0; i < numWriters; i++ {
+		mdb.sparseJLBuf[i] = resizeSparseJLBuf(mdb.sparseJLBuf[i], mdb.codebook.Dimension(), true)
 	}
 }
 
@@ -5963,6 +5992,9 @@ func (mdb *plasmaSlice) recoverCodebook(codebookPath string) error {
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
+	if mdb.idxDefn.HasSparseVector() {
+		mdb.initSparseJLBuf()
+	}
 	return nil
 }
 
