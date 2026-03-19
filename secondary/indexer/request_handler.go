@@ -1083,6 +1083,9 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 				if defn.VectorMeta.TrainList > 0 {
 					withObj["trainList"] = defn.VectorMeta.TrainList
 				}
+				if defn.VectorMeta.TrainListWait {
+					withObj["trainListWait"] = true
+				}
 				withObj["scanNProbes"] = defn.VectorMeta.Nprobes
 				if defn.VectorMeta.Quantizer.Nlist > 0 {
 					withObj["nlist"] = defn.VectorMeta.Quantizer.Nlist
