@@ -1079,6 +1079,12 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 				// Vector Dimension for sparse vector indexes and make it configurable
 				if !isVectorSparse {
 					withObj["dimension"] = defn.VectorMeta.Dimension
+				} else {
+					// For sparse vector indexes, include the sparsejl_dim if specified (>0)
+					// Default (128) is not shown unless explicitly set
+					if defn.VectorMeta.SparseJLDimension > 0 {
+						withObj["sparsejl_dim"] = defn.VectorMeta.SparseJLDimension
+					}
 				}
 				if defn.VectorMeta.TrainList > 0 {
 					withObj["trainList"] = defn.VectorMeta.TrainList

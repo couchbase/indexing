@@ -949,6 +949,11 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 		}
 		withExpr += fmt.Sprintf(" \"description\":\"%v\"", def.VectorMeta.Quantizer.String())
 
+		// Add sparsejl_dim for sparse vector indexes if explicitly set (>0)
+		if def.HasSparseVector() && def.VectorMeta.SparseJLDimension > 0 {
+			withExpr += fmt.Sprintf(", \"sparsejl_dim\":%v", def.VectorMeta.SparseJLDimension)
+		}
+
 		if def.VectorMeta.Nprobes > 1 {
 			if len(withExpr) != 0 {
 				withExpr += ","

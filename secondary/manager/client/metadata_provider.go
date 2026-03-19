@@ -224,7 +224,7 @@ var REQUEST_CHANNEL_COUNT = 1000
 
 var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr",
 	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio",
-	"dimension", "similarity", "description", "scan_nprobes", "train_list", "persist_full_vector", "train_list_wait"}
+	"dimension", "similarity", "description", "scan_nprobes", "train_list", "persist_full_vector", "train_list_wait", "sparsejl_dim"}
 
 var ErrWaitScheduleTimeout = fmt.Errorf("Timeout in checking for schedule create token.")
 
@@ -2687,6 +2687,11 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	}
 
 	if idxDefn.IsVectorIndex {
+		sparseJLDimension, err := o.getSparseJLDimension(plan, isSparseVector)
+		if err != nil {
+			return nil, err, false
+		}
+
 		idxDefn.VectorMeta = &c.VectorMetadata{
 			IsCompositeIndex:  isCompositeVectorIndex,
 			IsBhive:           isBhive,
@@ -2697,6 +2702,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			TrainList:         trainlist,
 			PersistFullVector: persistFullVector, // set to true only for BHIVE and Dense vector
 			TrainListWait:     trainListWait,
+			SparseJLDimension: sparseJLDimension,
 		}
 	}
 
@@ -3616,6 +3622,53 @@ func (o *MetadataProvider) getTrainlistParam(plan map[string]interface{}, isVect
 	}
 
 	return trainlist, nil
+}
+
+func (o *MetadataProvider) getSparseJLDimension(plan map[string]interface{}, isSparseVector bool) (int, error) {
+	keyword := "sparsejl_dim"
+
+	if !isSparseVector {
+		if _, ok := plan[keyword]; ok {
+			return 0, fmt.Errorf("Fail to create index. '%v' parameter is expected only in sparse vector indexes. Observed it for non-sparse vector index", keyword)
+		}
+		return 0, nil // For non-sparse vector indexes, no error is expected
+	}
+
+	// Check if the parameter exists in the plan
+	if _, ok := plan[keyword]; !ok {
+		return 0, nil // Parameter is optional, return 0 to use default value
+	}
+
+	sparseJLDim := int(0)
+
+	sparseJLDim2, ok := plan[keyword].(int64)
+	if !ok {
+		sparseJLDim2, ok := plan[keyword].(float64)
+		if !ok {
+			sparseJLDim2_str, ok := plan[keyword].(string)
+			if ok {
+				var err error
+				sparseJLDim2, err := strconv.ParseInt(sparseJLDim2_str, 10, 64)
+				if err != nil {
+					return 0, fmt.Errorf("Parameter '%v' must be a positive integer value.", keyword)
+				}
+				sparseJLDim = int(sparseJLDim2)
+
+			} else if v, ok := plan[keyword]; ok {
+				return 0, fmt.Errorf("Parameter '%v' must be a positive integer value (%v).", keyword, reflect.TypeOf(v))
+			}
+		} else {
+			sparseJLDim = int(sparseJLDim2)
+		}
+	} else {
+		sparseJLDim = int(sparseJLDim2)
+	}
+
+	if sparseJLDim <= 0 {
+		return 0, fmt.Errorf("Parameter '%v' must be a positive integer value.", keyword)
+	}
+
+	return sparseJLDim, nil
 }
 
 func (o *MetadataProvider) getDocKeySizeParam(plan map[string]interface{}) (uint64, error, bool) {

@@ -95,15 +95,18 @@ func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (cb codebook.Code
 			vectorMeta.Dimension, nbits, nlist, metric, useCosine)
 
 	case common.NO_QUANTIZATION_SPARSE:
-		// TODO SPARSE: For sparse codebook, change the hard coded dimension to be read from
-		// VectorMetadata. This will require introduction of a new parameter in VectorMetadata
-		// for sparseJL dimension during DDL
-		cb, err = NewCodebookSparse(DEFAULT_SPARSEJL_DIM, nlist)
+		// For sparse codebook, use the sparseJLDimension from VectorMetadata if specified,
+		// otherwise use the default dimension
+		sparseJLDim := vectorMeta.SparseJLDimension
+		if sparseJLDim <= 0 {
+			sparseJLDim = DEFAULT_SPARSEJL_DIM
+		}
+		cb, err = NewCodebookSparse(sparseJLDim, nlist)
 		if err != nil {
 			return nil, err
 		}
 		logging.Infof("NewCodebookSparse: Initialized codebook with dimension: %v, "+
-			"nlist: %v, metric: %v", vectorMeta.Dimension, nlist, metric)
+			"sparseJLDim: %v, nlist: %v, metric: %v", vectorMeta.Dimension, sparseJLDim, nlist, metric)
 		return cb, nil
 
 	default:
