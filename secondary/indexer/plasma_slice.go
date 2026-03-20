@@ -5758,13 +5758,15 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 		return ErrorCodebookNotInitialized
 	}
 
-	//TODO: handle cases of malformed vecs. Where nextIdx >= len(vecs)
 	if mdb.idxDefn.HasSparseVector() {
 		sparseCb, ok := mdb.codebook.(codebook.SparseCodebook)
 		if !ok {
 			return codebook.ErrIncorrectCodebook
 		}
-		totalVecs := common.FindTotalVectorsInSparse(vecs)
+		totalVecs, err := common.FindTotalVectorsInSparse(vecs)
+		if err != nil {
+			return fmt.Errorf("training failed: %w", err)
+		}
 		sparseJLDim := mdb.codebook.Dimension()
 		outVecs := make([]float32, sparseJLDim*totalVecs)
 		idx := 0

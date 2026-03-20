@@ -2188,15 +2188,18 @@ func GetMinPartnsPerShardFromMap(memQuota uint64, minPartnsPerShardMap map[uint6
 	return result
 }
 
-func FindTotalVectorsInSparse(vecs []float32) int {
+func FindTotalVectorsInSparse(vecs []float32) (int, error) {
 	totalVecs := 0
 	for idx := 0; idx < len(vecs); {
 		size := int(vecs[idx])
 		nextIdx := idx + 2*size + 1
+		if nextIdx > len(vecs) {
+			return 0, fmt.Errorf("malformed sparse vector input: length smaller than size value")
+		}
 		totalVecs += 1
 		idx = nextIdx
 	}
-	return totalVecs
+	return totalVecs, nil
 }
 
 // RefreshSecurityContextOnTopology refreshes the security context on the topology updates
