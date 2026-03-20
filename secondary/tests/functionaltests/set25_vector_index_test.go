@@ -1707,3 +1707,32 @@ func TestVectorIndexDynamicCentroidSQ(t *testing.T) {
 
 	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 }
+
+func TestCompositeSparseVectorItemsCount(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	if !sparseVectorsLoaded {
+		vectorSetupSparse(t, bucket, "", "", numDocs, false)
+	}
+
+	idx_composite_sparse := "idx_composite_sparse"
+
+	// Drop all indexes from earlier tests
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	stmt := "CREATE INDEX " + idx_composite_sparse +
+		" ON default(sparse_dim SPARSE VECTOR)" +
+		" WITH {\"description\": \"IVF256\", \"defer_build\":true};"
+	err := createWithDeferAndBuild(idx_composite_sparse, bucket, "", "", stmt,
+		defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating "+idx_composite_sparse, t)
+
+	stats := secondaryindex.GetPerPartnStats(clusterconfig.Username, clusterconfig.Password,
+		kvaddress)
+	itemsCount := stats[fmt.Sprintf("%v:%v:items_count", bucket, idx_composite_sparse)].(float64)
+	if itemsCount != float64(numDocs) {
+		t.Fatalf("Incorrect items in the index. Expected %v. Actual: %v, stats: %v",
+			numDocs, itemsCount, stats)
+	}
+}
