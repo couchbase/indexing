@@ -216,7 +216,7 @@ type BridgeAccessor interface {
 		secExprs []string, desc []bool, hasVectorAttr []bool,
 		indexMissingLeadingKey, isPrimary bool,
 		scheme common.PartitionScheme, partitionKeys []string,
-		with []byte, include []string, isBhive bool, secExprsAttrs []common.SecExprAttr) (defnID uint64, err error)
+		with []byte, include []string, isBhive bool, secExprsAttrs common.SecExprAttrsArray) (defnID uint64, err error)
 
 	// BuildIndexes to build a deferred set of indexes. This call implies
 	// that indexes specified are already created.
@@ -599,7 +599,7 @@ func (c *GsiClient) CreateIndex6(
 	secExprs []string, desc []bool, hasVectorAttr []bool,
 	indexMissingLeadingKey, isPrimary bool,
 	scheme common.PartitionScheme, partitionKeys []string,
-	with []byte, include []string, isBhive bool, secExprsAttrs []common.SecExprAttr) (defnID uint64, err error) {
+	with []byte, include []string, isBhive bool, secExprsAttrs common.SecExprAttrsArray) (defnID uint64, err error) {
 
 	err = common.IsValidIndexName(name)
 	if err != nil {

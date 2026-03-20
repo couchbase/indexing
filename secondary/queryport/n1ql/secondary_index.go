@@ -623,7 +623,7 @@ func (gsi *gsiKeyspace) CreateIndex6(
 	desc := make([]bool, 0)
 	hasVectorAttr := make([]bool, 0)
 	indexMissingLeadingKey := false
-	secExprsAttrs := make([]c.SecExprAttr, 0)
+	secExprsAttrs := make(c.SecExprAttrsArray, 0)
 
 	// For flattened array index, explode the secExprs string. E.g.,
 	// for the index:
@@ -1075,7 +1075,7 @@ type secondaryIndex struct {
 	persistFullVector bool // Only for BHIVE indexes
 	include           expression.Expressions
 
-	secExprsAttrs []c.SecExprAttr
+	secExprsAttrs c.SecExprAttrsArray
 }
 
 // for metadata-provider.
@@ -1624,7 +1624,7 @@ func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 				attr |= datastore.IK_MISSING
 			}
 
-			if si.secExprsAttrs != nil && si.secExprsAttrs[i] != 0 {
+			if si.secExprsAttrs != nil && i < len(si.secExprsAttrs) && si.secExprsAttrs[i] != 0 {
 				attr |= datastore.IkAttributes(si.secExprsAttrs[i])
 			}
 
