@@ -1129,7 +1129,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 						state != common.INDEX_STATE_DELETED &&
 						state != common.INDEX_STATE_NIL {
 
-						stateStr := getStateStr(&instance, state, len(errStr) != 0, stats, &defn)
+						stateStr := getStateStr(&instance, state, errStr, stats, &defn)
 
 						name := common.FormatIndexInstDisplayName(defn.Name, int(instance.ReplicaId))
 						prefix := common.GetStatsPrefix(defn.Bucket, defn.Scope, defn.Collection,
@@ -1427,11 +1427,15 @@ func (m *requestHandlerContext) getCachedIndexerNodeUUIDs() (nodeUUIDs []service
 }
 
 // getStateStr is a helper for getIndexStatus that returns the IndexStatus.Status string for the
-// given instance given its state, stateError, and stats.
-func getStateStr(instance *manager.IndexInstDistribution, state common.IndexState, stateError bool,
-	stats *common.Statistics, defn *common.IndexDefn) string {
+// given instance given its state, errStr, and stats.
+func getStateStr(instance *manager.IndexInstDistribution, state common.IndexState,
+	errStr string, stats *common.Statistics, defn *common.IndexDefn) string {
 
-	if stateError {
+	if len(errStr) != 0 {
+		// Check if the error is retryable
+		if strings.Contains(errStr, common.ErrTransientError.Error()) {
+			return "Retrying"
+		}
 		return "Error"
 	}
 
