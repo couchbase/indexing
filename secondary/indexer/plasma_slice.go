@@ -907,33 +907,115 @@ func (s *plasmaSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, stri
 	return masterEncryptionKeyBytes, rkeyId, cipher
 }
 
+// sets encryption key ID and cipher
+//
+// Params:
+// - keyId: Encryption key identifier. Pass nil to disable encryption.
+// - cipher: Encryption cipher name (e.g., gocbcrypto.CipherNameAES256GCM
+// or gocbcrypto.CipherNameNone).
 func (s *plasmaSlice) SetCurrentEncryptionKey(masterEncryptionKey []byte, keyId []byte, cipher string) error {
+	err := s.mainstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
+	if err != nil {
+		return err
+	}
+	s.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "bucket", BucketUUID: s.idxDefn.BucketUUID}, string(keyId))
 
-	// ENCRYPT_TODO: Update after storage changes
-	//err := s.mainstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
-	//if err != nil {
-	//	return err
-	//}
-	//if !s.isPrimary {
-	//	err := s.backstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
-	//	if err != nil {
-	//		return err
-	//	}
-	//}
-
-	// s.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "bucket", BucketUUID: s.idxDefn.BucketUUID}, string(keyId))
+	if !s.isPrimary {
+		err := s.backstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
 
-func (mdb *plasmaSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
-	// ENCRYPT_TODO: Update after storage changes
-	doneCh <- nil
+// asynchronously re-encrypts/encrypts/decrypts all data with the specified key IDs
+// using the current encryption key (set via SetCurrentEncryptionKey).
+// The operation is performed via plasma's DropKeyManager and completion is notified
+// on doneCh
+//
+// Behavior:
+//   - Key rotation is performed asynchronously by log cleaning. It is resource
+//     intensive (CPU, I/O) and therefore limited by worker pool size (25% of cores).
+//   - Mainstore and backstore can be processed concurrently
+//   - Requests for the same shard are serialized; different shards may proceed in parallel.
+//   - shard with mixed encrypted and unencrypted instance increase write amplification as
+//     unencrypted instances will also be rewritten. If possible grouping encrypted bucket
+//     in same shard will be beneficial.
+//   - api is thread-safe; can be called concurrently.
+//
+// Error:
+//   - Fails if drop keyId itself is the active encryption keyId
+//   - Fails if called before RecoveryDone (bootstrap) or
+//     RestoreShardDone (shard rebalance) completion
+//   - Exits early if the instance closes during operation
+//   - No error if keyId is already absent.
+//   - plasma.ErrRetryDropKey means the caller should retry.
+//
+// Params:
+//   - keyIds: List of key IDs to be rotated/dropped.
+//   - doneCh: error channel to receive completion/error notification.
+func (s *plasmaSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
+	kids := make([][]byte, len(keyIds))
+	for i := range keyIds {
+		kids[i] = make([]byte, len(keyIds[i]))
+		copy(kids[i], keyIds[i])
+	}
+
+	go func() {
+		var err error
+		defer func() {
+			if doneCh != nil {
+				doneCh <- err
+			}
+		}()
+
+		doneCh2 := make(chan error, 2)
+
+		// initiate drop key
+		s.mainstore.DropKeys(kids, doneCh2)
+		if !s.isPrimary {
+			s.backstore.DropKeys(kids, doneCh2)
+		}
+
+		// wait for completion
+		err = <-doneCh2
+		if !s.isPrimary {
+			if err2 := <-doneCh2; err == nil {
+				err = err2
+			}
+		}
+		close(doneCh2)
+	}()
 }
 
-func (mdb *plasmaSlice) GetKeyIdList() ([][]byte, error) {
-	// ENCRYPT_TODO: Update after storage changes
-	return [][]byte{}, nil
+// returns all unique encryption key IDs in use by the slice.
+//
+// Returns:
+//
+//   - [][]byte: List of unique key IDs in use.
+//     It also includes current active key even though there are no inserts.
+//     If at least one encryptable block is unencrypted, keyIds will have an empty keyId - []byte
+//
+//   - The api is atomic. Key change cannot happen during the api call
+func (s *plasmaSlice) GetKeyIdList() ([][]byte, error) {
+	keyIds, err := s.mainstore.GetKeyIdList()
+	if err != nil {
+		return nil, err
+	}
+
+	if !s.isPrimary {
+		keyIds2, err := s.backstore.GetKeyIdList()
+		if err != nil {
+			return nil, err
+		}
+		for _, kid := range keyIds2 {
+			keyIds = plasma.AppendUniqueKeyId(keyIds, kid)
+		}
+	}
+
+	return keyIds, nil
 }
 
 type plasmaReaderCtx struct {
@@ -3559,6 +3641,8 @@ func updatePlasmaConfig(cfg common.Config) {
 	plasma.SetupArenaSeparationOnce(cfg["plasma.enableArenaSeparation"].Bool())
 
 	plasma.SetLogReclaimBlockSize(int64(cfg["plasma.LSSReclaimBlockSize"].Int()))
+
+	plasma.RunDropKeyManager()
 }
 
 func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
