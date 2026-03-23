@@ -1156,6 +1156,8 @@ type VectorMetadata struct {
 	TrainListWait bool `json:"trainListWait,omitempty"`
 
 	Quantizer *VectorQuantizer `json:"quantizer,omitempty"`
+
+	SparseJLDimension int `json:"sparseJLDimension,omitempty"`
 }
 
 func (v *VectorMetadata) Clone() *VectorMetadata {
@@ -1173,6 +1175,7 @@ func (v *VectorMetadata) Clone() *VectorMetadata {
 		PersistFullVector: v.PersistFullVector,
 		TrainListWait:     v.TrainListWait,
 		Quantizer:         v.Quantizer.Clone(),
+		SparseJLDimension: v.SparseJLDimension,
 	}
 
 	return newMeta
@@ -1192,6 +1195,13 @@ func (v *VectorMetadata) IsEquivalent(u *VectorMetadata) bool {
 	}
 
 	if v.Similarity != u.Similarity {
+		return false
+	}
+
+	// For sparse vector indexes, sparseJLDimension must match
+	// Both being 0 means both use default (equivalent)
+	// Different values (including one 0 and one explicit) are NOT equivalent
+	if v.SparseJLDimension != u.SparseJLDimension {
 		return false
 	}
 

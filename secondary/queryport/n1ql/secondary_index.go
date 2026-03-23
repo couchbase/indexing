@@ -1073,6 +1073,7 @@ type secondaryIndex struct {
 	isBhive           bool
 	rerankFactor      int
 	persistFullVector bool // Only for BHIVE indexes
+	vectorSparseJLDim int    // SparseJL reduced dimension for sparse vector indexes
 	include           expression.Expressions
 
 	secExprsAttrs c.SecExprAttrsArray
@@ -1181,6 +1182,11 @@ func newSecondaryIndexFromMetaData(
 
 		si.isBhive = indexDefn.VectorMeta.IsBhive
 		si.persistFullVector = indexDefn.VectorMeta.PersistFullVector
+
+		// Set sparseJL dimension for sparse vector indexes
+		if si.isVectorSparse {
+			si.vectorSparseJLDim = indexDefn.VectorMeta.SparseJLDimension
+		}
 
 		if len(indexDefn.Include) > 0 {
 			exprs := make(expression.Expressions, 0, len(indexDefn.Include))
@@ -1296,6 +1302,11 @@ func (si *secondaryIndex) With() map[string]interface{} {
 		if !si.isVectorSparse {
 			withClause["dimension"] = si.vectorDimension
 			withClause["similarity"] = si.vectorUserSimilarity
+		} else {
+			// For sparse vector indexes, include sparsejl_dim if explicitly set (>0)
+			if si.vectorSparseJLDim > 0 {
+				withClause["sparsejl_dim"] = si.vectorSparseJLDim
+			}
 		}
 		withClause["scan_nprobes"] = si.nprobes
 		withClause["description"] = si.vectorDescription
