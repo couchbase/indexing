@@ -57,6 +57,8 @@ var PARTN_METRICS_PREFIX = METRICS_PREFIX + "partn_"
 // Common latency distribution for flush, snapshot, and scan request latencies
 var latencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100, 1000, 5000, 10000, 30000, 60000, 120000}
 var isJemallocProfilingActive int64
+var ErrInvalidStatusCode = errors.New("invalid status code")
+var ErrNilResponse = errors.New("nil response")
 
 func init() {
 	uptime = time.Now()
@@ -158,6 +160,24 @@ type IndexTimingStats struct {
 	vtEncode  stats.TimingStat
 	vtDecode  stats.TimingStat
 	vtDistCmp stats.TimingStat
+}
+
+type LostReplicaInfo struct {
+	IndexName         string           `json:"indexName"`
+	Bucket            string           `json:"bucket"`
+	Scope             string           `json:"scope"`
+	Collection        string           `json:"collection"`
+	DefnId            uint64           `json:"defnId"`
+	PartitionId       int              `json:"partitionId"`
+	ExpectedInstances int              `json:"expectedInstances"`
+	PresentReplicaIds []int            `json:"presentReplicaIds"`
+	MissingReplicaIds []int            `json:"missingReplicaIds"`
+	PartitionMap      map[string][]int `json:"partitionMap"`
+	DetectedAt        time.Time        `json:"detectedAt"`
+}
+
+type LostReplicasResponse struct {
+	Results []*LostReplicaInfo `json:"results"`
 }
 
 func (it *IndexTimingStats) Init() {
@@ -960,6 +980,7 @@ type IndexerStats struct {
 
 	numLostReplicaIndexes stats.Int64Val
 	lostReplicaIndexesMap *MapHolder
+	lostReplicaDetailsMap *MapHolder
 }
 
 func (s *IndexerStats) Init() {
@@ -1050,6 +1071,9 @@ func (s *IndexerStats) Init() {
 	s.numLostReplicaIndexes.Init()
 	s.lostReplicaIndexesMap = &MapHolder{}
 	s.lostReplicaIndexesMap.Init()
+
+	s.lostReplicaDetailsMap = &MapHolder{}
+	s.lostReplicaDetailsMap.Init()
 }
 
 // SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
@@ -3491,6 +3515,9 @@ func (s *statsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/stats/metadata", s.handleMetaStatsRequest)
 	mux.HandleFunc("/stats/timestampedCounts", s.handleTimestampedCountsReq)
 	mux.HandleFunc("/stats/refreshTimestampedCounts", s.handleRefreshTimestampedCountsReq)
+	// the logic for returning lost replicas is contained in
+	// the handleRefreshTimestampedCountsReq handler
+	mux.HandleFunc("/stats/getLostReplica", s.handleRefreshTimestampedCountsReq)
 	mux.HandleFunc("/_prometheusMetrics", s.handleMetrics)
 	mux.HandleFunc("/_prometheusMetricsHigh", s.handleMetricsHigh)
 }
@@ -3564,6 +3591,19 @@ func writeErrorResponse(w http.ResponseWriter, statusCode int, body string, hand
 	}
 }
 
+func writeJSONResponse(w http.ResponseWriter, data interface{}, handlerName string) {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		logging.Warnf("%s Error marshaling response, err: %v", handlerName, err)
+		writeErrorResponse(w, http.StatusInternalServerError, "[]", handlerName)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(jsonData); err != nil {
+		logging.Warnf("%s: failed to write response: %v", handlerName, err)
+	}
+}
+
 func (s *statsManager) initClusterInfo(
 	w http.ResponseWriter,
 	handlerName string,
@@ -3597,12 +3637,13 @@ func (s *statsManager) initClusterInfo(
 func (s *statsManager) broadcastToIndexNodes(
 	cinfo *common.ClusterInfoCache,
 	handlerName string,
-	processNodeResponse func(addr string) error,
-) (map[string]error, error) {
+	processNodeResponse func(addr string) (interface{}, error),
+) (map[string]interface{}, map[string]error, error) {
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	errMap := make(map[string]error)
+	dataMap := make(map[string]interface{})
 
 	nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
 	for _, nid := range nids {
@@ -3610,23 +3651,26 @@ func (s *statsManager) broadcastToIndexNodes(
 		if err != nil {
 			logging.Errorf("%s: Error getting service address for node %v. Error = %v",
 				handlerName, nid, err)
-			return nil, fmt.Errorf("failed to get service address for node %v: %w", nid, err)
+			return nil, nil, fmt.Errorf("failed to get service address for node %v: %w", nid, err)
 		}
 
 		wg.Add(1)
 		go func(nodeAddr string) {
 			defer wg.Done()
-			if err := processNodeResponse(nodeAddr); err != nil {
-				mu.Lock()
-				defer mu.Unlock()
+			data, err := processNodeResponse(nodeAddr)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
 				errMap[nodeAddr] = err
+			} else if data != nil {
+				dataMap[nodeAddr] = data
 			}
 		}(addr)
 	}
 
 	wg.Wait()
 
-	return errMap, nil
+	return dataMap, errMap, nil
 }
 
 // Returns true if the request is authorized and should continue,
@@ -4022,11 +4066,13 @@ func (s *statsManager) handleTimestampedCountsReq(w http.ResponseWriter, r *http
 }
 
 func (s *statsManager) handleRefreshTimestampedCountsReq(w http.ResponseWriter, r *http.Request) {
+	handlerName := "StatsManager::handleRefreshTimestampedCountsReq"
+	checkLostReplica := strings.Contains(r.URL.Path, "getLostReplica")
+
 	if !s.validateStatsAuth(
-		w, r, "StatsManager::handleRefreshTimestampedCountsReq",
+		w, r, handlerName,
 		"cluster.admin.internal.stats!read",
 	) {
-
 		return
 	}
 
@@ -4058,46 +4104,89 @@ func (s *statsManager) handleRefreshTimestampedCountsReq(w http.ResponseWriter, 
 		"with broadcast: %v, log: %v", clusterAddr, broadcast, doLog)
 	// broadcast the request to all nodes
 	if broadcast {
-		cinfo := s.initClusterInfo(w, "statsMgr::handleRefreshTimestampedCountsReq")
+		cinfo := s.initClusterInfo(w, handlerName)
 		if cinfo == nil {
 			return
 		}
 
-		uri := fmt.Sprintf("/stats/refreshTimestampedCounts?broadcast=false&log=%v", doLog)
+		baseUri := "/stats/refreshTimestampedCounts"
+		if strings.Contains(r.URL.Path, "getLostReplica") {
+			baseUri = "/stats/getLostReplica"
+		}
+		uri := fmt.Sprintf("%s?broadcast=false&log=%v", baseUri, doLog)
 
-		// Define callback to refresh timestamped counts on each node
-		processNode := func(addr string) error {
+		// For getLostReplica: fetches lost replica data from each node and returns it via dataMap.
+		// For refreshTimestampedCounts: triggers a refresh on each node; no data is returned.
+		processNode := func(addr string) (interface{}, error) {
+			if checkLostReplica {
+				resp, err := fetchLostReplicasFromNode(addr, uri, handlerName)
+				return resp, err
+			}
+
 			resp, err := getWithAuth(addr + uri)
 			if err != nil {
-				logging.Warnf("statsMgr::handleRefreshTimestampedCountsReq: Failed to refresh timestamped count stats from node: %v, err: %v.", addr, err)
-				return err
+				logging.Warnf("%s: Failed to refresh timestamped count stats "+
+					"from node: %v, err: %v.",
+					handlerName, addr, err)
+				return nil, err
 			}
 			if resp == nil {
-				logging.Warnf("statsMgr::handleRefreshTimestampedCountsReq: nil response received from refreshing timestamped count stats stats req from node: %v", addr)
-				return fmt.Errorf("nil repsonse from node: %v", addr)
+				logging.Warnf("%s: nil response received from refreshing timestamped count stats stats req "+
+					"from node: %v",
+					handlerName, addr)
+				return nil, fmt.Errorf("%w from node: %v", ErrNilResponse, addr)
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
 				logging.Warnf(
-					"statsMgr::handleRefreshTimestampedCountsReq: Invalid response received from "+
+					"%s: Invalid response received from "+
 						"timestampedCount stats req from node: %v, resp.StatusCode: %v",
-					addr, resp.StatusCode,
+					handlerName, addr, resp.StatusCode,
 				)
-				return fmt.Errorf("invalid resp code: %v received from node: %v", resp.StatusCode, addr)
+				return nil, fmt.Errorf("%w: %v from node: %v", ErrInvalidStatusCode, resp.StatusCode, addr)
 			}
-			return nil
+			return nil, nil
 		}
 
 		// Broadcast to all nodes
-		errMap, fatalErr := s.broadcastToIndexNodes(
-			cinfo, "statsMgr::handleRefreshTimestampedCountsReq", processNode,
+		dataMap, errMap, fatalErr := s.broadcastToIndexNodes(
+			cinfo, handlerName, processNode,
 		)
 		if fatalErr != nil {
 			writeErrorResponse(
 				w, http.StatusInternalServerError, "[]",
-				"statsMgr::handleRefreshTimestampedCountsReq",
+				handlerName,
 			)
+			return
+		}
+
+		if checkLostReplica {
+			if len(errMap) > 0 {
+				var failedNodes []string
+				for node := range errMap {
+					failedNodes = append(failedNodes, node)
+				}
+				logging.Warnf("%s: Failed to get responses from nodes: %v", handlerName, failedNodes)
+			}
+
+			seen := make(map[replicaKey]bool)
+			var finalResult []*LostReplicaInfo
+			for _, data := range dataMap {
+				nodeResp, ok := data.(*LostReplicasResponse)
+				if !ok || nodeResp == nil {
+					continue
+				}
+				for _, info := range nodeResp.Results {
+					key := replicaKey{defnId: info.DefnId, partitionId: info.PartitionId}
+					if !seen[key] {
+						seen[key] = true
+						finalResult = append(finalResult, info)
+					}
+				}
+			}
+
+			writeJSONResponse(w, LostReplicasResponse{Results: finalResult}, handlerName)
 			return
 		}
 
@@ -4113,12 +4202,13 @@ func (s *statsManager) handleRefreshTimestampedCountsReq(w http.ResponseWriter, 
 			}
 
 			logging.Warnf(
-				"statsMgr::handleRefreshTimestampedCountsReq: Errors from nodes: %s",
+				"%s: Errors from nodes: %s",
+				handlerName,
 				errBuilder.String(),
 			)
 			writeErrorResponse(
 				w, http.StatusInternalServerError, "\""+errBuilder.String()+"\"",
-				"statsMgr::handleRefreshTimestampedCountsReq",
+				handlerName,
 			)
 			return
 
@@ -4153,18 +4243,38 @@ func (s *statsManager) handleRefreshTimestampedCountsReq(w http.ResponseWriter, 
 			return
 		case resp := <-respCh:
 
+			if checkLostReplica {
+				// lostReplicaDetailsMap is already updated in indexer
+				// so we can read it directly.
+				lMap := s.stats.Get().lostReplicaDetailsMap.Get()
+				result := make([]*LostReplicaInfo, 0, len(lMap))
+				for _, val := range lMap {
+					lData, ok := val.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					if info, ok := buildLostReplicaInfo(lData); ok {
+						result = append(result, info)
+					}
+				}
+				writeJSONResponse(w, LostReplicasResponse{Results: result}, handlerName)
+				return
+			}
+
 			// Send 200 ok as the cases where nil is sent is either for FDB (or)
 			// if there are no indexes on the node
 			if resp == nil {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("[]"))
 				return
-			} else { // Only nil response is expected for this request
-				logging.Warnf("statsManager::handleRefreshTimestampedCountsReq Invalid response received, resp: %v", resp)
-				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte("[]"))
-				return
 			}
+			// Only nil response is expected for this request
+			logging.Warnf("%s Invalid response received, resp: %v", handlerName, resp)
+			w.WriteHeader(http.StatusInternalServerError)
+			if _, err := w.Write([]byte("[]")); err != nil {
+				logging.Debugf("%s: Failed to write response: %v", handlerName, err)
+			}
+			return
 		}
 	}
 }
@@ -5277,4 +5387,88 @@ func (fp *FlatFileStatsPersister) Close() error {
 		return err
 	}
 	return nil
+}
+
+type replicaKey struct {
+	defnId      uint64
+	partitionId int
+}
+
+// buildPartitionMap maps node address to the replica IDs present on that node.
+func buildPartitionMap(replicaInfo []*IndexInfo) map[string][]int {
+	partitionMap := make(map[string][]int)
+	for _, indexInfo := range replicaInfo {
+		nodeAddr := indexInfo.nodeId
+		partitionMap[nodeAddr] = append(partitionMap[nodeAddr], indexInfo.ReplicaID)
+	}
+	return partitionMap
+}
+
+func buildLostReplicaInfo(lData map[string]interface{}) (*LostReplicaInfo, bool) {
+	replicaInfo, ok := lData["replicaInfo"].([]*IndexInfo)
+	if !ok || len(replicaInfo) == 0 {
+		return nil, false
+	}
+
+	first := replicaInfo[0]
+	var scope, collection string
+	if parts := strings.SplitN(first.IndexName, ":", 4); len(parts) >= 4 {
+		scope, collection = parts[1], parts[2]
+	} else {
+		scope, collection = common.DEFAULT_SCOPE, common.DEFAULT_COLLECTION
+	}
+	info := &LostReplicaInfo{
+		IndexName:    first.IndexName,
+		Bucket:       first.Bucket,
+		Scope:        scope,
+		Collection:   collection,
+		DefnId:       first.DefnId,
+		PartitionId:  first.PartitionID,
+		PartitionMap: buildPartitionMap(replicaInfo),
+	}
+
+	if val, ok := lData["expectedInstances"].(int); ok {
+		info.ExpectedInstances = val
+	}
+	if val, ok := lData["presentReplicaIds"].([]int); ok {
+		info.PresentReplicaIds = val
+	}
+	if val, ok := lData["detectedAt"].(time.Time); ok {
+		info.DetectedAt = val
+	}
+
+	presentSet := make(map[int]bool, len(info.PresentReplicaIds))
+	for _, id := range info.PresentReplicaIds {
+		presentSet[id] = true
+	}
+	for i := 0; i < info.ExpectedInstances; i++ {
+		if !presentSet[i] {
+			info.MissingReplicaIds = append(info.MissingReplicaIds, i)
+		}
+	}
+
+	return info, true
+}
+
+func fetchLostReplicasFromNode(addr, uri, handlerName string) (*LostReplicasResponse, error) {
+	resp, err := getWithAuth(addr + uri)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logging.Debugf("%s: Failed to close response body: %v", handlerName, err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%w: %v from node: %v", ErrInvalidStatusCode, resp.StatusCode, addr)
+	}
+
+	var nodeResp LostReplicasResponse
+	if err := json.NewDecoder(resp.Body).Decode(&nodeResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &nodeResp, nil
 }
