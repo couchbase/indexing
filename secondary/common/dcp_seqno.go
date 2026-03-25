@@ -37,6 +37,9 @@ var clusterVersion int64
 var errConnClosed = errors.New("dcpSeqnos - conn closed already")
 var errFetchSeqnosPanic = errors.New("Recovered from an error in FetchSeqnos")
 var errFetchItemCountPanic = errors.New("Recovered from an error in FetchItemCount")
+var errFetchMinSeqnosPartialFailure = errors.New(
+	"FetchMinSeqnos - failed to fetch seqnos from some KV nodes",
+)
 
 // cache Bucket{} and DcpFeed{} objects, its underlying connections
 // to make Stats-Seqnos fast.
@@ -1622,23 +1625,50 @@ func FetchMinSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool,
 
 	wg.Wait()
 
+	// Log per-node seqnos (success paths) before we potentially return on partial failures.
+	// This preserves the existing debug behavior that helps diagnose missing KV nodes.
+	if debugLogs {
+		for kvaddr, kv_seqnos := range kv_seqnos_node {
+			conn := kvfeeds[kvaddr].mc
+			logging.Infof("feed.FetchMinSeqnos(): Got seqnos: %v for bucket: %v from node: %v",
+				kv_seqnos, bucketName, conn.GetRemoteAddr())
+		}
+	}
+
+	// IMPORTANT:
+	// Returning a "successful" merged seqnos vector while request to any KV node
+	// failed can silently produce incomplete coverage (e.g. vb seqnos stuck at 0).
+	// That breaks snapshot cleanup gating and can lead to excessive disk snapshot
+	// retention and sawtooth disk usage. Treat any per-node failure as an error so
+	// callers can retry and refresh cached KV connections.
+	if len(errors) != 0 {
+		for kvaddr, e := range errors {
+			conn := kvfeeds[kvaddr].mc
+			logging.Errorf("feed.FetchMinSeqnos(): error %v from node: %v "+
+				"(local: %v) for bucket %q",
+				e, conn.GetRemoteAddr(), conn.GetLocalAddr(), bucketName)
+		}
+		failedNodes := make([]string, 0, len(errors))
+		for kvaddr := range errors {
+			failedNodes = append(failedNodes, kvfeeds[kvaddr].mc.GetRemoteAddr())
+		}
+		successNodes := make([]string, 0, len(kv_seqnos_node))
+		for kvaddr := range kv_seqnos_node {
+			successNodes = append(successNodes, kvfeeds[kvaddr].mc.GetRemoteAddr())
+		}
+		logging.Errorf("feed.FetchMinSeqnos(): %d/%d KV nodes failed for bucket %q. "+
+			"Failed nodes: %v. Successful nodes: %v. Returning error to force KV connection cache refresh on next retry.",
+			len(errors), len(kvfeeds), bucketName, failedNodes, successNodes)
+		err = fmt.Errorf("%w for bucket %q: failed to fetch seqnos from %d/%d KV nodes",
+			errFetchMinSeqnosPartialFailure, bucketName, len(errors), len(kvfeeds))
+		return nil, err
+	}
+
 	i := 0
 	var seqnos []uint64
 	for kvaddr, kv_seqnos := range kv_seqnos_node {
 		if i == 0 {
 			seqnos = kv_seqnos_node[kvaddr]
-		}
-		err := errors[kvaddr]
-		if err != nil {
-			conn := kvfeeds[kvaddr].mc
-			logging.Errorf("feed.FetchMinSeqnos(): %v from node: %v\n", err, conn.GetRemoteAddr())
-			return nil, err
-		}
-
-		if debugLogs {
-			conn := kvfeeds[kvaddr].mc
-			logging.Infof("feed.FetchMinSeqnos(): Got seqnos: %v for bucket: %v from node: %v",
-				kv_seqnos, bucketName, conn.GetRemoteAddr())
 		}
 
 		for vbno, seqno := range kv_seqnos {
