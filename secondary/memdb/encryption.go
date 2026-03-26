@@ -28,6 +28,8 @@ import (
 )
 
 const (
+	dataFilePrefix = "shard-"
+
 	// extension for encrypted files
 	rencrypt_tmp_ext = ".aes.tmp"
 	encrypt_bak_ext  = ".bak"
@@ -47,6 +49,10 @@ var (
 	// use empty slice for unencrypted files
 	NullKeyId = []byte{}
 )
+
+func isDataFile(fpath string) bool {
+	return strings.HasPrefix(filepath.Base(fpath), dataFilePrefix)
+}
 
 type RotationType int
 
@@ -709,13 +715,15 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 		}
 	}()
 
+	var encryptCtx gocbcrypto.EncryptionContext
+
 	switch rotType {
 	case NoRotation:
 		return nil
 	case Reencrypt:
-		var encryptCtx gocbcrypto.EncryptionContext
 		encryptCtx, err = v.db.NewEncryptionContext(keyId, cipher)
 		if err != nil {
+			atomic.AddUint64(&v.NumFilesErrRencrypt, 1)
 			return err
 		}
 
@@ -736,7 +744,18 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 		}
 
 	case Encrypt:
-		bytesWritten, err = v.db.encryptFileByItem(ctx, file, tmpDst, keyId, cipher)
+		if isDataFile(file) {
+			bytesWritten, err = v.db.encryptFileByItem(ctx, file, tmpDst, keyId, cipher)
+		} else {
+			// manifest
+			var bs []byte
+			if bs, err = iowrap.Os_ReadFile(file); err == nil {
+				if encryptCtx, err = v.db.NewEncryptionContext(keyId, cipher); err == nil {
+					err = gocbcrypto.WriteFile(tmpDst, bs, FilePermMode, encryptCtx, iowrap.CountDiskFailures)
+				}
+			}
+		}
+
 		if err != nil && !errors.Is(err, context.Canceled) {
 			atomic.AddUint64(&v.NumFilesErrEncrypt, 1)
 		}
