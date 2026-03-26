@@ -378,8 +378,7 @@ func (mdb *memdbSlice) initStores() error {
 	cfg.SetKeyComparator(byteItemCompare)
 
 	// GSI place holder for encryption callback setup
-	// cfg.SetEncryptionDummy()
-	cfg.GetKeyById = mdb.GetEncryptionKeyByIdCb
+	cfg.SetEncryption(mdb.GetEncryptionKeyByIdCb, gocbcrypto.ChunkSize)
 
 	cfg.Path = mdb.path
 
