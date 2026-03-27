@@ -8,7 +8,7 @@
 - This repo is a part of a larger monorepo. The root of monorepo is to be set as `export WORKSPACE=../../../../../`
 - To Build the code changes, do `cd $WORKSPACE && make`
 - Use project Go toolchain and existing dependencies; avoid adding new ones unless required.
-- Prefer repo tools (gofmt, go test, project scripts) over custom commands.
+- Prefer repo tools (project scripts in `secondary/tests/ci/scripts`) over custom commands.
 - No credentials or secrets in code, logs, or configs.
 
 ## Architecture
@@ -49,8 +49,23 @@
 - Run targeted tests touching Go code: `MODE=unit secondary/tests/ci/scripts/dotest` (or narrower packages).
 - For a broader change, run full suite of functional tests with `MODE=functional secondary/tests/ci/scripts/dotest`
 
+## Repo tool guidelines
+
+Prerequisite: environment variable "WORKSPACE".
+
+- Build: use command `secondary/tests/ci/scripts/builder`. no arguments
+- Test: before running test, determine storage mode from following list: "forestdb", "nitro" or "plasma".
+  Now set the selected as environment variable "STORAGE". Then run command -
+  `MODE=unit,functional secondary/tests/ci/scripts/dotest`
+  To run specific functional tests with full cluster setup, use environment variable "TEST_NAME"
+  with the value of golang test names.
+- Lint: use command `secondary/tests/ci/scripts/dolint`. no arguments.
+
 ## Conventions / Policies
 
 - Respect existing patterns and naming; follow surrounding style.
 - Keep comments minimal and functional; no README/docs edits unless requested.
 - Ensure safety: no unvetted downloads, no external code execution.
+- Keep logging changes to minimal to avoid production log flooding. Use Debug and Trace if
+  required for extra information
+- Review all changes proposed
