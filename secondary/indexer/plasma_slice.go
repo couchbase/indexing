@@ -216,6 +216,8 @@ type plasmaSlice struct {
 
 	// vector index related metadata
 	nlist int // number of centroids to use for training
+	// For Sparse vector index, used for sparseJL representation of concise vector
+	sparseJLBuf [][]float32
 
 	codebook codebook.Codebook
 
@@ -907,33 +909,115 @@ func (s *plasmaSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, stri
 	return masterEncryptionKeyBytes, rkeyId, cipher
 }
 
+// sets encryption key ID and cipher
+//
+// Params:
+// - keyId: Encryption key identifier. Pass nil to disable encryption.
+// - cipher: Encryption cipher name (e.g., gocbcrypto.CipherNameAES256GCM
+// or gocbcrypto.CipherNameNone).
 func (s *plasmaSlice) SetCurrentEncryptionKey(masterEncryptionKey []byte, keyId []byte, cipher string) error {
+	err := s.mainstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
+	if err != nil {
+		return err
+	}
+	s.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "bucket", BucketUUID: s.idxDefn.BucketUUID}, string(keyId))
 
-	// ENCRYPT_TODO: Update after storage changes
-	//err := s.mainstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
-	//if err != nil {
-	//	return err
-	//}
-	//if !s.isPrimary {
-	//	err := s.backstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
-	//	if err != nil {
-	//		return err
-	//	}
-	//}
-
-	// s.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "bucket", BucketUUID: s.idxDefn.BucketUUID}, string(keyId))
+	if !s.isPrimary {
+		err := s.backstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
 
-func (mdb *plasmaSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
-	// ENCRYPT_TODO: Update after storage changes
-	doneCh <- nil
+// asynchronously re-encrypts/encrypts/decrypts all data with the specified key IDs
+// using the current encryption key (set via SetCurrentEncryptionKey).
+// The operation is performed via plasma's DropKeyManager and completion is notified
+// on doneCh
+//
+// Behavior:
+//   - Key rotation is performed asynchronously by log cleaning. It is resource
+//     intensive (CPU, I/O) and therefore limited by worker pool size (25% of cores).
+//   - Mainstore and backstore can be processed concurrently
+//   - Requests for the same shard are serialized; different shards may proceed in parallel.
+//   - shard with mixed encrypted and unencrypted instance increase write amplification as
+//     unencrypted instances will also be rewritten. If possible grouping encrypted bucket
+//     in same shard will be beneficial.
+//   - api is thread-safe; can be called concurrently.
+//
+// Error:
+//   - Fails if drop keyId itself is the active encryption keyId
+//   - Fails if called before RecoveryDone (bootstrap) or
+//     RestoreShardDone (shard rebalance) completion
+//   - Exits early if the instance closes during operation
+//   - No error if keyId is already absent.
+//   - plasma.ErrRetryDropKey means the caller should retry.
+//
+// Params:
+//   - keyIds: List of key IDs to be rotated/dropped.
+//   - doneCh: error channel to receive completion/error notification.
+func (s *plasmaSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
+	kids := make([][]byte, len(keyIds))
+	for i := range keyIds {
+		kids[i] = make([]byte, len(keyIds[i]))
+		copy(kids[i], keyIds[i])
+	}
+
+	go func() {
+		var err error
+		defer func() {
+			if doneCh != nil {
+				doneCh <- err
+			}
+		}()
+
+		doneCh2 := make(chan error, 2)
+
+		// initiate drop key
+		s.mainstore.DropKeys(kids, doneCh2)
+		if !s.isPrimary {
+			s.backstore.DropKeys(kids, doneCh2)
+		}
+
+		// wait for completion
+		err = <-doneCh2
+		if !s.isPrimary {
+			if err2 := <-doneCh2; err == nil {
+				err = err2
+			}
+		}
+		close(doneCh2)
+	}()
 }
 
-func (mdb *plasmaSlice) GetKeyIdList() ([][]byte, error) {
-	// ENCRYPT_TODO: Update after storage changes
-	return [][]byte{}, nil
+// returns all unique encryption key IDs in use by the slice.
+//
+// Returns:
+//
+//   - [][]byte: List of unique key IDs in use.
+//     It also includes current active key even though there are no inserts.
+//     If at least one encryptable block is unencrypted, keyIds will have an empty keyId - []byte
+//
+//   - The api is atomic. Key change cannot happen during the api call
+func (s *plasmaSlice) GetKeyIdList() ([][]byte, error) {
+	keyIds, err := s.mainstore.GetKeyIdList()
+	if err != nil {
+		return nil, err
+	}
+
+	if !s.isPrimary {
+		keyIds2, err := s.backstore.GetKeyIdList()
+		if err != nil {
+			return nil, err
+		}
+		for _, kid := range keyIds2 {
+			keyIds = plasma.AppendUniqueKeyId(keyIds, kid)
+		}
+	}
+
+	return keyIds, nil
 }
 
 type plasmaReaderCtx struct {
@@ -1761,8 +1845,8 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
 	}
-
-	if mdb.codebook.IsTrained() == false || mdb.codeSize <= 0 {
+	isSparseVector := mdb.idxDefn.HasSparseVector()
+	if mdb.codebook.IsTrained() == false || (!isSparseVector && mdb.codeSize <= 0) {
 		err := fmt.Errorf("Fatal - Mutation processing should not happen on an untrained codebook. "+
 			"docId: %s, Index instId: %v", logging.TagUD(docid), mdb.IndexInstId())
 		logging.Fatalf("plasmaSlice::insertIntoVectorIndex %v", err)
@@ -1778,14 +1862,29 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 	minEncodeBufSize := len(key) + sha256.Size
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], minEncodeBufSize, szConf.allowLargeKeys)
 
-	var quantizedCode []byte
+	var quantizedCodeOrConciseVec []byte
 	vec := vecs[0]
 
 	if vec != nil {
 		var centroidId int64
 		var err error
 
-		quantizedCode, centroidId, err = mdb.getQuantizedCodeForVector(vec, mdb.codeSize, mdb.quantizedCodeBuf[workerId])
+		if !isSparseVector {
+			quantizedCodeOrConciseVec, centroidId, err = mdb.getQuantizedCodeForVector(
+				vec,
+				mdb.codeSize,
+				mdb.quantizedCodeBuf[workerId])
+		} else {
+			quantizedCodeOrConciseVec = Float32ToByteSlice(vec)
+			mdb.sparseJLBuf[workerId] = resizeSparseJLBuf(
+				mdb.sparseJLBuf[workerId],
+				mdb.codebook.Dimension(),
+				true)
+			if _, err = mdb.getSparseJLVec(vec, mdb.sparseJLBuf[workerId]); err == nil {
+				centroidId, err = mdb.getNearestCentroidId(mdb.sparseJLBuf[workerId])
+			}
+		}
+
 		if err != nil {
 			logging.Errorf("plasmaSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
 				"Skipping docid:%s (%v)", mdb.Id(), mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
@@ -1832,11 +1931,11 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 		mdb.back[workerId].BeginNoThrottle()
 		defer mdb.back[workerId].End()
 
-		err = mdb.main[workerId].InsertKV(mainIndexEntry, quantizedCode)
+		err = mdb.main[workerId].InsertKV(mainIndexEntry, quantizedCodeOrConciseVec)
 		if err == nil {
-			mdb.idxStats.rawDataSize.Add(int64(len(mainIndexEntry)))
+			mdb.idxStats.rawDataSize.Add(int64(len(mainIndexEntry) + len(quantizedCodeOrConciseVec)))
 			addKeySizeStat(mdb.idxStats, len(mainIndexEntry))
-			atomic.AddInt64(&mdb.insert_bytes, int64(len(mainIndexEntry)))
+			atomic.AddInt64(&mdb.insert_bytes, int64(len(mainIndexEntry)+len(quantizedCodeOrConciseVec)))
 		}
 
 		backIndexEntry := entry2VectorBackIndexEntry(mainIndexEntry, encodedSHA)
@@ -2904,6 +3003,9 @@ func (mdb *plasmaSlice) RollbackToZero(initialBuild bool) error {
 	// During rollback to zero, initialise the quantizedCodeBuf. Rest of the metadata is still valid
 	if mdb.idxDefn.IsVectorIndex {
 		mdb.initQuantizedCodeBuf()
+		if mdb.idxDefn.HasSparseVector() {
+			mdb.initSparseJLBuf()
+		}
 	}
 
 	return nil
@@ -3559,6 +3661,8 @@ func updatePlasmaConfig(cfg common.Config) {
 	plasma.SetupArenaSeparationOnce(cfg["plasma.enableArenaSeparation"].Bool())
 
 	plasma.SetLogReclaimBlockSize(int64(cfg["plasma.LSSReclaimBlockSize"].Int()))
+
+	plasma.RunDropKeyManager()
 }
 
 func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
@@ -4966,6 +5070,9 @@ func (slice *plasmaSlice) setupWriters() {
 	slice.quantizedCodeBuf = make([][]byte, 0, slice.maxNumWriters)
 	slice.keySzConfChanged = make([]int32, 0, slice.maxNumWriters)
 	slice.keySzConf = make([]keySizeConfig, 0, slice.maxNumWriters)
+	if slice.idxDefn.HasSparseVector() {
+		slice.sparseJLBuf = make([][]float32, 0, slice.maxNumWriters)
+	}
 
 	// initialize comand handler
 	slice.cmdCh = make([]chan *indexMutation, 0, slice.maxNumWriters)
@@ -5003,6 +5110,14 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 		slice.shaBuf = slice.shaBuf[:numWriters]
 		slice.quantizedCodeBuf = slice.quantizedCodeBuf[:numWriters]
 	}
+	if slice.idxDefn.IsVectorIndex && slice.idxDefn.HasSparseVector() {
+		slice.sparseJLBuf = slice.sparseJLBuf[:numWriters]
+		for i := curNumWriters; i < numWriters; i++ {
+			// After training is completed, the sparse JL vector buffer will be resized
+			slice.sparseJLBuf[i] = make([]float32, 0)
+		}
+	}
+
 	slice.keySzConfChanged = slice.keySzConfChanged[:numWriters]
 	slice.keySzConf = slice.keySzConf[:numWriters]
 
@@ -5632,6 +5747,9 @@ func (mdb *plasmaSlice) InitCodebookFromSerialized(content []byte) error {
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
+	if mdb.idxDefn.HasSparseVector() {
+		mdb.initSparseJLBuf()
+	}
 	return nil
 }
 
@@ -5681,6 +5799,9 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
+	if mdb.idxDefn.HasSparseVector() {
+		mdb.initSparseJLBuf()
+	}
 	return nil
 }
 
@@ -5708,6 +5829,13 @@ func (mdb *plasmaSlice) initQuantizedCodeBuf() {
 	numWriters := mdb.numWritersPerPartition()
 	for i := 0; i < numWriters; i++ {
 		mdb.quantizedCodeBuf[i] = resizeQuantizedCodeBuf(mdb.quantizedCodeBuf[i], 1, mdb.codeSize, true)
+	}
+}
+
+func (mdb *plasmaSlice) initSparseJLBuf() {
+	numWriters := mdb.numWritersPerPartition()
+	for i := 0; i < numWriters; i++ {
+		mdb.sparseJLBuf[i] = resizeSparseJLBuf(mdb.sparseJLBuf[i], mdb.codebook.Dimension(), true)
 	}
 }
 
@@ -5823,6 +5951,23 @@ func resizeShaBuf(shaBuf []byte, vecLen int, doResize bool) []byte {
 	return shaBuf
 }
 
+func (mdb *plasmaSlice) getSparseJLVec(vec []float32, sparseJLVecBuf []float32) ([]float32, error) {
+
+	sparseCb, ok := mdb.codebook.(codebook.SparseCodebook)
+	if !ok {
+		return nil, codebook.ErrIncorrectCodebook
+	}
+
+	t0 := time.Now()
+	err := sparseCb.Concise2SparseJL(vec, sparseJLVecBuf)
+	if err != nil {
+		return nil, err
+	}
+	mdb.idxStats.Timings.vtEncode.Put(time.Now().Sub(t0))
+
+	return sparseJLVecBuf, nil
+}
+
 func resizeQuantizedCodeBuf(quantizedCodeBuf []byte, numVecs, codeSize int, doResize bool) []byte {
 	if doResize && ((numVecs*codeSize)+4) > cap(quantizedCodeBuf) {
 		newSize := ((numVecs * codeSize) + 4)
@@ -5879,6 +6024,9 @@ func (mdb *plasmaSlice) recoverCodebook(codebookPath string) error {
 	mdb.idxStats.codebookSize.Set(mdb.codebook.Size())
 
 	mdb.initQuantizedCodeBuf()
+	if mdb.idxDefn.HasSparseVector() {
+		mdb.initSparseJLBuf()
+	}
 	return nil
 }
 

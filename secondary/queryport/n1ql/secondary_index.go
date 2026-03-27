@@ -1073,7 +1073,7 @@ type secondaryIndex struct {
 	isBhive           bool
 	rerankFactor      int
 	persistFullVector bool // Only for BHIVE indexes
-	vectorSparseJLDim int    // SparseJL reduced dimension for sparse vector indexes
+	vectorSparseJLDim int  // SparseJL reduced dimension for sparse vector indexes
 	include           expression.Expressions
 
 	secExprsAttrs c.SecExprAttrsArray
@@ -2445,8 +2445,13 @@ func makeResponsehandler(
 			conn.RecordGsiRU(tenant.Unit(readUnits))
 		}
 
+		// Scan report is sent as part of StreamEndResponse and does not contain
+		// any entries. So we can return false here.
+		// Another case is when there is an error in server, the error is
+		// already handled prior to repsponse handler callback invocation.
 		if serverScanReport := data.GetServerScanReport(); serverScanReport != nil {
 			broker.AttachIndexerScanReport(serverScanReport, int(id))
+			return false
 		}
 
 		err := data.Error()

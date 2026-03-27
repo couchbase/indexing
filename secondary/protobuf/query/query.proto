@@ -122,8 +122,9 @@ message EndStreamRequest {
 }
 
 message ResponseStream {
-    repeated IndexEntry indexEntries = 1;
-    optional Error      err     = 2;
+    repeated IndexEntry     indexEntries    = 1;
+    optional Error          err             = 2;
+    optional SrvrScanReport srvrScanReport  = 3;
 }
 
 // Last response packet sent by server to end query results.

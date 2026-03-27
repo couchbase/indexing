@@ -11,6 +11,7 @@ package indexer
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net"
 
 	"github.com/couchbase/indexing/secondary/common"
@@ -22,7 +23,7 @@ import (
 )
 
 type ScanResponseWriter interface {
-	Error(err error) error
+	Error(err error, srvrScanReport *report.HostScanReport) error
 	Stats(rows, unique uint64, min, max []byte) error
 	Count(count uint64) error
 	RawBytes([]byte) error
@@ -49,16 +50,22 @@ func NewProtoWriter(t ScanReqType, conn net.Conn) *protoResponseWriter {
 	}
 }
 
-func logScanReport(srvrScanReport *report.HostScanReport) {
-	if !logging.IsEnabled(logging.Debug) || srvrScanReport == nil {
+func logScanReport(srvrScanReport *report.HostScanReport, forceLog bool) {
+	if srvrScanReport == nil || (!forceLog && !logging.IsEnabled(logging.Debug)) {
 		return
 	}
+
 	report, err := json.Marshal(srvrScanReport)
 	if err != nil {
 		logging.Errorf("logScanReport err: %v while marshalling server scan report", err)
 		return
 	}
-	logging.Debugf("Server scan report: %v", string(report))
+
+	if forceLog {
+		logging.Infof("ReqId:%v Server scan report: %v", srvrScanReport.ReqId, string(report))
+	} else {
+		logging.Debugf("ReqId:%v Server scan report: %v", srvrScanReport.ReqId, string(report))
+	}
 }
 
 func packageReport(srvrScanReport *report.HostScanReport) *protobuf.SrvrScanReport {
@@ -95,7 +102,7 @@ func (w *protoResponseWriter) writeLen(l int) error {
 	return err
 }
 
-func (w *protoResponseWriter) Error(err error) error {
+func (w *protoResponseWriter) Error(err error, srvrScanReport *report.HostScanReport) error {
 	var res interface{}
 	protoErr := &protobuf.Error{Error: proto.String(err.Error())}
 
@@ -114,7 +121,8 @@ func (w *protoResponseWriter) Error(err error) error {
 		}
 	case ScanAllReq, ScanReq, FastCountReq, VectorScanReq:
 		res = &protobuf.ResponseStream{
-			Err: protoErr,
+			Err:            protoErr,
+			SrvrScanReport: packageReport(srvrScanReport),
 		}
 	}
 
@@ -196,15 +204,33 @@ func (w *protoResponseWriter) Row(pk, sk []byte) error {
 	return nil
 }
 
-func (w *protoResponseWriter) Done(readUnits uint64, clientVersion uint32, srvrScanReport *report.HostScanReport) error {
+func (w *protoResponseWriter) Done(
+	readUnits uint64,
+	clientVersion uint32,
+	srvrScanReport *report.HostScanReport,
+) (err error) {
+
 	defer p.PutBlock(w.encBuf)
 	defer p.PutBlock(w.rowBuf)
 
-	if (w.scanType == ScanReq || w.scanType == ScanAllReq || w.scanType == FastCountReq || w.scanType == VectorScanReq) && w.rowSize > 0 {
-		res := &protobuf.ResponseStream{IndexEntries: w.rowEntries}
-		err := protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
+	defer func() {
 		if err != nil {
-			return err
+			logScanReport(srvrScanReport, true)
+		}
+	}()
+
+	if (w.scanType == ScanReq || w.scanType == ScanAllReq ||
+		w.scanType == FastCountReq ||
+		w.scanType == VectorScanReq) && w.rowSize > 0 {
+
+		res := &protobuf.ResponseStream{
+			IndexEntries: w.rowEntries,
+		}
+		err = protobuf.EncodeAndWrite(
+			w.conn, *w.encBuf, res,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to encode and write response stream: %w", err)
 		}
 	}
 
@@ -218,7 +244,11 @@ func (w *protoResponseWriter) Done(readUnits uint64, clientVersion uint32, srvrS
 
 	if clientVersion >= common.INDEXER_81_VERSION {
 		res.SrvrScanReport = packageReport(srvrScanReport)
-		logScanReport(srvrScanReport)
+		go logScanReport(srvrScanReport, false)
 	}
-	return protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
+	err = protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
+	if err != nil {
+		return fmt.Errorf("failed to encode and write stream end response: %w", err)
+	}
+	return nil
 }

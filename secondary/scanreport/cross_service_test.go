@@ -88,6 +88,70 @@ func TestRequestBrokerInitAndAttachScanReport(t *testing.T) {
 	require.EqualValues(t, 55, sr.HostScanReport["inst[0]"].SrvrCounts.RowsReturn)
 }
 
+// TestRequestBrokerRetryAccumulatesHostReports verifies that when scatter
+// retries occur, the hostIdOffset mechanism correctly accumulates host IDs
+// across attempts. Each retry appends new host IDs and the offset ensures
+// AttachIndexerScanReport maps response handler index (0-based per attempt)
+// to the correct global position in perHostReportIds.
+func TestRequestBrokerRetryAccumulatesHostReports(t *testing.T) {
+	defnID, err := common.NewIndexDefnId()
+	require.NoError(t, err)
+
+	broker := client.NewRequestBroker("req", 0, 0)
+	broker.SetScanReport("req", defnID, true)
+
+	sr := broker.GetScanReport()
+
+	// --- First scatter attempt: 2 hosts ---
+	firstAttemptIds := []string{"inst1[0]", "inst1[1]"}
+	broker.SetPerHostReportIds(firstAttemptIds)
+
+	for _, id := range firstAttemptIds {
+		sr.HostScanReport[id] = &report.HostScanReport{}
+	}
+
+	broker.AttachIndexerScanReport(&report.HostScanReport{
+		SrvrNs:     &report.ServerTimings{TotalDur: 1000},
+		SrvrCounts: &report.ServerCounts{RowsReturn: 10},
+	}, 0)
+	broker.AttachIndexerScanReport(&report.HostScanReport{
+		SrvrNs:     &report.ServerTimings{TotalDur: 2000},
+		SrvrCounts: &report.ServerCounts{RowsReturn: 20},
+	}, 1)
+
+	require.EqualValues(t, 1000, sr.HostScanReport["inst1[0]"].SrvrNs.TotalDur)
+	require.EqualValues(t, 2000, sr.HostScanReport["inst1[1]"].SrvrNs.TotalDur)
+
+	// --- Second scatter attempt (retry): 1 host (different replica) ---
+	retryIds := []string{"inst2[0]"}
+	broker.SetPerHostReportIds(retryIds)
+
+	for _, id := range retryIds {
+		sr.HostScanReport[id] = &report.HostScanReport{}
+	}
+
+	broker.AttachIndexerScanReport(&report.HostScanReport{
+		SrvrNs:     &report.ServerTimings{TotalDur: 3000},
+		SrvrCounts: &report.ServerCounts{RowsReturn: 30},
+	}, 0)
+
+	require.EqualValues(t, 3000, sr.HostScanReport["inst2[0]"].SrvrNs.TotalDur)
+	require.EqualValues(t, 30, sr.HostScanReport["inst2[0]"].SrvrCounts.RowsReturn)
+
+	require.EqualValues(t, 1000, sr.HostScanReport["inst1[0]"].SrvrNs.TotalDur)
+	require.EqualValues(t, 10, sr.HostScanReport["inst1[0]"].SrvrCounts.RowsReturn)
+	require.EqualValues(t, 2000, sr.HostScanReport["inst1[1]"].SrvrNs.TotalDur)
+	require.EqualValues(t, 20, sr.HostScanReport["inst1[1]"].SrvrCounts.RowsReturn)
+
+	allIds := broker.GetPerHostReportIds()
+	require.Len(t, allIds, 3, "Should have accumulated 3 host IDs across both attempts")
+	require.Equal(t, "inst1[0]", allIds[0])
+	require.Equal(t, "inst1[1]", allIds[1])
+	require.Equal(t, "inst2[0]", allIds[2])
+
+	require.Len(t, sr.HostScanReport, 3)
+}
+
 // TestRequestBrokerSendFinalReportDetailedToggle tests SendFinalReport in both
 // concise and detailed modes. When detailed mode is enabled (ScanReportWait > 0),
 // the report should include per-host details wrapped in the "detailed" field.

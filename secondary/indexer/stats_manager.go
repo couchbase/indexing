@@ -57,6 +57,8 @@ var PARTN_METRICS_PREFIX = METRICS_PREFIX + "partn_"
 // Common latency distribution for flush, snapshot, and scan request latencies
 var latencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100, 1000, 5000, 10000, 30000, 60000, 120000}
 var isJemallocProfilingActive int64
+var ErrInvalidStatusCode = errors.New("invalid status code")
+var ErrNilResponse = errors.New("nil response")
 
 func init() {
 	uptime = time.Now()
@@ -158,6 +160,24 @@ type IndexTimingStats struct {
 	vtEncode  stats.TimingStat
 	vtDecode  stats.TimingStat
 	vtDistCmp stats.TimingStat
+}
+
+type LostReplicaInfo struct {
+	IndexName         string           `json:"indexName"`
+	Bucket            string           `json:"bucket"`
+	Scope             string           `json:"scope"`
+	Collection        string           `json:"collection"`
+	DefnId            uint64           `json:"defnId"`
+	PartitionId       int              `json:"partitionId"`
+	ExpectedInstances int              `json:"expectedInstances"`
+	PresentReplicaIds []int            `json:"presentReplicaIds"`
+	MissingReplicaIds []int            `json:"missingReplicaIds"`
+	PartitionMap      map[string][]int `json:"partitionMap"`
+	DetectedAt        time.Time        `json:"detectedAt"`
+}
+
+type LostReplicasResponse struct {
+	Results []*LostReplicaInfo `json:"results"`
 }
 
 func (it *IndexTimingStats) Init() {
@@ -923,6 +943,7 @@ type IndexerStats struct {
 	avgDiskBps          stats.Int64Val
 	totalDataSize       stats.Int64Val
 	totalDiskSize       stats.Int64Val
+	numScanReportsGen   stats.Int64Val
 
 	numGoroutine stats.Int64Val
 	numCgoCall   stats.Int64Val
@@ -959,6 +980,7 @@ type IndexerStats struct {
 
 	numLostReplicaIndexes stats.Int64Val
 	lostReplicaIndexesMap *MapHolder
+	lostReplicaDetailsMap *MapHolder
 }
 
 func (s *IndexerStats) Init() {
@@ -1004,6 +1026,7 @@ func (s *IndexerStats) Init() {
 	s.avgMutationRate.Init()
 	s.avgDrainRate.Init()
 	s.avgDiskBps.Init()
+	s.numScanReportsGen.Init()
 	s.totalDataSize.Init()
 	s.totalDiskSize.Init()
 
@@ -1048,6 +1071,9 @@ func (s *IndexerStats) Init() {
 	s.numLostReplicaIndexes.Init()
 	s.lostReplicaIndexesMap = &MapHolder{}
 	s.lostReplicaIndexesMap.Init()
+
+	s.lostReplicaDetailsMap = &MapHolder{}
+	s.lostReplicaDetailsMap.Init()
 }
 
 // SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
@@ -1104,6 +1130,7 @@ func (s *IndexerStats) SetSummaryFilters() {
 	s.totalDiskSize.AddFilter(stats.SummaryFilter)
 	s.numStorageInstances.AddFilter(stats.SummaryFilter)
 	s.numIndexes.AddFilter(stats.SummaryFilter)
+	s.numScanReportsGen.AddFilter(stats.SummaryFilter)
 
 	s.storageMode.AddFilter(stats.SummaryFilter)
 	s.indexerStateHolder.AddFilter(stats.SummaryFilter)
@@ -1374,6 +1401,7 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("total_disk_size", &is.totalDiskSize)
 	statMap.AddStatValueFiltered("num_storage_instances", &is.numStorageInstances)
 	statMap.AddStatValueFiltered("num_indexes", &is.numIndexes)
+	statMap.AddStatValueFiltered("num_scan_reports_gen", &is.numScanReportsGen)
 
 	if common.IsServerlessDeployment() {
 		statMap.AddStatValueFiltered("memory_used_actual", &is.memoryUsedActual)
@@ -2865,6 +2893,24 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	return st
 }
 
+func parseIndexName(
+	indexName string,
+) (bucket, scope, collection, index, partition string, ok bool) {
+
+	parts := strings.Split(indexName, ":")
+	switch len(parts) {
+	case 5: // bucket:scope:collection:index:partition
+		return parts[0], parts[1], parts[2], parts[3], parts[4], true
+	case 4: // bucket:scope:collection:index
+		return parts[0], parts[1], parts[2], parts[3], "", true
+	case 3: // bucket:index:partition
+		return parts[0], common.DEFAULT_SCOPE, common.DEFAULT_COLLECTION, parts[1], parts[2], true
+	case 2: // bucket:index
+		return parts[0], common.DEFAULT_SCOPE, common.DEFAULT_COLLECTION, parts[1], "", true
+	}
+	return "", "", "", "", "", false
+}
+
 func (is *IndexerStats) populateIsDivergingReplicaStat(out []byte) []byte {
 	divergingReplicaIndexes := is.divergingReplicaIndexesMap.Get()
 
@@ -2873,23 +2919,8 @@ func (is *IndexerStats) populateIsDivergingReplicaStat(out []byte) []byte {
 	typeFmtStr := "# TYPE %v%v gauge\n"
 
 	for indexName := range divergingReplicaIndexes {
-		var bucket, scope, collection, index, partn string
-		// Retrive bucket, scope, collection from the name
-		split := strings.Split(indexName, ":")
-		if len(split) == 3 { // bucket:index_name
-			bucket = split[0]
-			scope = common.DEFAULT_SCOPE
-			collection = common.DEFAULT_COLLECTION
-			index = split[1]
-			partn = split[2]
-		} else if len(split) == 5 {
-			bucket = split[0]
-			scope = split[1]
-			collection = split[2]
-			index = split[3]
-			partn = split[4]
-		} else {
-			// Ignore the index
+		bucket, scope, collection, index, partn, ok := parseIndexName(indexName)
+		if !ok {
 			continue
 		}
 
@@ -2906,35 +2937,19 @@ func (is *IndexerStats) populateLostReplicaStat(out []byte) []byte {
 
 	var str, collectionLabels string
 	fmtStr := "%v%v{bucket=\"%v\", %vindex=\"%v\", partition=\"%v\"} %v\n"
-
 	for indexName, val := range indexesWithLostReplicas {
-		var bucket, scope, collection, index, partn string
-		// Retrive bucket, scope, collection from the name
-		split := strings.Split(indexName, ":")
-		if len(split) == 3 { // bucket:index_name
-			bucket = split[0]
-			scope = common.DEFAULT_SCOPE
-			collection = common.DEFAULT_COLLECTION
-			index = split[1]
-			partn = split[2]
-		} else if len(split) == 5 {
-			bucket = split[0]
-			scope = split[1]
-			collection = split[2]
-			index = split[3]
-			partn = split[4]
-		} else {
-			// Ignore the index
+		bucket, scope, collection, index, partn, ok := parseIndexName(indexName)
+		if !ok {
 			continue
 		}
 		lostReplicaCount, ok := val.(int)
 		if !ok {
-			// if the value is not integer ignore it
 			continue
 		}
 
 		collectionLabels = fmt.Sprintf("scope=\"%v\", collection=\"%v\", ", scope, collection)
-		str = fmt.Sprintf(fmtStr, PARTN_METRICS_PREFIX, "num_lost_replicas", bucket, collectionLabels, index, partn, lostReplicaCount)
+		str = fmt.Sprintf(fmtStr, PARTN_METRICS_PREFIX, "num_lost_replicas", bucket,
+			collectionLabels, index, partn, lostReplicaCount)
 		out = append(out, []byte(str)...)
 	}
 	return out
@@ -3500,6 +3515,9 @@ func (s *statsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/stats/metadata", s.handleMetaStatsRequest)
 	mux.HandleFunc("/stats/timestampedCounts", s.handleTimestampedCountsReq)
 	mux.HandleFunc("/stats/refreshTimestampedCounts", s.handleRefreshTimestampedCountsReq)
+	// the logic for returning lost replicas is contained in
+	// the handleRefreshTimestampedCountsReq handler
+	mux.HandleFunc("/stats/getLostReplica", s.handleRefreshTimestampedCountsReq)
 	mux.HandleFunc("/_prometheusMetrics", s.handleMetrics)
 	mux.HandleFunc("/_prometheusMetricsHigh", s.handleMetricsHigh)
 }
@@ -3564,6 +3582,134 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 	} else {
 		s.Unlock()
 	}
+}
+
+func writeErrorResponse(w http.ResponseWriter, statusCode int, body string, handlerName string) {
+	w.WriteHeader(statusCode)
+	if _, err := w.Write([]byte(body)); err != nil {
+		logging.Debugf("%s: failed to write response: %v", handlerName, err)
+	}
+}
+
+func writeJSONResponse(w http.ResponseWriter, data interface{}, handlerName string) {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		logging.Warnf("%s Error marshaling response, err: %v", handlerName, err)
+		writeErrorResponse(w, http.StatusInternalServerError, "[]", handlerName)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(jsonData); err != nil {
+		logging.Warnf("%s: failed to write response: %v", handlerName, err)
+	}
+}
+
+func (s *statsManager) initClusterInfo(
+	w http.ResponseWriter,
+	handlerName string,
+) *common.ClusterInfoCache {
+
+	clusterAddr := s.config.Load()["clusterAddr"].String()
+	url, err := common.ClusterAuthUrl(clusterAddr)
+	if err != nil {
+		logging.Errorf("%s, error retrieving ClusterAuthUrl, err: %v", handlerName, err)
+		writeErrorResponse(w, http.StatusInternalServerError, "[]", handlerName)
+		return nil
+	}
+
+	cinfo, err := common.NewClusterInfoCache(url, DEFAULT_POOL)
+	if err != nil {
+		logging.Errorf("%s, error initializing clusterInfoCache, err: %v", handlerName, err)
+		writeErrorResponse(w, http.StatusInternalServerError, "[]", handlerName)
+		return nil
+	}
+	cinfo.SetUserAgent(handlerName)
+
+	if err := cinfo.FetchNodesAndSvsInfoWithLock(); err != nil {
+		logging.Errorf("%s, error updating cluster info cache, err: %v", handlerName, err)
+		writeErrorResponse(w, http.StatusInternalServerError, "[]", handlerName)
+		return nil
+	}
+
+	return cinfo
+}
+
+func (s *statsManager) broadcastToIndexNodes(
+	cinfo *common.ClusterInfoCache,
+	handlerName string,
+	processNodeResponse func(addr string) (interface{}, error),
+) (map[string]interface{}, map[string]error, error) {
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	errMap := make(map[string]error)
+	dataMap := make(map[string]interface{})
+
+	nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
+	for _, nid := range nids {
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
+		if err != nil {
+			logging.Errorf("%s: Error getting service address for node %v. Error = %v",
+				handlerName, nid, err)
+			return nil, nil, fmt.Errorf("failed to get service address for node %v: %w", nid, err)
+		}
+
+		wg.Add(1)
+		go func(nodeAddr string) {
+			defer wg.Done()
+			data, err := processNodeResponse(nodeAddr)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errMap[nodeAddr] = err
+			} else if data != nil {
+				dataMap[nodeAddr] = data
+			}
+		}(addr)
+	}
+
+	wg.Wait()
+
+	return dataMap, errMap, nil
+}
+
+// Returns true if the request is authorized and should continue,
+// false if an error response was written.
+func (s *statsManager) validateStatsAuth(
+	w http.ResponseWriter,
+	r *http.Request,
+	handlerName string,
+	permission string,
+) bool {
+
+	creds, valid, err := common.IsAuthValid(r)
+	switch {
+	case err != nil:
+		writeErrorResponse(w, http.StatusBadRequest, err.Error()+"\n", handlerName)
+		return false
+	case !valid:
+		if err := audit.Audit(common.AUDIT_UNAUTHORIZED, r, handlerName, ""); err != nil {
+			logging.Warnf("%s: failed to audit unauthorized access: %v", handlerName, err)
+		}
+		writeErrorResponse(w, http.StatusUnauthorized,
+			string(common.HTTP_STATUS_UNAUTHORIZED), handlerName)
+		return false
+	case creds != nil:
+		allowed, err := creds.IsAllowed(permission)
+		if err != nil {
+			writeErrorResponse(w, http.StatusInternalServerError, err.Error(), handlerName)
+			return false
+		} else if !allowed {
+			logging.Verbosef("%s not enough permissions", handlerName)
+			writeErrorResponse(
+				w, http.StatusForbidden,
+				string(common.HTTP_STATUS_FORBIDDEN),
+				handlerName,
+			)
+			return false
+		}
+	}
+	return true
 }
 
 // handleStatsReq handles a /stats REST API request.
@@ -3659,28 +3805,12 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	creds, valid, err := common.IsAuthValid(r)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error() + "\n"))
+	if !s.validateStatsAuth(
+		w, r, "StatsManager::handleMetrics",
+		"cluster.admin.internal.stats!read",
+	) {
+
 		return
-	} else if !valid {
-		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleMetrics", "")
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
-		return
-	} else if creds != nil {
-		allowed, err := creds.IsAllowed("cluster.admin.internal.stats!read")
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error()))
-			return
-		} else if !allowed {
-			logging.Verbosef("StatsManager::handleMetrics not enough permissions")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write(common.HTTP_STATUS_FORBIDDEN)
-			return
-		}
 	}
 
 	is := s.stats.Get()
@@ -3711,6 +3841,9 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_drain_rate gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_drain_rate %v\n", METRICS_PREFIX, is.avgDrainRate.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_scan_reports_gen gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_scan_reports_gen %v\n", METRICS_PREFIX, is.numScanReportsGen.Value()))...)
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_disk_bps gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vavg_disk_bps %v\n", METRICS_PREFIX, is.avgDiskBps.Value()))...)
@@ -3789,29 +3922,12 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request) {
-	creds, valid, err := common.IsAuthValid(r)
+	if !s.validateStatsAuth(
+		w, r, "StatsManager::handleMetricsHigh",
+		"cluster.admin.internal.stats!read",
+	) {
 
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error() + "\n"))
 		return
-	} else if !valid {
-		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleMetricsHigh", "")
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
-		return
-	} else if creds != nil {
-		allowed, err := creds.IsAllowed("cluster.admin.internal.stats!read")
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error()))
-			return
-		} else if !allowed {
-			logging.Verbosef("StatsManager::handleMetricsHigh not enough permissions")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write(common.HTTP_STATUS_FORBIDDEN)
-			return
-		}
 	}
 
 	is := s.stats.Get()
@@ -3855,28 +3971,12 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request) {
-	creds, valid, err := common.IsAuthValid(r)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error() + "\n"))
+	if !s.validateStatsAuth(
+		w, r, "StatsManager::handleMemStatsReq",
+		"cluster.admin.internal.index!read",
+	) {
+
 		return
-	} else if !valid {
-		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleMemStatsReq", "")
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
-		return
-	} else if creds != nil {
-		allowed, err := creds.IsAllowed("cluster.admin.internal.index!read")
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error()))
-			return
-		} else if !allowed {
-			logging.Verbosef("StatsManager::handleMemStatsReq not enough permissions")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write(common.HTTP_STATUS_FORBIDDEN)
-			return
-		}
 	}
 
 	stats := new(runtime.MemStats)
@@ -3892,28 +3992,12 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *statsManager) handleTimestampedCountsReq(w http.ResponseWriter, r *http.Request) {
-	creds, valid, err := common.IsAuthValid(r)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error() + "\n"))
+	if !s.validateStatsAuth(
+		w, r, "StatsManager::handleTimestampedCountsReq",
+		"cluster.admin.internal.stats!read",
+	) {
+
 		return
-	} else if !valid {
-		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleTimestampedCountsReq", "")
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
-		return
-	} else if creds != nil {
-		allowed, err := creds.IsAllowed("cluster.admin.internal.stats!read")
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error()))
-			return
-		} else if !allowed {
-			logging.Verbosef("StatsManager::handleTimestampedCountsReq not enough permissions")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write(common.HTTP_STATUS_FORBIDDEN)
-			return
-		}
 	}
 
 	if r.Method == "GET" {
@@ -3982,28 +4066,14 @@ func (s *statsManager) handleTimestampedCountsReq(w http.ResponseWriter, r *http
 }
 
 func (s *statsManager) handleRefreshTimestampedCountsReq(w http.ResponseWriter, r *http.Request) {
-	creds, valid, err := common.IsAuthValid(r)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error() + "\n"))
+	handlerName := "StatsManager::handleRefreshTimestampedCountsReq"
+	checkLostReplica := strings.Contains(r.URL.Path, "getLostReplica")
+
+	if !s.validateStatsAuth(
+		w, r, handlerName,
+		"cluster.admin.internal.stats!read",
+	) {
 		return
-	} else if !valid {
-		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleRefreshTimestampedCountsReq", "")
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
-		return
-	} else if creds != nil {
-		allowed, err := creds.IsAllowed("cluster.admin.internal.stats!read")
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error()))
-			return
-		} else if !allowed {
-			logging.Verbosef("StatsManager::handleTimestampedCountsReq not enough permissions")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write(common.HTTP_STATUS_FORBIDDEN)
-			return
-		}
 	}
 
 	if r.Method != "GET" {
@@ -4030,100 +4100,120 @@ func (s *statsManager) handleRefreshTimestampedCountsReq(w http.ResponseWriter, 
 	}
 
 	clusterAddr := s.config.Load()["clusterAddr"].String()
-	logging.Infof("statsMgr::handleRefreshTimestampedCountsReq Received request on node: %v with broadcast: %v, log: %v", clusterAddr, broadcast, doLog)
+	logging.Infof("statsMgr::handleRefreshTimestampedCountsReq Received request on node: %v "+
+		"with broadcast: %v, log: %v", clusterAddr, broadcast, doLog)
 	// broadcast the request to all nodes
 	if broadcast {
-		// Get cluster info cache, and send the request to all nodes
-		url, err := common.ClusterAuthUrl(clusterAddr)
-		if err != nil {
-			logging.Errorf("statsMgr::handleRefreshTimestampedCountsReq, error observed while retrieving ClusterAuthUrl, err : %v", err)
-			w.WriteHeader(http.StatusInternalServerError) // Send 408 timeout as indexer is not ready to serve the request
-			w.Write([]byte("[]"))
+		cinfo := s.initClusterInfo(w, handlerName)
+		if cinfo == nil {
 			return
 		}
 
-		cinfo, err := common.NewClusterInfoCache(url, DEFAULT_POOL)
-		if err != nil {
-			logging.Errorf("statsMgr::handleRefreshTimestampedCountsReq, error observed during the initilization of clusterInfoCache, err : %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("[]"))
-			return
+		baseUri := "/stats/refreshTimestampedCounts"
+		if strings.Contains(r.URL.Path, "getLostReplica") {
+			baseUri = "/stats/getLostReplica"
 		}
-		cinfo.SetUserAgent("statsMgr::handleRefreshTimestampedCountReq")
+		uri := fmt.Sprintf("%s?broadcast=false&log=%v", baseUri, doLog)
 
-		if err := cinfo.FetchNodesAndSvsInfoWithLock(); err != nil {
-			logging.Errorf("statsMgr::handleRefreshTimestampedCountsReq, error observed while Updating cluster info cache, err: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("[]"))
-			return
-		}
-
-		uri := fmt.Sprintf("/stats/refreshTimestampedCounts?broadcast=false&log=%v", doLog)
-		refreshTimestampedCounts := func(addr string) error {
-			resp, err := getWithAuth(addr + uri)
-			if err != nil {
-				logging.Warnf("statsMgr::handleRefreshTimestampedCountsReq: Failed to refresh timestamped count stats from node: %v, err: %v.", addr, err)
-				return err
+		// For getLostReplica: fetches lost replica data from each node and returns it via dataMap.
+		// For refreshTimestampedCounts: triggers a refresh on each node; no data is returned.
+		processNode := func(addr string) (interface{}, error) {
+			if checkLostReplica {
+				resp, err := fetchLostReplicasFromNode(addr, uri, handlerName)
+				return resp, err
 			}
 
+			resp, err := getWithAuth(addr + uri)
+			if err != nil {
+				logging.Warnf("%s: Failed to refresh timestamped count stats "+
+					"from node: %v, err: %v.",
+					handlerName, addr, err)
+				return nil, err
+			}
 			if resp == nil {
-				logging.Warnf("statsMgr::handleRefreshTimestampedCountsReq: nil response received from refreshing timestamped count stats stats req from node: %v", addr)
-				return fmt.Errorf("nil repsonse from node: %v", addr)
+				logging.Warnf("%s: nil response received from refreshing timestamped count stats stats req "+
+					"from node: %v",
+					handlerName, addr)
+				return nil, fmt.Errorf("%w from node: %v", ErrNilResponse, addr)
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
-				logging.Warnf("statsMgr::handleRefreshTimestampedCountsReq: Invalid response received from timestampedCount stats req from node: %v, resp.StatusCode: %v", addr, resp.StatusCode)
-				return fmt.Errorf("invalid resp code: %v received from node: %v", resp.StatusCode, addr)
+				logging.Warnf(
+					"%s: Invalid response received from "+
+						"timestampedCount stats req from node: %v, resp.StatusCode: %v",
+					handlerName, addr, resp.StatusCode,
+				)
+				return nil, fmt.Errorf("%w: %v from node: %v", ErrInvalidStatusCode, resp.StatusCode, addr)
 			}
-
-			return nil
+			return nil, nil
 		}
 
-		var wg sync.WaitGroup
-		errMap := make(map[string]error)
-		var mu sync.Mutex
+		// Broadcast to all nodes
+		dataMap, errMap, fatalErr := s.broadcastToIndexNodes(
+			cinfo, handlerName, processNode,
+		)
+		if fatalErr != nil {
+			writeErrorResponse(
+				w, http.StatusInternalServerError, "[]",
+				handlerName,
+			)
+			return
+		}
 
-		nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
-		for _, nid := range nids {
-			// obtain the admin port for the indexer node
-			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
-			if err != nil {
-				logging.Errorf("statsMgr::handleRefreshTimestampedCountsReq: Error from getting service address for node %v. Error = %v", nid, err)
-				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte("[]"))
-				return
+		if checkLostReplica {
+			if len(errMap) > 0 {
+				var failedNodes []string
+				for node := range errMap {
+					failedNodes = append(failedNodes, node)
+				}
+				logging.Warnf("%s: Failed to get responses from nodes: %v", handlerName, failedNodes)
 			}
 
-			restCall := func(nid common.NodeId, addr string) {
-				defer wg.Done()
-
-				err := refreshTimestampedCounts(addr)
-				if err != nil {
-					mu.Lock()
-					defer mu.Unlock()
-
-					errMap[addr] = err
+			seen := make(map[replicaKey]bool)
+			var finalResult []*LostReplicaInfo
+			for _, data := range dataMap {
+				nodeResp, ok := data.(*LostReplicasResponse)
+				if !ok || nodeResp == nil {
+					continue
+				}
+				for _, info := range nodeResp.Results {
+					key := replicaKey{defnId: info.DefnId, partitionId: info.PartitionId}
+					if !seen[key] {
+						seen[key] = true
+						finalResult = append(finalResult, info)
+					}
 				}
 			}
 
-			wg.Add(1)
-			go restCall(nid, addr)
+			writeJSONResponse(w, LostReplicasResponse{Results: finalResult}, handlerName)
+			return
 		}
 
-		wg.Wait()
-
 		if len(errMap) > 0 {
-			var errStr string
-			for _, err := range errMap {
-				errStr += err.Error() + ","
+			var errBuilder strings.Builder
+			errCount := 0
+			for addr, err := range errMap {
+				if errCount > 0 {
+					errBuilder.WriteString(", ")
+				}
+				errBuilder.WriteString(fmt.Sprintf("%s: %v", addr, err))
+				errCount++
 			}
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("\"" + errStr[:len(errStr)-1] + "\""))
+
+			logging.Warnf(
+				"%s: Errors from nodes: %s",
+				handlerName,
+				errBuilder.String(),
+			)
+			writeErrorResponse(
+				w, http.StatusInternalServerError, "\""+errBuilder.String()+"\"",
+				handlerName,
+			)
 			return
 
 		} else {
-			w.WriteHeader(http.StatusOK) // Send Ok as everything is fine
+			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("[]"))
 			return
 		}
@@ -4153,18 +4243,38 @@ func (s *statsManager) handleRefreshTimestampedCountsReq(w http.ResponseWriter, 
 			return
 		case resp := <-respCh:
 
+			if checkLostReplica {
+				// lostReplicaDetailsMap is already updated in indexer
+				// so we can read it directly.
+				lMap := s.stats.Get().lostReplicaDetailsMap.Get()
+				result := make([]*LostReplicaInfo, 0, len(lMap))
+				for _, val := range lMap {
+					lData, ok := val.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					if info, ok := buildLostReplicaInfo(lData); ok {
+						result = append(result, info)
+					}
+				}
+				writeJSONResponse(w, LostReplicasResponse{Results: result}, handlerName)
+				return
+			}
+
 			// Send 200 ok as the cases where nil is sent is either for FDB (or)
 			// if there are no indexes on the node
 			if resp == nil {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("[]"))
 				return
-			} else { // Only nil response is expected for this request
-				logging.Warnf("statsManager::handleRefreshTimestampedCountsReq Invalid response received, resp: %v", resp)
-				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte("[]"))
-				return
 			}
+			// Only nil response is expected for this request
+			logging.Warnf("%s Invalid response received, resp: %v", handlerName, resp)
+			w.WriteHeader(http.StatusInternalServerError)
+			if _, err := w.Write([]byte("[]")); err != nil {
+				logging.Debugf("%s: Failed to write response: %v", handlerName, err)
+			}
+			return
 		}
 	}
 }
@@ -4368,28 +4478,12 @@ func (s *statsManager) handleShardStorageStatsReq(w http.ResponseWriter, r *http
 }
 
 func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Request) {
-	creds, valid, err := common.IsAuthValid(r)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error() + "\n"))
+	if !s.validateStatsAuth(
+		w, r, "StatsManager::handleStorageMMStatsReq",
+		"cluster.admin.internal.index!read",
+	) {
+
 		return
-	} else if !valid {
-		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleStorageMMStatsReq", "")
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
-		return
-	} else if creds != nil {
-		allowed, err := creds.IsAllowed("cluster.admin.internal.index!read")
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error()))
-			return
-		} else if !allowed {
-			logging.Verbosef("StatsManager::handleStorageMMStatsReq not enough permissions")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write(common.HTTP_STATUS_FORBIDDEN)
-			return
-		}
 	}
 
 	if r.Method == "POST" || r.Method == "GET" {
@@ -4414,28 +4508,12 @@ func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Re
 }
 
 func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Request) {
-	creds, valid, err := common.IsAuthValid(r)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error() + "\n"))
+	if !s.validateStatsAuth(
+		w, r, "StatsManager::handleStatsResetReq",
+		"cluster.admin.internal.index!write",
+	) {
+
 		return
-	} else if !valid {
-		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleStatsResetReq", "")
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
-		return
-	} else if creds != nil {
-		allowed, err := creds.IsAllowed("cluster.admin.internal.index!write")
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error()))
-			return
-		} else if !allowed {
-			logging.Verbosef("StatsManager::handleStatsResetReq not enough permissions")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write(common.HTTP_STATUS_FORBIDDEN)
-			return
-		}
 	}
 
 	if r.Method == "POST" || r.Method == "GET" {
@@ -5110,28 +5188,12 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 }
 
 func (s *statsManager) handleMetaStatsRequest(w http.ResponseWriter, r *http.Request) {
-	creds, valid, err := common.IsAuthValid(r)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error() + "\n"))
+	if !s.validateStatsAuth(
+		w, r, "StatsManager::handleMetaStatsRequest",
+		"cluster.admin.internal.index!write",
+	) {
+
 		return
-	} else if !valid {
-		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleMetaStatsRequest", "")
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
-		return
-	} else if creds != nil {
-		allowed, err := creds.IsAllowed("cluster.admin.internal.index!write")
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error()))
-			return
-		} else if !allowed {
-			logging.Verbosef("StatsManager::handleMetaStatsRequest not enough permissions")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write(common.HTTP_STATUS_FORBIDDEN)
-			return
-		}
 	}
 
 	if r.Method == "GET" {
@@ -5325,4 +5387,88 @@ func (fp *FlatFileStatsPersister) Close() error {
 		return err
 	}
 	return nil
+}
+
+type replicaKey struct {
+	defnId      uint64
+	partitionId int
+}
+
+// buildPartitionMap maps node address to the replica IDs present on that node.
+func buildPartitionMap(replicaInfo []*IndexInfo) map[string][]int {
+	partitionMap := make(map[string][]int)
+	for _, indexInfo := range replicaInfo {
+		nodeAddr := indexInfo.nodeId
+		partitionMap[nodeAddr] = append(partitionMap[nodeAddr], indexInfo.ReplicaID)
+	}
+	return partitionMap
+}
+
+func buildLostReplicaInfo(lData map[string]interface{}) (*LostReplicaInfo, bool) {
+	replicaInfo, ok := lData["replicaInfo"].([]*IndexInfo)
+	if !ok || len(replicaInfo) == 0 {
+		return nil, false
+	}
+
+	first := replicaInfo[0]
+	var scope, collection string
+	if parts := strings.SplitN(first.IndexName, ":", 4); len(parts) >= 4 {
+		scope, collection = parts[1], parts[2]
+	} else {
+		scope, collection = common.DEFAULT_SCOPE, common.DEFAULT_COLLECTION
+	}
+	info := &LostReplicaInfo{
+		IndexName:    first.IndexName,
+		Bucket:       first.Bucket,
+		Scope:        scope,
+		Collection:   collection,
+		DefnId:       first.DefnId,
+		PartitionId:  first.PartitionID,
+		PartitionMap: buildPartitionMap(replicaInfo),
+	}
+
+	if val, ok := lData["expectedInstances"].(int); ok {
+		info.ExpectedInstances = val
+	}
+	if val, ok := lData["presentReplicaIds"].([]int); ok {
+		info.PresentReplicaIds = val
+	}
+	if val, ok := lData["detectedAt"].(time.Time); ok {
+		info.DetectedAt = val
+	}
+
+	presentSet := make(map[int]bool, len(info.PresentReplicaIds))
+	for _, id := range info.PresentReplicaIds {
+		presentSet[id] = true
+	}
+	for i := 0; i < info.ExpectedInstances; i++ {
+		if !presentSet[i] {
+			info.MissingReplicaIds = append(info.MissingReplicaIds, i)
+		}
+	}
+
+	return info, true
+}
+
+func fetchLostReplicasFromNode(addr, uri, handlerName string) (*LostReplicasResponse, error) {
+	resp, err := getWithAuth(addr + uri)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logging.Debugf("%s: Failed to close response body: %v", handlerName, err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%w: %v from node: %v", ErrInvalidStatusCode, resp.StatusCode, addr)
+	}
+
+	var nodeResp LostReplicasResponse
+	if err := json.NewDecoder(resp.Body).Decode(&nodeResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &nodeResp, nil
 }

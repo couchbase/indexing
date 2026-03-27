@@ -15601,6 +15601,9 @@ func (idx *indexer) checkForLostReplicas(
 
 	// this should be string(IndexName:PartnId) -> int(num lost replicas)
 	indexesWithLostReplica := make(map[string]interface{})
+	// lost replica data for /stats/getLostReplica endpoint
+	lostReplicaData := make(map[string]interface{})
+	detectedAt := time.Now()
 
 	for defnId, partnIdMap := range indexDefnToPartns {
 		for partnId, replicaIndexInfo := range partnIdMap {
@@ -15625,6 +15628,14 @@ func (idx *indexer) checkForLostReplicas(
 				presentReplica = append(presentReplica, indexInfo.ReplicaID)
 			}
 
+			// Store data for /getLostReplica endpoint
+			lostReplicaData[key] = map[string]interface{}{
+				"expectedInstances": totalExpectedInstances,
+				"presentReplicaIds": presentReplica,
+				"replicaInfo":       replicaIndexInfo,
+				"detectedAt":        detectedAt,
+			}
+
 			logging.Warnf("Indexer::checkForLostReplica defnId: %v, partnId: %v "+
 				"has only %v(%v) replica instances while it is "+
 				"expected to have %v total instances", defnId, partnId, len(presentReplica),
@@ -15635,6 +15646,7 @@ func (idx *indexer) checkForLostReplicas(
 	// Set the number indexes with lost replica
 	idx.stats.numLostReplicaIndexes.Set(int64(len(indexesWithLostReplica)))
 	idx.stats.lostReplicaIndexesMap.Set(indexesWithLostReplica)
+	idx.stats.lostReplicaDetailsMap.Set(lostReplicaData)
 }
 
 func (idx *indexer) resetDivergingReplicaAndLostReplicaStats() {
@@ -15643,6 +15655,7 @@ func (idx *indexer) resetDivergingReplicaAndLostReplicaStats() {
 
 	idx.stats.numLostReplicaIndexes.Set(0)
 	idx.stats.lostReplicaIndexesMap.Reset()
+	idx.stats.lostReplicaDetailsMap.Reset()
 }
 
 func (idx *indexer) getIndexInfoFromTsCounts(tsCounts []*TimestampedCounts) []*IndexInfo {

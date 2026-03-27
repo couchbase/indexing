@@ -342,7 +342,15 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 	}
 
 	defer func() {
+		if req.srvrScanReport != nil && req.srvrScanReport.SrvrNs != nil {
+			req.srvrScanReport.SrvrNs.TotalDur = time.Since(ttime).Nanoseconds()
+		}
+
 		s.handleError(req.LogPrefix, w.Done(readUnits, clientVersion, req.srvrScanReport))
+		if stats != nil && req.srvrScanReport != nil {
+			stats.numScanReportsGen.Add(1)
+		}
+
 		req.Done()
 	}()
 
@@ -374,7 +382,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 	}
 
 	if req.hasRollback != nil && req.hasRollback.Load() == true {
-		err = w.Error(ErrIndexRollback)
+		err = w.Error(ErrIndexRollback, nil)
 	}
 
 	if s.tryRespondWithError(w, req, err) {
@@ -429,6 +437,12 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 	if err != nil {
 		logging.Errorf("%s Error in getRequestedIndexSnapshot, instId: %v, partnIds: %v, err: %v", req.LogPrefix, req.IndexInstId, req.PartitionIds, err)
 
+		// Added to detect wait duration in scan report in case of errored out 
+		// request
+		if req.srvrScanReport != nil && req.srvrScanReport.SrvrNs != nil {
+			req.srvrScanReport.SrvrNs.WaitDur = time.Since(t0).Nanoseconds()
+		}
+
 		if err == common.ErrScanTimedOut {
 			getSnapTs := func() *common.TsVbuuid {
 				lastSnapshot := s.lastSnapshot.Get()
@@ -466,10 +480,6 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 			elapsed := time.Now().Sub(ttime).Nanoseconds()
 			req.Stats.scanReqDuration.Add(elapsed)
 			req.Stats.scanReqLatDist.Add(elapsed)
-		}
-
-		if req.srvrScanReport != nil && req.srvrScanReport.SrvrNs != nil {
-			req.srvrScanReport.SrvrNs.TotalDur = time.Since(ttime).Nanoseconds()
 		}
 	}()
 
@@ -1268,7 +1278,7 @@ func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanReq
 			logging.Infof("%s RESPONSE status:(error = %s), requestId: %v %v", req.LogPrefix, err, req.RequestId, errList)
 		}
 		s.updateErrStats(req, err)
-		s.handleError(req.LogPrefix, w.Error(err))
+		s.handleError(req.LogPrefix, w.Error(err, req.srvrScanReport))
 		return true
 	}
 

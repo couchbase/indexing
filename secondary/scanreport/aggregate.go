@@ -55,7 +55,9 @@ func (s *ScanReportState) aggregateServerMetrics() {
 			totalCounts.BytesRead += detail.SrvrCounts.BytesRead
 			sumCache += detail.SrvrCounts.CacheHitPer
 		}
-		numHosts++
+		if detail.SrvrNs != nil || detail.SrvrCounts != nil {
+			numHosts++
+		}
 	}
 
 	if numHosts > 0 {
@@ -205,10 +207,6 @@ func aggregateTotalCounts(aggregatedReport map[string]interface{},
 		return
 	}
 
-	if !ok {
-		return
-	}
-
 	existingSrvrTotalCounts, exists := aggregatedReport["srvr_total_counts"]
 	if !exists {
 		aggregatedReport["srvr_total_counts"] = copyServerCounts(newCounts)
@@ -286,11 +284,11 @@ func copyServerTimings(st *ServerTimings) *ServerTimings {
 		return nil
 	}
 	return &ServerTimings{
-		TotalDur:          st.TotalDur,
-		WaitDur:           st.WaitDur,
-		ScanDur:           st.ScanDur,
-		GetSeqnosDur:      st.GetSeqnosDur,
-		DiskReadDur:       st.DiskReadDur,
+		TotalDur:     st.TotalDur,
+		WaitDur:      st.WaitDur,
+		ScanDur:      st.ScanDur,
+		GetSeqnosDur: st.GetSeqnosDur,
+		DiskReadDur:  st.DiskReadDur,
 	}
 }
 
