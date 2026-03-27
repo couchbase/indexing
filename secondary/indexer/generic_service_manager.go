@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
@@ -155,14 +156,23 @@ func (m *GenericServiceManager) Shutdown() error {
 // cancel the call.
 func (m *GenericServiceManager) GetTaskList(rev service.Revision,
 	cancel service.Cancel) (*service.TaskList, error) {
+
+	start := time.Now()
 	const _GetTaskList = "GenericServiceManager::GetTaskList:"
 	logging.Infof("%v called with rev: %v", _GetTaskList, rev)
 
 	// Wait for new revision if needed
 	err := m.waitForNewRev(rev, cancel)
 	if err != nil {
-		// Log as Info because it is not really an error, just service.ErrCanceled
-		logging.Infof("%v return from rev %v call. err: %v", _GetTaskList, rev, err)
+		if time.Since(start) >= time.Minute {
+			logging.Warnf(
+				"%v cancel took more than 60s. potential connection down. rev: %v, err: %v",
+				_GetTaskList, rev, err,
+			)
+		} else {
+			// Log as Info because it is not really an error, just service.ErrCanceled
+			logging.Infof("%v return from rev %v call. err: %v", _GetTaskList, rev, err)
+		}
 		return nil, err
 	}
 

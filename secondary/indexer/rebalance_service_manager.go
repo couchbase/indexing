@@ -399,10 +399,18 @@ func (m *RebalanceServiceManager) RebalCancelTask(id string, rev service.Revisio
 func (m *RebalanceServiceManager) GetCurrentTopology(rev service.Revision,
 	cancel service.Cancel) (*service.Topology, error) {
 
+	start := time.Now()
 	l.Infof("RebalanceServiceManager::GetCurrentTopology %v", rev)
 
 	currState, err := m.wait(rev, cancel)
 	if err != nil {
+		if time.Since(start) >= time.Minute {
+			logging.Warnf(
+				"RebalanceServiceManager::GetCurrentTopology: cancel took more than 60s. "+
+					"Potentially connection down. rev %v, err %v",
+				rev, err,
+			)
+		}
 		return nil, err
 	}
 
