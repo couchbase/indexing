@@ -1566,8 +1566,11 @@ func (tk *timekeeper) repairMissingStreamBegin(streamId common.StreamId) {
 
 					// If there is missing vb and timekeeper has not received StreamBegin for any vb for over the threshold,
 					// then raise an error on those vbs.
-					if now-tk.ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId] > maxInterval {
-
+					lastBegin := tk.ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId]
+					if lastBegin == 0 {
+						lastBegin = tk.ss.streamKeyspaceIdStartTimeMap[streamId][keyspaceId]
+					}
+					if now-lastBegin > maxInterval {
 						//flag the missing vb as error and repair stream.  Do not raise connection error.
 						for _, vb := range vbList {
 							tk.ss.updateVbStatus(streamId, keyspaceId, []Vbucket{vb}, VBS_STREAM_END)
