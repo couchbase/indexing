@@ -2298,3 +2298,170 @@ func TestSparseBhiveIndexBackupRestore(t *testing.T) {
 func TestSparseCompositeIndexBackupRestore(t *testing.T) {
 	testSparseSmallBackupRestore(t, false /*isBhive*/)
 }
+
+// checkSparseBase64IndexInPlan verifies via EXPLAIN that idxName appears in the plan
+// for a query on DECODE_VECTOR(sparsebase, false).
+func checkSparseBase64IndexInPlan(t *testing.T, idxName string, isBhive bool) {
+	t.Helper()
+	const fieldExpr = "DECODE_VECTOR(sparsebase, false, \"sparse\")"
+	nprobes := 256
+	var stmt string
+	if isBhive {
+		stmt = fmt.Sprintf(
+			"EXPLAIN SELECT vectornum FROM %v"+
+				" ORDER BY sparse_vector_distance(%v, [[1055, 2002, 3000], [0.5, 1.2, 0.8]], %d) LIMIT 10",
+			bucket, fieldExpr, nprobes)
+	} else {
+		stmt = fmt.Sprintf(
+			"EXPLAIN SELECT vectornum FROM %v WHERE `type`=\"Casual\""+
+				" ORDER BY sparse_vector_distance(%v, [[1055, 2002, 3000], [0.5, 1.2, 0.8]], %d) LIMIT 10",
+			bucket, fieldExpr, nprobes)
+	}
+	planRes, err := execN1QL(bucket, stmt)
+	FailTestIfError(err, "Error in EXPLAIN for "+idxName, t)
+	if !strings.Contains(fmt.Sprintf("%v", planRes), idxName) {
+		t.Fatalf("%v: index not found in query plan: %v", idxName, planRes)
+	}
+	log.Printf("%v: plan check passed", idxName)
+}
+
+// runSparseBase64QueryAndCheckRecall runs the first ground-truth query from SparseSmall
+// against DECODE_VECTOR(sparsebase, false) and asserts 100% recall@10 with nprobes=256.
+func runSparseBase64QueryAndCheckRecall(t *testing.T, idxName string, isBhive bool) {
+	t.Helper()
+	const fieldExpr = "DECODE_VECTOR(sparsebase, false, \"sparse\")"
+	nprobes := 256
+
+	sd, err := randdocs.OpenSparseData(sparseSmallDataPath + "base_small.csr")
+	FailTestIfError(err, "Error opening sparse base data for "+idxName, t)
+	err = sd.LoadQueryAndTruth(sparseSmallDataPath+"queries.dev.csr", sparseSmallDataPath+"base_small.dev.gt")
+	FailTestIfError(err, "Error loading query/truth for "+idxName, t)
+
+	query, truth, err := sd.GetQueryAndTruth()
+	FailTestIfError(err, "Error getting query for "+idxName, t)
+
+	groundTruthK := sd.GetGroundTruthK()
+	if groundTruthK > 10 {
+		groundTruthK = 10
+	}
+
+	queryVecStr := formatSparseQueryVector(query)
+
+	var queryStmt string
+	if isBhive {
+		queryStmt = fmt.Sprintf(
+			"SELECT vectornum FROM %v"+
+				" ORDER BY sparse_vector_distance(%v, %v, %d, %d) LIMIT %d",
+			bucket, fieldExpr, queryVecStr, nprobes, 500, groundTruthK)
+	} else {
+		queryStmt = fmt.Sprintf(
+			"SELECT vectornum FROM %v"+
+				" WHERE `type`=\"Casual\" AND `category`=\"Document\" AND `source`=\"MSMARCO\""+
+				" AND `language`=\"English\" AND `topic`=\"Science\" AND `relevance`=1"+
+				" ORDER BY sparse_vector_distance(%v, %v, %d) LIMIT %d",
+			bucket, fieldExpr, queryVecStr, nprobes, groundTruthK)
+	}
+
+	scanResults, err := execN1QL(bucket, queryStmt)
+	FailTestIfError(err, "Error in scan for "+idxName, t)
+
+	truthTopK := truth
+	if len(truthTopK) > groundTruthK {
+		truthTopK = truthTopK[:groundTruthK]
+	}
+	truthSet := make(map[int32]struct{})
+	for _, idx := range truthTopK {
+		truthSet[idx] = struct{}{}
+	}
+
+	var matches int
+	for _, res := range scanResults {
+		resDict, ok := res.(map[string]interface{})
+		if !ok {
+			t.Fatalf("%v: unexpected result type %T", idxName, res)
+		}
+		vecnum, ok := resDict["vectornum"].(float64)
+		if !ok {
+			t.Fatalf("%v: missing vectornum in result: %v", idxName, resDict)
+		}
+		if _, found := truthSet[int32(vecnum)]; found {
+			matches++
+		}
+	}
+
+	recall := 100.0 * float64(matches) / float64(len(truthTopK))
+	log.Printf("%v: Recall=%.2f%% (%d/%d)", idxName, recall, matches, len(truthTopK))
+	if recall < 100.0 {
+		t.Fatalf("%v: expected 100%% recall with nprobes=%d, got %.2f%%", idxName, nprobes, recall)
+	}
+}
+
+// testSparseSmallBase64VectorIndex is the shared implementation for bhive and composite
+// base64 sparse vector index tests. It:
+//  1. Loads SparseSmall data if not already loaded.
+//  2. Runs UPDATE to add sparsebase = ENCODE_VECTOR(sparse, false) on all docs.
+//  3. Creates the index on DECODE_VECTOR(sparsebase, false) SPARSE VECTOR.
+//  4. Verifies items_count == numSparseSmallDocs.
+//  5. Verifies via EXPLAIN that the index is used.
+//  6. Runs one ground-truth query and asserts 100% recall@10.
+func testSparseSmallBase64VectorIndex(t *testing.T, isBhive bool) {
+	skipIfNotPlasma(t)
+
+	if !sparseSmallVectorsLoaded {
+		vectorSetupSparseSmall(t, bucket, "", "", numSparseSmallDocs)
+	}
+
+	// Encode sparse vector field into base64 representation for all docs
+	n1qlstatement := "UPDATE `default` SET sparsebase = ENCODE_VECTOR(sparse, false, \"sparse\");"
+	_, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, nil)
+	FailTestIfError(err, "Error adding sparsebase encoded field", t)
+	log.Printf("Added ENCODE_VECTOR(sparse, false, \"sparse\") as sparsebase to all docs")
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	nprobes := 256
+	var idxName, stmt string
+	if isBhive {
+		idxName = "idx_sparse_base64_bhive"
+		stmt = fmt.Sprintf(
+			"CREATE VECTOR INDEX %v ON %v(DECODE_VECTOR(sparsebase, false, \"sparse\") SPARSE VECTOR)"+
+				" WITH {\"defer_build\":true, \"description\":\"IVF256\", \"similarity\":\"DOT\", \"scan_nprobes\":%d};",
+			idxName, bucket, nprobes)
+	} else {
+		idxName = "idx_sparse_base64_comp"
+		stmt = fmt.Sprintf(
+			"CREATE INDEX %v ON %v(`type`, `category`, `source`, `language`, `topic`, `relevance`,"+
+				" DECODE_VECTOR(sparsebase, false, \"sparse\") SPARSE VECTOR, `vectornum`)"+
+				" WITH {\"defer_build\":true, \"description\":\"IVF256\", \"similarity\":\"DOT\", \"scan_nprobes\":%d};",
+			idxName, bucket, nprobes)
+	}
+
+	err = createWithDeferAndBuild(idxName, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error creating "+idxName, t)
+
+	// Verify items_count
+	stats := secondaryindex.GetPerPartnStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	itemsCount := int(stats[fmt.Sprintf("%v:%v:items_count", bucket, idxName)].(float64))
+	if itemsCount != numSparseSmallDocs {
+		t.Fatalf("%v: items_count mismatch: expected %v, got %v", idxName, numSparseSmallDocs, itemsCount)
+	}
+	log.Printf("%v: items_count=%v OK", idxName, itemsCount)
+
+	checkSparseBase64IndexInPlan(t, idxName, isBhive)
+	runSparseBase64QueryAndCheckRecall(t, idxName, isBhive)
+}
+
+// TestSparseBhiveBase64VectorIndex tests a bhive sparse vector index (CREATE VECTOR INDEX)
+// on a base64-encoded sparse field DECODE_VECTOR(sparsebase, false), using the SparseSmall
+// (MS MARCO) dataset.
+func TestSparseBhiveBase64VectorIndex(t *testing.T) {
+	testSparseSmallBase64VectorIndex(t, true /*isBhive*/)
+}
+
+// TestSparseCompositeBase64VectorIndex tests a composite sparse vector index (CREATE INDEX)
+// with scalar keys + DECODE_VECTOR(sparsebase, false) SPARSE VECTOR, using the SparseSmall
+// (MS MARCO) dataset.
+func TestSparseCompositeBase64VectorIndex(t *testing.T) {
+	testSparseSmallBase64VectorIndex(t, false /*isBhive*/)
+}
