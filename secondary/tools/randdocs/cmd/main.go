@@ -30,6 +30,7 @@ func main() {
 	VecDim := flag.Int("dimension", 128, "Size of the vector array. Default is 128")
 	VecSeed := flag.Int("vecSeed", 1234, "Seed to be used for random number generator")
 	GenSparseVectors := flag.Bool("genSparseVectors", false, "Set to true to generate random sparse vector data")
+	VectorInXATTR := flag.Bool("VectorInXATTR", false, "Set to true to store vectors in XATTR (credentials via cbauth or CB_USERNAME/CB_PASSWORD env vars)")
 	SparseVecDim := flag.Int("sparseVecDim", 0, "Number of non-zero dimensions for sparse vectors. 0 means variable")
 
 	flag.Parse()
@@ -120,6 +121,10 @@ func main() {
 		cfg.GenSparseVectors = true
 		cfg.SparseVecDim = *SparseVecDim
 		cfg.VecSeed = *VecSeed
+	}
+
+	if *VectorInXATTR == true {
+		cfg.VectorInXATTR = true
 	}
 
 	randdocs.Run(cfg)

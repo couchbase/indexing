@@ -368,3 +368,195 @@ func TestVectorIndexXATTRMultiple(t *testing.T) {
 	}
 
 }
+
+var sparseSmallXATTRLoaded = false
+
+// vectorSetupSparseSmallXATTR loads the SparseSmall (MS MARCO) dataset with the sparse
+// vector stored as XATTR (key: sparse_xattr) rather than in the main document body.
+// Scalar fields (type, category, source, language, topic, relevance, vectornum, etc.)
+// remain in the document. Note: VectorInXATTR overrides type="Document" for all docs.
+func vectorSetupSparseSmallXATTR(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	kvutility.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	resetVectorDataSetupFlags()
+	sparseSmallXATTRLoaded = false
+
+	cfg := randdocs.Config{
+		ClusterAddr:    clusterconfig.KVAddress,
+		Bucket:         bucket,
+		NumDocs:        numSparseSmallDocs,
+		Iterations:     1,
+		Threads:        8,
+		OpsPerSec:      100000,
+		UseSparseSmall: true,
+		SkipNormalData: true,
+		SparseCSRFile:  sparseSmallDataPath + "base_small.csr",
+		VectorInXATTR:  true,
+		Username:       clusterconfig.Username,
+		Password:       clusterconfig.Password,
+	}
+	err := randdocs.Run(cfg)
+	FailTestIfError(err, "Error loading sparsesmall XATTR data", t)
+
+	sparseSmallXATTRLoaded = true
+}
+
+// testSparseVectorXATTRSparseSmall is the shared implementation for both the bhive and
+// composite sparse XATTR tests. It:
+//  1. Loads sparsesmall data with vectors stored in XATTR (sparse_xattr key).
+//  2. Creates the appropriate index on meta().xattrs.sparse_xattr.
+//  3. Verifies items_count matches numSparseSmallDocs.
+//  4. Verifies via EXPLAIN that the index is used by the query planner.
+//  5. Runs 32 queries from the dataset ground truth and asserts 100% recall
+//     (achievable because nprobes=256 is exhaustive for IVF256).
+func testSparseVectorXATTRSparseSmall(t *testing.T, isBhive bool) {
+	skipIfNotPlasma(t)
+
+	if !sparseSmallXATTRLoaded {
+		vectorSetupSparseSmallXATTR(t)
+	}
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	const xattrField = "meta().xattrs.sparse_xattr"
+	nprobes := 256
+
+	var idxName, stmt string
+	if isBhive {
+		idxName = "idx_sparse_xattr_bhive"
+		stmt = fmt.Sprintf(
+			"CREATE VECTOR INDEX %v ON %v(%v SPARSE VECTOR)"+
+				" WITH {\"defer_build\":true, \"description\":\"IVF256\", \"similarity\":\"DOT\", \"scan_nprobes\":%d};",
+			idxName, bucket, xattrField, nprobes)
+	} else {
+		idxName = "idx_sparse_xattr_comp"
+		stmt = fmt.Sprintf(
+			"CREATE INDEX %v ON %v(`type`, `category`, `source`, `language`, `topic`, `relevance`, %v SPARSE VECTOR, `vectornum`)"+
+				" WITH {\"defer_build\":true, \"description\":\"IVF256\", \"similarity\":\"DOT\", \"scan_nprobes\":%d};",
+			idxName, bucket, xattrField, nprobes)
+	}
+
+	err := createWithDeferAndBuild(idxName, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error creating "+idxName, t)
+
+	// Validate items count
+	stats := secondaryindex.GetPerPartnStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	itemsCount := int(stats[fmt.Sprintf("%v:%v:items_count", bucket, idxName)].(float64))
+	if itemsCount != numSparseSmallDocs {
+		t.Fatalf("%v: items_count mismatch: expected %v, got %v", idxName, numSparseSmallDocs, itemsCount)
+	}
+	log.Printf("%v: items_count=%v OK", idxName, itemsCount)
+
+	// Verify index is used in the query plan
+	var planCheckStmt string
+	if isBhive {
+		planCheckStmt = fmt.Sprintf(
+			"EXPLAIN SELECT vectornum FROM %v ORDER BY sparse_vector_distance(%v, [[1055, 2002, 3000], [0.5, 1.2, 0.8]], %d) LIMIT 10",
+			bucket, xattrField, nprobes)
+	} else {
+		planCheckStmt = fmt.Sprintf(
+			"EXPLAIN SELECT vectornum FROM %v WHERE `type`=\"Document\" AND `category`=\"Document\" "+
+				"ORDER BY sparse_vector_distance(%v, [[1055, 2002, 3000], [0.5, 1.2, 0.8]], %d) LIMIT 10",
+			bucket, xattrField, nprobes)
+	}
+	planRes, perr := execN1QL(bucket, planCheckStmt)
+	FailTestIfError(perr, "Error in EXPLAIN for "+idxName, t)
+	if !strings.Contains(fmt.Sprintf("%v", planRes), idxName) {
+		t.Fatalf("%v: index not used in query plan: %v", idxName, planRes)
+	}
+	log.Printf("%v: plan verification passed", idxName)
+
+	// Load queries and ground truth from the SparseSmall dataset
+	sd, err := randdocs.OpenSparseData(sparseSmallDataPath + "base_small.csr")
+	FailTestIfError(err, "Error opening sparse base data", t)
+	err = sd.LoadQueryAndTruth(sparseSmallDataPath+"queries.dev.csr", sparseSmallDataPath+"base_small.dev.gt")
+	FailTestIfError(err, "Error loading query and ground truth files", t)
+
+	groundTruthK := sd.GetGroundTruthK()
+	if groundTruthK > 10 {
+		groundTruthK = 10 // cap at recall@10
+	}
+
+	var totalRel, totalQueries int64
+	numQueriesInDataset := 32
+
+	for qi := 0; qi < numQueriesInDataset; qi++ {
+		query, truth, qerr := sd.GetQueryAndTruth()
+		if qerr != nil {
+			break
+		}
+
+		queryVecStr := formatSparseQueryVector(query)
+
+		var queryStmt string
+		if isBhive {
+			queryStmt = fmt.Sprintf(
+				"SELECT vectornum FROM %v ORDER BY sparse_vector_distance(%v, %v, %d, %d) LIMIT %d",
+				bucket, xattrField, queryVecStr, nprobes, 500, groundTruthK)
+		} else {
+			// VectorInXATTR sets type="Document" for all docs; other scalar fields use overflow=0 values.
+			queryStmt = fmt.Sprintf(
+				"SELECT vectornum FROM %v "+
+					"WHERE `type`=\"Document\" AND `category`=\"Document\" AND `source`=\"MSMARCO\" "+
+					"AND `language`=\"English\" AND `topic`=\"Science\" AND `relevance`=1 "+
+					"ORDER BY sparse_vector_distance(%v, %v, %d) LIMIT %d",
+				bucket, xattrField, queryVecStr, nprobes, groundTruthK)
+		}
+
+		scanResults, serr := execN1QL(bucket, queryStmt)
+		FailTestIfError(serr, fmt.Sprintf("Error running query %d on %v", qi, idxName), t)
+
+		truthTopK := truth
+		if len(truthTopK) > groundTruthK {
+			truthTopK = truthTopK[:groundTruthK]
+		}
+		truthSet := make(map[int32]struct{})
+		for _, idx := range truthTopK {
+			truthSet[idx] = struct{}{}
+		}
+
+		var matches int64
+		for _, res := range scanResults {
+			resDict, ok := res.(map[string]interface{})
+			if !ok {
+				t.Fatalf("Query %d: unexpected result type %T", qi, res)
+			}
+			vecnum, ok := resDict["vectornum"].(float64)
+			if !ok {
+				t.Fatalf("Query %d: missing vectornum in result: %v", qi, resDict)
+			}
+			if _, found := truthSet[int32(vecnum)]; found {
+				matches++
+			}
+		}
+
+		recall := float64(matches) / float64(len(truthTopK))
+		totalRel += matches
+		totalQueries++
+		log.Printf("%v: Query %d: Recall=%.3f (%d/%d)", idxName, qi, recall, matches, len(truthTopK))
+	}
+
+	overallRecall := 100 * float64(totalRel) / (float64(groundTruthK) * float64(totalQueries))
+	log.Printf("%v: Overall Recall=%.2f%% (%d rel / %d queries)", idxName, overallRecall, totalRel, totalQueries)
+
+	if overallRecall < 100 {
+		t.Fatalf("%v: expected 100%% recall with exhaustive scan (nprobes=%d), got %.2f%%",
+			idxName, nprobes, overallRecall)
+	}
+}
+
+// TestSparseBhiveVectorXATTRSparseSmall creates a bhive sparse vector index
+// (CREATE VECTOR INDEX) on meta().xattrs.sparse_xattr loaded from the SparseSmall
+// (MS MARCO) dataset, then validates index usage and 100% recall@10.
+func TestSparseBhiveVectorXATTRSparseSmall(t *testing.T) {
+	testSparseVectorXATTRSparseSmall(t, true /*isBhive*/)
+}
+
+// TestSparseCompositeVectorXATTRSparseSmall creates a composite sparse vector index
+// (CREATE INDEX) on scalar fields + meta().xattrs.sparse_xattr from the SparseSmall
+// (MS MARCO) dataset, then validates index usage and 100% recall@10.
+func TestSparseCompositeVectorXATTRSparseSmall(t *testing.T) {
+	testSparseVectorXATTRSparseSmall(t, false /*isBhive*/)
+}

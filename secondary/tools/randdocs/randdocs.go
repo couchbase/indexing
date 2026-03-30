@@ -6,12 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	rnd "math/rand"
+	"net/url"
+	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+
+	"github.com/couchbase/gocb/v2"
 )
 
 type Config struct {
@@ -49,6 +54,14 @@ type Config struct {
 
 	// Use 16 byte random docid
 	UseRandDocID bool
+
+	// Vector in XATTR
+	VectorInXATTR bool
+
+	// Optional credentials for gocb XATTR insertion.
+	// If empty, credentials are resolved from CBAUTH_REVRPC_URL or CB_USERNAME/CB_PASSWORD env vars.
+	Username string
+	Password string
 }
 
 const (
@@ -117,6 +130,17 @@ func Run(cfg Config) error {
 
 	}
 
+	var gocbCol *gocb.Collection
+	var gocbCluster *gocb.Cluster
+	if cfg.VectorInXATTR {
+		gocbCluster, gocbCol, err = openGocbCollection(cfg.ClusterAddr, cfg.Bucket, cfg.Scope, cfg.Collection, cfg.Username, cfg.Password)
+		if err != nil {
+			fmt.Printf("Error connecting gocb for XATTR: %v\n", err)
+			return err
+		}
+		defer gocbCluster.Close(nil)
+	}
+
 	var localErr error
 	for itr := 0; itr < cfg.Iterations; itr++ {
 		var wg sync.WaitGroup
@@ -181,14 +205,77 @@ func Run(cfg Config) error {
 						value["arr"] = val
 					}
 
-					if cid != "" {
-						localErr = b.SetC(docid, cid, 0, value)
+					if cfg.VectorInXATTR {
+						// For XATTR mode, don't include vector in main document
+						// Only include scalar field
+						value["type"] = "Document" // default scalar field
+
+						var vectorData interface{}
+
+						if cfg.GenVectors {
+							value["description"] = []interface{}{} // placeholder
+							vectorData = generateVectors(cfg.VecDimension, cfg.VecSeed)
+						}
+
+						if cfg.GenSparseVectors {
+							key := "sparse_random"
+							if cfg.SparseVecDim > 0 {
+								key = "sparse_dim"
+							}
+							value[key] = nil // placeholder
+							vectorData = generateSparseVector(cfg.SparseVecDim, cfg.VecSeed)
+						}
+
+						if cfg.UseSIFTSmall {
+							vectorData = value["sift"]
+							delete(value, "sift")
+						}
+
+						if cfg.UseSparseSmall {
+							vectorData = value["sparse"]
+							delete(value, "sparse")
+						}
+
+						if vectorData != nil {
+							// Insert doc with scalar fields first
+							if cid != "" {
+								localErr = b.SetC(docid, cid, 0, value)
+							} else {
+								localErr = b.Set(docid, 0, value)
+							}
+
+							if localErr != nil {
+								fmt.Println(err)
+								err = localErr
+							}
+
+							// Then insert vector as XATTR using gocb
+							xattrErr := insertVectorAsXATTR(gocbCol, docid, vectorData)
+							if xattrErr != nil {
+								fmt.Printf("Failed to insert XATTR for doc %s: %v\n", docid, xattrErr)
+							}
+						} else {
+							// No vector data, just insert the document
+							if cid != "" {
+								localErr = b.SetC(docid, cid, 0, value)
+							} else {
+								localErr = b.Set(docid, 0, value)
+							}
+							if localErr != nil {
+								fmt.Println(err)
+								err = localErr
+							}
+						}
 					} else {
-						localErr = b.Set(docid, 0, value)
-					}
-					if localErr != nil {
-						fmt.Println(err)
-						err = localErr
+						if cid != "" {
+							localErr = b.SetC(docid, cid, 0, value)
+						} else {
+							localErr = b.Set(docid, 0, value)
+						}
+						if localErr != nil {
+							fmt.Println(err)
+							err = localErr
+						}
 					}
 
 					if k := atomic.AddInt64(&cnt, 1); k%100000 == 0 {
@@ -210,3 +297,98 @@ func Run(cfg Config) error {
 
 	return err
 }
+
+// openGocbCollection creates a single gocb cluster connection and returns the target collection.
+// The caller is responsible for closing the cluster when done.
+// getAddrWithMemcachedPort converts cluster address to memcached port.
+// gocb/v2 returns CONNECTION_ERROR with http/https ports (9000/19000), so use memcached port 12000.
+func getAddrWithMemcachedPort(addr string) (string, error) {
+	parts := strings.Split(addr, ":")
+	if len(parts) == 1 {
+		return "", fmt.Errorf("invalid cluster address: %v", addr)
+	}
+	return parts[0] + ":12000", nil
+}
+
+// resolveGocbCredentials returns credentials for gocb by trying, in order:
+//  1. cfg.Username / cfg.Password if set (programmatic use, e.g. tests)
+//  2. CBAUTH_REVRPC_URL env var (e.g. "http://Administrator:asdasd@127.0.0.1:9000/query")
+//  3. CB_USERNAME / CB_PASSWORD env vars
+func resolveGocbCredentials(username, password string) (string, string, error) {
+	if username != "" {
+		return username, password, nil
+	}
+	if raw := os.Getenv("CBAUTH_REVRPC_URL"); raw != "" {
+		if u, err := url.Parse(raw); err == nil && u.User != nil {
+			user := u.User.Username()
+			pass, _ := u.User.Password()
+			if user != "" {
+				return user, pass, nil
+			}
+		}
+	}
+	if u := os.Getenv("CB_USERNAME"); u != "" {
+		return u, os.Getenv("CB_PASSWORD"), nil
+	}
+	return "", "", fmt.Errorf("no credentials: set CBAUTH_REVRPC_URL or CB_USERNAME/CB_PASSWORD env vars")
+}
+
+func openGocbCollection(clusterAddr, bucket, scope, collection, username, password string) (*gocb.Cluster, *gocb.Collection, error) {
+	connString, err := getAddrWithMemcachedPort(clusterAddr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	username, password, err = resolveGocbCredentials(username, password)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	cluster, err := gocb.Connect("couchbase://"+connString, gocb.ClusterOptions{
+		Authenticator: gocb.PasswordAuthenticator{
+			Username: username,
+			Password: password,
+		},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	bucketObj := cluster.Bucket(bucket)
+	if err = bucketObj.WaitUntilReady(10*time.Second, nil); err != nil {
+		cluster.Close(nil)
+		return nil, nil, err
+	}
+
+	var col *gocb.Collection
+	if scope != "" && collection != "" {
+		col = bucketObj.Scope(scope).Collection(collection)
+	} else {
+		col = bucketObj.Scope("_default").Collection("_default")
+	}
+
+	return cluster, col, nil
+}
+
+// insertVectorAsXATTR inserts vector data as an XATTR on an existing document.
+func insertVectorAsXATTR(col *gocb.Collection, docid string, vectorData interface{}) error {
+	// Determine XATTR key based on vector type
+	var xattrKey string
+	switch v := vectorData.(type) {
+	case []float32:
+		xattrKey = "vector_xattr"
+	case SparseVector:
+		xattrKey = "sparse_xattr"
+	case []interface{}:
+		xattrKey = "sparse_xattr"
+	default:
+		return fmt.Errorf("unsupported vector type: %T", v)
+	}
+
+	_, err := col.MutateIn(docid, []gocb.MutateInSpec{
+		gocb.UpsertSpec(xattrKey, vectorData, &gocb.UpsertSpecOptions{IsXattr: true}),
+	}, nil)
+	return err
+}
+
+
