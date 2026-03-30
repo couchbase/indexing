@@ -1835,10 +1835,19 @@ func TestSparseBhiveIndexSparseSmall(t *testing.T) {
 	testSparseVectorIndexWithAllSparseSmallQueries(t, 0, 1, 1, true /*isBhive*/)
 }
 
+func TestSparseCompositeIndexSparseSmall(t *testing.T) {
+	testSparseVectorIndexWithAllSparseSmallQueries(t, 0, 1, 1, false /*isBhive*/)
+}
+
 // TestSparseBhiveReplicatedPartnIndexAllSparseSmall tests replicated bhive sparse index
 func TestSparseBhiveReplicatedPartnIndexSparseSmall(t *testing.T) {
 	t.Skipf("Skipping test for now...")
 	testSparseVectorIndexWithAllSparseSmallQueries(t, 2, 1, 1, true /*isBhive*/)
+}
+
+func TestSparseCompositeReplicatedPartnIndexSparseSmall(t *testing.T) {
+	t.Skipf("Skipping test for now...")
+	testSparseVectorIndexWithAllSparseSmallQueries(t, 2, 1, 1, false /*isBhive*/)
 }
 
 // testSparseVectorIndexWithAllSparseSmallQueries is the shared implementation for sparse vector
@@ -1996,7 +2005,7 @@ func testSparseVectorIndexWithAllSparseSmallQueries(t *testing.T, numReplica, nu
 					// Composite: use scalar predicates that match all docs (overflow=0 values)
 					queryStmt = fmt.Sprintf(
 						"SELECT vectornum FROM default "+
-							"WHERE `type`=\"Casual\" AND category=\"Document\" AND source=\"MSMARCO\" AND language=\"English\" AND topic=\"Science\" AND relevance=1 "+
+							"WHERE `type`=\"Casual\" AND category=\"Document\" AND source=\"MSMARCO\" AND `language`=\"English\" AND topic=\"Science\" AND relevance=1 "+
 							"ORDER BY sparse_vector_distance(sparse, %v, %d) "+
 							"LIMIT %d",
 						queryVecStr, nprobes, groundTruthK)
