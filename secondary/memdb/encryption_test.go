@@ -716,6 +716,13 @@ func testEncryptionDropKeyIdsFromSnapshot(t *testing.T, conf Config) {
 	// This triggers GC which flushes the gc list and removes the dead items from the index
 	assert.NoError(t, db.StoreToDisk(conf.Path, snap, runtime.GOMAXPROCS(0), keyId, cipher, nil))
 
+	ctx, _ := db.NewEncryptionContext(keyId, cipher)
+	err = gocbcrypto.WriteFile(filepath.Join(conf.Path, "manifest.json"), make([]byte, 1), FilePermMode, ctx, nil)
+	assert.NoError(t, err)
+	for i := range unencryptedFiles {
+		os.WriteFile(filepath.Join(conf.Path, unencryptedFiles[i]), make([]byte, 1), 0644)
+	}
+
 	// get key ids from snapshot before dropping
 	keyIds, err := db.getActiveKeyIdsFromSnapshot(conf.Path)
 	assert.NoError(t, err)
@@ -890,6 +897,12 @@ func testEncryptionDropEmptyKeyIdsFromSnapshot(t *testing.T, conf Config) {
 	assert.NoError(t, db.PreparePersistence(conf.Path, snap, keyId, cipher))
 	assert.NoError(t, db.StoreToDisk(conf.Path, snap, runtime.GOMAXPROCS(0), keyId, cipher, nil))
 	snap.Close()
+
+	// simulate slice created metadata files
+	os.WriteFile(filepath.Join(db.Path, "manifest.json"), make([]byte, 1), 0644)
+	for i := range unencryptedFiles {
+		os.WriteFile(filepath.Join(db.Path, unencryptedFiles[i]), make([]byte, 1), 0644)
+	}
 
 	// get empty key id from snapshot
 	keyIds, err := db.getActiveKeyIdsFromSnapshot(conf.Path)

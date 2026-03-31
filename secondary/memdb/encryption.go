@@ -28,6 +28,8 @@ import (
 )
 
 const (
+	dataFilePrefix = "shard-"
+
 	// extension for encrypted files
 	rencrypt_tmp_ext = ".aes.tmp"
 	encrypt_bak_ext  = ".bak"
@@ -47,6 +49,10 @@ var (
 	// use empty slice for unencrypted files
 	NullKeyId = []byte{}
 )
+
+func isDataFile(fpath string) bool {
+	return strings.HasPrefix(filepath.Base(fpath), dataFilePrefix)
+}
 
 type RotationType int
 
@@ -564,6 +570,11 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 func (v *keyRotationVisitor) visit(ctx context.Context, fpath string) error {
 	var fkeyId []byte
 
+	// clean up stale rotation files from previous attempts (if janitor fails cleanup)
+	if _, _, err := handleStaleRotationFile(fpath); err != nil {
+		return err
+	}
+
 	if ok, err := gocbcrypto.IsFileEncrypted(fpath); err != nil {
 		return fmt.Errorf("keyRotationVisitor %s: %w", fpath, err)
 	} else if ok {
@@ -709,13 +720,15 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 		}
 	}()
 
+	var encryptCtx gocbcrypto.EncryptionContext
+
 	switch rotType {
 	case NoRotation:
 		return nil
 	case Reencrypt:
-		var encryptCtx gocbcrypto.EncryptionContext
 		encryptCtx, err = v.db.NewEncryptionContext(keyId, cipher)
 		if err != nil {
+			atomic.AddUint64(&v.NumFilesErrRencrypt, 1)
 			return err
 		}
 
@@ -736,7 +749,18 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 		}
 
 	case Encrypt:
-		bytesWritten, err = v.db.encryptFileByItem(ctx, file, tmpDst, keyId, cipher)
+		if isDataFile(file) {
+			bytesWritten, err = v.db.encryptFileByItem(ctx, file, tmpDst, keyId, cipher)
+		} else {
+			// manifest
+			var bs []byte
+			if bs, err = iowrap.Os_ReadFile(file); err == nil {
+				if encryptCtx, err = v.db.NewEncryptionContext(keyId, cipher); err == nil {
+					err = gocbcrypto.WriteFile(tmpDst, bs, FilePermMode, encryptCtx, iowrap.CountDiskFailures)
+				}
+			}
+		}
+
 		if err != nil && !errors.Is(err, context.Canceled) {
 			atomic.AddUint64(&v.NumFilesErrEncrypt, 1)
 		}
@@ -842,34 +866,7 @@ func (v *keyRotationJanitor) process(ctx context.Context) error {
 
 	for _, f := range v.candidates {
 		var er error
-		if strings.HasSuffix(f, encrypt_bak_ext) {
-			// backup file
-			orig := strings.TrimSuffix(f, encrypt_bak_ext)
-			// restore backup file
-			if _, er = iowrap.Os_Stat(orig); er != nil {
-				if os.IsNotExist(er) {
-					if er = iowrap.Os_Rename(f, orig); er == nil { // restore
-						restored++
-					}
-				} else {
-					// original stat failed (permission, transient error, etc.)
-					// attempt to clean up stale backup file
-					if er = iowrap.Os_Remove(f); er == nil {
-						cleanup++
-					}
-				}
-			} else {
-				// original exists, remove stale backup file
-				er = iowrap.Os_Remove(f)
-			}
-
-		} else if strings.HasSuffix(f, rencrypt_tmp_ext) {
-			// temporary file
-			if er = iowrap.Os_Remove(f); er == nil {
-				cleanup++
-			}
-		}
-
+		restored, cleanup, er = handleStaleRotationFile(f)
 		if er != nil && !os.IsNotExist(er) {
 			if err == nil {
 				err = er
@@ -879,6 +876,35 @@ func (v *keyRotationJanitor) process(ctx context.Context) error {
 	}
 
 	return err
+}
+
+// restores the original file from a backup if needed, or removes stale backup/temp files
+// from failed rotation attempt due to crash
+func handleStaleRotationFile(f string) (restored, cleanedUp int, err error) {
+	if strings.HasSuffix(f, encrypt_bak_ext) {
+		orig := strings.TrimSuffix(f, encrypt_bak_ext)
+		if _, er := iowrap.Os_Stat(orig); er != nil {
+			if os.IsNotExist(er) {
+				if er = iowrap.Os_Rename(f, orig); er == nil {
+					restored++
+				}
+			} else {
+				if er = iowrap.Os_Remove(f); er == nil {
+					cleanedUp++
+				}
+			}
+		} else {
+			er := iowrap.Os_Remove(f)
+			if er == nil {
+				cleanedUp++
+			}
+		}
+	} else if strings.HasSuffix(f, rencrypt_tmp_ext) {
+		if er := iowrap.Os_Remove(f); er == nil {
+			cleanedUp++
+		}
+	}
+	return
 }
 
 // returns encryption statistics for all snapshots.

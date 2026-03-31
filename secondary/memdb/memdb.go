@@ -1278,7 +1278,7 @@ func (m *MemDB) PreparePersistence(dir string, snap *Snapshot, keyId []byte, cip
 		deltadir := filepath.Join(dir, "delta")
 		iowrap.Os_MkdirAll(deltadir, 0755)
 		for id := 0; id < m.numWriters(); id++ {
-			file := fmt.Sprintf("shard-%d", id)
+			file := fmt.Sprintf("%s%d", dataFilePrefix, id)
 			deltafile := filepath.Join(deltadir, file)
 			var dw FileWriter
 			if dw, err = m.newFileWriter(m.fileType, deltafile, keyId, cipher); err != nil {
@@ -1350,7 +1350,7 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, keyId []byt
 	}()
 
 	for shard := 0; shard < shards; shard++ {
-		file := fmt.Sprintf("shard-%d", shard)
+		file := fmt.Sprintf("%s%d", dataFilePrefix, shard)
 		datafile := filepath.Join(datadir, file)
 		w, err := m.newFileWriter(m.fileType, datafile, keyId, cipher)
 		if err != nil {
