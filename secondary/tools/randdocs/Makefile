@@ -26,6 +26,12 @@ loadsiftsmall:
 loadsparsesmall:
 	./randdocs -config ./cmd/config.json -useSparseSmall -NumDocs 100000 -skipNormalData
 
+loadsiftsmall-xattr:
+	./randdocs -config ./cmd/config.json -useSIFTSmall -NumDocs 40000 -skipNormalData -VectorInXATTR=true
+
+loadsparsesmall-xattr:
+	./randdocs -config ./cmd/config.json -useSparseSmall -NumDocs 100000 -skipNormalData -VectorInXATTR=true
+
 # Generate random sparse vectors with variable dimensions (default)
 loadrandsparse:
 	./randdocs -config ./cmd/config.json -genSparseVectors -NumDocs 10000

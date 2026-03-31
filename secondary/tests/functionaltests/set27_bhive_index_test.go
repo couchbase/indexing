@@ -466,6 +466,114 @@ func TestBhiveSparseVectorItemsCount(t *testing.T) {
 	runSparseScan(t, idx_bhive_sparse, "sparse_dim", 256, 10, 1)
 }
 
+// TestCommonBuildForBhiveDenseAndSparse verifies that a single BUILD statement can build both a
+// dense and sparse bhive index together.
+func TestCommonBuildForBhiveDenseAndSparse(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	// load both dense (sparse is already loaded
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	// Load dense vector data (docs with "sift" field)
+	e = loadVectorData(t, bucket, "", "", numDocs)
+	FailTestIfError(e, "Error in loading dense vector data", t)
+	vectorsLoaded = true
+
+	// Step 2: Create dense bhive index with defer_build=true
+	idxDense := "idx_bhive_dense_defer"
+	stmtDense := "CREATE VECTOR INDEX " + idxDense + " ON default(sift VECTOR) WITH " +
+		"{ \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\"," +
+		"\"defer_build\":true};"
+	_, err := execN1QL(bucket, stmtDense)
+	FailTestIfError(err, "Error in creating deferred dense index "+idxDense, t)
+	log.Printf("Created deferred dense bhive index: %v", idxDense)
+
+	// Step 3: Create sparse bhive index with defer_build=true
+	idxSparse := "idx_bhive_sparse_defer"
+	stmtSparse := "CREATE VECTOR INDEX " + idxSparse + " ON default(sparse_dim SPARSE VECTOR)" +
+		" WITH {\"description\": \"IVF256\", \"defer_build\":true};"
+	_, err = execN1QL(bucket, stmtSparse)
+	FailTestIfError(err, "Error in creating deferred sparse index "+idxSparse, t)
+	log.Printf("Created deferred sparse bhive index: %v", idxSparse)
+
+	// Step 4: Issue a single BUILD for both indexes together
+	log.Printf("Issuing a common BUILD statement for both: %v, %v", idxDense, idxSparse)
+	err = secondaryindex.BuildIndexes(
+		[]string{idxDense, idxSparse},
+		bucket,
+		indexManagementAddress,
+		defaultIndexActiveTimeout*2,
+	)
+	FailTestIfError(err, "Error in building deferred dense+sparse indexes", t)
+	log.Printf("Both indexes built successfully: %v, %v", idxDense, idxSparse)
+
+	// Step 5: Verify items_count for both indexes
+	stats := secondaryindex.GetPerPartnStats(
+		clusterconfig.Username,
+		clusterconfig.Password,
+		kvaddress)
+
+	denseItemsKey := fmt.Sprintf("%v:%v:items_count", bucket, idxDense)
+	denseItemsCount := stats[denseItemsKey].(float64)
+	if denseItemsCount != float64(numDocs) {
+		t.Fatalf("Dense index items_count mismatch. Expected %v, got %v. Stats: %v",
+			numDocs, denseItemsCount, stats)
+	}
+	log.Printf("Dense index %v items_count verified: %v", idxDense, denseItemsCount)
+
+	sparseItemsKey := fmt.Sprintf("%v:%v:items_count", bucket, idxSparse)
+	sparseItemsCount := stats[sparseItemsKey].(float64)
+	if sparseItemsCount != float64(numDocs) {
+		t.Fatalf("Sparse index items_count mismatch. Expected %v, got %v. Stats: %v",
+			numDocs, sparseItemsCount, stats)
+	}
+	log.Printf("Sparse index %v items_count verified: %v", idxSparse, sparseItemsCount)
+
+	// Step 6: Verify the dense index is functional with an ANN scan
+	limit := int64(5)
+	queryVectorStr := "["
+	for _, val := range indexVector.QueryVector {
+		queryVectorStr += fmt.Sprintf("%v,", val)
+	}
+	queryVectorStr = queryVectorStr[:len(queryVectorStr)-1]
+	queryVectorStr += "]"
+
+	annScanStmt := fmt.Sprintf(
+		"with qvec as (%v) select meta().id, APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v, true) as distance "+
+			"from %v ORDER BY distance limit %v",
+		queryVectorStr, indexVector.Probes, bucket, limit)
+	annScanResults, err := execN1QL(bucket, annScanStmt)
+	FailTestIfError(err, "Error during dense ANN scan on "+idxDense, t)
+
+	if int64(len(annScanResults)) != limit {
+		t.Fatalf("Dense ANN scan: expected %v results, got %v", limit, len(annScanResults))
+	}
+	log.Printf("Dense idx %v ANN scan returned %v results as expected", idxDense, len(annScanResults))
+
+	// Validate dense ANN results against KNN
+	knnScanStmt := fmt.Sprintf(
+		"with qvec as (%v) select meta().id, VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\") as distance "+
+			"from %v ORDER BY distance limit %v",
+		queryVectorStr, bucket, limit)
+	knnScanResults, err := execN1QL(bucket, knnScanStmt)
+	FailTestIfError(err, "Error during dense KNN scan", t)
+
+	recall := computeRecallWithKNNResults(annScanResults, knnScanResults, 2, t)
+	log.Printf("TestBhiveDenseAndSparseDeferBuild: dense recall = %v", recall)
+	if recall < 0.5 {
+		log.Printf("Dense ANN results: %v, KNN results: %v", annScanResults, knnScanResults)
+	}
+
+	// Step 7: Verify the sparse index is functional with a sparse vector scan
+	runSparseScan(t, idxSparse, "sparse_dim", 256, limit, 1)
+	log.Printf("Sparse index %v scan verified successfully", idxSparse)
+
+	// Step 8: Verify scan stats for both indexes
+	validateScanStats(bucket, idxDense, 1, limit, t)
+	validateScanStats(bucket, idxSparse, 1, limit, t)
+}
+
 func TestBhiveSparseVectorRandomDocs(t *testing.T) {
 	skipIfNotPlasma(t)
 
