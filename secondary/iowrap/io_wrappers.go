@@ -326,3 +326,13 @@ func Os_Stat(name string) (os.FileInfo, error) {
 	}
 	return fileInfo, err
 }
+
+// Os_ReadDir wraps Go-native FUNCTION os.ReadDir for disk failure tracking.
+func Os_ReadDir(path string) ([]os.DirEntry, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil && !os.IsNotExist(err) {
+		countDiskFailures(err)
+		return nil, err
+	}
+	return entries, nil
+}

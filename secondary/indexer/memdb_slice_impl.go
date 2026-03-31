@@ -318,6 +318,28 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	return mdb, nil
 }
 
+func remapSlice_MOI(storageDir string, idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId, oldPath string, newPath string) error {
+	var err error
+
+	if oldPath == newPath {
+		return nil
+	}
+
+	if err = iowrap.Os_Rename(oldPath, newPath); err != nil {
+		return fmt.Errorf("remapSlice_MOI: rename from %v to %v failed: %v", oldPath, newPath, err)
+	}
+
+	if err = memdb.Dir_Sync(newPath, 0o755); err != nil {
+		logging.Warnf("remapSlice_MOI: dir sync for %v error: %v", newPath, err)
+	}
+
+	if err = removeEmptySliceDir(oldPath); err != nil {
+		return fmt.Errorf("remapSlice_MOI: %w", err)
+	}
+
+	return err
+}
+
 var (
 	moiWriterSemaphoreCh chan bool
 	moiWritersAllowed    int

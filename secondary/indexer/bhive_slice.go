@@ -343,6 +343,54 @@ func DestroySlice_Bhive(storageDir string, path string) error {
 	return destroySlice_Bhive(storageDir, path)
 }
 
+func RemapSlice_Bhive(storageDir string, idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId, oldPath string, newPath string) (err error) {
+	if idxInst == nil {
+		return fmt.Errorf("remapSlice_Bhive: invalid instance for remapping slice")
+	}
+
+	if oldPath == newPath {
+		return nil
+	}
+
+	defer func() {
+		if err != nil && bhive.IsFatalError(err) {
+			if bhive.IsErrorRecoveryInstPathNotFound(err) {
+				err = errStoragePathNotFound
+			} else {
+				err = errStorageCorrupted
+			}
+		}
+	}()
+
+	if err = bhive.RemapInstancePath(storageDir,
+		filepath.Join(oldPath, getInstanceGroup(MAIN_INDEX)),
+		filepath.Join(newPath, getInstanceGroup(MAIN_INDEX))); err != nil {
+		return
+	}
+
+	if err = bhive.RemapInstancePath(storageDir,
+		filepath.Join(oldPath, getInstanceGroup(BACK_INDEX)),
+		filepath.Join(newPath, getInstanceGroup(BACK_INDEX))); err != nil {
+		return
+	}
+
+	if err = RemapCodebookDir(storageDir, idxInst, partnId, sliceId,
+		oldPath, newPath); err != nil {
+		return
+	}
+
+	if err = plasma.DirSync(newPath, 0o755); err != nil {
+		logging.Warnf("remapSlice_Bhive: dir sync for %v error: %v", newPath, err)
+	}
+
+	if err = removeEmptySliceDir(oldPath); err != nil {
+		err = fmt.Errorf("remapSlice_Bhive: %w", err)
+		return
+	}
+
+	return
+}
+
 // GetEmptyShardInfo_Bhive - get list of empty bhive shards
 func GetEmptyShardInfo_Bhive() ([]common.ShardId, error) {
 	bhiveShards, err := bhive.GetCurrentEmptyShardsInfo()

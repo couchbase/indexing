@@ -11511,6 +11511,24 @@ func DestroySlice(mode common.StorageMode, storeEngineDir string, path string) e
 	return fmt.Errorf("unable to delete instance %v : unrecognized storage type %v", path, mode)
 }
 
+func RemapSlice(mode common.StorageMode, storeEngineDir string, idxInst *common.IndexInst,
+	partnId common.PartitionId, sliceId SliceId, oldPath string, newPath string) error {
+
+	switch mode {
+	case common.FORESTDB, common.NOT_SET:
+		return fmt.Errorf("remapSlice is not supported for instance: %v storage type %v", oldPath, mode)
+	case common.MOI:
+		return remapSlice_MOI(storeEngineDir, idxInst, partnId, sliceId, oldPath, newPath)
+	case common.PLASMA:
+		if strings.HasSuffix(storeEngineDir, c.BHIVE_DIR_PREFIX) {
+			return RemapSlice_Bhive(storeEngineDir, idxInst, partnId, sliceId, oldPath, newPath)
+		}
+		return RemapSlice_Plasma(storeEngineDir, idxInst, partnId, sliceId, oldPath, newPath)
+	}
+
+	return fmt.Errorf("unable to remap instance %v : unrecognized storage type %v", oldPath, mode)
+}
+
 func ListSlices(mode common.StorageMode, storeEngineDir string) ([]string, error) {
 
 	listFiles := func() ([]string, error) {
