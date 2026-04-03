@@ -302,6 +302,10 @@ func RegisterRequestHandler(mgr *manager.IndexManager, mux *http.ServeMux, confi
 		mux.HandleFunc("/getCachedStats", handlerContext.handleCachedStats)
 		mux.HandleFunc("/postScheduleCreateRequest", handlerContext.handleScheduleCreateRequest)
 		mux.HandleFunc("/getInternalVersion", handlerContext.handleInternalVersionRequest)
+		mux.HandleFunc(
+			"/compactMetadataStores",
+			handlerContext.handleCompactMetadataStores,
+		)
 
 		// Create cache for getIndexStatus results
 		storageDir, _ := common.GetStorageDirs(config, common.NA_StorageEngine)
@@ -2749,6 +2753,38 @@ func (m *requestHandlerContext) getLocalReplicaCount(creds cbauth.Creds) (map[co
 	}
 
 	return result, nil
+}
+
+func (m *requestHandlerContext) handleCompactMetadataStores(
+	w http.ResponseWriter, r *http.Request,
+) {
+
+	const method string = "RequestHandler::handleCompactMetadataStores"
+
+	creds, ok := doAuth(r, w, method)
+	if !ok {
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, method) {
+		return
+	}
+
+	err := m.doCompactMetadataStores()
+	if err == nil {
+		rhSend(http.StatusOK, w, "ok")
+	} else {
+		logging.Errorf("%v: err %v", method, err)
+		rhSendHttpError(w, "failed to compact metastore", http.StatusInternalServerError)
+	}
+}
+
+func (m *requestHandlerContext) doCompactMetadataStores() error {
+	err := m.mgr.GetMetadataRepo().CompactStores()
+	if err != nil {
+		return fmt.Errorf("failed to compact metadata stores with error %w", err)
+	}
+	return nil
 }
 
 ///////////////////////////////////////////////////////
