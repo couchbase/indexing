@@ -18,6 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	"github.com/couchbase/query/auth"
 	"github.com/couchbase/query/datastore"
+	"github.com/couchbase/query/encryption"
 	qerrors "github.com/couchbase/query/errors"
 	qexpr "github.com/couchbase/query/expression"
 	qparser "github.com/couchbase/query/expression/parser"
@@ -456,6 +457,13 @@ func (ctxt *qcmdContext) GetErrors() []qerrors.Error {
 
 func (ctxt *qcmdContext) ScanReportWait() time.Duration {
 	return 0
+}
+
+func (ctxt *qcmdContext) GetActiveEncryptionKey(encryption.KeyDataType) (
+	*encryption.EaRKey, qerrors.Error,
+) {
+
+	return nil, nil
 }
 
 func cleanbackfillFiles() {
