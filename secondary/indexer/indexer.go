@@ -29,6 +29,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/cbauth/cbauthimpl"
 	"github.com/couchbase/cbauth/service"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	l "github.com/couchbase/indexing/secondary/logging"
@@ -313,6 +315,10 @@ type buildDoneSpec struct {
 }
 
 type resetList []common.IndexInstId
+
+type KeyDataType = cbauth.KeyDataType
+type EncrKeysInfo = cbauth.EncrKeysInfo
+type EaRKey = cbauthimpl.EaRKey
 
 // NewIndexer is the constructor for the Indexer interface implemented by the indexer class.
 // config is a few hard-coded defaults but does NOT contain most indexer config values as
@@ -1863,7 +1869,7 @@ func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 	kdt := msg.(*MsgEncryptionGetInuseKeys).GetKeyDataType()
 
 	switch kdt.TypeName {
-	case "bucket":
+	case "service_bucket":
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
@@ -1873,6 +1879,8 @@ func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 	case "config":
 	case "audit":
 	default:
+		// ENCRYPT_TODO: Return error in this case
+		logging.Warnf("Indexer::handleEncryptionGetInUseKeys invalid KeyDataType:%v", kdt)
 	}
 
 }
@@ -1880,6 +1888,8 @@ func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 
 	kdt := msg.(*MsgEncryptionUpdateKey).GetKeyDataType()
+	logging.Infof("Indexer::handleEncryptionUpdateKey keydatatype: %v", kdt)
+
 	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
 		// ENCRYPT_TODO: Revisit if required, MOI encryption APIs are not pause aware
 		logging.Infof("Indexer::handleEncryptionUpdateKey aborted keydatatype: %v", kdt)
@@ -1888,10 +1898,8 @@ func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 		return
 	}
 
-	logging.Infof("Indexer::handleEncryptionUpdateKey keydatatype: %v", kdt)
-
 	switch kdt.TypeName {
-	case "bucket":
+	case "service_bucket":
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
@@ -1901,6 +1909,8 @@ func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 	case "config":
 	case "audit":
 	default:
+		// ENCRYPT_TODO: Return error in this case
+		logging.Warnf("Indexer::handleEncryptionUpdateKey invalid KeyDataType:%v", kdt)
 	}
 }
 
@@ -1917,7 +1927,7 @@ func (idx *indexer) handleEncryptionDropKeys(msg Message) {
 	logging.Infof("Indexer::handleEncryptionDropKeys...")
 
 	switch kdt.TypeName {
-	case "bucket":
+	case "service_bucket":
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
@@ -1927,6 +1937,8 @@ func (idx *indexer) handleEncryptionDropKeys(msg Message) {
 	case "config":
 	case "audit":
 	default:
+		// ENCRYPT_TODO: Return error in this case
+		logging.Warnf("Indexer::handleEncryptionDropKeys invalid KeyDataType:%v", kdt)
 	}
 }
 

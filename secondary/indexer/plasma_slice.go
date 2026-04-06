@@ -315,7 +315,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 		}
 	}
 
-	if err := slice.initStores(isInitialBuild, cancelCh, slice.GetEncryptionKeyByIdCb); err != nil {
+	if err := slice.initStores(isInitialBuild, cancelCh); err != nil {
 		// Index is unusable. Remove the data files and reinit
 		if err == errStorageCorrupted || err == errStoragePathNotFound {
 			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v PartitionId %v isNew %v"+
@@ -327,9 +327,23 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 		return nil, err
 	}
 
-	// ENCRYPT_TODO: Update after storage changes
-	// Get keyid:= slice.GetKeyId() from storage used for slice
-	//slice.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "bucket", BucketUUID: idxDefn.BucketUUID}, keyid)
+	// ENCRYPT_TODO: Address this in plasma gsi integration.
+	// Mark in use key for encryption as initStores updates the slice keys
+	// keys, err := slice.GetKeyIdList()
+	// if err != nil {
+	// 	logging.Errorf("plasmaSlice:newPlasmaSlice:GetKeyIdList Id %v IndexInstId %v "+
+	// 		"failed error: %v", sliceId, idxInstId, err)
+	// 	return nil, err
+	// }
+
+	// for _, keyByte := range keys {
+	// 	key := string(keyByte)
+	// 	slice.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxDefn.BucketUUID}, key)
+	// }
+	// // If GetKeyIdList doesn't return any keys, mark "" key in-use thus GetInUseKeysCallback will know that there can some un-encrypted data.
+	// if len(keys) == 0 {
+	// 	slice.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxDefn.BucketUUID}, "")
+	// }
 
 	if isInitialBuild {
 		atomic.StoreInt32(&slice.isInitialBuild, 1)
@@ -412,11 +426,9 @@ func backupCorruptedSlice_Plasma(storageDir string, prefix string, rename func(s
 	return plasma.BackupCorruptedInstance(storageDir, prefix, rename, clean)
 }
 
-// ENCRYPT_TODO: Update after storage changes
-// Use storage callback plasma.GetKeyByIdCb
 type GetKeyByIdCb func(keyId []byte) (masterEncryptionKey []byte, returnedKeyId []byte, cipher string)
 
-func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool, keyCb GetKeyByIdCb) error {
+func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) error {
 	var err error
 
 	// This function encapsulates confLock.RLock + defer confLock.RUnlock
@@ -646,10 +658,10 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool, ke
 			}
 		}
 
-		// ENCRYPT_TODO: Update after storage changes
+		// ENCRYPT_TODO: Address this in plasma gsi integration
 		// callback will be used by storage to get keydata for keyId
-		//mCfg.GetKeyByIdCb = keyCb
-		//bCfg.GetKeyByIdCb = keyCb
+		// mCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
+		// bCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
 
 		return mCfg, bCfg
 	}()
@@ -880,30 +892,18 @@ func (s *plasmaSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, stri
 	var cipher string
 	var rkeyId []byte
 	var masterEncryptionKeyBytes []byte
-	var err error
-	retry := 0
 
-	// ENCRYPT_TODO: Check behavior for cases like key not available for bucket
-	for {
-		if len(keyId) == 0 {
-			buuid := s.idxDefn.BucketUUID
-			masterEncryptionKeyBytes, rk, cipher, err = s.sliceEncryptionCallbacks.getActiveKeyIdCipher("bucket", buuid)
-			rkeyId = []byte(rk)
-		} else {
-			// Plasma instance belonging to a bucket can ask for key related to another bucket
-			keyIdStr := string(keyId)
-			masterEncryptionKeyBytes, cipher, err = s.sliceEncryptionCallbacks.getKeyCipherById(keyIdStr)
-			rkeyId = keyId
-		}
-
-		if err != nil {
-			logging.Warnf("PlasmaSlice:GetEncryptionKeyByIdCb keyId:%v retry:%v err:%v", string(keyId), retry, err)
-		} else {
-			break
-		}
-
-		retry += 1
-		time.Sleep(5 * time.Second)
+	// Methods getActiveKeyIdCipher, getKeyCipherById do EncryptionMgr cache lookup and then cbauth.GetEncryptionKeysBlocking()
+	// Thus key must be available, if key is not available it is treated as hard error in below calls.
+	if len(keyId) == 0 {
+		buuid := s.idxDefn.BucketUUID
+		masterEncryptionKeyBytes, rk, cipher = s.sliceEncryptionCallbacks.getActiveKeyIdCipher("service_bucket", buuid)
+		rkeyId = []byte(rk)
+	} else {
+		// Plasma instance belonging to a bucket can ask for key related to another bucket
+		keyIdStr := string(keyId)
+		masterEncryptionKeyBytes, cipher = s.sliceEncryptionCallbacks.getKeyCipherById(keyIdStr)
+		rkeyId = keyId
 	}
 
 	return masterEncryptionKeyBytes, rkeyId, cipher
@@ -920,7 +920,7 @@ func (s *plasmaSlice) SetCurrentEncryptionKey(masterEncryptionKey []byte, keyId 
 	if err != nil {
 		return err
 	}
-	s.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "bucket", BucketUUID: s.idxDefn.BucketUUID}, string(keyId))
+	s.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: s.idxDefn.BucketUUID}, string(keyId))
 
 	if !s.isPrimary {
 		err := s.backstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
@@ -2837,7 +2837,7 @@ func (mdb *plasmaSlice) resetStores(initBuild bool) error {
 	}
 
 	mdb.newBorn = true
-	if err := mdb.initStores(initBuild, nil, mdb.GetEncryptionKeyByIdCb); err != nil {
+	if err := mdb.initStores(initBuild, nil); err != nil {
 		return err
 	}
 
