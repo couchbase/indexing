@@ -3646,7 +3646,7 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 		//Storage encryption
 		for instId, inst := range indexInstMap {
 			// ENCRYPT_TODO: Address this in plasma/bhive gsi integration. Keep only MOI for now.
-			if common.GetClusterStorageMode() != common.MOI {
+			if common.GetStorageMode() != common.MOI {
 				continue
 			}
 			if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
@@ -3748,7 +3748,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 		//Storage encryption
 		for instId, inst := range indexInstMap {
 			// ENCRYPT_TODO: Address this in plasma/bhive gsi integration. Keep only MOI for now.
-			if inst.StorageMode != common.MemDB && inst.StorageMode != common.MemoryOptimized {
+			if common.GetStorageMode() != common.MOI {
 				continue
 			}
 			if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
