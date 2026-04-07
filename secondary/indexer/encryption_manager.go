@@ -786,14 +786,13 @@ func (e *EncryptionMgr) cacheKeysForBootstrap() {
 	//kdt = KeyDataType{TypeName: "audit", BucketUUID: ""}
 	//encrKeysInfo = cbmockGetEncryptionKeysBlocking(kdt)
 	//e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
-	logKdt := KeyDataType{TypeName: "log", BucketUUID: ""}
 	logCtx := context.Background()
-	logEncrKeysInfo, logErr := cbauth.GetEncryptionKeysBlocking(logCtx, logKdt)
+	logEncrKeysInfo, logErr := cbauth.GetEncryptionKeysBlocking(logCtx, LogdataKDT)
 	if logErr != nil {
 		logging.Fatalf("EncryptionMgr:caching keys for log err:%v", logErr)
 		panic(logErr)
 	}
-	e.SetClusterEncrKeysInfo(logKdt, logEncrKeysInfo)
+	e.SetClusterEncrKeysInfo(LogdataKDT, logEncrKeysInfo)
 	logging.Infof("EncryptionMgr:cached keys for log")
 
 	close(e.cachingDone)
@@ -873,7 +872,7 @@ func (e *EncryptionMgr) recoverInUseKeys() {
 	//e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: KeyDataType{TypeName: "audit", BucketUUID: ""}, respMapCh: respMapCh}
 	//kdtKeysMap = <-respMapCh
 	//allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
-	e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: KeyDataType{TypeName: "log", BucketUUID: ""}, respMapCh: respMapCh}
+	e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: LogdataKDT, respMapCh: respMapCh}
 	kdtKeysMap = <-respMapCh
 	allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
 
@@ -1538,6 +1537,7 @@ func (e *EncryptionMgr) synchronizeKeyFilesCallback(kdt KeyDataType) error {
 }
 
 var MetadataKDT = KeyDataType{TypeName: "other"}
+var LogdataKDT = KeyDataType{TypeName: "log", BucketUUID: ""}
 
 func (e *EncryptionMgr) getActiveKeyCipherMetadataCb() (*EaRKey, error) {
 	key, id, cipher := e.getActiveKeyIdCipher(
