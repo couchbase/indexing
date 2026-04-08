@@ -54,6 +54,9 @@ const (
 
 	// Logged when 2 replicas of same index are diverging in items_count
 	EVENID_DIVERGING_REPLICAS
+
+	// Logged when we detect metadata store corruption and perform automatic recovery
+	EVENTID_METADATA_CORRUPTION
 	// *****
 	// Note: Add events here. Don't add events above in between the Events.
 	// EventID once assigned should not be changed.
@@ -80,6 +83,7 @@ var eventIDToDescriptionMap = map[SystemEventID]string{
 	EVENTID_INDEX_SCHED_CREATE:           "Index Scheduled for Creation",
 	EVENTID_INDEX_SCHED_CREATE_ERROR:     "Index Scheduled Creation Error",
 	EVENID_DIVERGING_REPLICAS:            "Index replicas are diverging in items_count",
+	EVENTID_METADATA_CORRUPTION:          "Metadata store corruption",
 }
 
 // Configuration values for SystemEventLogger
@@ -287,4 +291,18 @@ func NewSettingsChangeEvent(mod string, oldSetting,
 		OldSettings: oldSetting,
 	}
 	return e
+}
+
+type metadataStoreErrorEvent struct {
+	Group  string `json:"group"`
+	Module string `json:"module"`
+	Err    string `json:"error"`
+}
+
+func NewMetadataStoreErrorEvent(err error) metadataStoreErrorEvent {
+	return metadataStoreErrorEvent{
+		Group:  "Metadata",
+		Module: "gometa",
+		Err:    err.Error(),
+	}
 }
