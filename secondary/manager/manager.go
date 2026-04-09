@@ -269,6 +269,13 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 		StoreType:                  storeType,
 	}
 
+	testServerEnabled := config.GetDeploymentModelAwareCfg("api.enableTestServer").Bool()
+	if testServerEnabled {
+		testSleepDur := config.GetDeploymentModelAwareCfg("metadata.test_upgrade_sleep_dur").Int()
+
+		repoOpenParams.TestSleepDur = int64(testSleepDur)
+	}
+
 	logging.Infof("NewIndexManagerInternal: Starting metadadta repo with params %v",
 		repoOpenParams)
 	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(adminPort,

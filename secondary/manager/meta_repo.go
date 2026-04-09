@@ -58,6 +58,7 @@ type RepoRef interface {
 	isMetaDirty() bool
 	clearMetaDirty()
 	getMetastoreStats() repo.MetastoreStats
+	compactStores() error
 }
 
 // RemoteRepoRef implements the RepoRef interface for a remote metadata repo.
@@ -546,6 +547,10 @@ func (c *MetadataRepo) GetMetastoreStats() repo.MetastoreStats {
 	return c.repo.getMetastoreStats()
 }
 
+func (c *MetadataRepo) CompactStores() error {
+	return c.repo.compactStores()
+}
+
 ///////////////////////////////////////////////////////
 //  Public Function : Indexer Info
 ///////////////////////////////////////////////////////
@@ -903,6 +908,14 @@ func (c *LocalRepoRef) getMetastoreStats() repo.MetastoreStats {
 	return c.server.GetMetastoreStats()
 }
 
+func (c *LocalRepoRef) compactStores() error {
+	err := c.server.CompactStores()
+	if err != nil {
+		return fmt.Errorf("repo err %w", err)
+	}
+	return nil
+}
+
 func getEventType(key string) EventType {
 
 	evtType := EVENT_NONE
@@ -1095,6 +1108,14 @@ func (c *RemoteRepoRef) newDictionaryRequest(request *Request, reply **Reply) er
 
 func (c *RemoteRepoRef) getMetastoreStats() repo.MetastoreStats {
 	return c.repository.GetStoreStats()
+}
+
+func (c *RemoteRepoRef) compactStores() error {
+	err := c.repository.CompactStores()
+	if err != nil {
+		return fmt.Errorf("repo err %w", err)
+	}
+	return nil
 }
 
 func (c *RemoteRepoRef) close() {

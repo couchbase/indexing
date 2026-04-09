@@ -25,6 +25,7 @@ import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/query/auth"
 	"github.com/couchbase/query/datastore"
+	"github.com/couchbase/query/encryption"
 	"github.com/couchbase/query/errors"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
@@ -905,6 +906,13 @@ func (ctxt *testContext) GetErrors() []errors.Error {
 
 func (ctxt *testContext) ScanReportWait() time.Duration {
 	return 0
+}
+
+func (ctxt *testContext) GetActiveEncryptionKey(encryption.KeyDataType) (
+	*encryption.EaRKey, errors.Error,
+) {
+
+	return nil, nil
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

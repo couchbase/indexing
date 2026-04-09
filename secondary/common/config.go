@@ -3965,6 +3965,13 @@ var SystemConfig = Config{
 		false,                   // mutable
 		false,                   // case-insensitive
 	},
+	"indexer.metadata.test_upgrade_sleep_dur": ConfigValue{
+		int(0),
+		"TEST induce sleep before upgrading to magma for given duration (in seconds)",
+		int(0), // default - 4kb
+		false,  // mutable
+		false,  // case-insensitive
+	},
 	"indexer.memcachedTimeout": ConfigValue{
 		120, // In Seconds
 		"Timeout for indexer to memcached communication (In Seconds)",
