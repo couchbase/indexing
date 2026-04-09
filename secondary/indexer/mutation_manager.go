@@ -413,16 +413,8 @@ func (m *mutationMgr) processStreamBegins() {
 			case STREAM_READER_STREAM_BEGIN:
 				// Initialize latency object
 				node := cmd.(*MsgStream).GetNode()
-				streamId := cmd.(*MsgStream).GetStreamId()
 				if node != nil {
-					m.lock.Lock()
-					_, streamExists := m.streamReaderMap[streamId]
-					m.lock.Unlock()
-
-					// Initialize the latency object only if the stream exists
-					if streamExists {
-						m.initLatencyObj(cmd)
-					}
+					m.initLatencyObj(cmd)
 				}
 
 			case CLEANUP_PRJ_STATS:
@@ -808,6 +800,9 @@ func (m *mutationMgr) handleRemoveKeyspaceFromStream(cmd Message) {
 		delete(keyspaceIdSessionId, keyspaceId)
 		delete(keyspaceIdEnableOSO, keyspaceId)
 		delete(keyspaceIdAllowMarkFirstSnap, keyspaceId)
+
+		// Remove all vbMap entries for this stream/keyspace
+		m.removeVbMapEntriesForKeyspace(streamId, keyspaceId)
 	}
 
 	if len(keyspaceIdQueueMap) == 0 {
@@ -840,6 +835,44 @@ func (m *mutationMgr) handleRemoveKeyspaceFromStream(cmd Message) {
 		m.supvCmdch <- &MsgSuccess{}
 	}
 
+}
+
+// removeVbMapEntriesForKeyspace removes all vbMap entries for a given stream/keyspace.
+// Caller must hold m.lock.
+func (m *mutationMgr) removeVbMapEntriesForKeyspace(streamId common.StreamId, keyspaceId string) {
+	perStreamKeyspaceId := fmt.Sprintf("%v/%v", streamId, keyspaceId)
+
+	currentVbMap := m.vbMap.Clone()
+	update := false
+
+	stats := m.stats.Get()
+	var newPrjLatencyMap map[string]interface{}
+	if stats != nil {
+		newPrjLatencyMap = stats.prjLatencyMap.Clone()
+	}
+
+	// Update numVbsPerNode to remove references to this keyspace's vbuckets
+	if vbHostMap, ok := currentVbMap[perStreamKeyspaceId]; ok {
+		for _, host := range vbHostMap {
+			if count, exists := m.numVbsPerNode[host]; exists {
+				m.numVbsPerNode[host] = count - 1
+				if m.numVbsPerNode[host] == 0 {
+					delete(m.numVbsPerNode, host)
+					if newPrjLatencyMap != nil {
+						delete(newPrjLatencyMap, host)
+					}
+					update = true
+				}
+			}
+		}
+	}
+	delete(currentVbMap, perStreamKeyspaceId)
+
+	if newPrjLatencyMap != nil && update {
+		stats.prjLatencyMap.Set(newPrjLatencyMap)
+	}
+
+	m.vbMap.Set(currentVbMap)
 }
 
 //handleCloseStream closes MutationStreamReader for the specified stream.
@@ -1350,20 +1383,31 @@ func (m *mutationMgr) handleUpdateKeyspaceStatsMap(cmd Message) {
 }
 
 func (m *mutationMgr) initLatencyObj(cmd Message) {
-	stats := m.stats.Get()
-	if stats == nil {
-		return
-	}
-
-	newPrjLatencyMap := stats.prjLatencyMap.Clone()
-	update := false
-
 	node := cmd.(*MsgStream).GetNode()
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
 	vb := meta.vbucket
 	keyspaceId := meta.keyspaceId
+
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	stats := m.stats.Get()
+	if stats == nil {
+		return
+	}
+
+	// Check if stream/keyspace still exists, skip if cleaned up
+	if _, streamExists := m.streamReaderMap[streamId]; !streamExists {
+		return
+	}
+	if _, keyspaceInStream := m.streamKeyspaceIdQueueMap[streamId][keyspaceId]; !keyspaceInStream {
+		return
+	}
+
+	newPrjLatencyMap := stats.prjLatencyMap.Clone()
+	update := false
 	vbMap := m.vbMap.Clone()
 
 	perStreamCurrNode := fmt.Sprintf("%v/%s", streamId, node)
