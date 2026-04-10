@@ -2944,6 +2944,7 @@ func (is *IndexerStats) populateLostReplicaStat(out []byte) []byte {
 
 	var str, collectionLabels string
 	fmtStr := "%v%v{bucket=\"%v\", %vindex=\"%v\", partition=\"%v\"} %v\n"
+	typeFmtStr := "# TYPE %v%v gauge\n"
 	for indexName, val := range indexesWithLostReplicas {
 		bucket, scope, collection, index, partn, ok := parseIndexName(indexName)
 		if !ok {
@@ -2962,6 +2963,7 @@ func (is *IndexerStats) populateLostReplicaStat(out []byte) []byte {
 		}
 
 		collectionLabels = fmt.Sprintf("scope=\"%v\", collection=\"%v\", ", scope, collection)
+		out = append(out, []byte(fmt.Sprintf(typeFmtStr, PARTN_METRICS_PREFIX, "num_lost_replicas"))...)
 		str = fmt.Sprintf(fmtStr, PARTN_METRICS_PREFIX, "num_lost_replicas", bucket,
 			collectionLabels, index, partn, lostReplicaCount)
 		out = append(out, []byte(str)...)
