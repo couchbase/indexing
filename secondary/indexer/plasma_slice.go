@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/gocbcrypto"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/iowrap"
@@ -338,23 +339,22 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 		return nil, err
 	}
 
-	// ENCRYPT_TODO: Address this in plasma gsi integration.
 	// Mark in use key for encryption as initStores updates the slice keys
-	// keys, err := slice.GetKeyIdList()
-	// if err != nil {
-	// 	logging.Errorf("plasmaSlice:newPlasmaSlice:GetKeyIdList Id %v IndexInstId %v "+
-	// 		"failed error: %v", sliceId, idxInstId, err)
-	// 	return nil, err
-	// }
+	keys, err := slice.GetKeyIdList()
+	if err != nil {
+		logging.Errorf("plasmaSlice:newPlasmaSlice:GetKeyIdList Id %v IndexInstId %v "+
+			"failed error: %v", sliceId, idxInstId, err)
+		return nil, err
+	}
 
-	// for _, keyByte := range keys {
-	// 	key := string(keyByte)
-	// 	slice.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxDefn.BucketUUID}, key)
-	// }
-	// // If GetKeyIdList doesn't return any keys, mark "" key in-use thus GetInUseKeysCallback will know that there can some un-encrypted data.
-	// if len(keys) == 0 {
-	// 	slice.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxDefn.BucketUUID}, "")
-	// }
+	for _, keyByte := range keys {
+		key := string(keyByte)
+		slice.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxDefn.BucketUUID}, key)
+	}
+	// If GetKeyIdList doesn't return any keys, mark "" key in-use thus GetInUseKeysCallback will know that there can some un-encrypted data.
+	if len(keys) == 0 {
+		slice.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxDefn.BucketUUID}, "")
+	}
 
 	if isInitialBuild {
 		atomic.StoreInt32(&slice.isInitialBuild, 1)
@@ -492,6 +492,8 @@ func backupCorruptedSlice_Plasma(storageDir string, prefix string, rename func(s
 }
 
 type GetKeyByIdCb func(keyId []byte) (masterEncryptionKey []byte, returnedKeyId []byte, cipher string)
+
+type GetActiveKeyByPathCb func(path string) (masterKey []byte, outKeyId []byte, cipher string)
 
 func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) error {
 	var err error
@@ -723,11 +725,11 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 			}
 		}
 
-		// ENCRYPT_TODO: Address this in plasma gsi integration
 		// callback will be used by storage to get keydata for keyId
-		// mCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
-		// bCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
-
+		mCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
+		bCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
+		mCfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
+		bCfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
 		return mCfg, bCfg
 	}()
 
@@ -971,6 +973,20 @@ func (s *plasmaSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, stri
 		rkeyId = keyId
 	}
 
+	return masterEncryptionKeyBytes, rkeyId, cipher
+}
+
+func (s *plasmaSlice) GetActiveKeyByPathCb(path string) ([]byte, []byte, string) {
+	bucketUUID := GetBucketUUIDIndexPath2(path)
+
+	logging.Infof("plasmaSlice::GetActiveKeyByPathCb path: %v bucketUUID: %v", path, bucketUUID)
+	//ENCRYPT_TODO: Add extra validation to check the bucketUUID is valid in cluster
+
+	if bucketUUID == common.BUCKET_UUID_NIL {
+		return []byte{}, []byte{}, gocbcrypto.CipherNameNone
+	}
+	masterEncryptionKeyBytes, rk, cipher := s.sliceEncryptionCallbacks.getActiveKeyIdCipher("service_bucket", bucketUUID)
+	rkeyId := []byte(rk)
 	return masterEncryptionKeyBytes, rkeyId, cipher
 }
 

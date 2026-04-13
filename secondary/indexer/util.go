@@ -119,6 +119,23 @@ func CodebookPath2(inst *common.IndexInst, partnId common.PartitionId, sliceId S
 	return filepath.Join(indexPath, CODEBOOK_DIR, CodebookName2(inst, partnId, sliceId))
 }
 
+// Expected input is *.index/mainIndex or *.index/docIndex
+func GetBucketUUIDIndexPath2(path string) string {
+	path = filepath.Clean(path)
+	path = strings.TrimSuffix(path, string(os.PathSeparator)+"mainIndex")
+	path = strings.TrimSuffix(path, string(os.PathSeparator)+"docIndex")
+	pathSlice := strings.Split(path, string(os.PathSeparator))
+	if len(pathSlice) == 0 {
+		return common.BUCKET_UUID_NIL
+	}
+	indexDir := pathSlice[len(pathSlice)-1]
+	indexDirSlice := strings.Split(indexDir, "_")
+	if len(indexDirSlice) == 0 {
+		return common.BUCKET_UUID_NIL
+	}
+	return indexDirSlice[0]
+}
+
 func InitCodebookDir(
 	storeEngineDir string, idxInst *common.IndexInst,
 	partnId common.PartitionId, sliceId SliceId,
