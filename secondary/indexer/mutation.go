@@ -15,15 +15,16 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 )
 
-// MutationMeta represents meta information for a KV Mutation
+// MutationMeta represents meta information for a KV Mutation.
+// Fields are ordered largest-to-smallest alignment to eliminate padding on 64-bit systems
 type MutationMeta struct {
-	keyspaceId string  //keyspaceId for the mutation
-	vbucket    Vbucket //vbucket
-	vbuuid     Vbuuid  //uuid for vbucket
-	seqno      uint64  //vbucket sequence number for this mutation
-	firstSnap  bool    //belongs to first DCP snapshot
-	projVer    c.ProjectorVersion
+	keyspaceId string             //keyspaceId for the mutation
+	vbuuid     Vbuuid             //uuid for vbucket
+	seqno      uint64             //vbucket sequence number for this mutation
 	opaque     uint64
+	vbucket    Vbucket            //vbucket
+	firstSnap  bool               //belongs to first DCP snapshot
+	projVer    c.ProjectorVersion
 }
 
 var mutMetaPool = sync.Pool{New: newMutationMeta}
@@ -145,15 +146,16 @@ func (mk *MutationKeys) Free() {
 	}
 }
 
+// Fields are ordered largest-to-smallest alignment for padding minimisation
 type Mutation struct {
 	uuid          c.IndexInstId // index-id
-	command       byte          // command the index
 	key           []byte        // key-version for index
 	oldkey        []byte        // previous key-version, if available
 	partnkey      []byte        // partition key
 	includeColumn []byte        // include column for the index
 	vectors       [][]float32   // Array of vector embeddings for vector indexes
 	centroidPos   []int32       // Position of the centroidId in the encoded key
+	command       byte          // command the index
 }
 
 var mutPool = sync.Pool{New: newMutation}
