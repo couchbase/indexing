@@ -398,9 +398,11 @@ func TestPartitionSetsWithBhiveIndex(t *testing.T) {
 }
 
 // runSparseScan executes a sparse vector scan using SPARSE_DIMENSION evenly-spaced terms
-// and validates that 'limit' rows are returned and scan stats match expectedNumRequests.
+// and validates that 'limit' rows are returned. If expectedNumRequests >= 0, scan stats
+// are also validated.
 // The query vector has indices 0, 78, 156, ..., (SPARSE_DIMENSION-1)*78 with uniform value 0.5.
-func runSparseScan(t *testing.T, idxName, vecField string, nprobes int, limit, expectedNumRequests int64) {
+// scope and coll can be empty strings to target the default scope/collection.
+func runSparseScan(t *testing.T, idxName, vecField, scope, coll string, nprobes int, limit, expectedNumRequests int64) {
 	idxPart := "["
 	valPart := "["
 	for i := 0; i < SPARSE_DIMENSION; i++ {
@@ -415,11 +417,14 @@ func runSparseScan(t *testing.T, idxName, vecField string, nprobes int, limit, e
 	valPart += "]"
 	queryVecStr := "[" + idxPart + ", " + valPart + "]"
 
+	keyspace := fmt.Sprintf("`%v`", bucket)
+	if scope != "" && coll != "" {
+		keyspace = fmt.Sprintf("`%v`.`%v`.`%v`", bucket, scope, coll)
+	}
+
 	annScanStmt := fmt.Sprintf(
-		"SELECT meta().id FROM default "+
-			"ORDER BY sparse_vector_distance(%s, %s, %d) "+
-			"LIMIT %d",
-		vecField, queryVecStr, nprobes, limit)
+		"SELECT meta().id FROM %v ORDER BY sparse_vector_distance(%s, %s, %d) LIMIT %d",
+		keyspace, vecField, queryVecStr, nprobes, limit)
 
 	log.Printf("runSparseScan: %v", annScanStmt)
 	annScanResults, err := execN1QL(bucket, annScanStmt)
@@ -428,7 +433,9 @@ func runSparseScan(t *testing.T, idxName, vecField string, nprobes int, limit, e
 	if int64(len(annScanResults)) != limit {
 		t.Fatalf("Expected %v results from sparse vector scan, got %v", limit, len(annScanResults))
 	}
-	validateScanStats(bucket, idxName, expectedNumRequests, expectedNumRequests*limit, t)
+	if expectedNumRequests >= 0 {
+		validateScanStats(bucket, idxName, expectedNumRequests, expectedNumRequests*limit, t)
+	}
 }
 
 // createSparseVectorIndexAndVerify drops all existing indexes, creates the given sparse
@@ -463,7 +470,7 @@ func TestBhiveSparseVectorItemsCount(t *testing.T) {
 
 	// Run sparse vector scan to verify the index is functional and exercises
 	// processSparseVectorBatch (including batches where validCount==0).
-	runSparseScan(t, idx_bhive_sparse, "sparse_dim", 256, 10, 1)
+	runSparseScan(t, idx_bhive_sparse, "sparse_dim", "", "", 256, 10, 1)
 }
 
 // TestCommonBuildForBhiveDenseAndSparse verifies that a single BUILD statement can build both a
@@ -566,7 +573,7 @@ func TestCommonBuildForBhiveDenseAndSparse(t *testing.T) {
 	}
 
 	// Step 7: Verify the sparse index is functional with a sparse vector scan
-	runSparseScan(t, idxSparse, "sparse_dim", 256, limit, 1)
+	runSparseScan(t, idxSparse, "sparse_dim", "", "", 256, limit, 1)
 	log.Printf("Sparse index %v scan verified successfully", idxSparse)
 
 	// Step 8: Verify scan stats for both indexes
@@ -588,5 +595,5 @@ func TestBhiveSparseVectorRandomDocs(t *testing.T) {
 		" WITH {\"description\": \"IVF10\", \"train_list\":1000, \"defer_build\":true};"
 	createSparseVectorIndexAndVerify(t, idx_bhive_sparse, stmt, numDocs)
 
-	runSparseScan(t, idx_bhive_sparse, "sparse_random", 10, 10, 1)
+	runSparseScan(t, idx_bhive_sparse, "sparse_random", "", "", 10, 10, 1)
 }
