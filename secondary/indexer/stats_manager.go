@@ -4299,7 +4299,7 @@ func (s *statsManager) getStorageStatsMap(spec *statsSpec) map[string]interface{
 	statReq := &MsgIndexStorageStats{respch: replych, spec: spec}
 	s.supvMsgch <- statReq
 
-	res, ok := readFromChanWithTimeout(replych)
+	res, ok := readFromChanWithTimeout(replych, statsReadTimeout)
 	if !ok {
 		logging.Warnf(
 			"StatsManager::getStorageStats timed out in reading storage stats. skip logging them",
@@ -4334,12 +4334,14 @@ func (s *statsManager) getStorageStatsMap(spec *statsSpec) map[string]interface{
 
 var errReqTimedOut = errors.New("indexer is busy. stats read timed out")
 
+const statsReadTimeout = 30 * time.Second
+
 func (s *statsManager) getShardStorageStats() ([]byte, error) {
 	replych := make(chan map[string]*common.ShardStats, 1)
 	statReq := &MsgShardStatsRequest{mType: SHARD_STORAGE_STATS, respch: replych}
 	s.supvMsgch <- statReq
 
-	res, ok := readFromChanWithTimeout(replych)
+	res, ok := readFromChanWithTimeout(replych, 100*time.Second)
 	if !ok {
 		logging.Warnf("StatsManager::getShardStorageStats: timed out in reading storage stats")
 		return nil, errReqTimedOut
@@ -4353,7 +4355,7 @@ func (s *statsManager) getStorageStats(spec *statsSpec, creds cbauth.Creds) stri
 	statReq := &MsgIndexStorageStats{respch: replych, spec: spec}
 	s.supvMsgch <- statReq
 
-	res, ok := readFromChanWithTimeout(replych)
+	res, ok := readFromChanWithTimeout(replych, statsReadTimeout)
 	if !ok {
 		logging.Warnf("StatsManager::getStorageStats: timed out in reading storage stats")
 		return ""
@@ -4478,12 +4480,16 @@ func (s *statsManager) handleShardStorageStatsReq(w http.ResponseWriter, r *http
 
 	if r.Method == "GET" {
 		resp, err := s.getShardStorageStats()
-		if err != nil { // return nil repsonse and error
+		var body []byte
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			body = []byte(fmt.Sprintf(`{"error":%q}`, err.Error()))
+		} else {
 			w.WriteHeader(200)
-			w.Write([]byte(fmt.Sprintf("Error observed, err: %v", err)))
-		} else { // return error
-			w.WriteHeader(200)
-			w.Write(resp)
+			body = resp
+		}
+		if _, wErr := w.Write(body); wErr != nil {
+			logging.Errorf("StatsManager::handleShardStorageStatsReq write error: %v", wErr)
 		}
 	} else {
 		w.WriteHeader(400)
@@ -5257,8 +5263,8 @@ func (s *statsManager) handleMetaStatsRequest(w http.ResponseWriter, r *http.Req
 	}
 }
 
-func readFromChanWithTimeout[T any](respCh chan T) (T, bool) {
-	var ticker = time.NewTicker(30 * time.Second) //nolint:mnd
+func readFromChanWithTimeout[T any](respCh chan T, timeout time.Duration) (T, bool) {
+	var ticker = time.NewTicker(timeout)
 	defer ticker.Stop()
 	select {
 	case res := <-respCh:
@@ -5275,7 +5281,7 @@ func (s *statsManager) getMetadataStats() (repo.MetastoreStats, bool) {
 		respCh: respCh,
 	}
 
-	var iStats, ok = readFromChanWithTimeout(respCh)
+	var iStats, ok = readFromChanWithTimeout(respCh, statsReadTimeout)
 	if ok {
 		var metastats, ok = iStats.(repo.MetastoreStats)
 		return metastats, ok

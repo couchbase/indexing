@@ -10,10 +10,15 @@ package indexer
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/audit"
 
 	"github.com/couchbase/gocbcrypto"
 
@@ -101,6 +106,8 @@ type EncryptionMgr struct {
 	recoveryDone  chan bool  // closed channel means indexerUsedKeyIds update is completed after inputs from indexer components.
 	cachingDone   chan bool  // closed channel means encryptionMgr updated keys for all the buckets available in clusterInfoCache
 
+	isRecoveryDone atomic.Bool // if false, return error for callbacks getInUseKeysCallback
+
 	// This map holds Encryption Messages for KeyDataType when there is already Encryption Message in progress
 	// Once previous operation completes, Message from this map is picked up and enqueued to wrkrQueue.
 	pendingMap map[KeyDataType][]Message
@@ -155,6 +162,8 @@ func NewEncryptionMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 	encryptionMgr.enableTest.Store(false)
 	encryptionMgr.setEnableTest()
 
+	encryptionMgr.isRecoveryDone.Store(false)
+
 	//ENCRYPT_TODO: Remove persisted test keys when test-framework not required
 	//keyPersistPath = config["storage_dir"].String()
 
@@ -175,6 +184,11 @@ func NewEncryptionMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 	}
 	return encryptionMgr, &MsgSuccess{}
 }
+
+// Errors
+var (
+	ErrEncrMgrNotReady = errors.New("EncryptionMgr not ready to process requests")
+)
 
 func RegisterCallbacks(e *EncryptionMgr) error {
 
@@ -602,27 +616,66 @@ func (e *EncryptionMgr) recoverInUseKeys() {
 		}
 	}
 	logging.Infof("EncryptionMgr:recoverInUseKeys done...")
+	e.isRecoveryDone.Store(true)
 	close(e.recoveryDone)
 }
 
 func (e *EncryptionMgr) RegisterRestEndpoints() {
 
+	mux := GetHTTPMux()
+	mux.HandleFunc("/encryption/GetInUseKeys", e.getInUseKeysHandler)
 	if e.testRunning == false && e.enableTest.Load() {
-		//mux := GetHTTPMux()
 		//mux.HandleFunc("/test/RefreshKeysCallback", addEncryptionKey)
 		//mux.HandleFunc("/test/DropKeysCallback", dropEncryptionKey)
 		//mux.HandleFunc("/test/DisableEncryption", disableEncryption)
 		//mux.HandleFunc("/test/GetInUseKeys", getInUseKeys)
 		//mux.HandleFunc("/test/GetToBeUsedKeys", getToBeUsedKeys)
 
-		// ENCRYPT_TODO: Expose endpoint for returning in-use keys
+		// ENCRYPT_TODO: Remove endpoints when test-framework not required
 		e.testRunning = true
 	}
 }
 
+// Get keyids which are being used by indexer components to encrypt data
+func (e *EncryptionMgr) getInUseKeysHandler(w http.ResponseWriter, r *http.Request) {
+
+	// ENCRYPT_TODO: Add params for specific keydatatype later.
+	valid := validateAuth(w, r)
+	if !valid {
+		return
+	}
+
+	kdtKeysMap, err := e.GetInUseKeysAll()
+	if err != nil {
+		err2 := fmt.Errorf("Error getting in use keys err:%v", err.Error())
+		http.Error(w, err2.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	// key part of json is string
+	kdtstrKeysMap := make(map[string][]string)
+	for k, v := range kdtKeysMap {
+		newKey := fmt.Sprintf("%v", k)
+		kdtstrKeysMap[newKey] = v
+	}
+	data, err := json.Marshal(kdtstrKeysMap)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", fmt.Sprintf("%v", len(data)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+	return
+}
+
 func (e *EncryptionMgr) GetInUseKeys(kdt KeyDataType) ([]string, error) {
 
-	<-e.recoveryDone
+	if !e.isRecoveryDone.Load() {
+		return []string{}, ErrEncrMgrNotReady
+	}
 	logging.Infof("EncryptionMgr:GetInUseKeys %v", kdt)
 	e.muid.Lock()
 	defer e.muid.Unlock()
@@ -634,6 +687,26 @@ func (e *EncryptionMgr) GetInUseKeys(kdt KeyDataType) ([]string, error) {
 	} else {
 		return keyids, nil
 	}
+}
+
+func (e *EncryptionMgr) GetInUseKeysAll() (map[KeyDataType][]string, error) {
+
+	kdtKeysMap := make(map[KeyDataType][]string)
+	if !e.isRecoveryDone.Load() {
+		logging.Warnf("EncryptionMgr:GetInUseKeysAll err:%v", ErrEncrMgrNotReady)
+		return kdtKeysMap, ErrEncrMgrNotReady
+	}
+	logging.Infof("EncryptionMgr:GetInUseKeysAll")
+	e.muid.Lock()
+	defer e.muid.Unlock()
+
+	for key, value := range e.indexerUsedKeyIds {
+		sliceCopy := make([]string, len(value))
+		copy(sliceCopy, value)
+		kdtKeysMap[key] = sliceCopy
+	}
+
+	return kdtKeysMap, nil
 }
 
 // When any of the component starts to use key for encryption, use this to update book-keeping
@@ -1098,4 +1171,33 @@ func getActiveEarKeyFromEncrKeysInfo(encrKeysInfo EncrKeysInfo) EaRKey {
 	}
 
 	return earkey
+}
+
+func validateAuth(w http.ResponseWriter, r *http.Request) bool {
+	creds, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return false
+	} else if valid == false {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "EncryptionMgr::validateAuth", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
+		return false
+	}
+
+	if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return false
+		} else if !allowed {
+			logging.Verbosef("EncryptionMgr::validateAuth not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return false
+		}
+	}
+	return true
 }

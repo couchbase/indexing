@@ -30,6 +30,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common/cbauthutil"
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/logging/systemevent"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/transport"
 )
@@ -259,6 +260,27 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 		storeType = repository.FDbStoreType
 	}
 
+	var consoleErrReporter = func(e error) {
+		err := common.Console(
+			config.GetDeploymentModelAwareCfg("clusterAddr").String(),
+			"Metadata store reported error - %v", e,
+		)
+		if err != nil {
+			logging.Errorf(
+				"NewIndexManagerInternal: failed to report metadata store error %v due to error %v",
+				e, err,
+			)
+		}
+
+		errAttr := systemevent.NewMetadataStoreErrorEvent(e)
+
+		systemevent.ErrorEvent(
+			"Indexer",
+			systemevent.EVENTID_METADATA_CORRUPTION,
+			errAttr,
+		)
+	}
+
 	repoOpenParams := repository.RepoFactoryParams{
 		MemoryQuota:                mgr.quota,
 		CompactionTimerDur:         uint64(sleepDur),
@@ -267,6 +289,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 		Dir:                        mgr.repoBaseDir,
 		EnableWAL:                  enableWAL,
 		StoreType:                  storeType,
+		ConsoleErrorReporter:       consoleErrReporter,
 	}
 
 	testServerEnabled := config.GetDeploymentModelAwareCfg("api.enableTestServer").Bool()
