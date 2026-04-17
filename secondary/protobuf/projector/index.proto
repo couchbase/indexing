@@ -6,6 +6,7 @@ syntax = "proto2";
 // created.
 
 package protoProjector;
+option go_package = "github.com/couchbase/indexing/secondary/protobuf/projector;protoProjector";
 
 import "partn_tp.proto";
 import "partn_single.proto";

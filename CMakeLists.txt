@@ -80,6 +80,7 @@ ADD_CUSTOM_COMMAND(
         OUTPUT ${DATA_PBGO_FILES}
         COMMAND ${PROTOC} ARGS -I ${CMAKE_CURRENT_SOURCE_DIR}/secondary/protobuf/data
             --go_out=${CMAKE_CURRENT_SOURCE_DIR}/secondary/protobuf/data
+            --go_opt=paths=source_relative
             --plugin=protoc-gen-go=${PROTOC_GEN_GO_EXE}
             ${DATA_PROTO_FILES}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/
@@ -90,6 +91,7 @@ ADD_CUSTOM_COMMAND(
         OUTPUT ${PROJECTOR_PBGO_FILES}
         COMMAND ${PROTOC} ARGS -I ${CMAKE_CURRENT_SOURCE_DIR}/secondary/protobuf/projector
             --go_out=${CMAKE_CURRENT_SOURCE_DIR}/secondary/protobuf/projector
+            --go_opt=paths=source_relative
             --plugin=protoc-gen-go=${PROTOC_GEN_GO_EXE}
             ${PROJECTOR_PROTO_FILES}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/
@@ -100,6 +102,7 @@ ADD_CUSTOM_COMMAND(
         OUTPUT ${QUERY_PBGO_FILES}
         COMMAND ${PROTOC} ARGS -I ${CMAKE_CURRENT_SOURCE_DIR}/secondary/protobuf/query
             --go_out=${CMAKE_CURRENT_SOURCE_DIR}/secondary/protobuf/query
+            --go_opt=paths=source_relative
             --plugin=protoc-gen-go=${PROTOC_GEN_GO_EXE}
             ${QUERY_PROTO_FILES}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/

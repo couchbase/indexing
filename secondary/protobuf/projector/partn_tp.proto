@@ -1,6 +1,7 @@
 syntax = "proto2";
 
 package protoProjector;
+option go_package = "github.com/couchbase/indexing/secondary/protobuf/projector;protoProjector";
 
 // Example TestPartition, can be used during development.
 message TestPartition {

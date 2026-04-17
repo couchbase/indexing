@@ -1,6 +1,7 @@
 syntax = "proto2";
 
 package protoProjector;
+option go_package = "github.com/couchbase/indexing/secondary/protobuf/projector;protoProjector";
 
 // SinglePartition is an oxymoron - the purpose of partition is to
 // scale-out, but using this partition-scheme for an index means the full

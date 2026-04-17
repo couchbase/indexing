@@ -15,15 +15,16 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 )
 
-// MutationMeta represents meta information for a KV Mutation
+// MutationMeta represents meta information for a KV Mutation.
+// Fields are ordered largest-to-smallest alignment to eliminate padding on 64-bit systems
 type MutationMeta struct {
-	keyspaceId string  //keyspaceId for the mutation
-	vbucket    Vbucket //vbucket
-	vbuuid     Vbuuid  //uuid for vbucket
-	seqno      uint64  //vbucket sequence number for this mutation
-	firstSnap  bool    //belongs to first DCP snapshot
-	projVer    c.ProjectorVersion
+	keyspaceId string             //keyspaceId for the mutation
+	vbuuid     Vbuuid             //uuid for vbucket
+	seqno      uint64             //vbucket sequence number for this mutation
 	opaque     uint64
+	vbucket    Vbucket            //vbucket
+	firstSnap  bool               //belongs to first DCP snapshot
+	projVer    c.ProjectorVersion
 }
 
 var mutMetaPool = sync.Pool{New: newMutationMeta}
@@ -69,10 +70,15 @@ func (m *MutationMeta) Clone() *MutationMeta {
 
 func (m *MutationMeta) Size() int64 {
 
-	size := int64(len(m.keyspaceId))
-	size += 8 + 4 + 8 + 8 + 8 //fixed cost of members
-	return size
+	var size int64
 
+	// string header (16 bytes) + data
+	size += 16 + int64(len(m.keyspaceId))
+
+	// Fixed fields: vbucket(4) + vbuuid(8) + seqno(8) + firstSnap(1) + projVer(1) + opaque(8)
+	size += 4 + 8 + 8 + 1 + 1 + 8
+
+	return size
 }
 
 func (m *MutationMeta) Free() {
@@ -123,7 +129,8 @@ func (mk *MutationKeys) Size() int64 {
 		size += m.Size()
 	}
 
-	size += 8 + 16 + 16 //fixed cost of members
+	// Fixed cost: meta pointer (8) + docid slice header (24) + mut slice header (24) + size (8)
+	size += 8 + 24 + 24 + 8
 	return size
 }
 
@@ -139,15 +146,16 @@ func (mk *MutationKeys) Free() {
 	}
 }
 
+// Fields are ordered largest-to-smallest alignment for padding minimisation
 type Mutation struct {
 	uuid          c.IndexInstId // index-id
-	command       byte          // command the index
 	key           []byte        // key-version for index
 	oldkey        []byte        // previous key-version, if available
 	partnkey      []byte        // partition key
 	includeColumn []byte        // include column for the index
 	vectors       [][]float32   // Array of vector embeddings for vector indexes
 	centroidPos   []int32       // Position of the centroidId in the encoded key
+	command       byte          // command the index
 }
 
 var mutPool = sync.Pool{New: newMutation}
@@ -167,19 +175,32 @@ func newMutation() interface{} {
 func (m *Mutation) Size() int64 {
 
 	var size int64
-	size = int64(len(m.key))
-	size += int64(len(m.partnkey))
-	size += 8 + 1        //instId + command
-	size += 16 + 16 + 16 //fixed cost of members
 
-	if m.vectors != nil {
-		size += 16 // For slice of vectors
-		if len(m.vectors) >= 0 {
-			size += int64((16 + (4 * len(m.vectors[0]))) * len(m.vectors))
+	// uuid (8 bytes) + command (1 byte)
+	size += 8 + 1
+
+	// Slice headers: key, oldkey, partnkey, includeColumn, vectors, centroidPos
+	size += 24 * 6
+
+	size += int64(len(m.key))
+	size += int64(len(m.oldkey))
+	size += int64(len(m.partnkey))
+	size += int64(len(m.includeColumn))
+
+	// centroidPos data: each int32 is 4 bytes
+	if m.centroidPos != nil {
+		size += int64(len(m.centroidPos) * 4)
+	}
+
+	// vectors: nested slice of float32
+	if m.vectors != nil && len(m.vectors) > 0 {
+		for _, v := range m.vectors {
+			size += 24                  // inner slice header
+			size += int64(len(v) * 4)   // float32 data (4 bytes each)
 		}
 	}
-	return size
 
+	return size
 }
 
 func (m *Mutation) Free() {

@@ -1,6 +1,7 @@
 syntax = "proto2";
 
 package protoProjector;
+option go_package = "github.com/couchbase/indexing/secondary/protobuf/projector;protoProjector";
 
 message KeyPartition {
     required uint64 numPartition   = 1;
