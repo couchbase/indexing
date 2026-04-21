@@ -573,7 +573,18 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.bootstrapStorageMode = idx.getBootstrapStorageMode(idx.config)
 	logging.Infof("Indexer::NewIndexer bootstrap storage mode %v", idx.bootstrapStorageMode)
 	if idx.enableManager {
-		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, idx.config, idx.bootstrapStorageMode)
+		idx.clustMgrAgent, res = NewClustMgrAgent(
+			idx.clustMgrAgentCmdCh,
+			idx.adminRecvCh,
+			idx.config,
+			idx.bootstrapStorageMode,
+			c.NewMetaEncryptionCallbacks(
+				idx.encryptionMgr.getActiveKeyCipherMetadataCb,
+				idx.encryptionMgr.getKeyCipherByIDMetadataCb,
+				idx.encryptionMgr.getEncryptionKeysMetadataCb,
+				idx.encryptionMgr.setInuseKeysMetadataCb,
+			),
+		)
 		if res.GetMsgType() != MSG_SUCCESS {
 			logging.Fatalf("Indexer::NewIndexer ClusterMgrAgent Init Error %+v", res)
 			return nil, res
@@ -1866,23 +1877,24 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 
 	logging.Infof("Indexer::handleEncryptionGetInUseKeys...")
-	kdt := msg.(*MsgEncryptionGetInuseKeys).GetKeyDataType()
 
-	switch kdt.TypeName {
-	case "service_bucket":
+	switch msg.(type) {
+	case *MsgEncryptionGetInuseKeys:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
+	case *MsgClustMgrGetInuseKeys:
+		idx.sendMsgToClustMgr(msg)
+
 	// ENCRYPT_TODO: Handle below types later
 	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
-	case "log":
-	case "config":
-	case "audit":
+	// case "log":
+	// case "audit":
+
 	default:
 		// ENCRYPT_TODO: Return error in this case
-		logging.Warnf("Indexer::handleEncryptionGetInUseKeys invalid KeyDataType:%v", kdt)
+		logging.Warnf("Indexer::handleEncryptionGetInUseKeys invalid type %T", msg)
 	}
-
 }
 
 func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
@@ -1908,6 +1920,8 @@ func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 	case "log":
 	case "config":
 	case "audit":
+	case "other":
+		idx.sendMsgToClustMgr(msg)
 	default:
 		// ENCRYPT_TODO: Return error in this case
 		logging.Warnf("Indexer::handleEncryptionUpdateKey invalid KeyDataType:%v", kdt)
@@ -1936,6 +1950,8 @@ func (idx *indexer) handleEncryptionDropKeys(msg Message) {
 	case "log":
 	case "config":
 	case "audit":
+	case "other":
+		idx.sendMsgToClustMgr(msg)
 	default:
 		// ENCRYPT_TODO: Return error in this case
 		logging.Warnf("Indexer::handleEncryptionDropKeys invalid KeyDataType:%v", kdt)

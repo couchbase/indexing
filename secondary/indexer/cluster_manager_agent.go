@@ -39,7 +39,12 @@ type clustMgrAgent struct {
 
 // NewClustMgrAgent creates a new ClustMgrAgent. This is a singleton owned by the Indexer.
 // It creates a singleton child IndexMgr object stored in the mgr field of the ClustMgrAgent.
-func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Config, storageMode common.StorageMode) (
+func NewClustMgrAgent(
+	supvCmdch, supvRespch MsgChannel,
+	cfg common.Config,
+	storageMode common.StorageMode,
+	metaEncryptCallbacks *common.MetaEncryptCallbacks,
+) (
 	ClustMgrAgent, Message) {
 
 	//Init the clustMgrAgent struct
@@ -49,7 +54,7 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 		config:     cfg,
 	}
 
-	mgr, err := manager.NewIndexManager(cfg, storageMode)
+	mgr, err := manager.NewIndexManager(cfg, storageMode, metaEncryptCallbacks)
 	if err != nil {
 		logging.Errorf("ClustMgrAgent::NewClustMgrAgent Error In Init %v", err)
 		return nil, &MsgError{
@@ -201,6 +206,15 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 
 	case META_STORE_STATS:
 		c.handleMetaStats(cmd)
+
+	case ENCRYPTION_GET_INUSE_KEYS:
+		c.handleGetInuseKeys(cmd)
+
+	case ENCRYPTION_DROP_KEY:
+		c.handleDropKeys(cmd)
+
+	case ENCRYPTION_UPDATE_KEY:
+		c.handleRefreshKeys(cmd)
 
 	default:
 		logging.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
@@ -1174,4 +1188,59 @@ func (c *clustMgrAgent) handleMetaStats(cmd Message) {
 
 	respCh := cmd.(*MsgMetaStoreStatsReq).GetRespCh()
 	respCh <- c.mgr.GetMetadataRepo().GetMetastoreStats()
+}
+
+func (c *clustMgrAgent) handleGetInuseKeys(cmd Message) {
+	c.supvCmdch <- &MsgSuccess{}
+
+	go func() {
+		msg, ok := cmd.(*MsgClustMgrGetInuseKeys)
+		if !ok {
+			logging.Errorf("ClustMgrAgent::handleGetInuseKeys unexpected message type %T", cmd)
+			return
+		}
+		respCh := msg.GetRespch()
+		inuseKeys, err := c.mgr.GetMetadataRepo().GetInuseKeys()
+
+		opt := common.NewOptional[[]string]()
+		if err == nil {
+			opt.Set(inuseKeys)
+		} else {
+			logging.Warnf("ClustMgrAgent::handleGetInuseKeys failed to get in use keys with err %v",
+				err)
+		}
+
+		respCh <- opt
+	}()
+}
+
+func (c *clustMgrAgent) handleRefreshKeys(cmd Message) {
+	c.supvCmdch <- &MsgSuccess{}
+
+	go func() {
+		msg, ok := cmd.(*MsgEncryptionUpdateKey)
+		if !ok {
+			logging.Errorf("ClustMgrAgent::handleRefreshKeys unexpected message type %T", cmd)
+			return
+		}
+		respCh := msg.GetRespCh()
+
+		respCh <- c.mgr.GetMetadataRepo().RefreshKeys()
+	}()
+}
+
+func (c *clustMgrAgent) handleDropKeys(cmd Message) {
+	c.supvCmdch <- &MsgSuccess{}
+
+	go func() {
+		msg, ok := cmd.(*MsgEncryptionDropKey)
+		if !ok {
+			logging.Errorf("ClustMgrAgent::handleDropKeys unexpected message type %T", cmd)
+			return
+		}
+		keyIDs := msg.GetDropKeyIds()
+		respCh := msg.GetRespCh()
+
+		respCh <- c.mgr.GetMetadataRepo().DropKeys(keyIDs)
+	}()
 }

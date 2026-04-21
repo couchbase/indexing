@@ -2429,3 +2429,28 @@ func ToFloat64(v interface{}) (float64, error) {
 		return 0, fmt.Errorf("unsupported type %T for float64", v)
 	}
 }
+
+type Optional[T any] struct {
+	value T
+	isSet bool
+}
+
+func NewOptional[T any]() *Optional[T] {
+	return &Optional[T]{}
+}
+
+func (o *Optional[T]) Set(val T) {
+	o.value = val
+	o.isSet = true
+}
+
+func (o *Optional[T]) Get() (T, bool) {
+	return o.value, o.isSet
+}
+
+func (o *Optional[T]) GetOrDefault(def T) T {
+	if o.isSet {
+		return o.value
+	}
+	return def
+}

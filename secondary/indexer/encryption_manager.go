@@ -80,6 +80,39 @@ type EncryptionCallbacks struct {
 	SynchronizeKeyFilesCallback func(kdt KeyDataType) error
 }
 
+var errDropWaitCanceled = errors.New("encryption drop wait canceled")
+
+const kdtTypeServiceBucket = "service_bucket"
+
+// logKeyIDs formats key IDs for logging. Empty string IDs are shown as "<unencrypted>".
+func logKeyIDs(keyIDs ...string) string {
+	if len(keyIDs) == 0 {
+		return "<unencrypted>"
+	}
+	result := make([]string, len(keyIDs))
+	for i, id := range keyIDs {
+		if id == "" {
+			result[i] = "<unencrypted>"
+		} else {
+			result[i] = id
+		}
+	}
+	return fmt.Sprintf("%v", result)
+}
+
+// logKDT formats a KeyDataType for logging.
+func logKDT(kdts ...KeyDataType) string {
+	result := make([]string, len(kdts))
+	for i, kdt := range kdts {
+		if kdt.TypeName == kdtTypeServiceBucket {
+			result[i] = fmt.Sprintf("{t: %v, bID: %v}", kdt.TypeName, kdt.BucketUUID)
+		} else {
+			result[i] = fmt.Sprintf("{t: %v}", kdt.TypeName)
+		}
+	}
+	return fmt.Sprintf("%v", result)
+}
+
 type EncryptionMgr struct {
 	supvCmdch MsgChannel //supervisor sends commands on this channel
 	supvMsgch MsgChannel //channel to send any message to supervisor
@@ -294,9 +327,15 @@ func (e *EncryptionMgr) trackUpdateKeys(msg Message) {
 
 	err := <-respCh
 	if err != nil {
-		logging.Warnf("EncryptionMgr:trackUpdateKeys err:%v for keydatatype:%v keyid:%v", err, kdt, keyid)
+		logging.Warnf(
+			"EncryptionMgr:trackUpdateKeys err:%v for keydatatype:%v keyid:%v",
+			err, logKDT(kdt), logKeyIDs(keyid),
+		)
 	} else {
-		logging.Infof("EncryptionMgr:trackUpdateKeys complete for keydatatype:%v keyid:%v", kdt, keyid)
+		logging.Infof(
+			"EncryptionMgr:trackUpdateKeys complete for keydatatype:%v keyid:%v",
+			logKDT(kdt), logKeyIDs(keyid),
+		)
 	}
 
 	e.cbMu.Lock()
@@ -306,7 +345,7 @@ func (e *EncryptionMgr) trackUpdateKeys(msg Message) {
 	nextPendingMsg := e.getNextMessagePending(kdt)
 	if nextPendingMsg != nil {
 		logging.Infof("EncryptionMgr:trackUpdateKeys complete, enqueuing pending msg for "+
-			"keydatatype:%v msg:%v", kdt, nextPendingMsg.GetMsgType().String())
+			"keydatatype:%v msg:%v", logKDT(kdt), nextPendingMsg.GetMsgType().String())
 		e.enqueue(nextPendingMsg)
 		e.setDropOrUpdateInProgress(kdt, nextPendingMsg)
 	}
@@ -319,9 +358,15 @@ func (e *EncryptionMgr) trackDropKeys(msg Message) {
 
 	err := <-respCh
 	if err != nil {
-		logging.Warnf("EncryptionMgr:trackDropKeys err:%v for keydatatype:%v drop keyids:%v", err, kdt, dropKeyids)
+		logging.Warnf(
+			"EncryptionMgr:trackDropKeys err:%v for keydatatype:%v drop keyids:%v",
+			err, logKDT(kdt), logKeyIDs(dropKeyids...),
+		)
 	} else {
-		logging.Infof("EncryptionMgr:trackDropKeys complete for keydatatype:%v drop keyids:%v", kdt, dropKeyids)
+		logging.Infof(
+			"EncryptionMgr:trackDropKeys complete for keydatatype:%v drop keyids:%v",
+			logKDT(kdt), logKeyIDs(dropKeyids...),
+		)
 		// Mark keys as not in-use
 		e.DropInUseKeys(kdt, dropKeyids)
 	}
@@ -333,12 +378,17 @@ func (e *EncryptionMgr) trackDropKeys(msg Message) {
 
 	err2 := cbauth.KeysDropComplete(kdt, err)
 	if err2 != nil {
-		logging.Warnf("EncryptionMgr:trackDropKeys error during notifying KeysDropComplete kdt:%v err:%v", kdt, err2)
+		logging.Warnf(
+			"EncryptionMgr:trackDropKeys error during notifying KeysDropComplete kdt:%v err:%v",
+			logKDT(kdt), err2,
+		)
 	}
 
 	nextPendingMsg := e.getNextMessagePending(kdt)
 	if nextPendingMsg != nil {
-		logging.Infof("EncryptionMgr:trackDropKeys complete, enqueuing pending msg for keydatatype:%v msg:%v", kdt, nextPendingMsg.GetMsgType().String())
+		logging.Infof("EncryptionMgr:trackDropKeys complete, enqueuing"+
+			" pending msg for keydatatype:%v msg:%v",
+			logKDT(kdt), nextPendingMsg.GetMsgType().String())
 		e.enqueue(nextPendingMsg)
 		e.setDropOrUpdateInProgress(kdt, nextPendingMsg)
 	}
@@ -517,7 +567,7 @@ func (e *EncryptionMgr) cacheKeysForBootstrap() {
 		if bucket.UUID == common.BUCKET_UUID_NIL {
 			continue
 		}
-		kdt := KeyDataType{TypeName: "service_bucket", BucketUUID: bucket.UUID}
+		kdt := KeyDataType{TypeName: kdtTypeServiceBucket, BucketUUID: bucket.UUID}
 		ctx := context.Background()
 		encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, kdt)
 		if err != nil {
@@ -532,10 +582,16 @@ func (e *EncryptionMgr) cacheKeysForBootstrap() {
 	//kdt := KeyDataType{TypeName: "log", BucketUUID: ""}
 	//encrKeysInfo := cbmockGetEncryptionKeysBlocking(kdt)
 	//e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
-	//
-	//kdt = KeyDataType{TypeName: "config", BucketUUID: ""}
-	//encrKeysInfo = cbmockGetEncryptionKeysBlocking(kdt)
-	//e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
+
+	ctx := context.Background()
+	encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, MetadataKDT)
+	if err != nil {
+		logging.Fatalf("EncryptionMgr:caching keys for config err:%v", err)
+		panic(err)
+	}
+	e.SetClusterEncrKeysInfo(MetadataKDT, encrKeysInfo)
+	logging.Infof("EncryptionMgr:cached keys for %v", logKDT(MetadataKDT))
+
 	//
 	//kdt = KeyDataType{TypeName: "audit", BucketUUID: ""}
 	//encrKeysInfo = cbmockGetEncryptionKeysBlocking(kdt)
@@ -593,7 +649,10 @@ func (e *EncryptionMgr) recoverInUseKeys() {
 
 	// This message is not for specific bucket thus bucketUUID is empty. This will get keys in use for all buckets.
 	respMapCh := make(chan map[KeyDataType][]string)
-	e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: KeyDataType{TypeName: "service_bucket", BucketUUID: ""}, respMapCh: respMapCh}
+	e.supvMsgch <- &MsgEncryptionGetInuseKeys{
+		keyDataType: KeyDataType{TypeName: kdtTypeServiceBucket, BucketUUID: ""},
+		respMapCh:   respMapCh,
+	}
 	kdtKeysMap := <-respMapCh
 	allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
 
@@ -601,11 +660,17 @@ func (e *EncryptionMgr) recoverInUseKeys() {
 	//e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: KeyDataType{TypeName: "log", BucketUUID: ""}, respMapCh: respMapCh}
 	//kdtKeysMap = <-respMapCh
 	//allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
-	//
-	//e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: KeyDataType{TypeName: "config", BucketUUID: ""}, respMapCh: respMapCh}
-	//kdtKeysMap = <-respMapCh
-	//allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
-	//
+
+	configKeysCh := make(chan *common.Optional[[]string])
+	e.supvMsgch <- &MsgClustMgrGetInuseKeys{respCh: configKeysCh}
+	configKeys, ok := (<-configKeysCh).Get()
+	if !ok {
+		logging.Warnf("EncryptionMgr:recoveryInUseKeys failed to get metadata store keys")
+	} else {
+		kdtKeysMap[MetadataKDT] = configKeys
+	}
+	allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
+
 	//e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: KeyDataType{TypeName: "audit", BucketUUID: ""}, respMapCh: respMapCh}
 	//kdtKeysMap = <-respMapCh
 	//allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
@@ -676,7 +741,7 @@ func (e *EncryptionMgr) GetInUseKeys(kdt KeyDataType) ([]string, error) {
 	if !e.isRecoveryDone.Load() {
 		return []string{}, ErrEncrMgrNotReady
 	}
-	logging.Infof("EncryptionMgr:GetInUseKeys %v", kdt)
+	logging.Infof("EncryptionMgr:GetInUseKeys %v", logKDT(kdt))
 	e.muid.Lock()
 	defer e.muid.Unlock()
 
@@ -684,9 +749,11 @@ func (e *EncryptionMgr) GetInUseKeys(kdt KeyDataType) ([]string, error) {
 	if !ok {
 		logging.Warnf("EncryptionMgr:GetInUseKeys no in-use keys for type:%v uuid:%v", kdt.TypeName, kdt.BucketUUID)
 		return []string{}, nil
-	} else {
-		return keyids, nil
 	}
+
+	logging.Infof("EncryptionMgn:GetInUseKeys %v - %v", logKDT(kdt), logKeyIDs(keyids...))
+
+	return keyids, nil
 }
 
 func (e *EncryptionMgr) GetInUseKeysAll() (map[KeyDataType][]string, error) {
@@ -719,17 +786,22 @@ func (e *EncryptionMgr) SetInUseKeys(kdt KeyDataType, keyId string) {
 		keys := make([]string, 0)
 		keys = append(keys, keyId)
 		e.indexerUsedKeyIds[kdt] = keys
-		logging.Infof("EncryptionMgr:SetInUseKeys new KeyDataType:%v KeyId:%v", kdt, keyId)
+		logging.Infof("EncryptionMgr:SetInUseKeys new KeyDataType:%v KeyId:%v",
+			logKDT(kdt), logKeyIDs(keyId))
 	} else {
 		for _, k := range keyids {
 			if keyId == k {
 				// Info logging is done only when if added to map or dropped from map
-				logging.Verbosef("EncryptionMgr:SetInUseKeys key already in use keys map for type:%v uuid:%v keyid:%v", kdt.TypeName, kdt.BucketUUID, keyId)
+				logging.Verbosef(
+					"EncryptionMgr:SetInUseKeys key already in use keys map for keydatatype:%v keyid:%v",
+					logKDT(kdt), logKeyIDs(keyId),
+				)
 				return
 			}
 		}
 		e.indexerUsedKeyIds[kdt] = append(e.indexerUsedKeyIds[kdt], keyId)
-		logging.Infof("EncryptionMgr:SetInUseKeys KeyDataType:%v KeyId:%v", kdt, keyId)
+		logging.Infof("EncryptionMgr:SetInUseKeys KeyDataType:%v KeyId:%v",
+			logKDT(kdt), logKeyIDs(keyId))
 	}
 }
 
@@ -737,7 +809,7 @@ func (e *EncryptionMgr) DropInUseKeys(kdt KeyDataType, dropkeys []string) {
 	e.muid.Lock()
 	defer e.muid.Unlock()
 
-	logging.Infof("EncryptionMgr:DropInUseKeys %v %v", kdt, dropkeys)
+	logging.Infof("EncryptionMgr:DropInUseKeys %v %v", logKDT(kdt), logKeyIDs(dropkeys...))
 	newKeyids := make([]string, 0)
 	keyids, ok := e.indexerUsedKeyIds[kdt]
 
@@ -751,7 +823,10 @@ func (e *EncryptionMgr) DropInUseKeys(kdt KeyDataType, dropkeys []string) {
 			if _, ok := dropMap[key]; !ok {
 				newKeyids = append(newKeyids, key)
 			} else {
-				logging.Infof("EncryptionMgr:DropInUseKeys %v deleting in-use key:%v", kdt, key)
+				logging.Infof(
+					"EncryptionMgr:DropInUseKeys %v deleting in-use key:%v",
+					logKDT(kdt), logKeyIDs(key),
+				)
 			}
 		}
 		e.indexerUsedKeyIds[kdt] = newKeyids
@@ -843,11 +918,14 @@ func (e *EncryptionMgr) getKeyCipherById(keyId string) ([]byte, string) {
 			if bucket.UUID == common.BUCKET_UUID_NIL {
 				continue
 			}
-			currKdt := KeyDataType{TypeName: "service_bucket", BucketUUID: bucket.UUID}
+			currKdt := KeyDataType{TypeName: kdtTypeServiceBucket, BucketUUID: bucket.UUID}
 			ctx := context.Background()
 			encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, currKdt)
 			if err != nil {
-				logging.Fatalf("EncryptionMgr:getKeyCipherById GetEncryptionKeysBlocking for keyid:%v bucket:%v err:%v", keyId, bucket.Name, err)
+				logging.Fatalf(
+					"EncryptionMgr:getKeyCipherById GetEncryptionKeysBlocking for keyid:%v bucket:%v err:%v",
+					logKeyIDs(keyId), bucket.Name, err,
+				)
 				panic(err)
 			}
 			for _, earkey := range encrKeysInfo.Keys {
@@ -870,7 +948,8 @@ func (e *EncryptionMgr) getKeyCipherById(keyId string) ([]byte, string) {
 	} else {
 		earkey, err := e.getKeyCacheByKeyid(kdt, keyId)
 		if err != nil {
-			logging.Warnf("EncryptionMgr:getKeyCipherById for key:%v err:%v", keyId, err.Error())
+			logging.Warnf("EncryptionMgr:getKeyCipherById for key:%v err:%v",
+				logKeyIDs(keyId), err.Error())
 		} else {
 			return earkey.Key, earkey.Cipher
 		}
@@ -879,7 +958,8 @@ func (e *EncryptionMgr) getKeyCipherById(keyId string) ([]byte, string) {
 	ctx := context.Background()
 	encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, kdt)
 	if err != nil {
-		logging.Fatalf("EncryptionMgr:getKeyCipherById retry for key:%v err:%v", keyId, err.Error())
+		logging.Fatalf("EncryptionMgr:getKeyCipherById retry for key:%v err:%v",
+			logKeyIDs(keyId), err.Error())
 		panic(err)
 	}
 	// Update encryption related info
@@ -888,11 +968,13 @@ func (e *EncryptionMgr) getKeyCipherById(keyId string) ([]byte, string) {
 	// Try getting key for keyId as keyinfo is updated
 	kdt, ok = e.keyidKdtMap[keyId]
 	if !ok {
-		logging.Warnf("EncryptionMgr:getKeyCipherById retry could not find keydatatype for key:%v", keyId)
+		logging.Warnf("EncryptionMgr:getKeyCipherById retry could not find keydatatype for key:%v",
+			logKeyIDs(keyId))
 	} else {
 		earkey, err := e.getKeyCacheByKeyid(kdt, keyId)
 		if err != nil {
-			logging.Warnf("EncryptionMgr:getKeyCipherById retry for key:%v err:%v", keyId, err.Error())
+			logging.Warnf("EncryptionMgr:getKeyCipherById retry for key:%v err:%v",
+				logKeyIDs(keyId), err.Error())
 		} else {
 			return earkey.Key, earkey.Cipher
 		}
@@ -908,7 +990,10 @@ func (e *EncryptionMgr) getActiveKeyIdCipher(typename, bucketUUID string) ([]byt
 	kdt := KeyDataType{TypeName: typename, BucketUUID: bucketUUID}
 	encrKeysInfo, err := e.GetClusterEncrKeysInfo(kdt)
 	if err != nil {
-		logging.Warnf("EncryptionMgr:getActiveKeyIdCipher cache no key data for keydatatype: %v", kdt)
+		logging.Warnf(
+			"EncryptionMgr:getActiveKeyIdCipher cache no key data for keydatatype: %v",
+			logKDT(kdt),
+		)
 	} else {
 		key, keyid, cipher := getActiveKeyIdCipherFromEncrKeysInfo(encrKeysInfo)
 		if len(key) == 0 && keyid == "" && cipher == "" {
@@ -916,7 +1001,10 @@ func (e *EncryptionMgr) getActiveKeyIdCipher(typename, bucketUUID string) ([]byt
 			return key, keyid, gocbcrypto.CipherNameNone
 		} else if len(key) == 0 || keyid == "" || cipher == "" {
 			//Try getting latest info from cbauth
-			logging.Warnf("EncryptionMgr:getActiveKeyIdCipher cache no key data, keylength:%d keyid:%v cipher:%v", len(key), keyid, cipher)
+			logging.Warnf(
+				"EncryptionMgr:getActiveKeyIdCipher cache no key data, keylength:%d keyid:%v cipher:%v",
+				len(key), logKeyIDs(keyid), cipher,
+			)
 		} else {
 			return key, keyid, cipher
 		}
@@ -927,7 +1015,8 @@ func (e *EncryptionMgr) getActiveKeyIdCipher(typename, bucketUUID string) ([]byt
 	ctx := context.Background()
 	encrKeysInfoPtr, err := cbauth.GetEncryptionKeysBlocking(ctx, kdt)
 	if err != nil {
-		logging.Fatalf("EncryptionMgr:getActiveKeyIdCipher cbauth for keydatatype: %v err:%v", kdt, err.Error())
+		logging.Fatalf("EncryptionMgr:getActiveKeyIdCipher cbauth for keydatatype: %v err:%v",
+			logKDT(kdt), err.Error())
 		panic(err)
 	}
 	// Update encryption related info
@@ -937,7 +1026,8 @@ func (e *EncryptionMgr) getActiveKeyIdCipher(typename, bucketUUID string) ([]byt
 	encrKeysInfo, err = e.GetClusterEncrKeysInfo(KeyDataType{TypeName: typename, BucketUUID: bucketUUID})
 	if err != nil {
 		//It is safe to assume Key data is present in encrKeysInfo from GetEncryptionKeysBlocking, still log warning if key data has some fields missing
-		logging.Warnf("EncryptionMgr:getActiveKeyIdCipher cbauth no key data for keydatatype: %v", kdt)
+		logging.Warnf("EncryptionMgr:getActiveKeyIdCipher cbauth no key data for keydatatype: %v",
+			logKDT(kdt))
 	} else {
 		key, keyid, cipher := getActiveKeyIdCipherFromEncrKeysInfo(encrKeysInfo)
 		if len(key) == 0 && keyid == "" && cipher == "" {
@@ -945,7 +1035,10 @@ func (e *EncryptionMgr) getActiveKeyIdCipher(typename, bucketUUID string) ([]byt
 			return key, keyid, gocbcrypto.CipherNameNone
 		} else if len(key) == 0 || keyid == "" || cipher == "" {
 			//It is safe to assume activeKey is present in encrKeys from GetEncryptionKeysBlocking, still log warning if key data has some fields missing
-			logging.Warnf("EncryptionMgr:getActiveKeyIdCipher cbauth no key data keylength:%d keyid:%v cipher:%v", len(key), keyid, cipher)
+			logging.Warnf(
+				"EncryptionMgr:getActiveKeyIdCipher cbauth no key data keylength:%d keyid:%v cipher:%v",
+				len(key), logKeyIDs(keyid), cipher,
+			)
 			return []byte{}, "", gocbcrypto.CipherNameNone
 		} else {
 			return key, keyid, cipher
@@ -979,20 +1072,16 @@ var EncrCbsTest = SliceEncryptionCallbacks{
 
 // ns-server expects service to cache in-use keys and return callback quickly
 func (e *EncryptionMgr) getInUseKeysCallback(kdt KeyDataType) ([]string, error) {
-	logging.Infof("EncryptionMgr:getInUseKeysCallback %v", kdt)
+	logging.Infof("EncryptionMgr:getInUseKeysCallback %v", logKDT(kdt))
 	return e.GetInUseKeys(kdt)
 }
 
 // This can be called concurrently by many callers.
 func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 
-	logging.Infof("EncryptionMgr:refreshKeysCallback %v", kdt)
+	logging.Infof("EncryptionMgr:refreshKeysCallback %v", logKDT(kdt))
 
 	// ENCRYPT_TODO: Enable refreshKeysCallback for other datatypes later when being used.
-	if kdt.TypeName != "service_bucket" {
-		logging.Infof("EncryptionMgr:refreshKeysCallback %v skipping...", kdt)
-		return nil
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1021,30 +1110,45 @@ func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 
 	// As the there is ongoing key drop/update, skip msg adding to wrkrQueue and check if this can be added to pending map.
 	if activeMsg != nil {
-		logging.Warnf("EncryptionMgr:RefreshKeysCallback: drop/update in progress for keydatatype:%v keyid:%v.", kdt, earkey.Id)
+		logging.Warnf(
+			"EncryptionMgr:RefreshKeysCallback: drop/update in progress for keydatatype:%v keyid:%v.",
+			logKDT(kdt), logKeyIDs(earkey.Id),
+		)
 
 		// As the current msg is duplicate of ongoing update, this msg can be skipped from enqueuing.
 		skipMsg := e.isDuplicateMsg(msg, activeMsg)
 		if skipMsg {
-			logging.Warnf("EncryptionMgr:RefreshKeysCallback:duplicate to active msg for keydatatype:%v keyid:%v.", kdt, earkey.Id)
+			logging.Warnf(
+				"EncryptionMgr:RefreshKeysCallback:duplicate to active msg for keydatatype:%v keyid:%v.",
+				logKDT(kdt), logKeyIDs(earkey.Id),
+			)
 			return fmt.Errorf("Duplicate to ongoing request")
 		}
 
 		skipAddPending := e.isDuplicatePending(kdt, msg)
 		if !skipAddPending {
 			// As the current msg is not present in pendingMap and update/drop key is happening for same keydatatype, this msg can be added to pending map.
-			logging.Warnf("EncryptionMgr:RefreshKeysCallback added to pending msg for keydatatype:%v keyid:%v.", kdt, earkey.Id)
+			logging.Warnf(
+				"EncryptionMgr:RefreshKeysCallback added to pending msg for keydatatype:%v keyid:%v.",
+				logKDT(kdt), logKeyIDs(earkey.Id),
+			)
 			e.addMessagePending(kdt, msg)
 			return nil
 		}
 
 		// As the current msg is present in pendingMap and update/drop key is happening for same keydatatype, this msg can be skipped from adding to pending map.
-		logging.Warnf("EncryptionMgr:RefreshKeysCallback:duplicate to pending msg for keydatatype:%v keyid:%v.", kdt, earkey.Id)
+		logging.Warnf(
+			"EncryptionMgr:RefreshKeysCallback:duplicate to pending msg for keydatatype:%v keyid:%v.",
+			logKDT(kdt), logKeyIDs(earkey.Id),
+		)
 		return fmt.Errorf("Duplicate to pending request ")
 	}
 
 	// As the there is no ongoing key drop/update, adding msg to wrkrQueue
-	logging.Infof("EncryptionMgr:RefreshKeysCallback:Starting for keydatatype:%v keyid:%v", kdt, earkey.Id)
+	logging.Infof(
+		"EncryptionMgr:RefreshKeysCallback:Starting for keydatatype:%v keyid:%v",
+		logKDT(kdt), logKeyIDs(earkey.Id),
+	)
 	e.enqueue(msg)
 	e.setDropOrUpdateInProgress(kdt, msg)
 	return nil
@@ -1054,31 +1158,27 @@ func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 // If keyids contain "", it is expected to encrypt the unencrypted data
 func (e *EncryptionMgr) dropKeysCallback(kdt KeyDataType, keyids []string) {
 
-	logging.Infof("EncryptionMgr:DropKeysCallback:Received for keydatatype:%v dropkeyids:%v", kdt, keyids)
+	logging.Infof("EncryptionMgr:DropKeysCallback:Received for keydatatype:%v dropkeyids:%v",
+		logKDT(kdt), logKeyIDs(keyids...))
 
 	// ENCRYPT_TODO: Enable dropKeysCallback for other datatypes later when being used.
-	if kdt.TypeName != "service_bucket" {
-		logging.Infof("EncryptionMgr:dropKeysCallback %v dropkeyids:%v skipping...", kdt, keyids)
-		err := cbauth.KeysDropComplete(kdt, nil)
-		if err != nil {
-			logging.Warnf("EncryptionMgr:DropKeysCallback error during notifying KeysDropComplete for skipped drop kdt:%v err:%v", kdt, err)
-		}
-		return
-	}
 
 	// Use latest key data from cbauth for dropKey of keydatatype
 	// If keys are not present, send error to cbauth using KeysDropComplete, otherwise it is expected to treat it as hard error.
 	encrKeysInfo, err := cbauth.GetEncryptionKeys(kdt)
 	if err != nil {
 		if err == cbauth.ErrKeysNotAvailable {
-			logging.Warnf("EncryptionMgr:DropKeysCallback error during GetEncryptionKeys kdt:%v err:%v", kdt, err)
+			logging.Warnf("EncryptionMgr:DropKeysCallback error during GetEncryptionKeys kdt:%v err:%v",
+				logKDT(kdt), err)
 			err2 := cbauth.KeysDropComplete(kdt, err)
 			if err2 != nil {
-				logging.Warnf("EncryptionMgr:DropKeysCallback error during notifying KeysDropComplete kdt:%v err:%v", kdt, err2)
+				logging.Warnf(
+					"EncryptionMgr:DropKeysCallback error during notifying KeysDropComplete kdt:%v err:%v",
+					logKDT(kdt), err2)
 			}
 			return
 		}
-		logging.Fatalf("EncryptionMgr:DropKeysCallback could not get key data kdt:%v err:%v", kdt, err)
+		logging.Fatalf("EncryptionMgr:DropKeysCallback could not get key data kdt:%v err:%v", logKDT(kdt), err)
 		panic(err)
 	}
 
@@ -1092,9 +1192,16 @@ func (e *EncryptionMgr) dropKeysCallback(kdt KeyDataType, keyids []string) {
 		if dropKey == earkey.Id {
 			err2 := cbauth.KeysDropComplete(kdt, fmt.Errorf("DropKey received for active keyid"))
 			if err2 != nil {
-				logging.Warnf("EncryptionMgr:DropKeysCallback error activeKeyId:%v in dropkeyids kdt:%v, error during notifying KeysDropComplete err:%v", dropKey, kdt, err2)
+				logging.Warnf(
+					"EncryptionMgr:DropKeysCallback error activeKeyId:%v in dropkeyids kdt:%v,"+
+						" error during notifying KeysDropComplete err:%v",
+					logKeyIDs(dropKey), logKDT(kdt), err2,
+				)
 			} else {
-				logging.Warnf("EncryptionMgr:DropKeysCallback error activeKeyId:%v in dropkeyids kdt:%v", earkey.Id, kdt)
+				logging.Warnf(
+					"EncryptionMgr:DropKeysCallback error activeKeyId:%v in dropkeyids kdt:%v",
+					logKeyIDs(earkey.Id), logKDT(kdt),
+				)
 			}
 			return
 		}
@@ -1111,28 +1218,43 @@ func (e *EncryptionMgr) dropKeysCallback(kdt KeyDataType, keyids []string) {
 	// As the there is ongoing key drop/update, skip msg adding to wrkrQueue
 	// If msg is not duplicate of ongoing update or also not present in pendingMap, add it to pendingMap.
 	if activeMsg != nil {
-		logging.Warnf("EncryptionMgr:DropKeysCallback: drop/update in progress for keydatatype:%v activekeyid:%v.", kdt, earkey.Id)
+		logging.Warnf(
+			"EncryptionMgr:DropKeysCallback: drop/update in progress for keydatatype:%v activekeyid:%v.",
+			logKDT(kdt), logKeyIDs(earkey.Id),
+		)
 
 		// As the current msg is duplicate of ongoing drop, this msg can be skipped from enqueuing.
 		skipMsg := e.isDuplicateMsg(msg, activeMsg)
 		if skipMsg {
-			logging.Warnf("EncryptionMgr:DropKeysCallback:duplicate to active msg for keydatatype:%v keyids:%v", kdt, keyids)
+			logging.Warnf(
+				"EncryptionMgr:DropKeysCallback:duplicate to active msg for keydatatype:%v keyids:%v",
+				logKDT(kdt), logKeyIDs(keyids...),
+			)
 			return
 		}
 
 		// As the current msg is also present in pendingMap, this msg can be skipped from adding to pending map.
 		skipAddPending := e.isDuplicatePending(kdt, msg)
 		if !skipAddPending {
-			logging.Warnf("EncryptionMgr:DropKeysCallback added to pending msg for keydatatype:%v keyid:%v.", kdt, earkey.Id)
+			logging.Warnf(
+				"EncryptionMgr:DropKeysCallback added to pending msg for keydatatype:%v keyid:%v.",
+				logKDT(kdt), logKeyIDs(earkey.Id),
+			)
 			e.addMessagePending(kdt, msg)
 			return
 		}
 
-		logging.Warnf("EncryptionMgr:DropKeysCallback:duplicate to pending msg for keydatatype:%v keyid:%v.", kdt, earkey.Id)
+		logging.Warnf(
+			"EncryptionMgr:DropKeysCallback:duplicate to pending msg for keydatatype:%v keyid:%v.",
+			logKDT(kdt), logKeyIDs(earkey.Id),
+		)
 		return
 	}
 
-	logging.Infof("EncryptionMgr:DropKeysCallback:Starting for keydatatype:%v using active keyid:%v", kdt, earkey.Id)
+	logging.Infof(
+		"EncryptionMgr:DropKeysCallback:Starting for keydatatype:%v using active keyid:%v",
+		logKDT(kdt), logKeyIDs(earkey.Id),
+	)
 	e.enqueue(msg)
 	e.setDropOrUpdateInProgress(kdt, msg)
 }
@@ -1140,6 +1262,37 @@ func (e *EncryptionMgr) dropKeysCallback(kdt KeyDataType, keyids []string) {
 func (e *EncryptionMgr) synchronizeKeyFilesCallback(kdt KeyDataType) error {
 	// ENCRYPT_TODO: Add synchronizeKeyFilesCallback for rebalance
 	logging.Infof("EncryptionMgr:synchronizeKeyFilesCallback...")
+	return nil
+}
+
+var MetadataKDT = KeyDataType{TypeName: "other"}
+
+func (e *EncryptionMgr) getActiveKeyCipherMetadataCb() (*EaRKey, error) {
+	key, id, cipher := e.getActiveKeyIdCipher(
+		MetadataKDT.TypeName, MetadataKDT.BucketUUID,
+	)
+	return &EaRKey{
+		Id:     id,
+		Key:    key,
+		Cipher: cipher,
+	}, nil
+}
+
+func (e *EncryptionMgr) getKeyCipherByIDMetadataCb(keyID common.KeyID) (*EaRKey, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	key, err := e.getKeyCacheByKeyid(MetadataKDT, keyID)
+	return &key, err
+}
+
+func (e *EncryptionMgr) getEncryptionKeysMetadataCb() (*EncrKeysInfo, error) {
+	keys, err := e.GetClusterEncrKeysInfo(MetadataKDT)
+	return &keys, err
+}
+
+func (e *EncryptionMgr) setInuseKeysMetadataCb(keyID common.KeyID) error {
+	e.SetInUseKeys(MetadataKDT, keyID)
 	return nil
 }
 

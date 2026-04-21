@@ -59,6 +59,9 @@ type RepoRef interface {
 	clearMetaDirty()
 	getMetastoreStats() repo.MetastoreStats
 	compactStores() error
+	getInuseKeys() ([]string, error)
+	refreshKeys() error
+	dropKeys([]string) error
 }
 
 // RemoteRepoRef implements the RepoRef interface for a remote metadata repo.
@@ -551,6 +554,18 @@ func (c *MetadataRepo) CompactStores() error {
 	return c.repo.compactStores()
 }
 
+func (c *MetadataRepo) GetInuseKeys() ([]string, error) {
+	return c.repo.getInuseKeys()
+}
+
+func (c *MetadataRepo) RefreshKeys() error {
+	return c.repo.refreshKeys()
+}
+
+func (c *MetadataRepo) DropKeys(keyIDs []string) error {
+	return c.repo.dropKeys(keyIDs)
+}
+
 ///////////////////////////////////////////////////////
 //  Public Function : Indexer Info
 ///////////////////////////////////////////////////////
@@ -969,6 +984,28 @@ func (c *LocalRepoRef) setMetaDirty() {
 	c.metaDirtyMutex.Unlock()
 }
 
+func (c *LocalRepoRef) getInuseKeys() ([]string, error) {
+	keyIDs, err := c.server.GetInuseKeys()
+	if err != nil {
+		return nil, fmt.Errorf("local metadata server get in-use keys: %w", err)
+	}
+	return keyIDs, nil
+}
+
+func (c *LocalRepoRef) dropKeys(keyIDs []string) error {
+	if err := c.server.DropKeys(keyIDs); err != nil {
+		return fmt.Errorf("local metadata server drop keys: %w", err)
+	}
+	return nil
+}
+
+func (c *LocalRepoRef) refreshKeys() error {
+	if err := c.server.RefreshKeys(); err != nil {
+		return fmt.Errorf("local metadata server refresh keys: %w", err)
+	}
+	return nil
+}
+
 ///////////////////////////////////////////////////////
 // private function : RemoteRepoRef
 ///////////////////////////////////////////////////////
@@ -1160,6 +1197,28 @@ func (c *RemoteRepoRef) isMetaDirty() bool {
 // clearMetaDirty is a no-op for RemoteRepoRef as the metadata dirty
 // flag is not implemented for remote repos.
 func (c *RemoteRepoRef) clearMetaDirty() {
+}
+
+func (c *RemoteRepoRef) getInuseKeys() ([]string, error) {
+	keyIDs, err := c.repository.GetInuseKeys()
+	if err != nil {
+		return nil, fmt.Errorf("remote metadata repository get in-use keys: %w", err)
+	}
+	return keyIDs, nil
+}
+
+func (c *RemoteRepoRef) refreshKeys() error {
+	if err := c.repository.RefreshKeys(); err != nil {
+		return fmt.Errorf("remote metadata repository refresh keys: %w", err)
+	}
+	return nil
+}
+
+func (c *RemoteRepoRef) dropKeys(keyIDs []string) error {
+	if err := c.repository.DropKeys(keyIDs); err != nil {
+		return fmt.Errorf("remote metadata repository drop keys: %w", err)
+	}
+	return nil
 }
 
 ///////////////////////////////////////////////////////
