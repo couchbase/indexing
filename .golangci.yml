@@ -104,10 +104,19 @@ linters:
       multi-if: true
       multi-func: true
     govet:
-      # enable-all: true
+      enable:
+        - printf
       settings:
         printf:
-          funcs: "fmt.Println,fmt.Printf,fmt.Sprintf,fmt.Errorf,logging.Infof,logging.Warnf,logging.Errorf,logging.Debugf,logging.Tracef,logging.Panicf,logging.Fatalf,l.Infof,l.Warnf,l.Errorf,l.Debugf,l.Tracef,l.Panicf,l.Fatalf,(github.com/couchbase/indexing/secondary/logging).Infof,(github.com/couchbase/indexing/secondary/logging).Warnf,(github.com/couchbase/indexing/secondary/logging).Errorf,(github.com/couchbase/indexing/secondary/logging).Debugf, (github.com/couchbase/indexing/secondary/logging).Tracef,(github.com/couchbase/indexing/secondary/logging).Panicf,(github.com/couchbase/indexing/secondary/logging).Fatalf,(github.com/couchbase/indexing/secondary/logging).Infof,(*github.com/couchbase/indexing/secondary/logging).Infof,(*github.com/couchbase/indexing/secondary/logging).Errorf,(*github.com/couchbase/indexing/secondary/logging).Debugf,(*github.com/couchbase/indexing/secondary/logging).Tracef,(*github.com/couchbase/indexing/secondary/logging).Panicf,(*github.com/couchbase/indexing/secondary/logging).Fatalf"
+          funcs:
+            - github.com/couchbase/indexing/secondary/logging.Infof
+            - github.com/couchbase/indexing/secondary/logging.Warnf
+            - github.com/couchbase/indexing/secondary/logging.Errorf
+            - github.com/couchbase/indexing/secondary/logging.Debugf
+            - github.com/couchbase/indexing/secondary/logging.Tracef
+            - github.com/couchbase/indexing/secondary/logging.Panicf
+            - github.com/couchbase/indexing/secondary/logging.Fatalf
+
   exclusions:
     paths:
       - protobuf
@@ -117,17 +126,10 @@ formatters:
   enable:
     - gofmt
     - goimports
-    - golines
   exclusions:
     paths:
       - protobuf
       - secondary/protobuf
-  settings:
-    golines:
-      max-len: 100
-      chain-split-dots: true
-      shorten-comments: true
-      reformat-tags: true
 
 output:
   formats:

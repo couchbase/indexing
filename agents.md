@@ -10,6 +10,7 @@
 - Use project Go toolchain and existing dependencies; avoid adding new ones unless required.
 - Prefer repo tools (project scripts in `secondary/tests/ci/scripts`) over custom commands.
 - No credentials or secrets in code, logs, or configs.
+- Dependencies: golang based dependencies are part of the monorepo. find the exact paths in go.mod.
 
 ## Architecture
 
