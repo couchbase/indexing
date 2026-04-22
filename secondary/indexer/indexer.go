@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"math"
 	"math/rand"
@@ -33,6 +34,7 @@ import (
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	l "github.com/couchbase/indexing/secondary/logging"
 
+	"github.com/couchbase/gocbcrypto"
 	gomr "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
@@ -105,6 +107,10 @@ var (
 const (
 	CORRUPT_DATA_SUBDIR = ".corruptData"
 )
+
+var codebookKDFLabelCtx = []byte("indexing/codebook")
+var codebookChunkSize = 64 * 1024 * 1024
+var cryptFileWriterReaderBufSz = uint32(4096)
 
 // indexer is the central GSI class that runs the main message loop.
 // It also implements the Indexer interface.
@@ -11584,7 +11590,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 			// safety call to make sure base dir exists before bhive directory is created
 			slice, err = NewBhiveSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
-				CodebookPath2(indInst, partitionId, id), indInst.BhiveGraphStatus[partitionId])
+				CodebookPath2(indInst, partitionId, id), indInst.BhiveGraphStatus[partitionId], sliceEncryptionCallbacks)
 		} else {
 			slice, err = NewPlasmaSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
@@ -15311,6 +15317,17 @@ func (idx *indexer) isTransientErrorForVectorBuild(err error, isRebalOrResume bo
 	return true
 }
 
+func newEncryptionCtx(cipher string, encryptionKeyId string, key []byte) (gocbcrypto.EncryptionContext, error) {
+
+	switch cipher {
+	case "AES-256-GCM":
+		ctx, err := gocbcrypto.NewAESGCM256ContextWithOpenSSL([]byte(encryptionKeyId), key, codebookKDFLabelCtx, 0)
+		return ctx, err
+	default:
+		return nil, fmt.Errorf("invalid cipher:%v", cipher)
+	}
+}
+
 func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 	idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId,
 	codebook []byte) error {
@@ -15329,16 +15346,82 @@ func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 		return err
 	}
 
-	err := common.WriteFileWithSync(codebookPath, codebook, 0755)
-	if err != nil {
-		logging.Errorf("Indexer::persistCodebookToDisk Error observed when writing file to path: %v, err: %v", codebookPath, err)
-		return err
+	key, keyid, cipher := idx.encryptionMgr.getActiveKeyIdCipher("service_bucket", idxInst.Defn.BucketUUID)
+
+	isEncryptionRequired := !(cipher == gocbcrypto.CipherNameNone || keyid == "" || key == nil)
+
+	if isEncryptionRequired {
+		// Persist encrypted codebook
+		ctx, err := newEncryptionCtx(cipher, keyid, key)
+		if err != nil {
+			logging.Errorf("Indexer::persistCodebookToDisk Error observed on newEncryptionCtx err:%v", err)
+			return err
+		}
+
+        var aligned = false
+        chunkSize := codebookChunkSize
+        reader := bytes.NewReader(codebook)
+        buffer := make([]byte,chunkSize)
+		fd, err := os.OpenFile(codebookPath, os.O_WRONLY|os.O_CREATE, 0755)
+		if err != nil {
+			logging.Errorf("Indexer::persistCodebookToDisk Error observed on opening file err:%v", err)
+			return err
+		}
+		defer fd.Close()
+
+		cfw, err := gocbcrypto.NewCryptFileWriter(fd, ctx, cryptFileWriterReaderBufSz, aligned, nil)
+		if err != nil {
+			logging.Errorf("Indexer::persistCodebookToDisk Error observed on NewCryptFileWriter err:%v", err)
+			return err
+		}
+		_, err = cfw.WriteHeader()
+		if err != nil {
+			logging.Errorf("Indexer::persistCodebookToDisk Error observed on CryptFileWriter.WriteHeader err:%v", err)
+			return err
+		}
+		err = cfw.Flush()
+		if err != nil {
+			logging.Errorf("Indexer::persistCodebookToDisk Error observed on CryptFileWriter.Flush err:%v", err)
+			return err
+		}
+
+		var err2 error
+		for {
+			var bufferBytes int
+			bufferBytes, err2 = reader.Read(buffer)
+			if err2 == io.EOF {
+				break
+			}
+			if err2 != nil {
+				break
+			}
+			_, err2 = cfw.EncryptAndWriteBlock(buffer[:bufferBytes])
+			if err2 != nil {
+				logging.Errorf("Indexer::persistCodebookToDisk Error observed on EncryptAndWriteBlock err:%v", err2)
+				return err2
+			}
+		}
+		cfw.Reset()
+		if err2 != nil && err2 != io.EOF {
+			logging.Errorf("Indexer::persistCodebookToDisk Error observed in reading buffer err:%v", err2)
+			return err2
+		}
+
+		// Set in-use key for codebook
+		idx.encryptionMgr.SetInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxInst.Defn.BucketUUID}, keyid)
 	} else {
-		// persistance is successful
-		logging.Infof("Indexer::persistCodebookToDisk: Persistance to disk is successful for path: %v", codebookPath)
-		return nil
+		// Persist un-encrypted codebook
+		err := common.WriteFileWithSync(codebookPath, codebook, 0755)
+		if err != nil {
+			logging.Errorf("Indexer::persistCodebookToDisk Error observed when writing file to path: %v, err: %v", codebookPath, err)
+			return err
+		}
+		// Set "" in-use key for codebook
+		idx.encryptionMgr.SetInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxInst.Defn.BucketUUID}, "")
 	}
 
+	logging.Infof("Indexer::persistCodebookToDisk: Persistance to disk is successful for path: %v isEncrypted:%v keyid:%v", codebookPath, isEncryptionRequired, keyid)
+	return nil
 }
 
 func (idx *indexer) removeCodebookDir(

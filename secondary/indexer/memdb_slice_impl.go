@@ -2090,6 +2090,20 @@ func (mdb *memdbSlice) String() string {
 
 }
 
+func (mdb *memdbSlice) SetCodebookEncryptionKey(key []byte, keyId string, cipher string, kdt KeyDataType) error {
+	//no-op
+	return nil
+}
+
+func (mdb *memdbSlice) DropCodebookEncryptionKey(dropKeys []string, activeEarkey EaRKey, kdt KeyDataType) error {
+	//no-op
+	return nil
+}
+
+func (mdb *memdbSlice) GetCodebookEncryptionKeyId() (string, error) {
+	return "", fmt.Errorf("Not supported")
+}
+
 func tryDeletememdbSlice(mdb *memdbSlice) {
 
 	//cleanup the disk directory

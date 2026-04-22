@@ -13,11 +13,13 @@ package indexer
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -1099,6 +1101,394 @@ func (s *plasmaSlice) GetKeyIdList() ([][]byte, error) {
 	}
 
 	return keyIds, nil
+}
+
+func encryptCodebookByChunk(codebookPath, tmpEncryptionPath string, eCtx gocbcrypto.EncryptionContext) error {
+	content, err := iowrap.Ioutil_ReadFile(codebookPath)
+	if err != nil {
+		logging.Errorf("encryptCodebook error observed while reading from disk for path: %v, err: %v", codebookPath, err)
+		return errCodebookCorrupted
+	}
+
+	var aligned = false
+	chunkSize := codebookChunkSize
+	reader := bytes.NewReader(content)
+	buffer := make([]byte, chunkSize)
+
+	fd, err := os.OpenFile(tmpEncryptionPath, os.O_WRONLY|os.O_CREATE, 0755)
+	if err != nil {
+		logging.Errorf("encryptCodebook Error observed on opening file err:%v", err)
+		return err
+	}
+
+	cfw, err := gocbcrypto.NewCryptFileWriter(fd, eCtx, cryptFileWriterReaderBufSz, aligned, nil)
+	if err != nil {
+		logging.Errorf("encryptCodebook Error observed on NewCryptFileWriter err:%v", err)
+		fd.Close()
+		err2 := os.Remove(tmpEncryptionPath)
+		if err2 != nil {
+			logging.Errorf("encryptCodebook encryption cleanup failed err:%v", err2)
+		}
+		return err
+	}
+	_, err = cfw.WriteHeader()
+	if err != nil {
+		logging.Errorf("encryptCodebook Error observed on CryptFileWriter.WriteHeader err:%v", err)
+		fd.Close()
+		err2 := os.Remove(tmpEncryptionPath)
+		if err2 != nil {
+			logging.Errorf("encryptCodebook encryption cleanup failed err:%v", err2)
+		}
+		return err
+	}
+	err = cfw.Flush()
+	if err != nil {
+		logging.Errorf("encryptCodebook Error observed on CryptFileWriter.Flush err:%v", err)
+		fd.Close()
+		err2 := os.Remove(tmpEncryptionPath)
+		if err2 != nil {
+			logging.Errorf("encryptCodebook encryption cleanup failed err:%v", err2)
+		}
+		return err
+	}
+
+	var err2 error
+	for {
+		var bufferBytes int
+		bufferBytes, err2 = reader.Read(buffer)
+		if err2 == io.EOF {
+			break
+		}
+		if err2 != nil {
+			break
+		}
+		_, err2 = cfw.EncryptAndWriteBlock(buffer[:bufferBytes])
+		if err2 != nil {
+			logging.Errorf("encryptCodebook Error observed on EncryptAndWriteBlock err:%v", err2)
+			fd.Close()
+			err3 := os.Remove(tmpEncryptionPath)
+			if err3 != nil {
+				logging.Errorf("encryptCodebook encryption cleanup failed err:%v", err3)
+			}
+			return err2
+		}
+	}
+	cfw.Reset()
+	if err2 != nil && err2 != io.EOF {
+		logging.Errorf("encryptCodebook Error observed in reading buffer err:%v", err2)
+		fd.Close()
+		err3 := os.Remove(tmpEncryptionPath)
+		if err3 != nil {
+			logging.Errorf("encryptCodebook encryption cleanup failed err:%v", err3)
+		}
+		return err2
+	}
+
+	err = iowrap.File_Close(fd)
+	if err != nil {
+		logging.Errorf("encryptCodebook Error observed in closing file err:%v", err)
+		fd.Close()
+		err3 := os.Remove(tmpEncryptionPath)
+		if err3 != nil {
+			logging.Errorf("encryptCodebook encryption cleanup failed err:%v", err3)
+		}
+		return err
+	}
+	return nil
+}
+
+func (mdb *plasmaSlice) SetCodebookEncryptionKey(key []byte, keyId string, cipher string, kdt KeyDataType) error {
+
+	// function for reading data from codebook
+	getKeyById := func(keyId2 []byte) []byte {
+
+		key, _ := mdb.sliceEncryptionCallbacks.getKeyCipherById(string(keyId2))
+		return key
+	}
+
+	codebookPath := filepath.Join(mdb.storageDir, mdb.codebookPath)
+	_, err := iowrap.Os_Stat(codebookPath)
+	if os.IsNotExist(err) {
+		logging.Errorf("plasmaSlice:SetCodebookEncryptionKey codebookpath doesn't exist for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+		return nil
+	}
+
+	// function for creating write context
+	// New context for encryption
+	var eCtx gocbcrypto.EncryptionContext
+	switch cipher {
+	case gocbcrypto.CipherNameNone:
+		eCtx = gocbcrypto.NewNullContext()
+	case gocbcrypto.CipherNameAES256GCM:
+		eCtx, err = gocbcrypto.NewAESGCM256ContextWithOpenSSL([]byte(keyId), key, codebookKDFLabelCtx, 0)
+		if err != nil {
+			logging.Errorf("plasmaSlice:SetCodebookEncryptionKey for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+			return err
+		}
+	default:
+		return fmt.Errorf("Unsupported cipher %v", cipher)
+	}
+
+	tmpEncryptionPath := codebookPath + ".tmp"
+
+	isEncrypted, err := gocbcrypto.IsFileEncrypted(codebookPath)
+	if err != nil {
+		logging.Errorf("plasmaSlice:SetCodebookEncryptionKey isFileEncrypted failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+		return err
+	}
+
+	// +-------------+-------------+-------------+-------------+-------------+
+	// | isEncrypted | true        | false       | true        | false       |	---> Codebook current encryption
+	// -----------------------------------------------------------------------
+	// | cipher      | AES256GCM   | AES256GCM   | none        | none        |	---> New cipher requested
+	// -----------------------------------------------------------------------
+	// | Action      | Re-encrypt  | Encrypt     | Decrypt     | no-op       |	---> Action to do for codebook
+	// +-------------+-------------+-------------+-------------+-------------+
+	if isEncrypted && cipher != gocbcrypto.CipherNameNone {
+
+		// Re-encrypt the codebook
+		// ReencryptFileByChunk closes files
+		bytesWritten, err := gocbcrypto.ReencryptFileByChunk(context.TODO(), codebookPath, tmpEncryptionPath, eCtx, getKeyById, codebookKDFLabelCtx, nil)
+		if err != nil {
+			logging.Errorf("plasmaSlice:SetCodebookEncryptionKey re-encryption failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+			err2 := os.Remove(tmpEncryptionPath)
+			if err2 != nil {
+				logging.Errorf("plasmaSlice:SetCodebookEncryptionKey re-encryption cleanup failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err2)
+			}
+			return err
+		} else if bytesWritten == 0 {
+			// It means codebook was already encrypted using same key
+			logging.Infof("plasmaSlice:SetCodebookEncryptionKey codebook re-encryption already encrypted for instId:%v partnId:%v keyId:%v", mdb.idxInstId, mdb.idxPartnId, keyId)
+			return nil
+		}
+
+	} else if !isEncrypted && cipher != gocbcrypto.CipherNameNone {
+
+		// Encrypt the unencrypted codebook
+		err := encryptCodebookByChunk(codebookPath, tmpEncryptionPath, eCtx)
+		if err != nil {
+			logging.Errorf("plasmaSlice:SetCodebookEncryptionKey Error observed on encryptCodebookByChunk for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+			return err
+		}
+
+	} else if isEncrypted && cipher == gocbcrypto.CipherNameNone {
+		// Decrypt the codebook
+		content, err := decryptCodebookByChunk(codebookPath, getKeyById, codebookKDFLabelCtx)
+		if err != nil {
+			logging.Errorf("plasmaSlice:SetCodebookEncryptionKey Error observed while decryptCodebookByChunk from disk for path: %v, err: %v", codebookPath, err)
+			return err
+		}
+
+		err = common.WriteFileWithSync(tmpEncryptionPath, content, 0755)
+		if err != nil {
+			logging.Errorf("plasmaSlice:SetCodebookEncryptionKey Error observed when writing file to path: %v, err: %v", codebookPath, err)
+			err2 := os.Remove(tmpEncryptionPath)
+			if err2 != nil {
+				logging.Errorf("plasmaSlice:SetCodebookEncryptionKey encryption cleanup failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err2)
+			}
+			return err
+		}
+	} else if !isEncrypted && cipher == gocbcrypto.CipherNameNone {
+		logging.Infof("plasmaSlice:SetCodebookEncryptionKey no-op for instId:%v partnId:%v keyId:%v", mdb.idxInstId, mdb.idxPartnId, keyId)
+		return nil
+	} else {
+		return fmt.Errorf("Invalid codebook encryption state")
+	}
+
+	err = os.Rename(tmpEncryptionPath, codebookPath)
+	if err != nil {
+		// As new encrypted codebook can't be used, keep using old codebook and remove file at tmpEncryptionPath
+		logging.Errorf("plasmaSlice:SetCodebookEncryptionKey rename failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+		err2 := os.Remove(tmpEncryptionPath)
+		if err2 != nil {
+			logging.Errorf("plasmaSlice:SetCodebookEncryptionKey remove failed for tmpEncryptionPath instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err2)
+		}
+		return err
+	}
+
+	logging.Infof("plasmaSlice:SetCodebookEncryptionKey complete for instId:%v partnId:%v keyId:%v", mdb.idxInstId, mdb.idxPartnId, keyId)
+	// As new encrypted codebook is present at mdb.codebookPath, set keyId as in-use
+	mdb.sliceEncryptionCallbacks.setInUseKeys(kdt, keyId)
+
+	return nil
+}
+
+func (mdb *plasmaSlice) GetCodebookEncryptionKeyId() (string, error) {
+
+	codebookPath := filepath.Join(mdb.storageDir, mdb.codebookPath)
+	isEncrypted, err := gocbcrypto.IsFileEncrypted(codebookPath)
+	if err != nil {
+		logging.Errorf("plasmaSlice:GetCodebookEncryptionKeyId isFileEncrypted failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+		return "", err
+	}
+	if !isEncrypted {
+		return "", nil
+	}
+
+	getKeyById := func(keyid []byte) []byte {
+		key, _ := mdb.sliceEncryptionCallbacks.getKeyCipherById(string(keyid))
+		return key
+	}
+
+	fd, err := os.OpenFile(codebookPath, os.O_RDONLY, 0755)
+	if err != nil {
+		logging.Errorf("plasmaSlice::GetCodebookEncryptionKeyId: Error observed while reading in-use key from disk for path: %v, err: %v", codebookPath, err)
+		return "", err
+	}
+	defer fd.Close()
+
+	rd, err := gocbcrypto.NewCryptFileReaderWithLabel(fd, getKeyById, codebookKDFLabelCtx, cryptFileWriterReaderBufSz, false, nil)
+	if err != nil {
+		logging.Errorf("plasmaSlice::GetCodebookEncryptionKeyId: Error observed while reading in-use key from disk for path: %v, err: %v", codebookPath, err)
+		return "", err
+	}
+	defer rd.Reset()
+
+	inUseKeyId := rd.GetCtx().KeyID()
+	return string(inUseKeyId), nil
+}
+
+// used to skip drop if key used for encryption is not dropped
+func isEncryptedUsing(key string, dropKeys []string) bool {
+	for _, v := range dropKeys {
+		if v == key {
+			return true
+		}
+	}
+	return false
+}
+
+func (mdb *plasmaSlice) DropCodebookEncryptionKey(dropkeyIds []string, activeEarkey EaRKey, kdt KeyDataType) error {
+
+	codebookPath := filepath.Join(mdb.storageDir, mdb.codebookPath)
+	tmpEncryptionPath := codebookPath + ".tmp"
+
+	_, err := iowrap.Os_Stat(codebookPath)
+	if os.IsNotExist(err) {
+		logging.Errorf("plasmaSlice:DropCodebookEncryptionKey codebookpath doesn't exist for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+		return nil
+	}
+
+	// function for creating write context
+	// New context for encryption
+	var eCtx gocbcrypto.EncryptionContext
+	switch activeEarkey.Cipher {
+	case gocbcrypto.CipherNameNone:
+		eCtx = gocbcrypto.NewNullContext()
+	case gocbcrypto.CipherNameAES256GCM:
+		eCtx, err = gocbcrypto.NewAESGCM256ContextWithOpenSSL([]byte(activeEarkey.Id), activeEarkey.Key, codebookKDFLabelCtx, 0)
+		if err != nil {
+			logging.Errorf("plasmaSlice:DropCodebookEncryptionKey for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+			return err
+		}
+	default:
+		return fmt.Errorf("Unsupported cipher %v", activeEarkey.Cipher)
+	}
+
+	// here getKeyById is for decryption of codebook or re-encryption
+	getKeyById := func(keyId []byte) []byte {
+
+		key, _ := mdb.sliceEncryptionCallbacks.getKeyCipherById(string(keyId))
+		return key
+	}
+
+	//Abort if no key from dropkeyIds is being used for codebook encryption
+	var codebookEKey string
+	isEncrypted, err := gocbcrypto.IsFileEncrypted(codebookPath)
+	if err != nil {
+		logging.Errorf("plasmaSlice:DropCodebookEncryptionKey isFileEncrypted failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+		return err
+	}
+	if !isEncrypted {
+		codebookEKey = ""
+	} else {
+
+		cbKey, err := mdb.GetCodebookEncryptionKeyId()
+		if err != nil {
+			return err
+		}
+		codebookEKey = cbKey
+	}
+	skipDrop := !isEncryptedUsing(codebookEKey, dropkeyIds)
+	if skipDrop {
+		logging.Infof("plasmaSlice:DropCodebookEncryptionKey skipped for instId:%v partnId:%v due to codebbok keyId:%v not in dropKeyIds:%v", mdb.idxInstId, mdb.idxPartnId, codebookEKey, dropkeyIds)
+		return nil
+	}
+
+	// +-------------+-----------+-----------+-----------+-----------+
+	// | isEncrypted | true       | false    | true      | false     |		---> Codebook current encryption
+	// ---------------------------------------------------------------
+	// |   KeyID     | non-nil    | non-nil  | nil       | nil       |		---> Current active key for bucket
+	// ---------------------------------------------------------------
+	// | Action      | Re-encrypt | Encrypt  | Decrypt   | no-op     |		---> Action to do for codebook
+	// +-------------+-----------+-----------+-----------+-----------+
+	if !isEncrypted && eCtx.KeyID() == nil {
+		// no-op
+		logging.Infof("plasmaSlice:DropCodebookEncryptionKey skipped for instId:%v partnId:%v due to un-encrypted codebbok and nil active key", mdb.idxInstId, mdb.idxPartnId)
+		return nil
+
+	} else if isEncrypted && eCtx.KeyID() != nil {
+		// Re-encrypt
+		bytesWritten, err := gocbcrypto.ReencryptFileByChunk(context.TODO(), codebookPath, tmpEncryptionPath, eCtx, getKeyById, codebookKDFLabelCtx, nil)
+		if err != nil {
+			logging.Errorf("plasmaSlice:DropCodebookEncryptionKey re-encryption failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+			err2 := os.Remove(tmpEncryptionPath)
+			if err2 != nil {
+				logging.Errorf("plasmaSlice:DropCodebookEncryptionKey re-encryption cleanup failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err2)
+			}
+			return err
+		} else if bytesWritten == 0 {
+			// codebook was already encrypted using active key
+			logging.Infof("plasmaSlice:DropCodebookEncryptionKey codebook re-encryption already encrypted for instId:%v partnId:%v keyId:%v", mdb.idxInstId, mdb.idxPartnId, eCtx.KeyID())
+			return nil
+		}
+
+	} else if !isEncrypted && eCtx.KeyID() != nil {
+
+		// Encrypt codebook with chunking
+		err := encryptCodebookByChunk(codebookPath, tmpEncryptionPath, eCtx)
+		if err != nil {
+			logging.Errorf("plasmaSlice:DropCodebookEncryptionKey Error observed on encryptCodebookByChunk for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+			return err
+		}
+
+	} else if isEncrypted && eCtx.KeyID() == nil {
+		// Decrypt
+
+		content, err := decryptCodebookByChunk(codebookPath, getKeyById, codebookKDFLabelCtx)
+		if err != nil {
+			logging.Errorf("plasmaSlice:DropCodebookEncryptionKey decryptCodebookByChunk error observed path: %v, err: %v", codebookPath, err)
+			return err
+		}
+
+		err = common.WriteFileWithSync(tmpEncryptionPath, content, 0755)
+		if err != nil {
+			logging.Errorf("plasmaSlice:DropCodebookEncryptionKey WriteFileWithSync error observed path: %v, err: %v", codebookPath, err)
+			err2 := os.Remove(tmpEncryptionPath)
+			if err2 != nil {
+				logging.Errorf("plasmaSlice:DropCodebookEncryptionKey remove failed for tmpEncryptionPath instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err2)
+			}
+			return err
+		}
+	} else {
+		return fmt.Errorf("Invalid codebook encryption state")
+	}
+
+	err = os.Rename(tmpEncryptionPath, codebookPath)
+	if err != nil {
+		// As new encrypted codebook can't be used, keep using old codebook and remove file at tmpEncryptionPath
+		logging.Errorf("plasmaSlice:DropCodebookEncryptionKey rename failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
+		err2 := os.Remove(tmpEncryptionPath)
+		if err2 != nil {
+			logging.Errorf("plasmaSlice:DropCodebookEncryptionKey remove failed for tmpEncryptionPath instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err2)
+		}
+		return err
+	}
+
+	// As new encrypted codebook is present at mdb.codebookPath, set keyId as in-use
+	mdb.sliceEncryptionCallbacks.setInUseKeys(kdt, activeEarkey.Id)
+
+	return nil
 }
 
 type plasmaReaderCtx struct {
@@ -6070,6 +6460,27 @@ func resizeSparseJLBuf(sparseJLBuf []float32, dimension int, doResize bool) []fl
 	return sparseJLBuf
 }
 
+func decryptCodebookByChunk(newFilePath string, getKeyById func(keyid []byte) []byte, codebookKDFLabelCtx []byte) ([]byte, error) {
+	decryptedFile := newFilePath + ".decrypt"
+	//Store decrypted codebook to content
+	_, err := gocbcrypto.DecryptFileByChunk(context.Background(), newFilePath, decryptedFile, getKeyById, codebookKDFLabelCtx, nil)
+	if err != nil {
+		logging.Errorf("decryptCodebookByChunk: Error observed while DecryptFileByChunk for path: %v, err: %v", newFilePath, err)
+		return []byte{}, errCodebookCorrupted
+	}
+	content, err := os.ReadFile(decryptedFile)
+	if err != nil {
+		logging.Errorf("decryptCodebookByChunk: Error observed while reading from disk for path: %v, err: %v", decryptedFile, err)
+		return []byte{}, errCodebookCorrupted
+	}
+	err = os.Remove(decryptedFile)
+	if err != nil {
+		logging.Errorf("decryptCodebookByChunk: Error observed while removing decrypted file for path: %v, err: %v", decryptedFile, err)
+		return []byte{}, err
+	}
+	return content, err
+}
+
 func (mdb *plasmaSlice) recoverCodebook(codebookPath string) error {
 	// Construct codebook path
 	newFilePath := filepath.Join(mdb.storageDir, codebookPath)
@@ -6080,13 +6491,48 @@ func (mdb *plasmaSlice) recoverCodebook(codebookPath string) error {
 	}
 
 	// Codebook path exists. Recover codebook from disk
-	content, err := iowrap.Ioutil_ReadFile(newFilePath)
+
+	isEncrypted, err := gocbcrypto.IsFileEncrypted(newFilePath)
 	if err != nil {
-		logging.Errorf("plasmaSlice::recoverCodebook: Error observed while reading from disk for path: %v, err: %v", newFilePath, err)
+		logging.Errorf("plasmaSlice::recoverCodebook: Error observed while IsFileEncrypted for path: %v, err: %v", newFilePath, err)
 		return errCodebookCorrupted
 	}
 
-	logging.Infof("plasmaSlice::recoverCodebook: reading from disk is successful for path: %v", newFilePath)
+	var content []byte
+	if !isEncrypted {
+		//Read codebook without decryption
+		content, err = iowrap.Ioutil_ReadFile(newFilePath)
+		if err != nil {
+			logging.Errorf("plasmaSlice::recoverCodebook: Error observed while reading from disk for path: %v, err: %v", newFilePath, err)
+			return errCodebookCorrupted
+		}
+
+		// Set empty keyid in-use if un-encrypted
+		mdb.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: mdb.idxDefn.BucketUUID}, "")
+	} else {
+		//Encryption: If codebook is in encrypted, decrypt before storing in memory.
+		getKeyById := func(keyid []byte) []byte {
+			key, _ := mdb.sliceEncryptionCallbacks.getKeyCipherById(string(keyid))
+			return key
+		}
+
+		//Store decrypted codebook to content
+		content, err = decryptCodebookByChunk(newFilePath, getKeyById, codebookKDFLabelCtx)
+		if err != nil {
+			logging.Errorf("plasmaSlice::recoverCodebook: Error observed while decryptCodebookByChunk for path: %v, err: %v", newFilePath, err)
+			return err
+		}
+
+		inUseKeyId, err := mdb.GetCodebookEncryptionKeyId()
+		if err != nil {
+			logging.Errorf("plasmaSlice::recoverCodebook: Error observed while reading in-use key from disk for path: %v, err: %v", newFilePath, err)
+			return errCodebookCorrupted
+		}
+
+		mdb.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: mdb.idxDefn.BucketUUID}, string(inUseKeyId))
+	}
+
+	logging.Infof("plasmaSlice::recoverCodebook: reading from disk is successful for path: %v isEncrypted: %v", newFilePath, isEncrypted)
 
 	codebook, err := vector.RecoverCodebook(content, string(mdb.idxDefn.VectorMeta.Quantizer.Type))
 	if err != nil {

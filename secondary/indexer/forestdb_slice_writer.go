@@ -1681,6 +1681,20 @@ func (mdb *fdbSlice) SetInUseKeys(kdt KeyDataType, key string) {
 	// no-op
 }
 
+func (mdb *fdbSlice) SetCodebookEncryptionKey(key []byte, keyId string, cipher string, kdt KeyDataType) error {
+	//no-op
+	return nil
+}
+
+func (mdb *fdbSlice) DropCodebookEncryptionKey(dropKeys []string, activeEarkey EaRKey, kdt KeyDataType) error {
+	//no-op
+	return nil
+}
+
+func (mdb *fdbSlice) GetCodebookEncryptionKeyId() (string, error) {
+	return "", fmt.Errorf("Not supported")
+}
+
 func (fdb *fdbSlice) updateSnapshotsMeta(infos []SnapshotInfo) error {
 	fdb.metaLock.Lock()
 	defer fdb.metaLock.Unlock()

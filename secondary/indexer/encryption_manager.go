@@ -20,11 +20,10 @@ import (
 
 	"github.com/couchbase/indexing/secondary/audit"
 
-	"github.com/couchbase/gocbcrypto"
-
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/gocbcrypto"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )

@@ -22,10 +22,29 @@ import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
+	"github.com/couchbase/indexing/secondary/tools/randdocs"
 )
 
 // copied from gocbcryto/writer.go
 const FILEHDR_MAGIC = "\x00Couchbase Encrypted\x00" // file is encrypted
+const FILEHDR_SZ = 84
+
+func GetFileEncryptionKeyId(filepath string) (string, error) {
+	fd, err := os.Open(filepath)
+	if err != nil {
+		return "", err
+	}
+	defer fd.Close()
+
+	bs := make([]byte, FILEHDR_SZ)
+	if _, err = io.ReadFull(fd, bs); err != nil {
+		return "", err
+	}
+
+	idLen := bs[27]
+	keyId := bs[28 : 28+idLen]
+	return string(keyId), nil
+}
 
 // copied from gocbcryto/writer.go
 func IsFileEncrypted(filepath string) (bool, error) {
@@ -246,7 +265,7 @@ func TestIndexEncryptionMOI(t *testing.T) {
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
 	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
-	bucketUUID, err := c.GetBucketUUID(kvaddress, bucket)
+	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
 	tc.HandleError(err, "failed to get bucket UUID")
 	indexDirPrefix := filepath.Join(storageDir, bucketUUID+"_")
 	indexDir, err := getDirWithPrefix(indexDirPrefix)
@@ -398,7 +417,7 @@ func TestIndexEncryptionPlasma(t *testing.T) {
 	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
-	bucketUUID, err := c.GetBucketUUID(kvaddress, bucket)
+	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
 	tc.HandleError(err, "failed to get bucket UUID")
 
 	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
@@ -1316,7 +1335,7 @@ func TestIndexEncryptionPlasmaRotationDrop(t *testing.T) {
 	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
-	bucketUUID, err := c.GetBucketUUID(kvaddress, bucket)
+	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
 	tc.HandleError(err, "failed to get bucket UUID")
 
 	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
@@ -1399,3 +1418,580 @@ func TestIndexEncryptionPlasmaRotationDrop(t *testing.T) {
 	FailTestIfError(err, "Error in deleteBucketEncryptionKey", t)
 
 }
+
+func verifyCodebookDecrypted(indexDir string, t *testing.T) {
+	codebookDir := filepath.Join(indexDir, tc.CODEBOOK_DIR)
+	if _, err := os.Stat(codebookDir); os.IsNotExist(err) {
+		log.Printf("Codebook directory does not exist: %s", codebookDir)
+		return
+	}
+
+	err := filepath.Walk(codebookDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			encrypted, err := IsFileEncrypted(path)
+			if err != nil {
+				t.Errorf("Error checking if file %s is encrypted: %v", path, err)
+			} else if !encrypted {
+				log.Printf("Codebook file %s is NOT encrypted", path)
+			} else {
+				t.Errorf("Codebook file %s is encrypted", path)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Errorf("Error walking codebook directory %s: %v", codebookDir, err)
+	}
+}
+
+func verifyCodebookEncryption(indexDir string, keyid string) error {
+	codebookDir := filepath.Join(indexDir, tc.CODEBOOK_DIR)
+	if _, err := os.Stat(codebookDir); os.IsNotExist(err) {
+		log.Printf("Codebook directory does not exist: %s", codebookDir)
+		return nil
+	}
+
+	err := filepath.Walk(codebookDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			encrypted, err := IsFileEncrypted(path)
+			if err != nil {
+				return fmt.Errorf("error checking if file %s is encrypted: %v", path, err)
+			}
+			if !encrypted {
+				return fmt.Errorf("codebook file %s is NOT encrypted", path)
+			}
+			keyid2, err := GetFileEncryptionKeyId(path)
+			if err != nil {
+				return fmt.Errorf("codebook file %s failed to get keyid: %v", path, err)
+			}
+			log.Printf("Codebook file %s is encrypted using key:%v expected key:%v", path, keyid2, keyid)
+			if keyid != keyid2 {
+				return fmt.Errorf("codebook file %s using incorrect keyid: got %v, expected %v", path, keyid2, keyid)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("error walking codebook directory %s: %v", codebookDir, err)
+	}
+	return nil
+}
+
+// TestVectorIndexCodebookEncryption tests that codebook files for vector indexes
+// are encrypted when bucket encryption is enabled.
+// Steps:
+// 1. Add bucket encryption key
+// 2. Create vector index with training documents
+// 3. Build the index
+// 4. Wait for some time
+// 5. Verify codebook directory encryption
+// 6. Crash indexer and reverify codebook directory encryption
+// 7. Rotate key and drop older key, check newer key being used and older key not being used
+// 8. Disable encryption verify decryption of codebook
+func TestPlasmaCodebookEncryption(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	bucketName := "default"
+	nodeKv := 0
+	nodeIndex := 1
+
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(2 * time.Second)
+
+	// Load vector documents for training
+	cfg := randdocs.Config{
+		ClusterAddr:    clusterconfig.KVAddress,
+		Bucket:         bucketName,
+		NumDocs:        10000,
+		Iterations:     1,
+		Threads:        8,
+		OpsPerSec:      100000,
+		UseSIFTSmall:   true,
+		SkipNormalData: true,
+		SIFTFVecsFile:  "../../tools/randdocs/siftsmall/siftsmall_base.fvecs",
+	}
+	err := randdocs.Run(cfg)
+	FailTestIfError(err, "Error loading vector data", t)
+
+	info, err := getBucketEncryptionInfo(bucketName, nodeKv)
+	if err != nil {
+		t.Fatalf("Failed to get bucket encryption info: %v", err)
+	}
+	log.Printf("encryptionAtRestInfo: %v", info["encryptionAtRestInfo"])
+
+	addBucketEncryptionKey(nodeKv, bucketName, "key1_vec", 30)
+
+	resp, err := getAllEncryptionKeys(nodeIndex)
+	log.Printf("All encryption keys: %v", resp)
+	FailTestIfError(err, "Error in getAllEncryptionKeys", t)
+
+	keyId := 0
+	for _, keymap := range resp {
+		usageIfc, ok := keymap["usage"].([]interface{})
+		if !ok {
+			t.Fatalf("Failed to get usage: %v", keymap["usage"])
+		}
+
+		var usage []string
+		for _, u := range usageIfc {
+			if str, ok := u.(string); ok {
+				usage = append(usage, str)
+			}
+		}
+		if hasBucketEncryptionUsage(bucketName, usage) {
+			log.Printf("keyId: %v, usage: %v", keymap["id"], usage)
+			keyId = max(keyId, int(math.Round(keymap["id"].(float64))))
+		}
+	}
+	keyIdStr := strconv.Itoa(keyId)
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, keyIdStr)
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+	keyUpdatedTime := time.Now()
+
+	node := clusterconfig.Nodes[nodeIndex]
+	// Create vector index
+	indexName := "idx_vec_encr"
+	stmt := fmt.Sprintf("CREATE INDEX %v ON `%v`(sift VECTOR) WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":true};", indexName, bucketName, node)
+
+	err = createWithDeferAndBuild(indexName, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_sift10k", t)
+
+	// Build the index
+	err = secondaryindex.BuildIndexes2([]string{indexName}, bucketName, "_default", "_default", indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error in building vector index", t)
+
+	time.Sleep(15 * time.Second)
+
+	// Verify codebook encryption
+	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
+	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
+	tc.HandleError(err, "failed to get bucket UUID")
+	indexDirPrefix := filepath.Join(storageDir, bucketUUID+"_")
+	indexDir, err := getDirWithPrefix(indexDirPrefix)
+	FailTestIfError(err, "Failed to get index directory", t)
+	log.Printf("Index directory: %s", indexDir)
+
+	ekeyIds, err := getInUseKeyIds(nodeIndex, "service_bucket", bucketUUID)
+	tc.HandleError(err, "failed to get in use key ids")
+
+	ekeyId, err := filterNonEmptyKeyId(ekeyIds)
+	tc.HandleError(err, "failed to filter non empty key id")
+
+	log.Printf("Basic persistCodebookToDisk...")
+	err = verifyCodebookEncryption(indexDir, ekeyId)
+	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
+
+	// Crash indexer
+	triggerIndexerCrash(nodeIndex)
+	time.Sleep(15 * time.Second) // wait for indexer to recover
+	secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	log.Printf("Encrypted codebook crash recovery")
+	err = verifyCodebookEncryption(indexDir, ekeyId)
+	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
+
+	// Rotate Key & Drop Key
+	diffInSeconds := int(time.Since(keyUpdatedTime).Seconds())
+	setBypassEncrCfgRestrictions(nodeKv)
+	log.Printf("diffInSeconds:%d",diffInSeconds)
+	setDekRotationInterval("default", nodeKv, diffInSeconds+10)
+	setDekLifetime("default", nodeKv, diffInSeconds+30)
+	
+	time.Sleep(15 * time.Second)
+	ekeyIds2, err := getInUseKeyIds(nodeIndex, "service_bucket", bucketUUID)
+	tc.HandleError(err, "failed to get in use key ids")
+
+	excludeKeyIds := []string{"", ekeyId}
+	ekeyId2, err := filterKeyId(ekeyIds2, excludeKeyIds)
+	tc.HandleError(err, "failed to filter key id")
+
+	time.Sleep(15 * time.Second)
+	log.Printf("Encrypted codebook rotation")
+	// Make sure that ekeyId is not being used & ekeyId2 is being used
+	err = verifyCodebookEncryption(indexDir, ekeyId2)
+	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
+	
+	// Set to higher interval as one rotation should have happened
+	setDekRotationInterval("default", nodeKv, 86400)
+	setDekLifetime("default", nodeKv, 86400)
+
+	// Disable encryption for bucket
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, "-1")
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+
+	time.Sleep(10 * time.Second) // wait for key update
+	verifyCodebookDecrypted(indexDir, t)
+
+	// Crash indexer
+	triggerIndexerCrash(nodeIndex)
+	time.Sleep(15 * time.Second) // wait for indexer to recover
+	secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	
+	verifyCodebookDecrypted(indexDir, t)
+
+	// Delete index
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	// Delete bucket
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(2 * time.Second)
+
+	// Delete bucket encryption key
+	err = deleteBucketEncryptionKey(nodeIndex, keyIdStr)
+	FailTestIfError(err, "Error in deleteBucketEncryptionKey", t)
+}
+
+// This test creates index with encryption disabled & later enabled.
+// 1. Create vector index with training documents
+// 2. Build the index (persisted codebook will not be encrypted)
+// 3. Add bucket encryption key
+// 4. Wait for some time
+// 5. Verify codebook directory encryption
+// 6. Cleanup: delete index, disable encryption, delete encryption key
+func TestPlasmaCodebookEncryption2(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	bucketName := "default"
+	nodeKv := 0
+	nodeIndex := 1
+
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(2 * time.Second)
+
+	// Load vector documents for training
+	cfg := randdocs.Config{
+		ClusterAddr:    clusterconfig.KVAddress,
+		Bucket:         bucketName,
+		NumDocs:        10000,
+		Iterations:     1,
+		Threads:        8,
+		OpsPerSec:      100000,
+		UseSIFTSmall:   true,
+		SkipNormalData: true,
+		SIFTFVecsFile:  "../../tools/randdocs/siftsmall/siftsmall_base.fvecs",
+	}
+	err := randdocs.Run(cfg)
+	FailTestIfError(err, "Error loading vector data", t)
+
+	node := clusterconfig.Nodes[nodeIndex]
+	// Create vector index
+	indexName := "idx_vec_encr"
+	stmt := fmt.Sprintf("CREATE INDEX %v ON `%v`(sift VECTOR) WITH { \"dimension\":128, \"description\": \"IVF256,PQ32x8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":true};", indexName, bucketName, node)
+
+	err = createWithDeferAndBuild(indexName, BUCKET, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_sift10k", t)
+
+	// Build the index
+	err = secondaryindex.BuildIndexes2([]string{indexName}, bucketName, "_default", "_default", indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error in building vector index", t)
+	
+	info, err := getBucketEncryptionInfo(bucketName, nodeKv)
+	if err != nil {
+		t.Fatalf("Failed to get bucket encryption info: %v", err)
+	}
+	log.Printf("encryptionAtRestInfo: %v", info["encryptionAtRestInfo"])
+
+	addBucketEncryptionKey(nodeKv, bucketName, "key1_vec", 30)
+
+	resp, err := getAllEncryptionKeys(nodeIndex)
+	log.Printf("All encryption keys: %v", resp)
+	FailTestIfError(err, "Error in getAllEncryptionKeys", t)
+
+	keyId := 0
+	for _, keymap := range resp {
+		usageIfc, ok := keymap["usage"].([]interface{})
+		if !ok {
+			t.Fatalf("Failed to get usage: %v", keymap["usage"])
+		}
+
+		var usage []string
+		for _, u := range usageIfc {
+			if str, ok := u.(string); ok {
+				usage = append(usage, str)
+			}
+		}
+		if hasBucketEncryptionUsage(bucketName, usage) {
+			log.Printf("keyId: %v, usage: %v", keymap["id"], usage)
+			keyId = max(keyId, int(math.Round(keymap["id"].(float64))))
+		}
+	}
+	keyIdStr := strconv.Itoa(keyId)
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, keyIdStr)
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+	time.Sleep(10 * time.Second) // wait for key update
+
+	// Verify codebook encryption
+	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
+	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
+	tc.HandleError(err, "failed to get bucket UUID")
+	indexDirPrefix := filepath.Join(storageDir, bucketUUID+"_")
+	indexDir, err := getDirWithPrefix(indexDirPrefix)
+	FailTestIfError(err, "Failed to get index directory", t)
+	log.Printf("Index directory: %s", indexDir)
+
+	ekeyIds, err := getInUseKeyIds(nodeIndex, "service_bucket", bucketUUID)
+	tc.HandleError(err, "failed to get in use key ids")
+
+	ekeyId, err := filterNonEmptyKeyId(ekeyIds)
+	tc.HandleError(err, "failed to filter non empty key id")
+
+	err = verifyCodebookEncryption(indexDir, ekeyId)
+	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
+}
+
+// TestVectorIndexCodebookEncryption tests that codebook files for vector indexes
+// are encrypted when bucket encryption is enabled.
+// Steps:
+// 1. Add bucket encryption key
+// 2. Create vector index with training documents
+// 3. Build the index
+// 4. Wait for some time
+// 5. Verify codebook directory encryption
+// 6. Crash indexer and reverify codebook directory encryption
+// 7. Rotate key and drop older key, check newer key being used and older key not being used
+// 8. Disable encryption verify decryption of codebook
+func TestBhiveCodebookEncryption(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	bucketName := "default"
+	nodeKv := 0
+	nodeIndex := 1
+
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(2 * time.Second)
+
+
+    vectorSetup(t, bucketName, "", "", numDocs)
+    idx_bhive := "idx_bhive"
+
+    // Drop all indexes from earlier tests
+    e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+    FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	info, err := getBucketEncryptionInfo(bucketName, nodeKv)
+	if err != nil {
+		t.Fatalf("Failed to get bucket encryption info: %v", err)
+	}
+	log.Printf("encryptionAtRestInfo: %v", info["encryptionAtRestInfo"])
+
+	addBucketEncryptionKey(nodeKv, bucketName, "key1_vec", 30)
+
+	resp, err := getAllEncryptionKeys(nodeIndex)
+	log.Printf("All encryption keys: %v", resp)
+	FailTestIfError(err, "Error in getAllEncryptionKeys", t)
+
+	keyId := 0
+	for _, keymap := range resp {
+		usageIfc, ok := keymap["usage"].([]interface{})
+		if !ok {
+			t.Fatalf("Failed to get usage: %v", keymap["usage"])
+		}
+
+		var usage []string
+		for _, u := range usageIfc {
+			if str, ok := u.(string); ok {
+				usage = append(usage, str)
+			}
+		}
+		if hasBucketEncryptionUsage(bucketName, usage) {
+			log.Printf("keyId: %v, usage: %v", keymap["id"], usage)
+			keyId = max(keyId, int(math.Round(keymap["id"].(float64))))
+		}
+	}
+	keyIdStr := strconv.Itoa(keyId)
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, keyIdStr)
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+	keyUpdatedTime := time.Now()
+
+	node := clusterconfig.Nodes[nodeIndex]
+	// Create vector index
+    stmt := fmt.Sprintf("CREATE VECTOR INDEX " + idx_bhive +
+        " ON default(sift VECTOR)" +
+        " WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":true};", node)
+    err = createWithDeferAndBuild(idx_bhive, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
+    FailTestIfError(err, "Error in creating idx_sift10k", t)
+
+	time.Sleep(15 * time.Second)
+
+	// Verify codebook encryption
+	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
+	storageDir = filepath.Join(storageDir,"@bhive")
+	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
+	tc.HandleError(err, "failed to get bucket UUID")
+	indexDirPrefix := filepath.Join(storageDir, bucketUUID+"_")
+	indexDir, err := getDirWithPrefix(indexDirPrefix)
+	FailTestIfError(err, "Failed to get index directory", t)
+	log.Printf("Index directory: %s", indexDir)
+
+	ekeyIds, err := getInUseKeyIds(nodeIndex, "service_bucket", bucketUUID)
+	tc.HandleError(err, "failed to get in use key ids")
+
+	ekeyId, err := filterNonEmptyKeyId(ekeyIds)
+	tc.HandleError(err, "failed to filter non empty key id")
+
+	log.Printf("Basic persistCodebookToDisk...")
+	err = verifyCodebookEncryption(indexDir, ekeyId)
+	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
+
+	// Crash indexer
+	triggerIndexerCrash(nodeIndex)
+	time.Sleep(15 * time.Second) // wait for indexer to recover
+	secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	log.Printf("Encrypted codebook crash recovery")
+	err = verifyCodebookEncryption(indexDir, ekeyId)
+	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
+
+	// Rotate Key & Drop Key
+	diffInSeconds := int(time.Since(keyUpdatedTime).Seconds())
+	setBypassEncrCfgRestrictions(nodeKv)
+	log.Printf("diffInSeconds:%d",diffInSeconds)
+	setDekRotationInterval("default", nodeKv, diffInSeconds+10)
+	setDekLifetime("default", nodeKv, diffInSeconds+30)
+	
+	time.Sleep(15 * time.Second)
+	ekeyIds2, err := getInUseKeyIds(nodeIndex, "service_bucket", bucketUUID)
+	tc.HandleError(err, "failed to get in use key ids")
+
+	excludeKeyIds := []string{"", ekeyId}
+	ekeyId2, err := filterKeyId(ekeyIds2, excludeKeyIds)
+	tc.HandleError(err, "failed to filter key id")
+
+	time.Sleep(15 * time.Second)
+	log.Printf("Encrypted codebook rotation")
+	// Make sure that ekeyId is not being used & ekeyId2 is being used
+	err = verifyCodebookEncryption(indexDir, ekeyId2)
+	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
+	
+	// Set to higher interval as one rotation should have happened
+	setDekRotationInterval("default", nodeKv, 86400)
+	setDekLifetime("default", nodeKv, 86400)
+
+	// Disable encryption for bucket
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, "-1")
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+
+	time.Sleep(10 * time.Second) // wait for key update
+	verifyCodebookDecrypted(indexDir, t)
+
+	// Crash indexer
+	triggerIndexerCrash(nodeIndex)
+	time.Sleep(15 * time.Second) // wait for indexer to recover
+	secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	verifyCodebookDecrypted(indexDir, t)
+
+	// Delete index
+	err = secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(err, "Error in DropAllSecondaryIndexes", t)
+
+	// Delete bucket
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(2 * time.Second)
+
+	// Delete bucket encryption key
+	err = deleteBucketEncryptionKey(nodeIndex, keyIdStr)
+	FailTestIfError(err, "Error in deleteBucketEncryptionKey", t)
+}
+
+// This test creates index with encryption disabled & later enabled.
+// 1. Create vector index with training documents
+// 2. Build the index (persisted codebook will not be encrypted)
+// 3. Add bucket encryption key
+// 4. Wait for some time
+// 5. Verify codebook directory encryption
+// 6. Cleanup: delete index, disable encryption, delete encryption key
+func TestBhiveCodebookEncryption2(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	bucketName := "default"
+	nodeKv := 0
+	nodeIndex := 1
+
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(2 * time.Second)
+
+
+    vectorSetup(t, bucketName, "", "", numDocs)
+    idx_bhive := "idx_bhive"
+
+    // Drop all indexes from earlier tests
+    e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+    FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	node := clusterconfig.Nodes[nodeIndex]
+	// Create vector index
+    stmt := fmt.Sprintf("CREATE VECTOR INDEX " + idx_bhive +
+        " ON default(sift VECTOR)" +
+        " WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":true};", node)
+    err := createWithDeferAndBuild(idx_bhive, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
+    FailTestIfError(err, "Error in creating idx_sift10k", t)
+	
+	info, err := getBucketEncryptionInfo(bucketName, nodeKv)
+	if err != nil {
+		t.Fatalf("Failed to get bucket encryption info: %v", err)
+	}
+	log.Printf("encryptionAtRestInfo: %v", info["encryptionAtRestInfo"])
+
+	addBucketEncryptionKey(nodeKv, bucketName, "key1_vec", 30)
+
+	resp, err := getAllEncryptionKeys(nodeIndex)
+	log.Printf("All encryption keys: %v", resp)
+	FailTestIfError(err, "Error in getAllEncryptionKeys", t)
+
+	keyId := 0
+	for _, keymap := range resp {
+		usageIfc, ok := keymap["usage"].([]interface{})
+		if !ok {
+			t.Fatalf("Failed to get usage: %v", keymap["usage"])
+		}
+
+		var usage []string
+		for _, u := range usageIfc {
+			if str, ok := u.(string); ok {
+				usage = append(usage, str)
+			}
+		}
+		if hasBucketEncryptionUsage(bucketName, usage) {
+			log.Printf("keyId: %v, usage: %v", keymap["id"], usage)
+			keyId = max(keyId, int(math.Round(keymap["id"].(float64))))
+		}
+	}
+	keyIdStr := strconv.Itoa(keyId)
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, keyIdStr)
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+	time.Sleep(10 * time.Second) // wait for key update
+
+	// Verify codebook encryption
+	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
+	storageDir = filepath.Join(storageDir,"@bhive")
+	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
+	tc.HandleError(err, "failed to get bucket UUID")
+	indexDirPrefix := filepath.Join(storageDir, bucketUUID+"_")
+	indexDir, err := getDirWithPrefix(indexDirPrefix)
+	FailTestIfError(err, "Failed to get index directory", t)
+	log.Printf("Index directory: %s", indexDir)
+
+	ekeyIds, err := getInUseKeyIds(nodeIndex, "service_bucket", bucketUUID)
+	tc.HandleError(err, "failed to get in use key ids")
+
+	ekeyId, err := filterNonEmptyKeyId(ekeyIds)
+	tc.HandleError(err, "failed to filter non empty key id")
+
+	err = verifyCodebookEncryption(indexDir, ekeyId)
+	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
+}
+
