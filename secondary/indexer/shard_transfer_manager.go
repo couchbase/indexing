@@ -68,6 +68,8 @@ type ShardTransferManager struct {
 	shardTypeMapper *ShardTypeMapper
 }
 
+var errNoShardIDs = errors.New("no shard IDs provided")
+
 func NewShardTransferManager(config common.Config, supvWrkrCh chan Message) *ShardTransferManager {
 	stm := &ShardTransferManager{
 		config:             config,
@@ -146,6 +148,9 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 	case START_SHARD_TRANSFER:
 		executionStr = "async-run"
 		go stm.processShardTransferMessage(cmd)
+
+	case FETCH_SHARD_KEYS:
+		stm.processFetchShardKeysMessage(cmd)
 
 	case SHARD_TRANSFER_CLEANUP:
 		executionStr = "async-run"
@@ -354,6 +359,54 @@ func (stm *ShardTransferManager) processCodebookTransfer(msg *MsgStartShardTrans
 		sendCodebookResponse()
 		return err
 	}
+}
+
+func (stm *ShardTransferManager) processFetchShardKeysMessage(cmd Message) {
+	msg, ok := cmd.(*MsgFetchShardKeys)
+	if !ok {
+		logging.Warnf("ShardTransferManager::processFetchShardKeys unexpected msg type: %T", cmd)
+		return
+	}
+	resp := ShardKeysResp{}
+
+	bundles, err := stm.fetchShardKeys(msg.GetShardIds())
+	resp.keys = bundles
+	resp.err = err
+
+	logging.Infof("ShardTransferManager::processFetchShardKeys get response %v for shardIDs %v",
+		resp, msg.GetShardIds())
+
+	msg.GetRespCh() <- resp
+}
+
+func (stm *ShardTransferManager) fetchShardKeys(shardIDs []c.ShardId) ([]c.ShardKeyBundle, error) {
+	if len(shardIDs) == 0 {
+		return nil, errNoShardIDs
+	}
+
+	var retErr error = nil
+
+	bundles := make([]c.ShardKeyBundle, 0, len(shardIDs))
+	for _, shardID := range shardIDs {
+		// get encryption keys for shard ID from plasma
+		bkeys, err := plasma.GetKeyIdList(plasma.ShardId(shardID))
+		if err != nil {
+			retErr = errors.Join(err, retErr)
+		}
+		// ENCRYPTION_TODO: read key IDs from bhive
+
+		keys := make([]string, 0, len(bkeys))
+		for _, bkey := range bkeys {
+			keys = append(keys, string(bkey))
+		}
+		logging.Infof(
+			"ShardTransferManager::fetchShardKeys: got keys %v for shardID - %v, err - %v",
+			keys, shardID, retErr,
+		)
+
+		bundles = append(bundles, keys)
+	}
+	return bundles, retErr
 }
 
 func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
@@ -576,6 +629,7 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	respCh := msg.GetRespCh()
 	isSyncCleanup := msg.IsSyncCleanup()
 	hasCodebooks := len(msg.GetCodebookNames()) != 0
+	hasKeys := len(msg.GetKeyPaths()) != 0
 	shardType := msg.GetShardType()
 
 	meta := make(map[string]interface{})
@@ -596,6 +650,12 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 			logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
 				"codebook cleanup for destination: %v, meta: %v, codebooks: %v, err: %v",
 				destination, meta, msg.GetCodebookNames(), err)
+		}
+	}
+
+	if hasKeys {
+		if err := stm.doKeyCleanup(msg); err != nil {
+			logging.Errorf("STM key cleanup failed dest:%v err:%v meta:%v", destination, err, meta)
 		}
 	}
 
@@ -675,6 +735,82 @@ func (stm *ShardTransferManager) doCodebookCleanup(msg *MsgShardTransferCleanup)
 		wg.Wait()
 	}
 
+	return err
+}
+
+func (stm *ShardTransferManager) doKeyCleanup(msg *MsgShardTransferCleanup) (err error) {
+	isSyncCleanup := msg.IsSyncCleanup()
+
+	initCleanup := func(copier plasma.Copier, doneCb func(err error)) {
+		location := copier.GetCopyRoot()
+
+		logging.Infof("ShardTransferManager::cleanupKeys removing key copies from %v", location)
+		var cerr error
+		ctx, ctxCancel := context.WithTimeout(context.Background(), copier.Config().CPTimeOut)
+		copier.SetContext(ctx)
+
+		defer func() {
+			if ctxCancel != nil {
+				ctxCancel()
+			}
+
+			if doneCb != nil {
+				doneCb(cerr)
+			}
+
+			copier.Done()
+		}()
+
+		if cerr = copier.CleanupFiles(location); cerr != nil && !os.IsNotExist(cerr) {
+			cerr = fmt.Errorf("failed key cleanup, path %v: %w", location, cerr)
+			logging.Errorf("ShardTransferManager::cleanupKeys observed error: %v", cerr)
+			return
+		}
+
+		logging.Infof("ShardTransferManager::cleanupKeys Cleaned up key copies from path :%v",
+			location)
+	}
+
+	doCleanup := func(doneCb func(err error)) error {
+		meta := &plasmaCopyConfigMeta{
+			rebalanceId: msg.GetRebalanceId(),
+			ttid:        msg.GetTransferTokenId(),
+			destination: msg.GetDestination(),
+			keyPrefix:   KEY_COPY_PREFIX,
+			authCb:      msg.GetAuthCallback(),
+			tlsConfig:   msg.GetTLSConfig(),
+		}
+
+		keyCopier, err := makeFileCopierForKeys(meta)
+		if err != nil || keyCopier == nil {
+			err = fmt.Errorf("err in make key file copier: %w", err)
+			doneCb(err)
+			return err
+		}
+
+		go initCleanup(keyCopier, doneCb)
+		return nil
+	}
+
+	if !isSyncCleanup {
+		return doCleanup(nil)
+	}
+
+	var wg sync.WaitGroup
+	doneCb := func(err error) {
+		logging.Infof("ShardTransferManager::DoKeyCleanup doneCb invoked ttid:%v rebal:%v",
+			msg.GetTransferTokenId(), msg.GetRebalanceId())
+		if err != nil {
+			//nolint:golines
+			logging.Errorf("ShardTransferManager::DoKeyCleanup transfer cleanup error ttid:%v rebal:%v err:%v",
+				msg.GetTransferTokenId(), msg.GetRebalanceId(), err)
+		}
+		wg.Done()
+	}
+
+	wg.Add(1)
+	err = doCleanup(doneCb)
+	wg.Wait()
 	return err
 }
 
@@ -1965,6 +2101,47 @@ func getCodebookRootDir(copyConfig *plasmaCopyConfigMeta) string {
 
 	prefix := fmt.Sprintf("%s_%s", formatUUID(rebalanceId), formatUUID(ttid))
 	return joinURIPath(destination, CODEBOOK_COPY_PREFIX, prefix)
+}
+
+func makeFileCopierForKeys(meta *plasmaCopyConfigMeta) (plasma.Copier, error) {
+	cfg := generatePlasmaCopierConfigForKeys(meta)
+	copyRoot := getKeyCopyRootDir(meta)
+	rlim := plasma.GetOpRateLimiter(plasma.GSIRebalanceId)
+	copier, err := plasma.MakeFileCopier(copyRoot, "", plasma.Env, rlim, cfg.CopyConfig)
+	if err != nil {
+		return nil, fmt.Errorf("make key file copier: %w", err)
+	}
+	return copier, nil
+}
+
+func generatePlasmaCopierConfigForKeys(meta *plasmaCopyConfigMeta) *plasma.Config {
+	cfg := plasma.DefaultConfig()
+	cc := plasma.GetUpdatedCopyConfig()
+
+	cc.RPCHttpClientCfg = cc.RPCHttpClientCfg.WithTLS(meta.GetTLSConfig())
+	cc.RPCHttpClientCfg = cc.RPCHttpClientCfg.WithAuth(meta.GetAuthCallback())
+	cc.RPCHttpClientCfg.SessionKey = meta.GetRebalanceId()
+	cc.KeyPrefix = meta.GetKeyPrefix()
+
+	cfg.CopyConfig = cc
+	return &cfg
+}
+
+func getKeyCopyRootDir(meta *plasmaCopyConfigMeta) string {
+	rebalanceId := meta.GetRebalanceId()
+	ttid := meta.GetTransferTokenId()
+	destination := meta.GetDestination()
+
+	formatUUID := func(str string) string {
+		return strings.ReplaceAll(str, ":", "_")
+	}
+
+	prefix := fmt.Sprintf("%s_%s", formatUUID(rebalanceId), formatUUID(ttid))
+	return joinURIPath(destination, KEY_COPY_PREFIX, prefix)
+}
+
+func genKeyFileStagingName(keyID string) string {
+	return fmt.Sprintf("key_%v", keyID)
 }
 
 type ShardTypeMapper struct {

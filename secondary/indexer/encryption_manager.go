@@ -125,8 +125,9 @@ type EncryptionMgr struct {
 
 	// Map holds keys being used by indexer sub components
 	// As GetInUseKeysCallback expects indexer to return in use keys quickly, only key no longer used can be removed.
-	indexerUsedKeyIds map[KeyDataType][]string
-	muid              sync.Mutex
+	indexerUsedKeyIds   map[KeyDataType][]string
+	rebalTransferKeyIDs map[KeyDataType][]string
+	muid                sync.Mutex
 
 	cinfoProvider     common.ClusterInfoProvider
 	cinfoProviderLock sync.RWMutex
@@ -499,6 +500,20 @@ func (e *EncryptionMgr) handleSupervisorCommands(cmd Message) {
 		e.handleConfigUpdate(cmd)
 	case CLUST_MGR_INDEXER_READY:
 		e.handleIndexerReady(cmd)
+	case ENCRYPTION_IMPORT_KEYS:
+		importMsg, ok := cmd.(*MsgEncryptionImportKeys)
+		if ok {
+			e.handleImportKeys(importMsg)
+		}
+	case ENCRYPTION_WAIT_DROP_KEYS:
+		waitDropKeysMsg, ok := cmd.(*MsgEncryptionWaitDropKeys)
+		if ok {
+			e.handleWaitDropKeys(waitDropKeysMsg)
+		}
+	case ENCRYPTION_REBAL_START:
+		e.handleRebalStart()
+	case ENCRYPTION_REBAL_DONE:
+		e.handleRebalDone()
 	}
 }
 
@@ -545,6 +560,32 @@ func (e *EncryptionMgr) handleConfigUpdate(cmd Message) {
 func (e *EncryptionMgr) handleIndexerReady(cmd Message) {
 	logging.Infof("EncryptionMgr:handleIndexerReady...")
 	close(e.bootstrapDone)
+	e.supvCmdch <- &MsgSuccess{}
+}
+
+func (e *EncryptionMgr) handleImportKeys(msg *MsgEncryptionImportKeys) {
+	err := e.importShardKeys(msg)
+	msg.GetRespCh() <- err
+}
+
+func (e *EncryptionMgr) handleWaitDropKeys(msg *MsgEncryptionWaitDropKeys) {
+	err := e.waitForDropKeys(msg.GetKeyDataTypes(), msg.GetCancelCh())
+	msg.GetRespCh() <- err
+}
+
+func (e *EncryptionMgr) handleRebalStart() {
+	logging.Infof("EncryptionMgr::handleRebalStart initializing rebalTransferKeyIDs")
+	e.muid.Lock()
+	e.rebalTransferKeyIDs = make(map[KeyDataType][]string)
+	e.muid.Unlock()
+	e.supvCmdch <- &MsgSuccess{}
+}
+
+func (e *EncryptionMgr) handleRebalDone() {
+	logging.Infof("EncryptionMgr::handleRebalDone clearing rebalTransferKeyIDs")
+	e.muid.Lock()
+	e.rebalTransferKeyIDs = nil
+	e.muid.Unlock()
 	e.supvCmdch <- &MsgSuccess{}
 }
 
@@ -745,15 +786,26 @@ func (e *EncryptionMgr) GetInUseKeys(kdt KeyDataType) ([]string, error) {
 	e.muid.Lock()
 	defer e.muid.Unlock()
 
-	keyids, ok := e.indexerUsedKeyIds[kdt]
-	if !ok {
-		logging.Warnf("EncryptionMgr:GetInUseKeys no in-use keys for type:%v uuid:%v", kdt.TypeName, kdt.BucketUUID)
-		return []string{}, nil
+	seen := make(map[string]bool)
+	result := make([]string, 0)
+
+	for _, id := range e.indexerUsedKeyIds[kdt] {
+		if !seen[id] {
+			seen[id] = true
+			result = append(result, id)
+		}
 	}
 
-	logging.Infof("EncryptionMgn:GetInUseKeys %v - %v", logKDT(kdt), logKeyIDs(keyids...))
+	for _, id := range e.rebalTransferKeyIDs[kdt] {
+		if !seen[id] {
+			seen[id] = true
+			result = append(result, id)
+		}
+	}
 
-	return keyids, nil
+	logging.Infof("EncryptionMgn:GetInUseKeys %v - %v", kdt, result)
+
+	return result, nil
 }
 
 func (e *EncryptionMgr) GetInUseKeysAll() (map[KeyDataType][]string, error) {
@@ -768,6 +820,12 @@ func (e *EncryptionMgr) GetInUseKeysAll() (map[KeyDataType][]string, error) {
 	defer e.muid.Unlock()
 
 	for key, value := range e.indexerUsedKeyIds {
+		sliceCopy := make([]string, len(value))
+		copy(sliceCopy, value)
+		kdtKeysMap[key] = sliceCopy
+	}
+
+	for key, value := range e.rebalTransferKeyIDs {
 		sliceCopy := make([]string, len(value))
 		copy(sliceCopy, value)
 		kdtKeysMap[key] = sliceCopy
@@ -831,6 +889,20 @@ func (e *EncryptionMgr) DropInUseKeys(kdt KeyDataType, dropkeys []string) {
 		}
 		e.indexerUsedKeyIds[kdt] = newKeyids
 	}
+}
+
+func (e *EncryptionMgr) SetInRebalanceKeys(kdt KeyDataType, keys []string) {
+	e.muid.Lock()
+	defer e.muid.Unlock()
+
+	logging.Infof("EncryptionMgr:SetInRebalanceKeys %v %v", kdt, keys)
+	if e.rebalTransferKeyIDs == nil {
+		logging.Errorf(
+			"EncryptionMgr:SetInRebalanceKeys rebalTransferKeyIDs is nil, rebalance may have already finished",
+		)
+		return
+	}
+	e.rebalTransferKeyIDs[kdt] = append(e.rebalTransferKeyIDs[kdt], keys...)
 }
 
 func (e *EncryptionMgr) GetClusterEncrKeysInfo(kdt KeyDataType) (EncrKeysInfo, error) {
@@ -1074,6 +1146,76 @@ var EncrCbsTest = SliceEncryptionCallbacks{
 func (e *EncryptionMgr) getInUseKeysCallback(kdt KeyDataType) ([]string, error) {
 	logging.Infof("EncryptionMgr:getInUseKeysCallback %v", logKDT(kdt))
 	return e.GetInUseKeys(kdt)
+}
+
+// importTimeoutSecPerKey - each key is expected to be a file say around 8kb max size. reading it
+// should be 1s at max on slow HDDs with ~10-100 ms seek time. 30s is considered as max time
+// including ns_server operations per key.
+const importTimeoutSecPerKey = 30 // 30s
+
+// importShardKeys marks transferred DEKs as in-rebalance-use and calls
+// cbauth.ImportEncryptionKeys so that ns_server registers the key files.
+func (e *EncryptionMgr) importShardKeys(msg *MsgEncryptionImportKeys) error {
+	bucketDekPaths := msg.GetBucketDekPaths()
+	bucketKeyIDs := msg.GetBucketKeyIDs()
+
+	for bucketUUID, dekPaths := range bucketDekPaths {
+		if len(dekPaths) == 0 {
+			continue
+		}
+
+		kdt := KeyDataType{TypeName: "bucket", BucketUUID: bucketUUID}
+
+		if keyIDs, ok := bucketKeyIDs[bucketUUID]; ok {
+			e.SetInRebalanceKeys(kdt, keyIDs)
+		}
+
+		logging.Infof(
+			"EncryptionMgr::importShardKeys importing %d keys for bucket %v (\npaths: %v\n)",
+			len(dekPaths), bucketUUID, dekPaths,
+		)
+
+		if err := cbauth.ImportEncryptionKeys(
+			dekPaths,                             /*dekPaths []string*/
+			kdt,                                  /*dataType cbauth.KeyDataType*/
+			importTimeoutSecPerKey*len(dekPaths), /*timeout int*/
+		); err != nil {
+			err = fmt.Errorf("import encryption keys failed for bucket %v: %w",
+				bucketUUID, err)
+			logging.Errorf("EncryptionMgr::importShardKeys %v", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+// waitForDropKeys blocks while drop/update is in progress for any of the kdts.
+func (e *EncryptionMgr) waitForDropKeys(kdts []KeyDataType, cancel <-chan struct{}) error {
+	for {
+		if cancel != nil {
+			select {
+			case <-cancel:
+				return errDropWaitCanceled
+			default:
+			}
+		}
+
+		e.cbMu.Lock()
+		busy := false
+		for _, kdt := range kdts {
+			if e.getDropOrUpdateInProgress(kdt) != nil {
+				busy = true
+				break
+			}
+		}
+		e.cbMu.Unlock()
+
+		if !busy {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // This can be called concurrently by many callers.

@@ -29,8 +29,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/couchbase/cbauth"
-	"github.com/couchbase/cbauth/cbauthimpl"
 	"github.com/couchbase/cbauth/service"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	l "github.com/couchbase/indexing/secondary/logging"
@@ -316,9 +314,9 @@ type buildDoneSpec struct {
 
 type resetList []common.IndexInstId
 
-type KeyDataType = cbauth.KeyDataType
-type EncrKeysInfo = cbauth.EncrKeysInfo
-type EaRKey = cbauthimpl.EaRKey
+type KeyDataType = c.KeyDataType
+type EncrKeysInfo = c.EncrKeysInfo
+type EaRKey = c.EaRKey
 
 // NewIndexer is the constructor for the Indexer interface implemented by the indexer class.
 // config is a few hard-coded defaults but does NOT contain most indexer config values as
@@ -1788,6 +1786,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		STOP_PEER_SERVER,
 		POPULATE_SHARD_TYPE,
 		CLEAR_SHARD_TYPE,
+		FETCH_SHARD_KEYS,
 		PERSISTANCE_STATUS:
 
 		idx.storageMgrCmdCh <- msg
@@ -1866,6 +1865,14 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case ENCRYPTION_DROP_KEY:
 		idx.handleEncryptionDropKeys(msg)
+
+	case ENCRYPTION_IMPORT_KEYS:
+		// no need to wait for response to indexer
+		idx.encryptionMgrCmdCh <- msg
+
+	case ENCRYPTION_WAIT_DROP_KEYS:
+		// no need to wait for response to indexer
+		idx.encryptionMgrCmdCh <- msg
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -11158,6 +11165,9 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 			idx.slicePendingClosure = make(map[common.IndexInstId]map[c.PartitionId][]Slice)
 			idx.droppedIndexesDuringRebal = make(map[common.IndexInstId]bool) // reset the book-keeping
 
+			idx.encryptionMgrCmdCh <- &MsgEncryptionRebalStart{}
+			<-idx.encryptionMgrCmdCh
+
 			msg := &MsgClustMgrUpdate{mType: CLUST_MGR_REBALANCE_RUNNING}
 			idx.sendMsgToClustMgrAndProcessResponse(msg)
 
@@ -11205,6 +11215,9 @@ func (idx *indexer) handleDelLocalMeta(msg Message) {
 
 			idx.clearRebalancePhase(false)
 			idx.rebalanceRunning = false
+
+			idx.encryptionMgrCmdCh <- &MsgEncryptionRebalDone{}
+			<-idx.encryptionMgrCmdCh
 		} else if key == RebalanceTokenTag {
 			idx.rebalanceToken = nil
 		} else if strings.Contains(key, PauseResumeRunning) {

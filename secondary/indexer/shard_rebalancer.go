@@ -1,14 +1,17 @@
 package indexer
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -23,6 +26,7 @@ import (
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
@@ -36,9 +40,11 @@ import (
 var ErrRebalanceCancel = errors.New("Shard rebalance cancel received")
 var ErrRebalanceDone = errors.New("Shard rebalance done received")
 var ErrShardTypeUnset = errors.New("Shard type not set")
+var errMissingKeyPath = errors.New("missing encryption key path")
 
 // TODO add the Prefix in Indexer settings
 const CODEBOOK_COPY_PREFIX = "codebook_v1"
+const KEY_COPY_PREFIX = "keys_v1"
 
 var maxParallelRegExp = regexp.MustCompile(`Build Already In Progress for (\d+) collections`)
 
@@ -1275,6 +1281,19 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 	}
 	defer sr.wg.Done()
 
+	// Fetch shard keys and wait for ongoing drop/update before transfer
+	{
+		var shardKeys, err = sr.fetchShardKeys(ttid, tt)
+		if err != nil {
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return
+		}
+		if err = sr.waitForDropKeys(shardKeys); err != nil {
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return
+		}
+	}
+
 	// If rebalance transfer fails due to rollbackToZero, then transfer is attempted
 	// for upto the limit specified by the config "indexer.rebalance.serverless.transferRetries"
 	retryCount := 0
@@ -1420,6 +1439,68 @@ loop:
 					}
 				}
 
+				////////// Re-read shard keys to capture any rotations during transfer
+				shardKeysBundle, err := sr.fetchShardKeys(ttid, tt)
+				if err != nil {
+					//nolint:golines
+					l.Errorf("ShardRebalancer::startShardTransfer refresh shard keys failed ttid:%v err:%v",
+						ttid, err)
+					sr.initiateShardTransferCleanup(
+						shardPaths,     // shardPaths []string
+						tt.Destination, // destination string
+						tt.Region,      // region string
+						ttid,           // ttid string
+						tt,             // tt *TransferToken
+						err,            // err error
+						false,          // syncCleanup bool
+					)
+					sr.setTransferTokenError(ttid, tt, err.Error())
+					return
+				}
+
+				////////// copy shard keys to temporary directory to avoid tranfer failure during key drops
+				bucketToKeyPathsMap, err := sr.prepareShardKeyBundles(ttid, tt, shardKeysBundle)
+
+				if err != nil {
+					//nolint:golines
+					l.Errorf("ShardRebalancer::startShardTransfer prepare key tranfer failed ttid:%v err:%v",
+						ttid, err)
+					sr.initiateShardTransferCleanup(
+						shardPaths,     // shardPaths []string
+						tt.Destination, // destination string
+						tt.Region,      // region string
+						ttid,           // ttid string
+						tt,             // tt *TransferToken
+						err,            // err error
+						false,          // syncCleanup bool
+					)
+					sr.setTransferTokenError(ttid, tt, err.Error())
+					return
+				}
+
+				////////// tranfer staging key copies to destination
+				err = sr.doCopyEarKeys(ttid, tt, getUniqueShardKeyFileNames(bucketToKeyPathsMap))
+				if err != nil {
+					//nolint:golines
+					l.Errorf("ShardRebalancer::startShardTransfer shard key copy failed ttid:%v err:%v",
+						ttid, err)
+					sr.initiateShardTransferCleanup(
+						shardPaths,     // shardPaths []string
+						tt.Destination, // destination string
+						tt.Region,      // region string
+						ttid,           // ttid string
+						tt,             // tt *TransferToken
+						err,            // err error
+						false,          // syncCleanup bool
+					)
+					sr.setTransferTokenError(ttid, tt, err.Error())
+					return
+				}
+
+				l.Infof(
+					"ShardRebalancer::startShardTransfer done moving keys - %v (rebalID - %v)",
+					bucketToKeyPathsMap, sr.rebalToken.RebalId)
+
 				////////////// Testing code - Not used in production //////////////
 				testcode.TestActionAtTag(sr.config.Load(), testcode.SOURCE_SHARDTOKEN_AFTER_TRANSFER)
 				///////////////////////////////////////////////////////////////////
@@ -1432,6 +1513,7 @@ loop:
 
 					tt.ShardTransferTokenState = c.ShardTokenRestoreShard
 					tt.ShardPaths = shardPaths
+					tt.ShardKeys = bucketToKeyPathsMap
 					setTransferTokenInMetakv(ttid, tt)
 				}()
 
@@ -1453,6 +1535,473 @@ loop:
 				stats.shardId, stats.bytesWritten, stats.totalBytes, stats.transferRate)
 		}
 	}
+}
+
+func getTokenBucketUUIDs(tt *c.TransferToken) []string {
+	if tt == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	for _, inst := range tt.IndexInsts {
+		b := inst.Defn.BucketUUID
+		if b == "" {
+			b = inst.Defn.Bucket
+		}
+		if _, ok := seen[b]; !ok {
+			seen[b] = struct{}{}
+		}
+	}
+	res := make([]string, 0, len(seen))
+	for b := range seen {
+		res = append(res, b)
+	}
+	return res
+}
+
+func (sr *ShardRebalancer) getDirToEaRKey(
+	tt *c.TransferToken, bundles []c.ShardKeyBundle,
+) (map[string][]c.KeyID, map[string][]c.KeyID, int, error) {
+
+	if len(bundles) == 0 {
+		return nil, nil, 0, nil
+	}
+
+	var (
+		shardKeysMap         = make(map[c.KeyID]bool)
+		dirToShardKeysMap    = make(map[string][]c.KeyID)
+		bucketToShardKeysMap = make(map[string][]c.KeyID) // bucketUUID -> key IDs
+		hasUnencryptedData   bool
+		keyCount             = 0
+		doneCh               = make(chan struct{})
+	)
+	defer close(doneCh)
+
+	for _, bundle := range bundles {
+		for _, key := range bundle {
+			if key == "" {
+				hasUnencryptedData = true
+				continue // no file to look up for unencrypted data
+			}
+			shardKeysMap[key] = true
+		}
+	}
+
+	var ctx, cancel = context.WithCancelCause(context.Background())
+	go func() {
+		select {
+		case <-sr.cancel:
+			cancel(ErrRebalanceCancel)
+		case <-doneCh:
+			cancel(nil)
+		}
+	}()
+
+	////////// find the parent dir for the EaR keys
+	for _, bucketUUID := range getTokenBucketUUIDs(tt) {
+		var kdt = cbauth.KeyDataType{
+			TypeName:   "bucket",
+			BucketUUID: bucketUUID,
+		}
+
+		dekInfo, err := cbauth.GetEncryptionKeys(kdt)
+
+		if err != nil {
+			dekInfo, err = cbauth.GetEncryptionKeysBlocking(ctx, kdt)
+		}
+
+		if err != nil {
+			err = fmt.Errorf("failed to read DEK for bucket UUID %v with err %w",
+				bucketUUID, err)
+			return nil, nil, 0, err
+		} else if dekInfo == nil {
+			l.Errorf("ShardRebalancer::prepareShardKeyBundle: couldn't read DEK info for bucket %v",
+				bucketUUID)
+			return nil, nil, 0, errMissingKeyPath
+		}
+
+		for _, key := range dekInfo.Keys {
+			if notDone, ok := shardKeysMap[key.Id]; notDone {
+				dirToShardKeysMap[dekInfo.Path] = append(dirToShardKeysMap[dekInfo.Path], key.Id)
+				bucketToShardKeysMap[bucketUUID] = append(bucketToShardKeysMap[bucketUUID], key.Id)
+				keyCount++
+				shardKeysMap[key.Id] = false // <DEK --1:n-- buckets> possible
+			} else if ok {
+				// same keyID is used in other bucket too which is on the same shard
+				bucketToShardKeysMap[bucketUUID] = append(bucketToShardKeysMap[bucketUUID], key.Id)
+			}
+		}
+	}
+
+	////////// if any keys are missing then find and report error
+	if len(shardKeysMap) > keyCount {
+		var missingKeys = make([]c.KeyID, 0, len(shardKeysMap)-keyCount)
+		// any shard key with true will not have been found
+		for keyID, pathNotFound := range shardKeysMap {
+			if pathNotFound {
+				missingKeys = append(missingKeys, keyID)
+			}
+		}
+		l.Errorf("ShardRebalancer::getDirToEaRKey: couldn't locate path for keys %v",
+			missingKeys)
+		return nil, nil, 0, errMissingKeyPath
+	}
+
+	// Record that unencrypted data exists for every bucket on these shards.
+	// The empty key ID is reported in GetInUseKeys so ns_server knows not to
+	// force re-encryption while rebalance is in progress.
+	if hasUnencryptedData {
+		for bucketUUID := range bucketToShardKeysMap {
+			bucketToShardKeysMap[bucketUUID] = append(bucketToShardKeysMap[bucketUUID], "")
+		}
+	}
+
+	return dirToShardKeysMap, bucketToShardKeysMap, keyCount, nil
+}
+
+const (
+	keyCopyRetryInterval = 191 * time.Millisecond
+	keyCopyMaxRetries    = 5
+	keyCopyRetryFactor   = 2
+)
+
+func (sr *ShardRebalancer) copySingleKey(
+	dir string,
+	files []os.DirEntry,
+	keyID c.KeyID,
+	stagingDir string,
+	attempt int,
+) (string, error) {
+
+	if attempt > 0 {
+		l.Infof(
+			"ShardRebalancer::prepareShardKeyBundles attempt %v to copy key %v from dir %v",
+			attempt, keyID, dir,
+		)
+	}
+
+	////////// Find the file
+	var fileNameWithVersion string
+	for _, file := range files {
+		if strings.Contains(keyID, file.Name()) {
+			fileNameWithVersion = file.Name()
+			break
+		}
+	}
+	if fileNameWithVersion == "" {
+		return "", errMissingKeyPath
+	}
+
+	////////// Open source file
+	keyFilePath := filepath.Clean(filepath.Join(dir, fileNameWithVersion))
+	if !strings.HasPrefix(keyFilePath, dir) {
+		return "", fmt.Errorf("key file %v not in directory %v (%w)",
+			fileNameWithVersion, dir, errMissingKeyPath)
+	}
+
+	keyFile, err := os.Open(keyFilePath)
+	if err != nil {
+		err = fmt.Errorf("failed to open key file %v: %w", keyFilePath, err)
+		l.Warnf("ShardRebalancer::prepareShardKeyBundles: %v", err)
+		return "", err
+	}
+	defer func() {
+		if err := keyFile.Close(); err != nil {
+			l.Warnf("ShardRebalancer::prepareShardKeyBundles: failed to close key file %v: %v",
+				keyFilePath, err)
+		}
+	}()
+
+	////////// Create staging file
+	tmpPath := filepath.Clean(filepath.Join(stagingDir, fileNameWithVersion))
+	if !strings.HasPrefix(tmpPath, stagingDir) {
+		return "", fmt.Errorf("failed to generate staging path for key file %v (%w)",
+			fileNameWithVersion, errMissingKeyPath)
+	}
+
+	stagingKeyFile, err := os.OpenFile(tmpPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600) //nolint:mnd
+	if err != nil {
+		if os.IsExist(err) {
+			return fileNameWithVersion, nil
+		}
+		err = fmt.Errorf("failed to create file %v: %w", tmpPath, err)
+		l.Warnf("ShardRebalancer::prepareShardKeyBundles: %v", err)
+		return "", err
+	}
+	defer func() {
+		if err := stagingKeyFile.Close(); err != nil {
+			l.Warnf("ShardRebalancer::prepareShardKeyBundles: err in close staging file %v: %v",
+				tmpPath, err)
+		}
+	}()
+
+	////////// Copy contents
+	if _, err = io.Copy(stagingKeyFile, keyFile); err != nil {
+		err = fmt.Errorf("file copy %v failed: %w", keyFile.Name(), err)
+		l.Warnf("ShardRebalancer::prepareShardKeyBundles: %v", err)
+		return "", err
+	}
+
+	return fileNameWithVersion, nil
+}
+
+// prepareShardKeyBundles prepares the shard keys for transfer from source node by copying
+// these into staging directory
+func (sr *ShardRebalancer) prepareShardKeyBundles(
+	ttid string, tt *c.TransferToken, bundles []c.ShardKeyBundle,
+) (map[string][]c.RebalKeyInfo, error) {
+
+	if len(bundles) == 0 {
+		return nil, nil
+	}
+
+	l.Infof(
+		"ShardRebalancer::prepareShardKeyBundles: preparing shard keys for copy ttid %v",
+		ttid)
+
+	////////// get path on disk for EaR keys
+	dirToShardKeysMap, bucketToShardKeysMap, keyCount, err := sr.getDirToEaRKey(tt, bundles)
+	if err != nil {
+		return nil, err
+	}
+
+	var baseDir, _ = c.GetStorageDirs(sr.config.Load(), c.Plasma_StorageEngine)
+	var stagingDir = filepath.Join(baseDir, GetRPCRootDir())
+
+	var keyFileNames = make(map[c.KeyID]string, keyCount)
+	var fileCopyResCh = make(chan struct {
+		path  string
+		err   error
+		keyID c.KeyID
+	}, keyCount+1)
+
+	var fileCopyWg sync.WaitGroup
+
+	for dir, keyIDs := range dirToShardKeysMap {
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			err = fmt.Errorf("failed to read dir %v with error %w", dir, err)
+			return nil, err
+		}
+
+		for _, keyID := range keyIDs {
+			if keyID == "" {
+				continue // empty key ID represents unencrypted data; no file to copy
+			}
+			fileCopyWg.Add(1)
+			go func(keyID c.KeyID) {
+				defer fileCopyWg.Done()
+				var fileNameWithVersion string
+				retryErr := c.NewRetryHelper(
+					keyCopyMaxRetries,
+					keyCopyRetryInterval,
+					keyCopyRetryFactor,
+					func(attempt int, _ error) error {
+						path, err := sr.copySingleKey(
+							dir, files, keyID, stagingDir, attempt,
+						)
+						fileNameWithVersion = path
+						return err
+					},
+				).Run()
+
+				fileCopyResCh <- struct {
+					path  string
+					err   error
+					keyID c.KeyID
+				}{
+					path:  fileNameWithVersion,
+					err:   retryErr,
+					keyID: keyID,
+				}
+			}(keyID)
+		}
+	}
+
+	fileCopyWg.Wait()
+	close(fileCopyResCh)
+
+	var superErr error
+	var bucketToKeyInfoMap = make(map[string][]c.RebalKeyInfo)
+
+	////////// collect the final results from all copies
+	for res := range fileCopyResCh {
+		if res.err != nil {
+			superErr = errors.Join(superErr, res.err)
+		} else if res.path != "" { // skip when shard has "unecrypted" data
+			keyFileNames[res.keyID] = res.path
+		}
+	}
+
+	for bucketUUID, keys := range bucketToShardKeysMap {
+		for _, keyID := range keys {
+			if keyID == "" {
+				// Preserve empty key ID so destination reports it in GetInUseKeys
+				bucketToKeyInfoMap[bucketUUID] = append(bucketToKeyInfoMap[bucketUUID],
+					c.RebalKeyInfo{ID: "", FileName: ""})
+			} else if fileName, ok := keyFileNames[keyID]; ok {
+				bucketToKeyInfoMap[bucketUUID] = append(bucketToKeyInfoMap[bucketUUID],
+					c.RebalKeyInfo{ID: keyID, FileName: fileName})
+			}
+		}
+	}
+
+	if superErr != nil {
+		l.Errorf(
+			"ShardRebalancer::prepareShardKeyBundles file copy err to staging dir - %v, ttid: %v",
+			superErr, ttid)
+		return nil, superErr
+	}
+
+	l.Infof(
+		"ShardRebalancer::prepareShardKeyBundles prepared shard keys %v for copy ttid %v",
+		bucketToKeyInfoMap, ttid)
+
+	return bucketToKeyInfoMap, nil
+}
+
+func (sr *ShardRebalancer) doCopyEarKeys(
+	ttid string, tt *c.TransferToken, keyFileNames []string,
+) error {
+
+	var err error
+
+	////////// transfer keys to destination
+
+	meta := &plasmaCopyConfigMeta{
+		rebalanceId: sr.rebalToken.RebalId,
+		ttid:        ttid,
+		destination: tt.Destination,
+		keyPrefix:   KEY_COPY_PREFIX,
+	}
+
+	if sr.canMaintainShardAffinity {
+		meta.authCb = cbauth.SetRequestAuth
+		host, _, splitErr := net.SplitHostPort(tt.DestHost)
+		if splitErr != nil {
+			return fmt.Errorf("parse host %s: %w", tt.DestHost, splitErr)
+		}
+		meta.tlsConfig, err = getTLSConfigWithCeftificates(host)
+		if err != nil {
+			return fmt.Errorf("get TLS config for host %s: %w", host, err)
+		}
+	}
+
+	copier, err := makeFileCopierForKeys(meta)
+	if err != nil {
+		return fmt.Errorf("make key copier: %w", err)
+	}
+
+	stagingDir, _ := c.GetStorageDirs(sr.config.Load(), c.Plasma_StorageEngine)
+	copyRoot := getKeyCopyRootDir(meta)
+	for _, fileName := range keyFileNames {
+		fileName = filepath.Join(stagingDir, fileName)
+		info, err := iowrap.Os_Stat(fileName)
+		if err != nil {
+			return fmt.Errorf("stat key file %s: %w", fileName, err)
+		}
+
+		dstFile := joinURIPath(copyRoot, genKeyFileStagingName(fileName))
+		if _, err := copier.CopyFile(
+			copier.Context(),  // ctx context.Context
+			fileName, dstFile, // src, dst filepaths/strings
+			0, info.Size(), // offset, size int64
+		); err != nil {
+			return fmt.Errorf("copy key file to staging %s: %w", dstFile, err)
+		}
+	}
+
+	return nil
+}
+
+func (sr *ShardRebalancer) fetchShardKeys(ttid string, tt *c.TransferToken) (
+	[]c.ShardKeyBundle, error,
+) {
+
+	respCh := make(chan ShardKeysResp, 1)
+	msg := &MsgFetchShardKeys{
+		respCh:   respCh,
+		shardIds: tt.ShardIds,
+		cancelCh: sr.cancel,
+	}
+
+	l.Infof(
+		"ShardRebalancer::fetchShardKeys fetching shard keys for shardIDs %v, ttid %v",
+		tt.ShardIds, ttid,
+	)
+	resp, err := sendMsgAndWaitForResp(sr.supvMsgch, msg, sr.cancel, respCh)
+	if err != nil {
+		l.Warnf("ShardRebalancer::fetchShardKeys got err %v when waiting for ttid %v",
+			err, ttid)
+		return nil, err
+	}
+	return resp.keys, resp.err
+}
+
+func (sr *ShardRebalancer) waitForDropKeys(shardKeys []c.ShardKeyBundle) error {
+	// ENCRYPTION_TODO: add wait for drop keys via encryptionMgr
+	return nil
+}
+
+func (sr *ShardRebalancer) importShardKeys(ttid string, tt *c.TransferToken) error {
+	if len(tt.ShardKeys) == 0 {
+		l.Infof("ShardRebalancer::importShardKeys no shard keys to import for transfer token %v",
+			ttid)
+		return nil
+	}
+
+	formatUUID := func(str string) string {
+		return strings.ReplaceAll(str, ":", "_")
+	}
+	prefix := fmt.Sprintf("%s_%s", formatUUID(sr.rebalToken.RebalId), formatUUID(ttid))
+
+	baseDir, _ := c.GetStorageDirs(sr.config.Load(), c.Plasma_StorageEngine)
+	stagingRoot := filepath.Join(baseDir, GetRPCRootDir())
+
+	bucketDekPaths := make(map[string][]string, len(tt.ShardKeys))
+	bucketKeyIDs := make(map[string][]string, len(tt.ShardKeys))
+
+	for bucketUUID, keyInfos := range tt.ShardKeys {
+		paths := make([]string, 0, len(keyInfos))
+		ids := make([]string, 0, len(keyInfos))
+		for _, ki := range keyInfos {
+			ids = append(ids, ki.ID)
+			if ki.ID == "" {
+				continue // empty key ID means unencrypted data; no file to import
+			}
+			paths = append(paths, filepath.Join(
+				stagingRoot, KEY_COPY_PREFIX, prefix,
+				genKeyFileStagingName(ki.FileName),
+			))
+		}
+		bucketDekPaths[bucketUUID] = paths
+		bucketKeyIDs[bucketUUID] = ids
+	}
+
+	l.Infof("ShardRebalancer::importShardKeys recovering shard keys %v for transfer token %v",
+		bucketDekPaths, ttid)
+
+	respCh := make(chan error, 1)
+	msg := &MsgEncryptionImportKeys{
+		bucketDekPaths: bucketDekPaths,
+		bucketKeyIDs:   bucketKeyIDs,
+		respCh:         respCh,
+	}
+
+	resErr, err := sendMsgAndWaitForResp(sr.supvMsgch, msg, sr.cancel, respCh)
+	if err != nil {
+		l.Warnf("ShardRebalancer::importShardKeys got err %v when waiting for ttid %v",
+			err, ttid)
+		return err
+	} else if resErr != nil {
+		l.Errorf("ShardRebalancer::importShardKeys got err %v from encryption manager for ttid %v",
+			resErr, ttid)
+		return resErr
+	}
+
+	l.Infof(
+		"ShardRebalancer::importShardKeys successfully recoverred shard keys for ttid %v",
+		ttid)
+	return nil
 }
 
 func (sr *ShardRebalancer) updateTransferStatistics(ttid string, stats *ShardTransferStatistics) {
@@ -1481,6 +2030,7 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.Sh
 		respCh:          respCh,
 		syncCleanup:     syncCleanup,
 		codebookPaths:   getCodebookPaths(tt),
+		keyPaths:        getShardKeyPaths(tt),
 		shardType:       tt.GetShardType(),
 	}
 
@@ -1758,6 +2308,11 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 		return
 	}
 	defer sr.wg.Done()
+
+	if err := sr.importShardKeys(ttid, tt); err != nil {
+		sr.setTransferTokenError(ttid, tt, err.Error())
+		return
+	}
 
 	start := time.Now()
 
@@ -4765,6 +5320,28 @@ func (sr *ShardRebalancer) isDcpRebalanceStarted() bool {
 	return sr.dcpRebalStarted
 }
 
+func sendMsgAndWaitForResp[T any](
+	supvMsgCh MsgChannel, msg Message,
+	cancelCh chan struct{},
+	respCh chan T,
+) (T, error) {
+
+	var def T
+
+	select {
+	case supvMsgCh <- msg:
+	case <-cancelCh:
+		return def, ErrRebalanceCancel
+	}
+
+	select {
+	case val := <-respCh:
+		return val, nil
+	case <-cancelCh:
+		return def, ErrRebalanceCancel
+	}
+}
+
 // isIndexDeletedDuringRebal returns true if an index is deleted while
 // bucket rebalance is in progress
 func isIndexDeletedDuringRebal(errMsg string) bool {
@@ -4929,6 +5506,37 @@ func getCodebookPaths(tt *c.TransferToken) (codebookPaths []string) {
 		}
 	}
 	return codebookPaths
+}
+
+func getShardKeyPaths(tt *c.TransferToken) []string {
+	var keyPaths = make([]string, 0, len(tt.ShardKeys))
+	for _, infos := range tt.ShardKeys {
+		for _, info := range infos {
+			if info.FileName == "" {
+				continue // no file for unencrypted data
+			}
+			keyPaths = append(keyPaths, info.FileName)
+		}
+	}
+	return keyPaths
+}
+
+func getUniqueShardKeyFileNames(bucketToKeyInfos map[string][]c.RebalKeyInfo) []string {
+	var seen = make(map[string]bool)
+	var fileNames = make([]string, 0)
+	for _, infos := range bucketToKeyInfos {
+		for _, info := range infos {
+			if info.FileName == "" {
+				continue // no file for unencrypted data
+			}
+			if seen[info.FileName] {
+				continue
+			}
+			seen[info.FileName] = true
+			fileNames = append(fileNames, info.FileName)
+		}
+	}
+	return fileNames
 }
 
 // This function is inline with the executor.go::getRenamePath() function called during tt generation
