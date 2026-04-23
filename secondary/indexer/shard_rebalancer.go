@@ -1938,8 +1938,41 @@ func (sr *ShardRebalancer) fetchShardKeys(ttid string, tt *c.TransferToken) (
 }
 
 func (sr *ShardRebalancer) waitForDropKeys(shardKeys []c.ShardKeyBundle) error {
-	// ENCRYPTION_TODO: add wait for drop keys via encryptionMgr
-	return nil
+	if len(shardKeys) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	keyIDs := make([]string, 0)
+	for _, bundle := range shardKeys {
+		for _, kid := range bundle {
+			if _, ok := seen[kid]; !ok {
+				seen[kid] = struct{}{}
+				keyIDs = append(keyIDs, kid)
+			}
+		}
+	}
+
+	if len(keyIDs) == 0 {
+		return nil
+	}
+
+	l.Infof("ShardRebalancer::waitForDropKeys waiting for key drop"+
+		" to finish for keyIDs:%v", keyIDs)
+
+	respCh := make(chan error, 1)
+	msg := &MsgEncryptionWaitDropKeys{
+		keyIDs: keyIDs,
+		cancel: sr.cancel,
+		respCh: respCh,
+	}
+
+	respErr, err := sendMsgAndWaitForResp(sr.supvMsgch, msg, sr.cancel, respCh)
+	if err != nil {
+		l.Warnf("ShardRebalancer::waitForDropKeys got err %v", err)
+		return err
+	}
+	return respErr
 }
 
 func (sr *ShardRebalancer) importShardKeys(ttid string, tt *c.TransferToken) error {

@@ -3614,16 +3614,16 @@ func (m *MsgEncryptionImportKeys) GetBucketKeyIDs() map[string][]string { return
 func (m *MsgEncryptionImportKeys) GetRespCh() chan error                { return m.respCh }
 
 type MsgEncryptionWaitDropKeys struct {
-	kdts   []KeyDataType
+	keyIDs []string
 	cancel <-chan struct{}
 	respCh chan error
 }
 
 func (m *MsgEncryptionWaitDropKeys) GetMsgType() MsgType { return ENCRYPTION_WAIT_DROP_KEYS }
 
-func (m *MsgEncryptionWaitDropKeys) GetKeyDataTypes() []KeyDataType { return m.kdts }
-func (m *MsgEncryptionWaitDropKeys) GetCancelCh() <-chan struct{}   { return m.cancel }
-func (m *MsgEncryptionWaitDropKeys) GetRespCh() chan error          { return m.respCh }
+func (m *MsgEncryptionWaitDropKeys) GetKeyIDs() []string          { return m.keyIDs }
+func (m *MsgEncryptionWaitDropKeys) GetCancelCh() <-chan struct{} { return m.cancel }
+func (m *MsgEncryptionWaitDropKeys) GetRespCh() chan error        { return m.respCh }
 
 type MsgEncryptionRebalStart struct{}
 
