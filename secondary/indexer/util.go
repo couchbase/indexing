@@ -87,12 +87,15 @@ func IndexPath(inst *common.IndexInst, partnId common.PartitionId, sliceId Slice
 
 func CodebookPath(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
 	indexPath := IndexPath(inst, partnId, sliceId)
+	return filepath.Join(indexPath, CODEBOOK_DIR, CodebookName(inst, partnId, sliceId))
+}
+
+func CodebookName(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
 	instId := inst.InstId
 	if inst.IsProxy() {
 		instId = inst.RealInstId
 	}
-	codebookName := fmt.Sprintf("%s_%s_%d_%d.codebook", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
-	return filepath.Join(indexPath, CODEBOOK_DIR, codebookName)
+	return fmt.Sprintf("%s_%s_%d_%d.codebook", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
 }
 
 func InitCodebookDir(
@@ -131,6 +134,39 @@ func RemoveCodebookDir(
 	)
 
 	return iowrap.Os_RemoveAll(codebookDirPath)
+}
+
+func RemapCodebookDir(
+	storeEngineDir string, idxInst *common.IndexInst,
+	partnId common.PartitionId, sliceId SliceId,
+	oldIndexPath string, newIndexPath string,
+) error {
+
+	if idxInst == nil {
+		return fmt.Errorf("RemapCodebookDir: invalid instance for remapping codebook directory")
+	}
+
+	if oldIndexPath == newIndexPath {
+		return nil
+	}
+
+	oldCbDir := filepath.Join(oldIndexPath, CODEBOOK_DIR)
+	newCbDir := filepath.Join(newIndexPath, CODEBOOK_DIR)
+	err := iowrap.Os_Rename(oldCbDir, newCbDir)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	oldCb := filepath.Join(newCbDir, CodebookName(idxInst, partnId, sliceId))
+	// TBD: CodebookName->CodebookName2 (dhruvil)
+	newCb := filepath.Join(newCbDir, CodebookName(idxInst, partnId, sliceId))
+	err = iowrap.Os_Rename(oldCb, newCb)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	logging.Infof("RemapCodebookDir: remapped codebook from %v to %v", oldCb, newCb)
+	return nil
 }
 
 // This has to follow the pattern in IndexPath function defined above.
@@ -415,4 +451,21 @@ func ByteSliceToFloat32(b []byte) []float32 {
 	vsh.Cap = bsh.Cap / size
 
 	return v
+}
+
+// utility function to remove old slice directory after remapping.
+// a slice is remapped sequentially by its entries
+func removeEmptySliceDir(slicePath string) error {
+	entries, err := iowrap.Os_ReadDir(slicePath)
+	switch {
+	case err == nil && len(entries) > 0:
+		return fmt.Errorf("%v old slice path has entries after remapping", slicePath)
+	case err == nil:
+		logging.Infof("%v removing old slice path after remapping", slicePath)
+		return iowrap.Os_Remove(slicePath)
+	case os.IsNotExist(err):
+		return nil
+	default:
+		return fmt.Errorf("old slice path removal failed after remapping: %w", err)
+	}
 }

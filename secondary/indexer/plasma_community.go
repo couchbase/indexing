@@ -42,6 +42,13 @@ func DestroySlice_Plasma(storageDir string, path string) error {
 	return nil
 }
 
+// RemapSlice_Plasma - placeholder for community edition
+func RemapSlice_Plasma(storageDir string, idxInst *common.IndexInst,
+	partnId common.PartitionId, sliceId SliceId, oldPath string, newPath string) error {
+	// do nothing
+	return nil
+}
+
 func ListPlasmaSlices() ([]string, error) {
 	// do nothing
 	return nil, nil

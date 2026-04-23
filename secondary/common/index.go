@@ -807,9 +807,37 @@ func CopyIndexInstMap(inMap IndexInstMap) IndexInstMap {
 			vv.Nlist[partnId] = nlist
 		}
 
+		vv.BhiveGraphStatus = make(map[PartitionId]bool)
+		for partnId, status := range v.BhiveGraphStatus {
+			vv.BhiveGraphStatus[partnId] = status
+		}
+
 		outMap[k] = vv
 	}
 	return outMap
+}
+
+func CopyIndexInstList(inList []IndexInst) []IndexInst {
+	outList := make([]IndexInst, len(inList))
+	for i, v := range inList {
+		vv := v
+		if v.Pc != nil {
+			vv.Pc = v.Pc.Clone()
+		}
+
+		vv.Nlist = make(map[PartitionId]int)
+		for partnId, nlist := range v.Nlist {
+			vv.Nlist[partnId] = nlist
+		}
+
+		vv.BhiveGraphStatus = make(map[PartitionId]bool)
+		for partnId, status := range v.BhiveGraphStatus {
+			vv.BhiveGraphStatus[partnId] = status
+		}
+
+		outList[i] = vv
+	}
+	return outList
 }
 
 // Create a copy of IndexInstMap by fixing Immutable flag
@@ -825,6 +853,11 @@ func CopyIndexInstMap2(inMap IndexInstMap) IndexInstMap {
 		vv.Nlist = make(map[PartitionId]int)
 		for partnId, nlist := range v.Nlist {
 			vv.Nlist[partnId] = nlist
+		}
+
+		vv.BhiveGraphStatus = make(map[PartitionId]bool)
+		for partnId, status := range v.BhiveGraphStatus {
+			vv.BhiveGraphStatus[partnId] = status
 		}
 
 		outMap[k] = vv

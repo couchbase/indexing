@@ -35,6 +35,12 @@ func DestroySlice_Bhive(storageDir string, path string) error {
 	return nil
 }
 
+// RemapSlice_Bhive - placeholder for community edition
+func RemapSlice_Bhive(storageDir string, idxInst *common.IndexInst,
+	partnId common.PartitionId, sliceId SliceId, oldPath string, newPath string) error {
+	return nil
+}
+
 // GetEmptyShardInfo_Bhive - placeholder for community edition
 func GetEmptyShardInfo_Bhive() ([]common.ShardId, error) {
 	return nil, nil

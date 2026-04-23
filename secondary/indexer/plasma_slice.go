@@ -49,6 +49,17 @@ const (
 	BACK_INDEX
 )
 
+func getInstanceGroup(group plasma.InstanceGroup) string {
+	switch group {
+	case MAIN_INDEX:
+		return "mainIndex"
+	case BACK_INDEX:
+		return "docIndex"
+	default:
+		return "unknown"
+	}
+}
+
 type meteringStats struct {
 	currMeteredWU     int64 //cumulative write units since last disk snapshot
 	currMeteredRU     int64 //cumulative read units since last disk snapshot
@@ -418,6 +429,60 @@ func destroySlice_Plasma(storageDir string, path string) error {
 	return iowrap.Os_RemoveAll(path)
 }
 
+func remapSlice_Plasma(storageDir string, idxInst *common.IndexInst,
+	partnId common.PartitionId, sliceId SliceId, oldPath string, newPath string) (err error) {
+	if idxInst == nil {
+		err = fmt.Errorf("remapSlice_Plasma: invalid instance for remapping slice")
+		return
+	}
+
+	if oldPath == newPath {
+		return nil
+	}
+
+	defer func() {
+		if err != nil && plasma.IsFatalError(err) {
+			if plasma.IsErrorRecoveryInstPathNotFound(err) {
+				err = errStoragePathNotFound
+			} else {
+				err = errStorageCorrupted
+			}
+		}
+	}()
+
+	if err = plasma.RemapInstancePath(storageDir,
+		filepath.Join(oldPath, getInstanceGroup(MAIN_INDEX)),
+		filepath.Join(newPath, getInstanceGroup(MAIN_INDEX))); err != nil {
+		return
+	}
+
+	if !idxInst.Defn.IsPrimary {
+		if err = plasma.RemapInstancePath(storageDir,
+			filepath.Join(oldPath, getInstanceGroup(BACK_INDEX)),
+			filepath.Join(newPath, getInstanceGroup(BACK_INDEX))); err != nil {
+			return
+		}
+	}
+
+	if idxInst.Defn.IsVectorIndex {
+		if err = RemapCodebookDir(storageDir, idxInst, partnId, sliceId,
+			oldPath, newPath); err != nil {
+			return
+		}
+	}
+
+	if err = plasma.DirSync(newPath, 0o755); err != nil {
+		logging.Warnf("remapSlice_Plasma: dir sync for %v error: %v", newPath, err)
+	}
+
+	if err = removeEmptySliceDir(oldPath); err != nil {
+		err = fmt.Errorf("remapSlice_Plasma: %w", err)
+		return
+	}
+
+	return
+}
+
 func listPlasmaSlices() ([]string, error) {
 	return plasma.ListInstancePaths(), nil
 }
@@ -667,8 +732,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 	}()
 
 	if slice.hasPersistence {
-		mCfg.File = filepath.Join(slice.path, "mainIndex")
-		bCfg.File = filepath.Join(slice.path, "docIndex")
+		mCfg.File = filepath.Join(slice.path, getInstanceGroup(MAIN_INDEX))
+		bCfg.File = filepath.Join(slice.path, getInstanceGroup(BACK_INDEX))
 	}
 
 	var wg sync.WaitGroup

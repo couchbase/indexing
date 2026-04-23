@@ -45,6 +45,11 @@ func DestroySlice_Plasma(storageDir string, path string) error {
 	return destroySlice_Plasma(storageDir, path)
 }
 
+func RemapSlice_Plasma(storageDir string, idxInst *common.IndexInst,
+	partnId common.PartitionId, sliceId SliceId, oldPath string, newPath string) error {
+	return remapSlice_Plasma(storageDir, idxInst, partnId, sliceId, oldPath, newPath)
+}
+
 func ListPlasmaSlices() ([]string, error) {
 	return listPlasmaSlices()
 }

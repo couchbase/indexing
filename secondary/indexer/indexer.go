@@ -6280,7 +6280,7 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 		mType:      ADD_INDEX_LIST_TO_STREAM,
 		streamId:   streamId,
 		keyspaceId: keyspaceId,
-		indexList:  indexInstList,
+		indexList:  common.CopyIndexInstList(indexInstList),
 		respCh:     respCh,
 		stopCh:     stopCh,
 		sessionId:  sessionId}
@@ -6444,7 +6444,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           buildStream,
 		keyspaceId:         keyspaceId,
-		indexList:          indexList,
+		indexList:          common.CopyIndexInstList(indexList),
 		buildTs:            buildTs,
 		respCh:             respCh,
 		restartTs:          nil,
@@ -7814,7 +7814,7 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 	cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
 		streamId:    common.MAINT_STREAM,
 		keyspaceId:  bucket,
-		indexList:   indexList,
+		indexList:   common.CopyIndexInstList(indexList),
 		respCh:      respCh,
 		stopCh:      stopCh,
 		sessionId:   sessionId,
@@ -8721,7 +8721,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           streamId,
 		keyspaceId:         keyspaceId,
-		indexList:          indexList,
+		indexList:          common.CopyIndexInstList(indexList),
 		restartTs:          restartTs,
 		buildTs:            buildTs,
 		respCh:             respCh,
@@ -11509,6 +11509,24 @@ func DestroySlice(mode common.StorageMode, storeEngineDir string, path string) e
 	}
 
 	return fmt.Errorf("unable to delete instance %v : unrecognized storage type %v", path, mode)
+}
+
+func RemapSlice(mode common.StorageMode, storeEngineDir string, idxInst *common.IndexInst,
+	partnId common.PartitionId, sliceId SliceId, oldPath string, newPath string) error {
+
+	switch mode {
+	case common.FORESTDB, common.NOT_SET:
+		return fmt.Errorf("remapSlice is not supported for instance: %v storage type %v", oldPath, mode)
+	case common.MOI:
+		return remapSlice_MOI(storeEngineDir, idxInst, partnId, sliceId, oldPath, newPath)
+	case common.PLASMA:
+		if strings.HasSuffix(storeEngineDir, c.BHIVE_DIR_PREFIX) {
+			return RemapSlice_Bhive(storeEngineDir, idxInst, partnId, sliceId, oldPath, newPath)
+		}
+		return RemapSlice_Plasma(storeEngineDir, idxInst, partnId, sliceId, oldPath, newPath)
+	}
+
+	return fmt.Errorf("unable to remap instance %v : unrecognized storage type %v", oldPath, mode)
 }
 
 func ListSlices(mode common.StorageMode, storeEngineDir string) ([]string, error) {
