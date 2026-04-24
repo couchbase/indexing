@@ -13982,6 +13982,30 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 		}
 
 		if err := idx.validateTrainListSize(trainListSize, centroids, inst.Defn.VectorMeta, keyspaceId, itemsCount); err != nil {
+			// During rebalance, a destination instance may already have a trained
+			// codebook at the slice level because it recovered one from shard
+			// transfer or from an earlier training attempt on the destination.
+			// If the current instance or its real instance already has a trained
+			// codebook, skip this validation and let initiateTraining reuse it.
+			// Without this bypass, the instance is rejected here and never reaches
+			// the codebook-reuse path in initiateTraining, which can later panic in
+			// mergePartition because the instances reach different states.
+			if instHasTrainedCodebook(partnInstMap) {
+				logging.Infof("Indexer::computeCentroids Skipping train list validation for inst %v "+
+					"as it already has a trained codebook", instId)
+				idx.indexInstMap[instId] = inst
+				validVecInsts = append(validVecInsts, instId)
+				continue
+			}
+			if inst.RealInstId != 0 {
+				if realPartnMap, ok := idx.indexPartnMap[inst.RealInstId]; ok && instHasTrainedCodebook(realPartnMap) {
+					logging.Infof("Indexer::computeCentroids Skipping train list validation for proxy inst %v "+
+						"as real inst %v has a trained codebook for reuse", instId, inst.RealInstId)
+					idx.indexInstMap[instId] = inst
+					validVecInsts = append(validVecInsts, instId)
+					continue
+				}
+			}
 			errMap[instId] = err
 			continue
 		}
