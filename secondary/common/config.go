@@ -2739,9 +2739,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.timekeeper.rollback.StreamBeginWaitTime": ConfigValue{
-		30, // 30 minutes
+		30 * 60, // 30 minutes
 		"Max wait time after the last received stream begin (in second) before rollback takes place during stream repair. ",
-		30,
+		30 * 60,
 		true,  // mutable
 		false, // case-insensitive
 	},
