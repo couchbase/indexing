@@ -26,7 +26,6 @@ import (
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
@@ -1479,7 +1478,7 @@ loop:
 				}
 
 				////////// tranfer staging key copies to destination
-				err = sr.doCopyEarKeys(ttid, tt, getUniqueShardKeyFileNames(bucketToKeyPathsMap))
+				err = sr.sendEarKeyCopyMsg(ttid, tt, getUniqueShardKeyFileNames(bucketToKeyPathsMap))
 				if err != nil {
 					//nolint:golines
 					l.Errorf("ShardRebalancer::startShardTransfer shard key copy failed ttid:%v err:%v",
@@ -1599,13 +1598,17 @@ func (sr *ShardRebalancer) getDirToEaRKey(
 	////////// find the parent dir for the EaR keys
 	for _, bucketUUID := range getTokenBucketUUIDs(tt) {
 		var kdt = cbauth.KeyDataType{
-			TypeName:   "bucket",
+			TypeName:   "service_bucket",
 			BucketUUID: bucketUUID,
 		}
 
 		dekInfo, err := cbauth.GetEncryptionKeys(kdt)
 
 		if err != nil {
+			logging.Warnf(
+				"ShardRebalancer::prepareShardKeyBundle: get encryption keys failed with err - %v for KDT - %v",
+				err, kdt,
+			)
 			dekInfo, err = cbauth.GetEncryptionKeysBlocking(ctx, kdt)
 		}
 
@@ -1859,58 +1862,35 @@ func (sr *ShardRebalancer) prepareShardKeyBundles(
 	return bucketToKeyInfoMap, nil
 }
 
-func (sr *ShardRebalancer) doCopyEarKeys(
+func (sr *ShardRebalancer) sendEarKeyCopyMsg(
 	ttid string, tt *c.TransferToken, keyFileNames []string,
 ) error {
 
-	var err error
-
-	////////// transfer keys to destination
-
-	meta := &plasmaCopyConfigMeta{
-		rebalanceId: sr.rebalToken.RebalId,
-		ttid:        ttid,
-		destination: tt.Destination,
-		keyPrefix:   KEY_COPY_PREFIX,
+	msg := &MsgEarKeyCopy{
+		keyFilePaths: keyFileNames,
+		rebalanceId:  sr.rebalToken.RebalId,
+		ttid:         ttid,
+		destination:  tt.Destination,
+		cancelCh:     sr.cancel,
+		respCh:       make(chan error, 1),
 	}
 
 	if sr.canMaintainShardAffinity {
-		meta.authCb = cbauth.SetRequestAuth
 		host, _, splitErr := net.SplitHostPort(tt.DestHost)
 		if splitErr != nil {
 			return fmt.Errorf("parse host %s: %w", tt.DestHost, splitErr)
 		}
-		meta.tlsConfig, err = getTLSConfigWithCeftificates(host)
+		tlsCfg, err := getTLSConfigWithCeftificates(host)
 		if err != nil {
-			return fmt.Errorf("get TLS config for host %s: %w", host, err)
+			return fmt.Errorf("get TLS config for host %s: %w", tt.DestHost, err)
 		}
+		msg.isPeerTransfer = true
+		msg.authCallback = cbauth.SetRequestAuth
+		msg.tlsConfig = tlsCfg
 	}
 
-	copier, err := makeFileCopierForKeys(meta)
-	if err != nil {
-		return fmt.Errorf("make key copier: %w", err)
-	}
-
-	stagingDir, _ := c.GetStorageDirs(sr.config.Load(), c.Plasma_StorageEngine)
-	copyRoot := getKeyCopyRootDir(meta)
-	for _, fileName := range keyFileNames {
-		fileName = filepath.Join(stagingDir, fileName)
-		info, err := iowrap.Os_Stat(fileName)
-		if err != nil {
-			return fmt.Errorf("stat key file %s: %w", fileName, err)
-		}
-
-		dstFile := joinURIPath(copyRoot, genKeyFileStagingName(fileName))
-		if _, err := copier.CopyFile(
-			copier.Context(),  // ctx context.Context
-			fileName, dstFile, // src, dst filepaths/strings
-			0, info.Size(), // offset, size int64
-		); err != nil {
-			return fmt.Errorf("copy key file to staging %s: %w", dstFile, err)
-		}
-	}
-
-	return nil
+	sr.supvMsgch <- msg
+	return <-msg.respCh
 }
 
 func (sr *ShardRebalancer) fetchShardKeys(ttid string, tt *c.TransferToken) (
@@ -1919,9 +1899,10 @@ func (sr *ShardRebalancer) fetchShardKeys(ttid string, tt *c.TransferToken) (
 
 	respCh := make(chan ShardKeysResp, 1)
 	msg := &MsgFetchShardKeys{
-		respCh:   respCh,
-		shardIds: tt.ShardIds,
-		cancelCh: sr.cancel,
+		respCh:    respCh,
+		shardIds:  tt.ShardIds,
+		shardType: tt.GetShardType(),
+		cancelCh:  sr.cancel,
 	}
 
 	l.Infof(
@@ -2510,7 +2491,7 @@ func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map
 		"system for ttid: %v, shards: %v ", ttid, shardPaths)
 
 	shardIds := make([]common.ShardId, 0)
-	for shardId, _ := range shardPaths {
+	for shardId := range shardPaths {
 		shardIds = append(shardIds, shardId)
 	}
 
@@ -2796,7 +2777,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 					if len(skipDefns) > 0 {
 						logging.Infof("ShardRebalancer::startShardRecovery Skipping state monitoring for insts: %v "+
 							"as scope/collection/index is dropped", skipDefns)
-						for defnId, _ := range skipDefns {
+						for defnId := range skipDefns {
 							if instId, ok := defnIdToInstIdMap[defnId]; ok {
 								delete(nonDeferredInsts[i], instId)
 							}
@@ -3884,7 +3865,7 @@ func (sr *ShardRebalancer) allShardTransferTokensAcked() bool {
 		return false
 	}
 
-	for ttid, _ := range sr.transferTokens {
+	for ttid := range sr.transferTokens {
 		if _, ok := sr.ackedTokens[ttid]; !ok {
 			return false
 		}
@@ -4404,7 +4385,7 @@ loop:
 		}
 
 		allInstancesDropped := true
-		for i, _ := range tt.IndexInsts {
+		for i := range tt.IndexInsts {
 			instKey := tt.RealInstIds[i]
 			if instKey == 0 {
 				instKey = tt.InstIds[i]

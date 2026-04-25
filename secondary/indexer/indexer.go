@@ -1787,6 +1787,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		POPULATE_SHARD_TYPE,
 		CLEAR_SHARD_TYPE,
 		FETCH_SHARD_KEYS,
+		START_EAR_KEY_COPY,
 		PERSISTANCE_STATUS:
 
 		idx.storageMgrCmdCh <- msg

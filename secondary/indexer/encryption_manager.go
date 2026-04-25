@@ -420,13 +420,13 @@ func (e *EncryptionMgr) trackDropKeys(msg Message) {
 		if e.rebalRunning.Load() && nextPendingMsg.GetMsgType() == ENCRYPTION_DROP_KEY {
 			logging.Infof(
 				"EncryptionMgr:trackDropKeys skipping drop next drop key message for %v as rebalance is running",
-				kdt)
+				logKDT(kdt))
 			continue
 		}
 
 		logging.Infof("EncryptionMgr:trackDropKeys complete, enqueuing"+
 			" pending msg for keydatatype:%v msg:%v",
-			kdt, nextPendingMsg.GetMsgType().String())
+			logKDT(kdt), nextPendingMsg.GetMsgType().String())
 		e.enqueue(nextPendingMsg)
 		e.setDropOrUpdateInProgress(kdt, nextPendingMsg)
 		break
@@ -704,7 +704,7 @@ func (e *EncryptionMgr) awaitKeyDropCompletion(
 		return
 	}
 
-	logging.Infof("EncryptionMgr::awaitKeyDropCompletion: key drop done for keys %v", keyIDs)
+	logging.Infof("EncryptionMgr::awaitKeyDropCompletion: key drop done for keys %v", logKeyIDs(keyIDs...))
 	respCh <- nil
 }
 
@@ -950,7 +950,7 @@ func (e *EncryptionMgr) GetInUseKeys(kdt KeyDataType) ([]string, error) {
 		}
 	}
 
-	logging.Infof("EncryptionMgn:GetInUseKeys %v - %v", kdt, result)
+	logging.Infof("EncryptionMgn:GetInUseKeys %v - %v", logKDT(kdt), logKeyIDs(result...))
 
 	return result, nil
 }
@@ -1042,7 +1042,7 @@ func (e *EncryptionMgr) SetInRebalanceKeys(kdt KeyDataType, keys []string) {
 	e.muid.Lock()
 	defer e.muid.Unlock()
 
-	logging.Infof("EncryptionMgr:SetInRebalanceKeys %v %v", kdt, keys)
+	logging.Infof("EncryptionMgr:SetInRebalanceKeys %v %v", logKDT(kdt), logKeyIDs(keys...))
 	if e.rebalTransferKeyIDs == nil {
 		logging.Errorf(
 			"EncryptionMgr:SetInRebalanceKeys rebalTransferKeyIDs is nil, rebalance may have already finished",
@@ -1420,7 +1420,7 @@ func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 func (e *EncryptionMgr) dropKeysCallback(kdt KeyDataType, keyids []string) {
 	if e.rebalRunning.Load() {
 		logging.Infof("EncryptionMgr:DropKeysCallback:Skipping drop keys during"+
-			" rebalance for keydatatype:%v keyids:%v", kdt, keyids)
+			" rebalance for keydatatype:%v keyids:%v", logKDT(kdt), logKeyIDs(keyids...))
 		return
 	}
 

@@ -210,6 +210,10 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 		forceLog = true
 		stm.handleStopPeerServer(cmd)
 
+	case START_EAR_KEY_COPY:
+		executionStr = "async-run"
+		go stm.processEarKeyCopyMessage(cmd)
+
 	case POPULATE_SHARD_TYPE:
 		forceLog = true
 		stm.handlePopulateShardType(cmd)
@@ -369,7 +373,7 @@ func (stm *ShardTransferManager) processFetchShardKeysMessage(cmd Message) {
 	}
 	resp := ShardKeysResp{}
 
-	bundles, err := stm.fetchShardKeys(msg.GetShardIds())
+	bundles, err := stm.fetchShardKeys(msg.GetShardIds(), msg.GetShardType())
 	resp.keys = bundles
 	resp.err = err
 
@@ -379,7 +383,11 @@ func (stm *ShardTransferManager) processFetchShardKeysMessage(cmd Message) {
 	msg.GetRespCh() <- resp
 }
 
-func (stm *ShardTransferManager) fetchShardKeys(shardIDs []c.ShardId) ([]c.ShardKeyBundle, error) {
+func (stm *ShardTransferManager) fetchShardKeys(
+	shardIDs []c.ShardId,
+	shardType c.ShardType,
+) ([]c.ShardKeyBundle, error) {
+
 	if len(shardIDs) == 0 {
 		return nil, errNoShardIDs
 	}
@@ -388,20 +396,31 @@ func (stm *ShardTransferManager) fetchShardKeys(shardIDs []c.ShardId) ([]c.Shard
 
 	bundles := make([]c.ShardKeyBundle, 0, len(shardIDs))
 	for _, shardID := range shardIDs {
-		// get encryption keys for shard ID from plasma
-		bkeys, err := plasma.GetKeyIdList(plasma.ShardId(shardID))
+		var bkeys [][]byte
+		var err error
+
+		switch shardType {
+		case c.PLASMA_SHARD:
+			bkeys, err = plasma.GetKeyIdList(plasma.ShardId(shardID))
+		case c.BHIVE_SHARD:
+			bkeys, err = bhive.GetKeyIdList(plasma.ShardId(shardID))
+		default:
+			err = fmt.Errorf("%w -> got invalid shard type %v for shard ID %v",
+				ErrShardTypeUnset, shardType, shardID)
+			logging.Errorf("ShardTransferManager::fetchShardKeys %v", err)
+		}
+
 		if err != nil {
 			retErr = errors.Join(err, retErr)
 		}
-		// ENCRYPTION_TODO: read key IDs from bhive
 
 		keys := make([]string, 0, len(bkeys))
 		for _, bkey := range bkeys {
 			keys = append(keys, string(bkey))
 		}
 		logging.Infof(
-			"ShardTransferManager::fetchShardKeys: got keys %v for shardID - %v, err - %v",
-			keys, shardID, retErr,
+			"ShardTransferManager::fetchShardKeys: got keys %v for shardID - %v, shardType - %v, err - %v",
+			keys, shardID, shardType, retErr,
 		)
 
 		bundles = append(bundles, keys)
@@ -2009,6 +2028,73 @@ func (stm *ShardTransferManager) handleClearShardType(cmd Message) {
 
 }
 
+func (stm *ShardTransferManager) processEarKeyCopyMessage(cmd Message) {
+	msg, ok := cmd.(*MsgEarKeyCopy)
+	if !ok {
+		logging.Fatalf(
+			"ShardTransferManager::processEarKeyCopyMessage expected message type *MsgEarKeyCopy but got %T",
+			msg,
+		)
+	}
+	logging.Infof(
+		"ShardTransferManager::processEarKeyCopyMessage Initiating EaR key copy for ttid: %v,"+
+			" destination: %v, keyFilePaths: %v",
+		msg.GetTransferTokenId(), msg.GetDestination(), msg.GetKeyFilePaths())
+
+	start := time.Now()
+	meta := &plasmaCopyConfigMeta{
+		rebalanceId: msg.GetRebalanceId(),
+		ttid:        msg.GetTransferTokenId(),
+		destination: msg.GetDestination(),
+		keyPrefix:   KEY_COPY_PREFIX,
+	}
+	if msg.IsPeerTransfer() {
+		meta.authCb = msg.GetAuthCallback()
+		meta.tlsConfig = msg.GetTLSConfig()
+	}
+
+	var err error
+	defer func() {
+		elapsed := time.Since(start).Seconds()
+		logging.Infof(
+			"ShardTransferManager::processEarKeyCopyMessage EaR key copy done for ttid: %v,"+
+				" err: %v, elapsed(sec): %v",
+			msg.GetTransferTokenId(), err, elapsed)
+		msg.GetRespCh() <- err
+	}()
+
+	copier, err := makeFileCopierForKeys(meta)
+	if err != nil {
+		err = fmt.Errorf("make key copier: %w", err)
+		return
+	}
+	defer copier.Done()
+
+	storageDir, _ := c.GetStorageDirs(stm.config, c.Plasma_StorageEngine)
+	copyRoot := getKeyCopyRootDir(meta)
+
+	for _, fileName := range msg.GetKeyFilePaths() {
+		select {
+		case <-msg.GetCancelCh():
+			err = ErrRebalanceCancel
+			return
+		default:
+		}
+
+		srcPath := filepath.Join(storageDir, fileName)
+		info, statErr := iowrap.Os_Stat(srcPath)
+		if statErr != nil {
+			err = fmt.Errorf("stat key file %s: %w", srcPath, statErr)
+			return
+		}
+		dstFile := joinURIPath(copyRoot, genKeyFileStagingName(fileName))
+		if _, copyErr := copier.CopyFile(copier.Context(), srcPath, dstFile, 0, info.Size()); copyErr != nil {
+			err = fmt.Errorf("copy key file to staging %s: %w", dstFile, copyErr)
+			return
+		}
+	}
+}
+
 func (stm *ShardTransferManager) TransferCodebook(codebookCopier plasma.Copier, codebookSrcPath string) error {
 	var srcFile string
 	var sz int64
@@ -2138,10 +2224,6 @@ func getKeyCopyRootDir(meta *plasmaCopyConfigMeta) string {
 
 	prefix := fmt.Sprintf("%s_%s", formatUUID(rebalanceId), formatUUID(ttid))
 	return joinURIPath(destination, KEY_COPY_PREFIX, prefix)
-}
-
-func genKeyFileStagingName(keyID string) string {
-	return fmt.Sprintf("key_%v", keyID)
 }
 
 type ShardTypeMapper struct {

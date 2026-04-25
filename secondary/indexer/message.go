@@ -246,6 +246,8 @@ const (
 	ENCRYPTION_WAIT_DROP_KEYS
 	ENCRYPTION_REBAL_START
 	ENCRYPTION_REBAL_DONE
+
+	START_EAR_KEY_COPY
 )
 
 type Message interface {
@@ -3144,9 +3146,10 @@ type ShardKeysResp struct {
 
 // MsgFetchShardKeys -> [FETCH_SHARD_KEYS]
 type MsgFetchShardKeys struct {
-	shardIds []common.ShardId
-	cancelCh <-chan struct{}
-	respCh   chan ShardKeysResp
+	shardIds  []common.ShardId
+	shardType common.ShardType
+	cancelCh  <-chan struct{}
+	respCh    chan ShardKeysResp
 }
 
 func (m *MsgFetchShardKeys) GetMsgType() MsgType {
@@ -3157,11 +3160,69 @@ func (m *MsgFetchShardKeys) GetShardIds() []common.ShardId {
 	return m.shardIds
 }
 
+func (m *MsgFetchShardKeys) GetShardType() common.ShardType {
+	return m.shardType
+}
+
 func (m *MsgFetchShardKeys) GetCancelCh() <-chan struct{} {
 	return m.cancelCh
 }
 
 func (m *MsgFetchShardKeys) GetRespCh() chan ShardKeysResp {
+	return m.respCh
+}
+
+// MsgEarKeyCopy -> [START_EAR_KEY_COPY]
+// Sent by ShardRebalancer after preparing key staging copies; handled by ShardTransferManager.
+type MsgEarKeyCopy struct {
+	keyFilePaths   []string
+	rebalanceId    string
+	ttid           string
+	destination    string
+	authCallback   func(*http.Request) error
+	tlsConfig      *tls.Config
+	isPeerTransfer bool
+	cancelCh       <-chan struct{}
+	respCh         chan error
+}
+
+func (m *MsgEarKeyCopy) GetMsgType() MsgType {
+	return START_EAR_KEY_COPY
+}
+
+func (m *MsgEarKeyCopy) GetKeyFilePaths() []string {
+	return m.keyFilePaths
+}
+
+func (m *MsgEarKeyCopy) GetRebalanceId() string {
+	return m.rebalanceId
+}
+
+func (m *MsgEarKeyCopy) GetTransferTokenId() string {
+	return m.ttid
+}
+
+func (m *MsgEarKeyCopy) GetDestination() string {
+	return m.destination
+}
+
+func (m *MsgEarKeyCopy) GetAuthCallback() func(*http.Request) error {
+	return m.authCallback
+}
+
+func (m *MsgEarKeyCopy) GetTLSConfig() *tls.Config {
+	return m.tlsConfig
+}
+
+func (m *MsgEarKeyCopy) IsPeerTransfer() bool {
+	return m.isPeerTransfer
+}
+
+func (m *MsgEarKeyCopy) GetCancelCh() <-chan struct{} {
+	return m.cancelCh
+}
+
+func (m *MsgEarKeyCopy) GetRespCh() chan error {
 	return m.respCh
 }
 
@@ -4086,6 +4147,8 @@ func (m MsgType) String() string {
 		return "ENCRYPTION_REBAL_START"
 	case ENCRYPTION_REBAL_DONE:
 		return "ENCRYPTION_REBAL_DONE"
+	case START_EAR_KEY_COPY:
+		return "START_EAR_KEY_COPY"
 	default:
 		return "UNKNOWN_MSG_TYPE"
 	}
