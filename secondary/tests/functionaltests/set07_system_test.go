@@ -1501,6 +1501,7 @@ func TestOrphanIndexCleanup(t *testing.T) {
 }
 
 func TestOrphanPartitionCleanup(t *testing.T) {
+	// t.Skipf("Skipping: GetIndexSlicePath2 implementation is incorrect")
 	// Explicitly create orphan index folder.
 	// Restart the indexer
 	// Check if orphan index folder gets deleted.
@@ -1530,8 +1531,17 @@ func TestOrphanPartitionCleanup(t *testing.T) {
 
 	log.Printf("Query on idx3_age_regular is successful\n")
 
-	slicePath, err := tc.GetIndexSlicePath("idx3_age_regular", "default", absIndexStorageDir, c.PartitionId(1))
-	FailTestIfError(err, "Error in GetIndexSlicePath", t)
+	defaultBucketUUID, errUUID := tc.GetBucketUUID(indexManagementAddress, clusterconfig.Username, clusterconfig.Password, "default")
+	FailTestIfError(errUUID, "Error in GetBucketUUID", t)
+
+	indexerHosts, errHosts := secondaryindex.GetIndexerNodesHttpAddresses(indexManagementAddress)
+	FailTestIfError(errHosts, "Error in GetIndexerNodesHttpAddresses", t)
+
+	instIds, errInstId := tc.GetIndexInstIds(indexerHosts[0], clusterconfig.Username, clusterconfig.Password, "idx3_age_regular", "default", "_default", "_default")
+	FailTestIfError(errInstId, "Error in GetIndexInstIds", t)
+
+	slicePath, err := tc.GetIndexSlicePath2(defaultBucketUUID, instIds[0], absIndexStorageDir, c.PartitionId(1))
+	FailTestIfError(err, "Error in GetIndexSlicePath2", t)
 
 	comps := strings.Split(slicePath, "_")
 	dummyPartnPath := strings.Join(comps[:len(comps)-1], "_")
