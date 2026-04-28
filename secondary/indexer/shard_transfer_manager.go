@@ -1188,7 +1188,11 @@ func (stm *ShardTransferManager) RestoreCodebook(
 	// TODO: check for the sliceId information
 	srcFileName := genCodebookFileStagingName(destFilePath)
 	for _, renameMap := range instRenameMap {
-		currCodebookPath, _ := generateCodebookRenamePaths(renameMap, vectorInst.Defn.Bucket, vectorInst.Defn.Name, partnId, vectorInst.InstId)
+		currCodebookPath, _ := generateCodebookRenamePaths2(
+			renameMap,
+			vectorInst.Defn.BucketUUID,
+			partnId, vectorInst.InstId,
+		)
 		if currCodebookPath != "" {
 			srcFileName = genCodebookFileStagingName(currCodebookPath)
 			break

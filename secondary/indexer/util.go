@@ -90,7 +90,7 @@ func IndexPath2(inst *common.IndexInst, partnId common.PartitionId, sliceId Slic
 	if inst.IsProxy() {
 		instId = inst.RealInstId
 	}
-	return fmt.Sprintf("%d_%d.index", instId, partnId)
+	return fmt.Sprintf("%s_%d_%d.index", inst.Defn.BucketUUID, instId, partnId)
 }
 
 func CodebookPath(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
@@ -106,14 +106,17 @@ func CodebookName(inst *common.IndexInst, partnId common.PartitionId, sliceId Sl
 	return fmt.Sprintf("%s_%s_%d_%d.codebook", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
 }
 
-func CodebookPath2(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
-	indexPath := IndexPath2(inst, partnId, sliceId)
+func CodebookName2(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
 	instId := inst.InstId
 	if inst.IsProxy() {
 		instId = inst.RealInstId
 	}
-	codebookName := fmt.Sprintf("%d_%d.codebook", instId, partnId)
-	return filepath.Join(indexPath, CODEBOOK_DIR, codebookName)
+	return fmt.Sprintf("%d_%d.codebook", instId, partnId)
+}
+
+func CodebookPath2(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
+	indexPath := IndexPath2(inst, partnId, sliceId)
+	return filepath.Join(indexPath, CODEBOOK_DIR, CodebookName2(inst, partnId, sliceId))
 }
 
 func InitCodebookDir(
@@ -184,9 +187,8 @@ func RemapCodebookDir(
 		return err
 	}
 
-	oldCb := filepath.Join(newCbDir, CodebookName(idxInst, partnId, sliceId))
-	// TBD: CodebookName->CodebookName2 (dhruvil)
-	newCb := filepath.Join(newCbDir, CodebookName(idxInst, partnId, sliceId))
+	oldCb := filepath.Join(oldCbDir, CodebookName(idxInst, partnId, sliceId))
+	newCb := filepath.Join(newCbDir, CodebookName2(idxInst, partnId, sliceId))
 	err = iowrap.Os_Rename(oldCb, newCb)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -199,6 +201,13 @@ func RemapCodebookDir(
 // This has to follow the pattern in IndexPath function defined above.
 func GetIndexPathPattern() string {
 	return "*_*_*_*.index"
+}
+
+// GetIndexPath2Pattern returns a glob pattern matching IndexPath2 format
+// (bucketuuid_instid_partid.index). Since glob * matches underscores, this
+// pattern also matches the old IndexPath format, so it covers both.
+func GetIndexPath2Pattern() string {
+	return "*_*_*.index"
 }
 
 // This has to follow the pattern in IndexPath function defined above.
@@ -251,13 +260,15 @@ func GetInstIdPartnIdFromPath2(idxPath string) (common.IndexInstId,
 		return common.IndexInstId(0), common.PartitionId(0), err
 	}
 
-	strInstId := pathComponents[0]
+	// IndexPath2 format: bucketuuid_instid_partid.index (3 components)
+	// Use len-2 so instId is correctly resolved for both formats.
+	strInstId := pathComponents[len(pathComponents)-2]
 	instId, err := strconv.ParseUint(strInstId, 10, 64)
 	if err != nil {
 		return common.IndexInstId(0), common.PartitionId(0), err
 	}
 
-	partnComponents := strings.Split(pathComponents[1], ".")
+	partnComponents := strings.Split(pathComponents[len(pathComponents)-1], ".")
 	if len(partnComponents) != 2 {
 		err := errors.New(fmt.Sprintf("Malformed index path %v", idxPath))
 		return common.IndexInstId(0), common.PartitionId(0), err

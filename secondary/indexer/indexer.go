@@ -9795,6 +9795,12 @@ func (idx *indexer) initFromPersistedState() error {
 	// need to be populated with values from persistence store
 	idx.updateStatsFromPersistence()
 
+	////////// upgrade system path from [IndexPath] to [IndexPath2]
+	for _, inst := range idx.indexInstMap {
+		instCopy := inst
+		idx.upgradeStoragePathForInst(&instCopy)
+	}
+
 	localIndexInstMap := make(common.IndexInstMap)
 	localIndexPartnMap := make(IndexPartnMap)
 
@@ -10396,6 +10402,58 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 		inst: *inst,
 	}
 	idx.sendMsgToClustMgrAndProcessResponse(msg)
+}
+
+// upgradeStoragePathForInst remaps on-disk storage files from the old IndexPath
+// format (bucket_name_instid_partid.index) to the new IndexPath2 format
+// (bucketuuid_instid_partid.index) for a single index instance. It is idempotent:
+// if the new path already exists the partition is skipped. Failures are logged as
+// warnings; initPartnInstance will surface any remaining path errors.
+func (idx *indexer) upgradeStoragePathForInst(inst *common.IndexInst) {
+	storageMode := common.IndexTypeToStorageMode(inst.Defn.Using)
+	if storageMode == common.FORESTDB || storageMode == common.NOT_SET {
+		return
+	}
+
+	_, storeEngineDir := c.GetStorageDirs(idx.config, c.GetStorageEngineForIndexDefn(&inst.Defn))
+
+	for _, partnDefn := range inst.Pc.GetAllPartitions() {
+		partnId := partnDefn.GetPartitionId()
+		sliceId := SliceId(0)
+
+		oldRelPath := IndexPath(inst, partnId, sliceId)
+		newRelPath := IndexPath2(inst, partnId, sliceId)
+		if oldRelPath == newRelPath {
+			continue
+		}
+
+		oldPath := filepath.Join(storeEngineDir, oldRelPath)
+		newPath := filepath.Join(storeEngineDir, newRelPath)
+
+		if _, err := iowrap.Os_Stat(newPath); err == nil {
+			logging.Infof("upgradeStoragePathForInst: inst %v partn %v already at new path, skipping",
+				inst.InstId, partnId)
+			continue
+		}
+
+		if _, err := iowrap.Os_Stat(oldPath); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			logging.Warnf("upgradeStoragePathForInst: stat error for %v: %v", oldPath, err)
+			continue
+		}
+
+		logging.Infof("upgradeStoragePathForInst: remapping inst %v partn %v: %v -> %v",
+			inst.InstId, partnId, oldPath, newPath)
+
+		if err := RemapSlice(storageMode, storeEngineDir, inst, partnId, sliceId, oldPath, newPath); err != nil {
+			logging.Warnf("upgradeStoragePathForInst: RemapSlice failed inst %v partn %v: %v",
+				inst.InstId, partnId, err)
+		} else {
+			logging.Infof("upgradeStoragePathForInst: inst %v partn %v remapped successfully",
+				inst.InstId, partnId)
+		}
+	}
 }
 
 func (idx *indexer) validateIndexInstMap() {
@@ -11532,7 +11590,9 @@ func RemapSlice(mode common.StorageMode, storeEngineDir string, idxInst *common.
 func ListSlices(mode common.StorageMode, storeEngineDir string) ([]string, error) {
 
 	listFiles := func() ([]string, error) {
-		pattern := GetIndexPathPattern()
+		// GetIndexPath2Pattern matches both old IndexPath (bucket_name_instid_partid.index)
+		// and new IndexPath2 (bucketuuid_instid_partid.index) since glob * matches underscores.
+		pattern := GetIndexPath2Pattern()
 		return filepath.Glob(filepath.Join(storeEngineDir, pattern))
 	}
 

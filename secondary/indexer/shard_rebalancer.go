@@ -4906,7 +4906,11 @@ func getCodebookPaths(tt *c.TransferToken) (codebookPaths []string) {
 				codebookPath := CodebookPath2(&idxInst, partnId, SliceId(0))
 				if tt.TransferMode == common.TokenTransferModeCopy { // if it is a replica repair, the codebook source will be from the sibling index
 					for _, renameMap := range tt.InstRenameMap {
-						currCodebookPath, newCodebookPath := generateCodebookRenamePaths(renameMap, idxInst.Defn.Bucket, idxInst.Defn.Name, partnId, idxInst.InstId)
+						currCodebookPath, newCodebookPath := generateCodebookRenamePaths2(
+							renameMap,
+							idxInst.Defn.BucketUUID,
+							partnId, idxInst.InstId,
+						)
 						if currCodebookPath != "" && newCodebookPath != "" {
 							codebookPath = currCodebookPath
 							break
@@ -4979,6 +4983,48 @@ func extractIndexInfoFromRenamePath(trimmedCurrPath, trimmedNewPath string) (cur
 		return
 	}
 	return
+}
+
+// This function is inline with the executor.go::getRenamePath2() function called during tt generation
+func generateCodebookRenamePaths2(
+	renameMap map[string]string,
+	bucketUUID string, partnId common.PartitionId,
+	instId common.IndexInstId) (string, string) {
+
+	indexPrefix := fmt.Sprintf("%s_", bucketUUID)
+
+	for currPath, newPath := range renameMap {
+		if trimmedCurrPath, foundPrefix := strings.CutPrefix(currPath, indexPrefix); foundPrefix {
+			currInstId, newInstId, extractedPartnId, err := extractIndexInfoFromRenamePath(
+				trimmedCurrPath, strings.TrimPrefix(newPath, indexPrefix),
+			)
+			if err != nil {
+				l.Warnf("ShardRebalancer::generateCodebookRenamePaths for InstId: %v, err: %v", instId, err)
+				return "", ""
+			}
+
+			if partnId != extractedPartnId {
+				continue
+			}
+
+			if instId != newInstId {
+				continue
+			}
+
+			currIndexPath := fmt.Sprintf("%s_%d_%d.index", bucketUUID, currInstId, partnId)
+			currCodebook := fmt.Sprintf("%v_%d.codebook", currInstId, partnId)
+
+			newIndexPath := fmt.Sprintf("%s_%d_%d.index", bucketUUID, newInstId, partnId)
+			newCodebook := fmt.Sprintf("%v_%d.codebook", newInstId, partnId)
+
+			return filepath.Join(currIndexPath, CODEBOOK_DIR, currCodebook),
+				filepath.Join(newIndexPath, CODEBOOK_DIR, newCodebook)
+		}
+
+		// STORAGE_PATH_UPGRADE_TODO: fix for multi-version rename (source is old convention
+		// and destination is new convention)
+	}
+	return "", ""
 }
 
 func getVectorIndexInsts(tt *c.TransferToken) (vectorInsts []c.IndexInst) {

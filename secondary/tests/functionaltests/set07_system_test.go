@@ -1482,6 +1482,11 @@ func TestOrphanIndexCleanup(t *testing.T) {
 	err = os.MkdirAll(idxFullPath, 0755)
 	FailTestIfError(err, "Error creating dummy orphan index", t)
 
+	idxPath2 := fmt.Sprintf("%s_%d_%d.index", "234456362gdidx564", c.IndexInstId(12345), 4)
+	idxFullPath2 := filepath.Join(absIndexStorageDir, idxPath2)
+	err = os.MkdirAll(idxFullPath2, 0755)
+	FailTestIfError(err, "Error creating dummy orphan index", t)
+
 	// restart the indexer
 	forceKillIndexer()
 
@@ -1497,6 +1502,9 @@ func TestOrphanIndexCleanup(t *testing.T) {
 	log.Printf("Query on idx2_company_regular is successful - after indexer restart.\n")
 
 	err = verifyDeletedPath(idxFullPath)
+	FailTestIfError(err, "Cleanup of orphan index did not happen", t)
+
+	err = verifyDeletedPath(idxFullPath2)
 	FailTestIfError(err, "Cleanup of orphan index did not happen", t)
 }
 
