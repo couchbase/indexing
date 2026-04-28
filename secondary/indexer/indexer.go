@@ -14603,7 +14603,8 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 							(idxInst.Defn.VectorMeta.Quantizer.Type == c.PQ &&
 								(1<<idxInst.Defn.VectorMeta.Quantizer.Nbits > instVectorsMap[instId])) ||
 							((idxInst.Defn.VectorMeta.Quantizer.Type == c.SQ ||
-								idxInst.Defn.VectorMeta.Quantizer.Type == c.RaBitQ) &&
+								idxInst.Defn.VectorMeta.Quantizer.Type == c.RaBitQ ||
+								idxInst.Defn.VectorMeta.Quantizer.Type == c.NO_QUANTIZATION_SPARSE) &&
 								instVectorsMap[instId] == 0) {
 
 							updateErrMap(instId, partnId, errors.New(errStr))
