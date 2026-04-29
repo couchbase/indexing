@@ -129,13 +129,21 @@ type RequestServer interface {
 ///////////////////////////////////////////////////////
 
 // Create a new IndexManager. It is a singleton owned by the ClustMgrAgent object, which is owned by Indexer.
-func NewIndexManager(config common.Config, storageMode common.StorageMode) (mgr *IndexManager, err error) {
+func NewIndexManager(
+	config common.Config,
+	storageMode common.StorageMode,
+	metaEncryptCallbacks *common.MetaEncryptCallbacks,
+) (mgr *IndexManager, err error) {
 
-	return NewIndexManagerInternal(config, storageMode)
+	return NewIndexManagerInternal(config, storageMode, metaEncryptCallbacks)
 }
 
 // Create a new IndexManager singleton that wraps a LocalMetadataRepo (not a RemoteMetadataRepo).
-func NewIndexManagerInternal(config common.Config, storageMode common.StorageMode) (mgr *IndexManager, err error) {
+func NewIndexManagerInternal(
+	config common.Config,
+	storageMode common.StorageMode,
+	metaEncryptCallbacks *common.MetaEncryptCallbacks,
+) (mgr *IndexManager, err error) {
 
 	gometaL.Current = &logging.SystemLogger
 
@@ -290,6 +298,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 		EnableWAL:                  enableWAL,
 		StoreType:                  storeType,
 		ConsoleErrorReporter:       consoleErrReporter,
+		EarCallbacks:               metaEncryptCallbacks,
 	}
 
 	testServerEnabled := config.GetDeploymentModelAwareCfg("api.enableTestServer").Bool()

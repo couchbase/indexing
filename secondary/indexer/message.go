@@ -3499,6 +3499,18 @@ func (m *MsgEncryptionGetInuseKeys) GetKeyMapCh() chan map[KeyDataType][]string 
 	return m.respMapCh
 }
 
+type MsgClustMgrGetInuseKeys struct {
+	respCh chan *c.Optional[[]string]
+}
+
+func (m *MsgClustMgrGetInuseKeys) GetMsgType() MsgType {
+	return ENCRYPTION_GET_INUSE_KEYS
+}
+
+func (m *MsgClustMgrGetInuseKeys) GetRespch() chan *c.Optional[[]string] {
+	return m.respCh
+}
+
 type MsgEncryptionUpdateKey struct {
 	keyDataType KeyDataType
 	earkey      EaRKey
