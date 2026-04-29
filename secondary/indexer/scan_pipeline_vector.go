@@ -601,7 +601,7 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 	w.fvecs = w.fvecs[:validCount*queryDim]
 
 	atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
-	atomic.AddInt64(&w.currJob.decodeCnt, int64(validCount))
+	atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
 
 	// No valid vectors after term-matching; nothing to compute.
 	if validCount == 0 {
