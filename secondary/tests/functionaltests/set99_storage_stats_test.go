@@ -87,13 +87,20 @@ func TestIdxCorruptBasicSanityMultipleIndices(t *testing.T) {
 		return
 	}
 
+	defaultBucketUUID, errUUID := tc.GetBucketUUID(indexManagementAddress, clusterconfig.Username, clusterconfig.Password, "default")
+	FailTestIfError(errUUID, "Error in GetBucketUUID", t)
+
+	instIds, errInstId := tc.GetIndexInstIds(hosts[0], clusterconfig.Username, clusterconfig.Password, "corrupt_idx1_age", "default", "_default", "_default")
+	FailTestIfError(errInstId, "Error in GetIndexInstIds", t)
+	instId := instIds[0]
+
 	var slicePath string
-	slicePath, err = tc.GetIndexSlicePath("corrupt_idx1_age", "default", absIndexStorageDir, 0)
-	FailTestIfError(err, "Error in GetIndexSlicePath", t)
+	slicePath, err = tc.GetIndexSlicePath2(defaultBucketUUID, instId, absIndexStorageDir, 0)
+	FailTestIfError(err, "Error in GetIndexSlicePath2", t)
 
 	// Step 2: Corrupt one of them (corrupt_idx1_age)
-	err = secondaryindex.CorruptIndex("corrupt_idx1_age", "default", absIndexStorageDir,
-		clusterconfig.IndexUsing, 0)
+	err = secondaryindex.CorruptIndex("corrupt_idx1_age", "default", defaultBucketUUID, absIndexStorageDir,
+		clusterconfig.IndexUsing, instId, 0)
 	FailTestIfError(err, "Error while corrupting the index", t)
 
 	// Step 3: Restart indexer process and wait for some time.
@@ -194,12 +201,19 @@ func TestIdxCorruptBasicBhiveIndex(t *testing.T) {
 		return
 	}
 
-	partn5SlicePath, err := tc.GetIndexSlicePath(idx_bhive, "default", bhiveIndexStorageDir, 5)
-	FailTestIfError(err, "Error in GetIndexSlicePath", t)
+	defaultBucketUUID, errUUID := tc.GetBucketUUID(indexManagementAddress, clusterconfig.Username, clusterconfig.Password, "default")
+	FailTestIfError(errUUID, "Error in GetBucketUUID", t)
+
+	instIds, errInstId := tc.GetIndexInstIds(hosts[0], clusterconfig.Username, clusterconfig.Password, idx_bhive, "default", "_default", "_default")
+	FailTestIfError(errInstId, "Error in GetIndexInstIds", t)
+	instId := instIds[0]
+
+	partn5SlicePath, err := tc.GetIndexSlicePath2(defaultBucketUUID, instId, bhiveIndexStorageDir, 5)
+	FailTestIfError(err, "Error in GetIndexSlicePath2", t)
 
 	// Corrupt the index
-	err = secondaryindex.CorruptIndex(idx_bhive, "default", bhiveIndexStorageDir,
-		clusterconfig.IndexUsing, 5)
+	err = secondaryindex.CorruptIndex(idx_bhive, "default", defaultBucketUUID, bhiveIndexStorageDir,
+		clusterconfig.IndexUsing, instId, 5)
 	FailTestIfError(err, "Error while corrupting the index", t)
 
 	// Restart indexer process and wait for some time.
@@ -212,8 +226,8 @@ func TestIdxCorruptBasicBhiveIndex(t *testing.T) {
 	FailTestIfError(err, "Error in verifyDeletedPath", t)
 
 	// verify other partitions exist
-	slicePath, err := tc.GetIndexSlicePath(idx_bhive, "default", bhiveIndexStorageDir, 1)
-	FailTestIfError(err, "Error in GetIndexSlicePath", t)
+	slicePath, err := tc.GetIndexSlicePath2(defaultBucketUUID, instId, bhiveIndexStorageDir, 1)
+	FailTestIfError(err, "Error in GetIndexSlicePath2", t)
 
 	ok, err = verifyPathExists(slicePath)
 	if !ok || err != nil {
@@ -301,21 +315,28 @@ func TestIdxCorruptPartitionedIndex(t *testing.T) {
 		return
 	}
 
+	defaultBucketUUID, errUUID := tc.GetBucketUUID(indexManagementAddress, clusterconfig.Username, clusterconfig.Password, "default")
+	FailTestIfError(errUUID, "Error in GetBucketUUID", t)
+
+	instIds, errInstId := tc.GetIndexInstIds(hosts[0], clusterconfig.Username, clusterconfig.Password, "corrupt_idx3_age", "default", "_default", "_default")
+	FailTestIfError(errInstId, "Error in GetIndexInstIds", t)
+	instId := instIds[0]
+
 	// Get slice paths for all partitions
 	slicePaths := make(map[int]string)
 	partnToCorrupt := c.PartitionId(rand.Intn(int(numPartns)) + 1)
 	fmt.Println("Corrupting partn id", partnToCorrupt)
 	for i := 1; i <= int(numPartns); i++ {
 		fmt.Println("Getting slicepath for ", i)
-		slicePaths[i], err = tc.GetIndexSlicePath("corrupt_idx3_age", "default",
-			absIndexStorageDir, c.PartitionId(i))
-		FailTestIfError(err, "Error in GetIndexSlicePath", t)
+		slicePaths[i], err = tc.GetIndexSlicePath2(defaultBucketUUID,
+			instId, absIndexStorageDir, c.PartitionId(i))
+		FailTestIfError(err, "Error in GetIndexSlicePath2", t)
 		fmt.Println("slicePath for partn", i, "=", slicePaths[i])
 	}
 
 	// Step 2: Corrupt the index corrupt_idx3_age partition 10
-	err = secondaryindex.CorruptIndex("corrupt_idx3_age", "default", absIndexStorageDir,
-		clusterconfig.IndexUsing, partnToCorrupt)
+	err = secondaryindex.CorruptIndex("corrupt_idx3_age", "default", defaultBucketUUID, absIndexStorageDir,
+		clusterconfig.IndexUsing, instId, partnToCorrupt)
 	FailTestIfError(err, "Error while corrupting the index", t)
 
 	// Step 3: Restart indexer process and wait for some time.
@@ -352,8 +373,8 @@ func TestIdxCorruptPartitionedIndex(t *testing.T) {
 			continue
 		}
 
-		err = secondaryindex.CorruptIndex("corrupt_idx3_age", "default", absIndexStorageDir,
-			clusterconfig.IndexUsing, c.PartitionId(i))
+		err = secondaryindex.CorruptIndex("corrupt_idx3_age", "default", defaultBucketUUID, absIndexStorageDir,
+			clusterconfig.IndexUsing, instId, c.PartitionId(i))
 		FailTestIfError(err, "Error while corrupting the index", t)
 	}
 
@@ -413,9 +434,16 @@ func TestIdxCorruptMOITwoSnapsOneCorrupt(t *testing.T) {
 		return
 	}
 
+	defaultBucketUUID, errUUID := tc.GetBucketUUID(indexManagementAddress, clusterconfig.Username, clusterconfig.Password, "default")
+	FailTestIfError(errUUID, "Error in GetBucketUUID", t)
+
+	instIds, errInstId := tc.GetIndexInstIds(hosts[0], clusterconfig.Username, clusterconfig.Password, "corrupt_idx4_age", "default", "_default", "_default")
+	FailTestIfError(errInstId, "Error in GetIndexInstIds", t)
+	instId := instIds[0]
+
 	var slicePath string
-	slicePath, err = tc.GetIndexSlicePath("corrupt_idx4_age", "default", absIndexStorageDir, 0)
-	FailTestIfError(err, "Error in GetIndexSlicePath", t)
+	slicePath, err = tc.GetIndexSlicePath2(defaultBucketUUID, instId, absIndexStorageDir, 0)
+	FailTestIfError(err, "Error in GetIndexSlicePath2", t)
 
 	// Step 2: Add more data and wait for snapshot interval
 	fmt.Printf("Populating the default bucket with more docs\n")
@@ -433,12 +461,12 @@ func TestIdxCorruptMOITwoSnapsOneCorrupt(t *testing.T) {
 	}
 
 	var pth string
-	pth, err = tc.GetMOILatestSnapshotPath("corrupt_idx4_age", "default", absIndexStorageDir, 0)
-	FailTestIfError(err, "Error in GetMOILatestSnapshotPath", t)
+	pth, err = tc.GetMOILatestSnapshotPath2(defaultBucketUUID, instId, absIndexStorageDir, 0)
+	FailTestIfError(err, "Error in GetMOILatestSnapshotPath2", t)
 
 	// Step 3: Corrupt latest snapshot for corrupt_idx4_age
-	err = secondaryindex.CorruptMOIIndexLatestSnapshot("corrupt_idx4_age", "default", absIndexStorageDir,
-		clusterconfig.IndexUsing, 0)
+	err = secondaryindex.CorruptMOIIndexLatestSnapshot("corrupt_idx4_age", defaultBucketUUID, absIndexStorageDir,
+		clusterconfig.IndexUsing, instId, 0)
 	FailTestIfError(err, "Error while corrupting the index", t)
 
 	// Step 4: Restart indexer process and wait for some time.
@@ -500,12 +528,19 @@ func TestIdxCorruptMOITwoSnapsBothCorrupt(t *testing.T) {
 		return
 	}
 
+	defaultBucketUUID, errUUID := tc.GetBucketUUID(indexManagementAddress, clusterconfig.Username, clusterconfig.Password, "default")
+	FailTestIfError(errUUID, "Error in GetBucketUUID", t)
+
+	instIds, errInstId := tc.GetIndexInstIds(hosts[0], clusterconfig.Username, clusterconfig.Password, "corrupt_idx5_name", "default", "_default", "_default")
+	FailTestIfError(errInstId, "Error in GetIndexInstIds", t)
+	instId := instIds[0]
+
 	var slicePath string
 	var cfg memdb.Config
 	cfg.SetTestEncryption()
 
-	slicePath, err = tc.GetIndexSlicePath("corrupt_idx5_name", "default", absIndexStorageDir, 0)
-	FailTestIfError(err, "Error in GetIndexSlicePath", t)
+	slicePath, err = tc.GetIndexSlicePath2(defaultBucketUUID, instId, absIndexStorageDir, 0)
+	FailTestIfError(err, "Error in GetIndexSlicePath2", t)
 
 	// Step 2: Add more data and wait for snapshot interval
 	fmt.Printf("Populating the default bucket with more docs\n")
@@ -598,14 +633,24 @@ func TestIdxCorruptBackup(t *testing.T) {
 		return
 	}
 
-	var slicePath string
-	slicePath, err = tc.GetIndexSlicePath("corrupt_idx6_age", "default",
-		absIndexStorageDir, c.PartitionId(0))
+	defaultBucketUUID, errUUID := tc.GetBucketUUID(indexManagementAddress, clusterconfig.Username, clusterconfig.Password, "default")
+	FailTestIfError(errUUID, "Error in GetBucketUUID", t)
 
-	// Step 2: Corrupt the index corrupt_idx3_age partition 10
-	err = secondaryindex.CorruptIndex("corrupt_idx6_age", "default", absIndexStorageDir,
-		clusterconfig.IndexUsing, 0)
+	instIds, errInstId := tc.GetIndexInstIds(hosts[0], clusterconfig.Username, clusterconfig.Password, "corrupt_idx6_age", "default", "_default", "_default")
+	FailTestIfError(errInstId, "Error in GetIndexInstIds", t)
+	instId := instIds[0]
+
+	var slicePath string
+	slicePath, err = tc.GetIndexSlicePath2(defaultBucketUUID,
+		instId, absIndexStorageDir, c.PartitionId(0))
+	FailTestIfError(err, "Error in GetIndexSlicePath2", t)
+
+	// Step 2: Corrupt the index corrupt_idx6_age partition 0
+	err = secondaryindex.CorruptIndex("corrupt_idx6_age", "default", defaultBucketUUID, absIndexStorageDir,
+		clusterconfig.IndexUsing, instId, 0)
 	FailTestIfError(err, "Error while corrupting the index", t)
+
+	clearCreateComandTokens()
 
 	// Step 3: Restart indexer process and wait for some time.
 	forceKillIndexer()

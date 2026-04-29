@@ -690,23 +690,23 @@ func BuildAllSecondaryIndexes(server string, indexActiveTimeoutSeconds int64) er
 	return err
 }
 
-func CorruptIndex(indexName, bucketName, dirPath, indexUsing string, partnId c.PartitionId) error {
+func CorruptIndex(indexName, bucketName, bucketUUID, dirPath, indexUsing string, instId c.IndexInstId, partnId c.PartitionId) error {
 	if indexUsing == "forestdb" {
-		return corruptForestdbIndex(indexName, bucketName, dirPath, partnId)
+		return corruptForestdbIndex(indexName, bucketUUID, dirPath, instId, partnId)
 	} else if indexUsing == "plasma" {
-		return corruptPlasmaIndex(indexName, bucketName, dirPath, partnId)
+		return corruptPlasmaIndex(indexName, bucketUUID, dirPath, instId, partnId)
 	} else if indexUsing == "memory_optimized" {
-		return corruptMOIIndex(indexName, bucketName, dirPath, partnId)
+		return corruptMOIIndex(indexName, bucketUUID, dirPath, instId, partnId)
 	} else {
 		msg := fmt.Sprintf("Unknown indexUsing %v", indexUsing)
 		return errors.New(msg)
 	}
 }
 
-func corruptPlasmaIndex(indexName, bucketName, dirPath string, partnId c.PartitionId) error {
+func corruptPlasmaIndex(indexName, bucketUUID, dirPath string, instId c.IndexInstId, partnId c.PartitionId) error {
 	var err error
 	var slicePath string
-	slicePath, err = tc.GetIndexSlicePath(indexName, bucketName, dirPath, partnId)
+	slicePath, err = tc.GetIndexSlicePath2(bucketUUID, instId, dirPath, partnId)
 	if err != nil {
 		return err
 	}
@@ -724,14 +724,14 @@ func corruptPlasmaIndex(indexName, bucketName, dirPath string, partnId c.Partiti
 }
 
 // This method will corrupt all available snapshots.
-func corruptMOIIndex(indexName, bucketName, dirPath string, partnId c.PartitionId) error {
+func corruptMOIIndex(indexName, bucketUUID, dirPath string, instId c.IndexInstId, partnId c.PartitionId) error {
 	var err error
 	var slicePath string
 	var cfg memdb.Config
 	// configure GetKeyId callback if slice is encrypted. TBD: fetch callback from the framework
 	cfg.SetTestEncryption()
 
-	slicePath, err = tc.GetIndexSlicePath(indexName, bucketName, dirPath, partnId)
+	slicePath, err = tc.GetIndexSlicePath2(bucketUUID, instId, dirPath, partnId)
 	if err != nil {
 		return err
 	}
@@ -765,10 +765,10 @@ func corruptMOIIndex(indexName, bucketName, dirPath string, partnId c.PartitionI
 	return nil
 }
 
-func corruptForestdbIndex(indexName, bucketName, dirPath string, partnId c.PartitionId) error {
+func corruptForestdbIndex(indexName, bucketUUID, dirPath string, instId c.IndexInstId, partnId c.PartitionId) error {
 	var err error
 	var slicePath string
-	slicePath, err = tc.GetIndexSlicePath(indexName, bucketName, dirPath, partnId)
+	slicePath, err = tc.GetIndexSlicePath2(bucketUUID, instId, dirPath, partnId)
 	if err != nil {
 		return err
 	}
@@ -799,7 +799,7 @@ func corruptForestdbIndex(indexName, bucketName, dirPath string, partnId c.Parti
 	return nil
 }
 
-func CorruptMOIIndexLatestSnapshot(indexName, bucketName, dirPath, indexUsing string, partnId c.PartitionId) error {
+func CorruptMOIIndexLatestSnapshot(indexName, bucketUUID, dirPath, indexUsing string, instId c.IndexInstId, partnId c.PartitionId) error {
 	if indexUsing != "memory_optimized" {
 		msg := fmt.Sprintf("Unexpected indexUsing %v", indexUsing)
 		return errors.New(msg)
@@ -811,7 +811,7 @@ func CorruptMOIIndexLatestSnapshot(indexName, bucketName, dirPath, indexUsing st
 	var cfg memdb.Config
 	cfg.SetTestEncryption()
 
-	slicePath, err = tc.GetIndexSlicePath(indexName, bucketName, dirPath, partnId)
+	slicePath, err = tc.GetIndexSlicePath2(bucketUUID, instId, dirPath, partnId)
 	if err != nil {
 		return err
 	}

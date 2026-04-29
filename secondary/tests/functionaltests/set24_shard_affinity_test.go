@@ -1197,15 +1197,15 @@ func preparePrimaryIndexDefn(defnID c.IndexDefnId,
 	return defn
 }
 
+func clearCreateComandTokens() {
+	err := c.MetakvRecurciveDel(mc.CreateDDLCommandTokenPath)
+	tc.HandleError(err, "failed to delete all create command token")
+}
+
 // TestShardRebalance_DropDuplicateIndexes - create duplicate indexes on node 1 and node 2.
 // swap rebalance node 2 with node 3. rebalance should drop the duplicate indexes on node 2.
 func TestShardRebalance_DropDuplicateIndexes(t *testing.T) {
 	skipShardAffinityTests(t)
-
-	clearCreateComandTokens := func() {
-		err := c.MetakvRecurciveDel(mc.CreateDDLCommandTokenPath)
-		tc.HandleError(err, "failed to delete all create command token")
-	}
 
 	status := getClusterStatus()
 	if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||

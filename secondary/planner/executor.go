@@ -37,37 +37,37 @@ type ReplicaDistMap map[int]map[*IndexerNode]*IndexUsage
 /////////////////////////////////////////////////////////////
 
 type RunConfig struct {
-	Detail           bool
-	GenStmt          string
-	MemQuotaFactor   float64
-	CpuQuotaFactor   float64
-	Resize           bool
-	MaxNumNode       int
-	Output           string
-	Shuffle          int
-	AllowMove        bool
-	AllowSwap        bool
-	AllowUnpin       bool
-	AddNode          int
-	DeleteNode       int
-	MaxMemUse        int
-	MaxCpuUse        int
-	MemQuota         int64
-	CpuQuota         int
-	DataCostWeight   float64
-	CpuCostWeight    float64
-	MemCostWeight    float64
-	EjectOnly        bool
+	Detail                            bool
+	GenStmt                           string
+	MemQuotaFactor                    float64
+	CpuQuotaFactor                    float64
+	Resize                            bool
+	MaxNumNode                        int
+	Output                            string
+	Shuffle                           int
+	AllowMove                         bool
+	AllowSwap                         bool
+	AllowUnpin                        bool
+	AddNode                           int
+	DeleteNode                        int
+	MaxMemUse                         int
+	MaxCpuUse                         int
+	MemQuota                          int64
+	CpuQuota                          int
+	DataCostWeight                    float64
+	CpuCostWeight                     float64
+	MemCostWeight                     float64
+	EjectOnly                         bool
 	CanBypassReplicaRepairConstraints bool
-	DisableRepair    bool
-	Timeout          int
-	UseLive          bool
-	Runtime          *time.Time
-	Threshold        float64
-	CpuProfile       bool
-	MinIterPerTemp   int
-	MaxIterPerTemp   int
-	UseGreedyPlanner bool
+	DisableRepair                     bool
+	Timeout                           int
+	UseLive                           bool
+	Runtime                           *time.Time
+	Threshold                         float64
+	CpuProfile                        bool
+	MinIterPerTemp                    int
+	MaxIterPerTemp                    int
+	UseGreedyPlanner                  bool
 
 	AllowDDLDuringScaleup bool
 
@@ -679,6 +679,74 @@ func addToInstRenamePath(token *common.TransferToken, index *IndexUsage, newInst
 			token.InstRenameMap[shardId][filepath.Join(currPathInMeta, "mainIndex")] = filepath.Join(newPathInMeta, "mainIndex")
 		} else if index.IsPrimary == false { // Back index only
 			token.InstRenameMap[shardId][filepath.Join(currPathInMeta, "docIndex")] = filepath.Join(newPathInMeta, "docIndex")
+		}
+	}
+}
+
+// getRenamePath2 only generates rename path for tokens; it returns
+//   - current path as old format if the ShardCompat Version is "1",
+//     else it returns the new path format;
+//   - rename path also follows the same convention as above
+func getRenamePath2(index *IndexUsage, newInstId common.IndexInstId) (string, string) {
+	var newPath string
+
+	if index.destNode.ShardCompatVersion == 1 {
+		newPath = fmt.Sprintf("%v_%v_%v_%v.index",
+			index.Bucket, index.Name, newInstId, index.PartnId)
+	} else {
+		newPath = fmt.Sprintf("%v_%v_%v.index",
+			index.Instance.Defn.BucketUUID, newInstId, index.PartnId)
+	}
+
+	var sourcePath string
+
+	var sourceShardCompatVersion int
+	if index.initialNode != nil {
+		sourceShardCompatVersion = index.initialNode.ShardCompatVersion
+	} else if index.siblingIndex.initialNode != nil {
+		sourceShardCompatVersion = index.siblingIndex.initialNode.ShardCompatVersion
+	}
+
+	if sourceShardCompatVersion == 1 {
+		sourcePath = fmt.Sprintf("%v_%v_%v_%v.index",
+			index.Bucket, index.Name, index.siblingIndex.InstId, index.PartnId)
+	} else {
+		sourcePath = fmt.Sprintf("%v_%v_%v.index",
+			index.Instance.Defn.BucketUUID, index.siblingIndex.InstId, index.PartnId)
+	}
+
+	return sourcePath, newPath
+}
+
+func addToInstRenamePath2(
+	token *common.TransferToken,
+	index *IndexUsage,
+	newInstId common.IndexInstId,
+	targetShardIds []common.ShardId,
+) {
+
+	if index.initialNode != nil || index.siblingIndex == nil {
+		return
+	}
+
+	currPathInMeta2, newPathInMeta2 := getRenamePath2(index, newInstId)
+
+	if token.InstRenameMap == nil {
+		token.InstRenameMap = make(map[common.ShardId]map[string]string)
+	}
+
+	for i, shardId := range targetShardIds {
+		if _, ok := token.InstRenameMap[shardId]; !ok {
+			token.InstRenameMap[shardId] = make(map[string]string)
+		}
+
+		mainIndex2 := filepath.Join(currPathInMeta2, "mainIndex")
+		backIndex2 := filepath.Join(currPathInMeta2, "docIndex")
+
+		if i == 0 { // Main index only
+			token.InstRenameMap[shardId][mainIndex2] = filepath.Join(newPathInMeta2, "mainIndex")
+		} else if !index.IsPrimary { // Back index only
+			token.InstRenameMap[shardId][backIndex2] = filepath.Join(newPathInMeta2, "docIndex")
 		}
 	}
 }
@@ -1391,10 +1459,13 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 				if shardMovementCompatCheck(index, realIndex) {
 
-					if realIndex.siblingIndex != nil &&
-						token.TransferMode == common.TokenTransferModeCopy {
+					if (realIndex.siblingIndex != nil &&
+						token.TransferMode == common.TokenTransferModeCopy) || // copy rename
+						(token.TransferMode == common.TokenTransferModeMove &&
+							index.initialNode != nil && // upgrade rename
+							index.initialNode.ShardCompatVersion < index.destNode.ShardCompatVersion) {
 						// set InstRenameMap in the root token itself
-						addToInstRenamePath(&token, realIndex, realIndex.InstId, targetShardIds)
+						addToInstRenamePath2(&token, realIndex, realIndex.InstId, targetShardIds)
 					}
 
 					if !realIndex.pendingCreate {

@@ -9268,7 +9268,7 @@ func (idx *indexer) doCleanupOrphanIndexes(mode c.StorageMode, storeEngineDir st
 	stDirPathLen := len(storeEngineDir) + len(string(os.PathSeparator))
 	orphanIndexList := make([]string, 0, len(flist))
 	for _, f := range flist {
-		instId, partnId, err := GetInstIdPartnIdFromPath(f[stDirPathLen:])
+		instId, partnId, err := GetInstIdPartnIdFromPath2(f[stDirPathLen:])
 		if err != nil {
 			logging.Warnf("Error %v during GetInstIdPartnIdFromPath for %v.", err, f)
 			continue
@@ -9794,6 +9794,12 @@ func (idx *indexer) initFromPersistedState() error {
 	// Stats that are initialized in previous loop
 	// need to be populated with values from persistence store
 	idx.updateStatsFromPersistence()
+
+	////////// upgrade system path from [IndexPath] to [IndexPath2]
+	for _, inst := range idx.indexInstMap {
+		instCopy := inst
+		idx.upgradeStoragePathForInst(&instCopy)
+	}
 
 	localIndexInstMap := make(common.IndexInstMap)
 	localIndexPartnMap := make(IndexPartnMap)
@@ -10385,7 +10391,7 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 
 	partnDefnList := inst.Pc.GetAllPartitions()
 	for _, partnDefn := range partnDefnList {
-		path := filepath.Join(engineDir, IndexPath(inst, partnDefn.GetPartitionId(), SliceId(0)))
+		path := filepath.Join(engineDir, IndexPath2(inst, partnDefn.GetPartitionId(), SliceId(0)))
 		if err := DestroySlice(storageMode, storage_dir, path); err != nil {
 			common.CrashOnError(err)
 		}
@@ -10396,6 +10402,58 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 		inst: *inst,
 	}
 	idx.sendMsgToClustMgrAndProcessResponse(msg)
+}
+
+// upgradeStoragePathForInst remaps on-disk storage files from the old IndexPath
+// format (bucket_name_instid_partid.index) to the new IndexPath2 format
+// (bucketuuid_instid_partid.index) for a single index instance. It is idempotent:
+// if the new path already exists the partition is skipped. Failures are logged as
+// warnings; initPartnInstance will surface any remaining path errors.
+func (idx *indexer) upgradeStoragePathForInst(inst *common.IndexInst) {
+	storageMode := common.IndexTypeToStorageMode(inst.Defn.Using)
+	if storageMode == common.FORESTDB || storageMode == common.NOT_SET {
+		return
+	}
+
+	_, storeEngineDir := c.GetStorageDirs(idx.config, c.GetStorageEngineForIndexDefn(&inst.Defn))
+
+	for _, partnDefn := range inst.Pc.GetAllPartitions() {
+		partnId := partnDefn.GetPartitionId()
+		sliceId := SliceId(0)
+
+		oldRelPath := IndexPath(inst, partnId, sliceId)
+		newRelPath := IndexPath2(inst, partnId, sliceId)
+		if oldRelPath == newRelPath {
+			continue
+		}
+
+		oldPath := filepath.Join(storeEngineDir, oldRelPath)
+		newPath := filepath.Join(storeEngineDir, newRelPath)
+
+		if _, err := iowrap.Os_Stat(newPath); err == nil {
+			logging.Infof("upgradeStoragePathForInst: inst %v partn %v already at new path, skipping",
+				inst.InstId, partnId)
+			continue
+		}
+
+		if _, err := iowrap.Os_Stat(oldPath); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			logging.Warnf("upgradeStoragePathForInst: stat error for %v: %v", oldPath, err)
+			continue
+		}
+
+		logging.Infof("upgradeStoragePathForInst: remapping inst %v partn %v: %v -> %v",
+			inst.InstId, partnId, oldPath, newPath)
+
+		if err := RemapSlice(storageMode, storeEngineDir, inst, partnId, sliceId, oldPath, newPath); err != nil {
+			logging.Warnf("upgradeStoragePathForInst: RemapSlice failed inst %v partn %v: %v",
+				inst.InstId, partnId, err)
+		} else {
+			logging.Infof("upgradeStoragePathForInst: inst %v partn %v remapped successfully",
+				inst.InstId, partnId)
+		}
+	}
 }
 
 func (idx *indexer) validateIndexInstMap() {
@@ -10630,7 +10688,7 @@ func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceI
 func (idx *indexer) forceCleanupPartitionData(inst *common.IndexInst, partitionId common.PartitionId, sliceId SliceId) error {
 
 	_, storeEngineDir := c.GetStorageDirs(idx.config, c.GetStorageEngineForIndexDefn(&inst.Defn))
-	path := filepath.Join(storeEngineDir, IndexPath(inst, partitionId, sliceId))
+	path := filepath.Join(storeEngineDir, IndexPath2(inst, partitionId, sliceId))
 	return DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), storeEngineDir, path)
 }
 
@@ -11463,7 +11521,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 		common.CrashOnError(e)
 	}
 
-	path := filepath.Join(storeEngineDir, IndexPath(indInst, partnInst.Defn.GetPartitionId(), id))
+	path := filepath.Join(storeEngineDir, IndexPath2(indInst, partnInst.Defn.GetPartitionId(), id))
 
 	partitionId := partnInst.Defn.GetPartitionId()
 	numPartitions := indInst.Pc.GetNumPartitions()
@@ -11483,11 +11541,11 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 			// safety call to make sure base dir exists before bhive directory is created
 			slice, err = NewBhiveSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
-				CodebookPath(indInst, partitionId, id), indInst.BhiveGraphStatus[partitionId])
+				CodebookPath2(indInst, partitionId, id), indInst.BhiveGraphStatus[partitionId])
 		} else {
 			slice, err = NewPlasmaSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
-				CodebookPath(indInst, partitionId, id), sliceEncryptionCallbacks)
+				CodebookPath2(indInst, partitionId, id), sliceEncryptionCallbacks)
 		}
 
 	}
@@ -11532,7 +11590,9 @@ func RemapSlice(mode common.StorageMode, storeEngineDir string, idxInst *common.
 func ListSlices(mode common.StorageMode, storeEngineDir string) ([]string, error) {
 
 	listFiles := func() ([]string, error) {
-		pattern := GetIndexPathPattern()
+		// GetIndexPath2Pattern matches both old IndexPath (bucket_name_instid_partid.index)
+		// and new IndexPath2 (bucketuuid_instid_partid.index) since glob * matches underscores.
+		pattern := GetIndexPath2Pattern()
 		return filepath.Glob(filepath.Join(storeEngineDir, pattern))
 	}
 
@@ -11593,7 +11653,7 @@ func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId com
 	case common.MOI, common.FORESTDB, common.NOT_SET:
 		return moveIndexFile(indexInst, partnId, sliceId, sourceDir, targetDir)
 	case common.PLASMA:
-		indexPath := IndexPath(indexInst, partnId, sliceId)
+		indexPath := IndexPath2(indexInst, partnId, sliceId)
 		srcPath := filepath.Join(sourceDir, indexPath)
 		if indexInst.Defn.IsBhive() {
 			return BackupCorruptedSlice_Bhive(sourceDir, srcPath, rename, clean)
@@ -11604,7 +11664,7 @@ func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId com
 }
 
 func moveIndexFile(indexInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId, sourceDir string, targetDir string) error {
-	indexPath := IndexPath(indexInst, partnId, sliceId)
+	indexPath := IndexPath2(indexInst, partnId, sliceId)
 	srcPath := filepath.Join(sourceDir, indexPath)
 
 	if err := deleteOldBackups(targetDir, sourceDir, srcPath); err != nil {
@@ -15195,7 +15255,7 @@ func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 	}
 
 	// Construct the codebook path
-	codebookPath := filepath.Join(storeEngineDir, CodebookPath(idxInst, partnId, sliceId))
+	codebookPath := filepath.Join(storeEngineDir, CodebookPath2(idxInst, partnId, sliceId))
 	if err := idx.removeResidualFile(codebookPath); err != nil {
 		logging.Errorf("Indexer::persistCodebookToDisk Error observed while removing residual files at path: %v, err: %v", codebookPath, err)
 		return err

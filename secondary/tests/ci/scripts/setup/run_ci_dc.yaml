@@ -43,6 +43,12 @@ services:
     cpuset: "0-5"
     mem_limit: 12G
     memswap_limit: "0"
+    security_opt:
+      - apparmor:unconfined # Required on some systems like Ubuntu
+    devices:
+      - /dev/fuse:/dev/fuse
+    cap_add:
+      - SYS_ADMIN
   apache:
     build:
       dockerfile: apache_server.dockerfile

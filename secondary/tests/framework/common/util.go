@@ -362,6 +362,121 @@ func GetMOILatestSnapshotPath(indexName, bucketName, dirPath string,
 	return files[len(files)-1], nil
 }
 
+// GetBucketUUID fetches the UUID for bucketName from the cluster management REST API.
+// serverAddr must be host:port of the management endpoint (e.g. 127.0.0.1:9000).
+func GetBucketUUID(serverAddr, user, password, bucketName string) (string, error) {
+	addr := fmt.Sprintf("http://%v/pools/default/buckets/%v", serverAddr, bucketName)
+	req, err := http.NewRequest("GET", addr, nil)
+	if err != nil {
+		return "", err
+	}
+	req.SetBasicAuth(user, password)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(body, &m); err != nil {
+		return "", err
+	}
+	uuid, ok := m["uuid"].(string)
+	if !ok {
+		return "", fmt.Errorf("uuid field not found in bucket response for %v", bucketName)
+	}
+	return uuid, nil
+}
+
+// GetIndexSlicePath2 finds the on-disk slice directory for an index using the
+// IndexPath2 naming convention: {bucketUUID}_{instId}_{partnId}.index.
+// instId must be obtained from the /getIndexStatus endpoint via GetIndexInstIds.
+func GetIndexSlicePath2(bucketUUID string, instId c.IndexInstId, dirPath string, partnId c.PartitionId) (string, error) {
+	dirName := fmt.Sprintf("%s_%d_%d.index", bucketUUID, instId, partnId)
+	fullPath := filepath.Join(dirPath, dirName)
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("slice path not found: %v", fullPath)
+		}
+		return "", fmt.Errorf("error checking slice path %v: %v", fullPath, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("expected directory at %v", fullPath)
+	}
+	return fullPath, nil
+}
+
+// GetMOILatestSnapshotPath2 is the IndexPath2-aware counterpart of GetMOILatestSnapshotPath.
+func GetMOILatestSnapshotPath2(bucketUUID string, instId c.IndexInstId, dirPath string, partnId c.PartitionId) (string, error) {
+	slicePath, err := GetIndexSlicePath2(bucketUUID, instId, dirPath, partnId)
+	if err != nil {
+		return "", err
+	}
+	pattern := "*"
+	files, errGlob := filepath.Glob(filepath.Join(slicePath, pattern))
+	if errGlob != nil {
+		return "", errGlob
+	}
+	return files[len(files)-1], nil
+}
+
+// GetIndexStatusResponse fetches the typed index status from the indexer's HTTP endpoint.
+// indexerAddr must be host:port of the indexer HTTP address (e.g. 127.0.0.1:9102).
+func GetIndexStatusResponse(indexerAddr, user, password string) (*IndexStatusResponse, error) {
+	addr := fmt.Sprintf("http://%v/getIndexStatus?getAll=true", indexerAddr)
+	req, err := http.NewRequest("GET", addr, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(user, password)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var result IndexStatusResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// GetIndexInstIds returns the instance IDs of all index instances matching the given
+// index name, bucket, scope and collection. Pass empty string for scope or collection
+// to skip filtering on that field.
+// indexerAddr must be host:port of the indexer HTTP address.
+func GetIndexInstIds(indexerAddr, user, password, indexName, bucket, scope, collection string) ([]c.IndexInstId, error) {
+	resp, err := GetIndexStatusResponse(indexerAddr, user, password)
+	if err != nil {
+		return nil, err
+	}
+	var ids []c.IndexInstId
+	for _, s := range resp.Status {
+		if s.Name != indexName || s.Bucket != bucket {
+			continue
+		}
+		if scope != "" && s.Scope != scope {
+			continue
+		}
+		if collection != "" && s.Collection != collection {
+			continue
+		}
+		ids = append(ids, s.InstId)
+	}
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("no index instances found for %v/%v/%v/%v", bucket, scope, collection, indexName)
+	}
+	return ids, nil
+}
+
 func GetIndexerSetting(indexerAddr, setting, username, password string) (interface{}, error) {
 	var err error
 
@@ -530,4 +645,8 @@ func ValidateClusterState(asm AlternateShardMap, logFails bool) map[InvalidClust
 
 func GetCodebookName(name, bucket string, instId c.IndexInstId, partnId c.PartitionId) string {
 	return fmt.Sprintf("%s_%s_%d_%d.codebook", bucket, name, instId, partnId)
+}
+
+func GetCodebookName2(instId c.IndexInstId, partnId c.PartitionId) string {
+	return fmt.Sprintf("%d_%d.codebook", instId, partnId)
 }

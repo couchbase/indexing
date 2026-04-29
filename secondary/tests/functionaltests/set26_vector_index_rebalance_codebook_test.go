@@ -724,6 +724,7 @@ func getAllStorageDirs(t *testing.T) map[string]string {
 
 func performCodebookTransferValidation(subt *testing.T, idxNames []string) *tc.IndexStatusResponse {
 
+	// subt.Skipf("%v skipped as GetIndexSlicePath2 needs to be updated", subt.Name())
 	var statuses *tc.IndexStatusResponse
 	err := c.NewRetryHelper(10, 10*time.Millisecond, 5, func(attempts int, lastErr error) error {
 		if attempts > 0 {
@@ -753,25 +754,28 @@ func performCodebookTransferValidation(subt *testing.T, idxNames []string) *tc.I
 			continue
 		}
 
+		bucketUUID, errUUID := tc.GetBucketUUID(indexManagementAddress, clusterconfig.Username, clusterconfig.Password, status.Bucket)
+		FailTestIfError(errUUID, "Error in GetBucketUUID", subt)
+
 		for _, host := range status.Hosts {
 			indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username, clusterconfig.Password, host)
 
 			for _, partnId := range status.PartitionMap[host] {
-				cvsSlicePath, err1 := tc.GetIndexSlicePath(status.Name, status.Bucket, storageDirMap[indexerAddr], c.PartitionId(partnId))
+				cvsSlicePath, err1 := tc.GetIndexSlicePath2(bucketUUID, status.InstId, storageDirMap[indexerAddr], c.PartitionId(partnId))
 				bhiveDir := filepath.Join(storageDirMap[indexerAddr], c.BHIVE_DIR_PREFIX)
-				bhiveSlicePath, err2 := tc.GetIndexSlicePath(status.Name, status.Bucket, bhiveDir, c.PartitionId(partnId))
+				bhiveSlicePath, err2 := tc.GetIndexSlicePath2(bucketUUID, status.InstId, bhiveDir, c.PartitionId(partnId))
 				if err1 != nil && err2 != nil {
-					FailTestIfError(err1, "Error while GetIndexSlicePath", subt)
-					FailTestIfError(err2, "Error while GetIndexSlicePath", subt)
+					FailTestIfError(err1, "Error while GetIndexSlicePath2", subt)
+					FailTestIfError(err2, "Error while GetIndexSlicePath2", subt)
 				} else if len(cvsSlicePath) == 0 && len(bhiveSlicePath) == 0 {
-					FailTestIfError(fmt.Errorf("slice path empty for all storages"), "Error while GetIndexSlicePath", subt)
+					FailTestIfError(fmt.Errorf("slice path empty for all storages"), "Error while GetIndexSlicePath2", subt)
 				}
 				slicePath := cvsSlicePath
 				if len(cvsSlicePath) == 0 {
 					slicePath = bhiveSlicePath
 				}
 
-				codebookName := tc.GetCodebookName(status.Name, status.Bucket, status.InstId, c.PartitionId(partnId))
+				codebookName := tc.GetCodebookName2(status.InstId, c.PartitionId(partnId))
 				codebookPath := filepath.Join(slicePath, tc.CODEBOOK_DIR, codebookName)
 
 				if exist, err1 := verifyPathExists(codebookPath); err1 != nil {
