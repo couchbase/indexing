@@ -3649,6 +3649,9 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 			if common.GetStorageMode() != common.MOI && common.GetStorageMode() != common.PLASMA {
 				continue
 			}
+			if inst.Defn.IsVectorIndex && inst.Defn.VectorMeta.IsBhive {
+				continue
+			}
 			if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
@@ -3749,6 +3752,9 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 		for instId, inst := range indexInstMap {
 			// ENCRYPT_TODO: Address bhive gsi integration. Keep this for now.
 			if common.GetStorageMode() != common.MOI && common.GetStorageMode() != common.PLASMA {
+				continue
+			}
+			if inst.Defn.IsVectorIndex && inst.Defn.VectorMeta.IsBhive {
 				continue
 			}
 			if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
