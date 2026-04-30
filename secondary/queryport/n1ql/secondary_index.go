@@ -1649,6 +1649,8 @@ func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 
 			if si.secExprsAttrs != nil && i < len(si.secExprsAttrs) && si.secExprsAttrs[i] != 0 {
 				attr |= datastore.IkAttributes(si.secExprsAttrs[i])
+			} else if si.vectorAttr != nil && si.vectorAttr[i] {
+				attr |= datastore.IK_DENSE_VECTOR
 			}
 
 			idxkey.SetAttribute(attr, true)
