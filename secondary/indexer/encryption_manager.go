@@ -125,8 +125,10 @@ type EncryptionMgr struct {
 
 	// Map holds keys being used by indexer sub components
 	// As GetInUseKeysCallback expects indexer to return in use keys quickly, only key no longer used can be removed.
-	indexerUsedKeyIds map[KeyDataType][]string
-	muid              sync.Mutex
+	indexerUsedKeyIds   map[KeyDataType][]string
+	rebalTransferKeyIDs map[KeyDataType][]string
+	rebalRunning        atomic.Bool
+	muid                sync.Mutex
 
 	cinfoProvider     common.ClusterInfoProvider
 	cinfoProviderLock sync.RWMutex
@@ -145,8 +147,15 @@ type EncryptionMgr struct {
 	// Once previous operation completes, Message from this map is picked up and enqueued to wrkrQueue.
 	pendingMap map[KeyDataType][]Message
 
-	dropOrUpdateInProgress map[KeyDataType]Message // Message entry in map means present in wrkrQueue or in progress sent to indexer. Skip enqueuing similar Message.
-	cbMu                   sync.Mutex              //Mutex used for read/write of common book-keeping update/drop for callbacks
+	// Message entry in map means present in wrkrQueue or in progress sent to indexer.
+	// Skip enqueuing similar Message.
+	dropOrUpdateInProgress map[KeyDataType]Message
+
+	// kdt -> keyID -> closed when drop completes; protected by cbMu
+	notifyKeyDropRebal map[KeyDataType]map[string]chan struct{}
+
+	// Mutex used for read/write of common book-keeping update/drop for callbacks
+	cbMu sync.Mutex
 }
 
 func NewEncryptionMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.Config) (*EncryptionMgr, Message) {
@@ -166,6 +175,7 @@ func NewEncryptionMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 		cachingDone:            make(chan bool),
 		pendingMap:             make(map[KeyDataType][]Message),
 		dropOrUpdateInProgress: make(map[KeyDataType]Message),
+		notifyKeyDropRebal:     make(map[KeyDataType]map[string]chan struct{}),
 	}
 
 	clusterAddr := config["clusterAddr"].String()
@@ -343,11 +353,19 @@ func (e *EncryptionMgr) trackUpdateKeys(msg Message) {
 
 	e.resetDropOrUpdateProgress(kdt)
 	nextPendingMsg := e.getNextMessagePending(kdt)
-	if nextPendingMsg != nil {
+	for ; nextPendingMsg != nil; nextPendingMsg = e.getNextMessagePending(kdt) {
+		if e.rebalRunning.Load() && nextPendingMsg.GetMsgType() == ENCRYPTION_DROP_KEY {
+			logging.Infof(
+				"EncryptionMgr:trackUpdateKeys skipping drop next drop key message for %v as rebalance is running",
+				kdt)
+			continue
+		}
+
 		logging.Infof("EncryptionMgr:trackUpdateKeys complete, enqueuing pending msg for "+
 			"keydatatype:%v msg:%v", logKDT(kdt), nextPendingMsg.GetMsgType().String())
 		e.enqueue(nextPendingMsg)
 		e.setDropOrUpdateInProgress(kdt, nextPendingMsg)
+		break
 	}
 }
 
@@ -376,6 +394,19 @@ func (e *EncryptionMgr) trackDropKeys(msg Message) {
 
 	e.resetDropOrUpdateProgress(kdt)
 
+	// Notify rebalance waiters that these keys are no longer being dropped
+	if kdtMap, ok := e.notifyKeyDropRebal[kdt]; ok {
+		for _, kid := range dropKeyids {
+			if ch, chOk := kdtMap[kid]; chOk {
+				close(ch)
+				delete(kdtMap, kid)
+			}
+		}
+		if len(kdtMap) == 0 {
+			delete(e.notifyKeyDropRebal, kdt)
+		}
+	}
+
 	err2 := cbauth.KeysDropComplete(kdt, err)
 	if err2 != nil {
 		logging.Warnf(
@@ -385,12 +416,20 @@ func (e *EncryptionMgr) trackDropKeys(msg Message) {
 	}
 
 	nextPendingMsg := e.getNextMessagePending(kdt)
-	if nextPendingMsg != nil {
+	for ; nextPendingMsg != nil; nextPendingMsg = e.getNextMessagePending(kdt) {
+		if e.rebalRunning.Load() && nextPendingMsg.GetMsgType() == ENCRYPTION_DROP_KEY {
+			logging.Infof(
+				"EncryptionMgr:trackDropKeys skipping drop next drop key message for %v as rebalance is running",
+				logKDT(kdt))
+			continue
+		}
+
 		logging.Infof("EncryptionMgr:trackDropKeys complete, enqueuing"+
 			" pending msg for keydatatype:%v msg:%v",
 			logKDT(kdt), nextPendingMsg.GetMsgType().String())
 		e.enqueue(nextPendingMsg)
 		e.setDropOrUpdateInProgress(kdt, nextPendingMsg)
+		break
 	}
 }
 
@@ -499,6 +538,20 @@ func (e *EncryptionMgr) handleSupervisorCommands(cmd Message) {
 		e.handleConfigUpdate(cmd)
 	case CLUST_MGR_INDEXER_READY:
 		e.handleIndexerReady(cmd)
+	case ENCRYPTION_IMPORT_KEYS:
+		importMsg, ok := cmd.(*MsgEncryptionImportKeys)
+		if ok {
+			e.handleImportKeys(importMsg)
+		}
+	case ENCRYPTION_WAIT_DROP_KEYS:
+		waitDropKeysMsg, ok := cmd.(*MsgEncryptionWaitDropKeys)
+		if ok {
+			e.handleWaitDropKeys(waitDropKeysMsg)
+		}
+	case ENCRYPTION_REBAL_START:
+		e.handleRebalStart()
+	case ENCRYPTION_REBAL_DONE:
+		e.handleRebalDone()
 	}
 }
 
@@ -545,6 +598,141 @@ func (e *EncryptionMgr) handleConfigUpdate(cmd Message) {
 func (e *EncryptionMgr) handleIndexerReady(cmd Message) {
 	logging.Infof("EncryptionMgr:handleIndexerReady...")
 	close(e.bootstrapDone)
+	e.supvCmdch <- &MsgSuccess{}
+}
+
+func (e *EncryptionMgr) handleImportKeys(msg *MsgEncryptionImportKeys) {
+	err := e.importShardKeys(msg)
+	msg.GetRespCh() <- err
+}
+
+func (e *EncryptionMgr) handleWaitDropKeys(msg *MsgEncryptionWaitDropKeys) {
+	keyIDs := msg.GetKeyIDs()
+	cancel := msg.GetCancelCh()
+	respCh := msg.GetRespCh()
+
+	e.cbMu.Lock()
+	// Build per-KDT set of keyIDs being actively dropped
+	droppingKeysPerKdt := make(map[KeyDataType]map[string]struct{})
+	for kdt, activeMsg := range e.dropOrUpdateInProgress {
+		dropMsg, ok := activeMsg.(*MsgEncryptionDropKey)
+		if !ok {
+			continue
+		}
+		kidSet := make(map[string]struct{})
+		for _, kid := range dropMsg.GetDropKeyIds() {
+			kidSet[kid] = struct{}{}
+		}
+		droppingKeysPerKdt[kdt] = kidSet
+	}
+
+	// For each requested keyID that is being dropped under any KDT,
+	// get-or-create a per-(kdt, keyID) notify channel.
+	var waitChs []chan struct{}
+	var waitKeyIDs []string
+	for _, kid := range keyIDs {
+		for kdt, kidSet := range droppingKeysPerKdt {
+			if _, dropping := kidSet[kid]; !dropping {
+				continue
+			}
+			kdtMap, ok := e.notifyKeyDropRebal[kdt]
+			if !ok {
+				kdtMap = make(map[string]chan struct{})
+				e.notifyKeyDropRebal[kdt] = kdtMap
+			}
+			ch, chOk := kdtMap[kid]
+			if !chOk {
+				ch = make(chan struct{})
+				kdtMap[kid] = ch
+			}
+			waitChs = append(waitChs, ch)
+			waitKeyIDs = append(waitKeyIDs, kid)
+		}
+	}
+	e.cbMu.Unlock()
+
+	if len(waitChs) == 0 {
+		respCh <- nil
+		return
+	}
+
+	go e.awaitKeyDropCompletion(waitKeyIDs, waitChs, cancel, respCh)
+}
+
+func (e *EncryptionMgr) awaitKeyDropCompletion(
+	keyIDs []string, chs []chan struct{},
+	cancel <-chan struct{}, respCh chan error,
+) {
+
+	logging.Infof("EncryptionMgr::awaitKeyDropCompletion: starting to wait for %v keys to be dropped",
+		keyIDs)
+
+	var wg sync.WaitGroup
+	var isCancelled atomic.Bool
+
+	for i, ch := range chs {
+		wg.Add(1)
+		go func(i int, ch chan struct{}) {
+			defer wg.Done()
+
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ch:
+					logging.Infof("EncryptionMgr::awaitKeyDropCompletion: key drop for %v completed",
+						keyIDs[i])
+					return
+				case <-cancel:
+					isCancelled.Store(true)
+					return
+				case <-ticker.C:
+					logging.Infof(
+						"EncryptionMgr::awaitKeyDropCompletion: waiting for key %v to be dropped",
+						keyIDs[i])
+				}
+			}
+		}(i, ch)
+	}
+
+	wg.Wait()
+
+	if isCancelled.Load() {
+		logging.Warnf("EncryptionMgr::awaitKeyDropCompletion: key drop cancelled")
+		respCh <- errDropWaitCanceled
+		return
+	}
+
+	logging.Infof("EncryptionMgr::awaitKeyDropCompletion: key drop done for keys %v", logKeyIDs(keyIDs...))
+	respCh <- nil
+}
+
+func (e *EncryptionMgr) handleRebalStart() {
+	logging.Infof("EncryptionMgr::handleRebalStart initializing rebalTransferKeyIDs")
+	e.rebalRunning.Store(true)
+	e.muid.Lock()
+	e.rebalTransferKeyIDs = make(map[KeyDataType][]string)
+	e.muid.Unlock()
+	e.supvCmdch <- &MsgSuccess{}
+}
+
+func (e *EncryptionMgr) handleRebalDone() {
+	logging.Infof("EncryptionMgr::handleRebalDone clearing rebalTransferKeyIDs")
+	e.muid.Lock()
+	e.rebalTransferKeyIDs = nil
+	e.muid.Unlock()
+
+	e.cbMu.Lock()
+	for kdt, kdtMap := range e.notifyKeyDropRebal {
+		for _, ch := range kdtMap {
+			close(ch)
+		}
+		delete(e.notifyKeyDropRebal, kdt)
+	}
+	e.cbMu.Unlock()
+
+	e.rebalRunning.Store(false)
 	e.supvCmdch <- &MsgSuccess{}
 }
 
@@ -745,15 +933,26 @@ func (e *EncryptionMgr) GetInUseKeys(kdt KeyDataType) ([]string, error) {
 	e.muid.Lock()
 	defer e.muid.Unlock()
 
-	keyids, ok := e.indexerUsedKeyIds[kdt]
-	if !ok {
-		logging.Warnf("EncryptionMgr:GetInUseKeys no in-use keys for type:%v uuid:%v", kdt.TypeName, kdt.BucketUUID)
-		return []string{}, nil
+	seen := make(map[string]bool)
+	result := make([]string, 0)
+
+	for _, id := range e.indexerUsedKeyIds[kdt] {
+		if !seen[id] {
+			seen[id] = true
+			result = append(result, id)
+		}
 	}
 
-	logging.Infof("EncryptionMgn:GetInUseKeys %v - %v", logKDT(kdt), logKeyIDs(keyids...))
+	for _, id := range e.rebalTransferKeyIDs[kdt] {
+		if !seen[id] {
+			seen[id] = true
+			result = append(result, id)
+		}
+	}
 
-	return keyids, nil
+	logging.Infof("EncryptionMgn:GetInUseKeys %v - %v", logKDT(kdt), logKeyIDs(result...))
+
+	return result, nil
 }
 
 func (e *EncryptionMgr) GetInUseKeysAll() (map[KeyDataType][]string, error) {
@@ -768,6 +967,12 @@ func (e *EncryptionMgr) GetInUseKeysAll() (map[KeyDataType][]string, error) {
 	defer e.muid.Unlock()
 
 	for key, value := range e.indexerUsedKeyIds {
+		sliceCopy := make([]string, len(value))
+		copy(sliceCopy, value)
+		kdtKeysMap[key] = sliceCopy
+	}
+
+	for key, value := range e.rebalTransferKeyIDs {
 		sliceCopy := make([]string, len(value))
 		copy(sliceCopy, value)
 		kdtKeysMap[key] = sliceCopy
@@ -831,6 +1036,20 @@ func (e *EncryptionMgr) DropInUseKeys(kdt KeyDataType, dropkeys []string) {
 		}
 		e.indexerUsedKeyIds[kdt] = newKeyids
 	}
+}
+
+func (e *EncryptionMgr) SetInRebalanceKeys(kdt KeyDataType, keys []string) {
+	e.muid.Lock()
+	defer e.muid.Unlock()
+
+	logging.Infof("EncryptionMgr:SetInRebalanceKeys %v %v", logKDT(kdt), logKeyIDs(keys...))
+	if e.rebalTransferKeyIDs == nil {
+		logging.Errorf(
+			"EncryptionMgr:SetInRebalanceKeys rebalTransferKeyIDs is nil, rebalance may have already finished",
+		)
+		return
+	}
+	e.rebalTransferKeyIDs[kdt] = append(e.rebalTransferKeyIDs[kdt], keys...)
 }
 
 func (e *EncryptionMgr) GetClusterEncrKeysInfo(kdt KeyDataType) (EncrKeysInfo, error) {
@@ -1076,6 +1295,48 @@ func (e *EncryptionMgr) getInUseKeysCallback(kdt KeyDataType) ([]string, error) 
 	return e.GetInUseKeys(kdt)
 }
 
+// importTimeoutSecPerKey - each key is expected to be a file say around 8kb max size. reading it
+// should be 1s at max on slow HDDs with ~10-100 ms seek time. 30s is considered as max time
+// including ns_server operations per key.
+const importTimeoutSecPerKey = 30 // 30s
+
+// importShardKeys marks transferred DEKs as in-rebalance-use and calls
+// cbauth.ImportEncryptionKeys so that ns_server registers the key files.
+func (e *EncryptionMgr) importShardKeys(msg *MsgEncryptionImportKeys) error {
+	bucketDekPaths := msg.GetBucketDekPaths()
+	bucketKeyIDs := msg.GetBucketKeyIDs()
+
+	for bucketUUID, dekPaths := range bucketDekPaths {
+		if len(dekPaths) == 0 {
+			continue
+		}
+
+		kdt := KeyDataType{TypeName: "bucket", BucketUUID: bucketUUID}
+
+		if keyIDs, ok := bucketKeyIDs[bucketUUID]; ok {
+			e.SetInRebalanceKeys(kdt, keyIDs)
+		}
+
+		logging.Infof(
+			"EncryptionMgr::importShardKeys importing %d keys for bucket %v (\npaths: %v\n)",
+			len(dekPaths), bucketUUID, dekPaths,
+		)
+
+		if err := cbauth.ImportEncryptionKeys(
+			dekPaths,                             /*dekPaths []string*/
+			kdt,                                  /*dataType cbauth.KeyDataType*/
+			importTimeoutSecPerKey*len(dekPaths), /*timeout int*/
+		); err != nil {
+			err = fmt.Errorf("import encryption keys failed for bucket %v: %w",
+				bucketUUID, err)
+			logging.Errorf("EncryptionMgr::importShardKeys %v", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
 // This can be called concurrently by many callers.
 func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 
@@ -1157,6 +1418,11 @@ func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 // This method is not expected to return error to caller.
 // If keyids contain "", it is expected to encrypt the unencrypted data
 func (e *EncryptionMgr) dropKeysCallback(kdt KeyDataType, keyids []string) {
+	if e.rebalRunning.Load() {
+		logging.Infof("EncryptionMgr:DropKeysCallback:Skipping drop keys during"+
+			" rebalance for keydatatype:%v keyids:%v", logKDT(kdt), logKeyIDs(keyids...))
+		return
+	}
 
 	logging.Infof("EncryptionMgr:DropKeysCallback:Received for keydatatype:%v dropkeyids:%v",
 		logKDT(kdt), logKeyIDs(keyids...))

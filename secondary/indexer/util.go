@@ -512,6 +512,10 @@ func joinURIPath(parent string, elem ...string) string {
 	}
 }
 
+func genKeyFileStagingName(keyID string) string {
+	return fmt.Sprintf("key_%v", keyID)
+}
+
 func Float32ToByteSlice(v []float32) []byte {
 	var ft float32
 	size := int(reflect.TypeOf(ft).Size())

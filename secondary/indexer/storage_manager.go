@@ -276,6 +276,11 @@ func respWithErr(cmd Message, err error) {
 			msg := cmd.(*MsgStartShardRestore)
 			respCh := msg.GetRespCh()
 			respCh <- errMsg
+		case START_EAR_KEY_COPY:
+			msg, ok := cmd.(*MsgEarKeyCopy)
+			if ok {
+				msg.GetRespCh() <- err
+			}
 		case START_PEER_SERVER,
 			STOP_PEER_SERVER:
 			msg := cmd.(*MsgPeerServerCommand)
@@ -358,11 +363,13 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case SHARD_TRANSFER_CLEANUP,
 		SHARD_TRANSFER_STAGING_CLEANUP,
 		START_SHARD_RESTORE,
+		FETCH_SHARD_KEYS,
 		DESTROY_LOCAL_SHARD,
 		MONITOR_SLICE_STATUS,
 		RESTORE_SHARD_DONE,
 		START_PEER_SERVER,
-		STOP_PEER_SERVER:
+		STOP_PEER_SERVER,
+		START_EAR_KEY_COPY:
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
 		} else {

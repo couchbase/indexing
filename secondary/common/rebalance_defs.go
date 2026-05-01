@@ -305,6 +305,15 @@ func (st ShardType) String() string {
 	return "unknown"
 }
 
+type RebalKeyInfo struct {
+	ID       KeyID
+	FileName string
+}
+
+func (ri *RebalKeyInfo) String() string {
+	return fmt.Sprintf("rebal_key_info(keyID: %v, fileName: %v)", ri.ID, ri.FileName)
+}
+
 // TransferToken represents a sindgle index partition movement for rebalance or move index.
 // These get stored in metakv, which makes callbacks on creation and each change.
 type TransferToken struct {
@@ -374,6 +383,11 @@ type TransferToken struct {
 	// shardId -> Location on S3 where the shard is uploaded
 	// shardPath is a sub-directory of "destination"
 	ShardPaths map[ShardId]string
+
+	// ShardKeys carries bucket-level encryption keys (DEKs) needed to decrypt
+	// shard data on the destination before restore. It is a map of bucketUUID
+	// to key info (key ID + staged file name).
+	ShardKeys map[string][]RebalKeyInfo
 
 	// Used by shard rebalancer during replica repair. Contains
 	// the paths which plasma has to repair in shard.json file

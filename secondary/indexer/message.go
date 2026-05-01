@@ -226,6 +226,7 @@ const (
 	METERING_MGR_START_WRITE_BILLING
 	PAUSE_UPDATE_BUCKET_STATE
 	PERSISTANCE_STATUS
+	FETCH_SHARD_KEYS
 
 	INDEX_TRAINING_DONE
 
@@ -241,6 +242,12 @@ const (
 	ENCRYPTION_GET_INUSE_KEYS
 	ENCRYPTION_UPDATE_KEY
 	ENCRYPTION_DROP_KEY
+	ENCRYPTION_IMPORT_KEYS
+	ENCRYPTION_WAIT_DROP_KEYS
+	ENCRYPTION_REBAL_START
+	ENCRYPTION_REBAL_DONE
+
+	START_EAR_KEY_COPY
 )
 
 type Message interface {
@@ -2846,6 +2853,7 @@ type MsgShardTransferCleanup struct {
 	isPeerTransfer bool
 
 	codebookPaths []string
+	keyPaths      []string
 
 	shardType common.ShardType
 }
@@ -2884,6 +2892,10 @@ func (m *MsgShardTransferCleanup) GetCodebookNames() []string {
 		codebookNames = append(codebookNames, filepath.Base(codebookPath))
 	}
 	return codebookNames
+}
+
+func (m *MsgShardTransferCleanup) GetKeyPaths() []string {
+	return m.keyPaths
 }
 
 func (m *MsgShardTransferCleanup) GetShardType() common.ShardType {
@@ -3125,6 +3137,93 @@ func (m *MsgStartShardRestore) ToShardTransferStagingCleanup() *MsgShardTransfer
 		transferId:  m.transferId,
 		taskType:    m.taskType,
 	}
+}
+
+type ShardKeysResp struct {
+	keys []common.ShardKeyBundle
+	err  error
+}
+
+// MsgFetchShardKeys -> [FETCH_SHARD_KEYS]
+type MsgFetchShardKeys struct {
+	shardIds  []common.ShardId
+	shardType common.ShardType
+	cancelCh  <-chan struct{}
+	respCh    chan ShardKeysResp
+}
+
+func (m *MsgFetchShardKeys) GetMsgType() MsgType {
+	return FETCH_SHARD_KEYS
+}
+
+func (m *MsgFetchShardKeys) GetShardIds() []common.ShardId {
+	return m.shardIds
+}
+
+func (m *MsgFetchShardKeys) GetShardType() common.ShardType {
+	return m.shardType
+}
+
+func (m *MsgFetchShardKeys) GetCancelCh() <-chan struct{} {
+	return m.cancelCh
+}
+
+func (m *MsgFetchShardKeys) GetRespCh() chan ShardKeysResp {
+	return m.respCh
+}
+
+// MsgEarKeyCopy -> [START_EAR_KEY_COPY]
+// Sent by ShardRebalancer after preparing key staging copies; handled by ShardTransferManager.
+type MsgEarKeyCopy struct {
+	keyFilePaths   []string
+	rebalanceId    string
+	ttid           string
+	destination    string
+	authCallback   func(*http.Request) error
+	tlsConfig      *tls.Config
+	isPeerTransfer bool
+	cancelCh       <-chan struct{}
+	respCh         chan error
+}
+
+func (m *MsgEarKeyCopy) GetMsgType() MsgType {
+	return START_EAR_KEY_COPY
+}
+
+func (m *MsgEarKeyCopy) GetKeyFilePaths() []string {
+	return m.keyFilePaths
+}
+
+func (m *MsgEarKeyCopy) GetRebalanceId() string {
+	return m.rebalanceId
+}
+
+func (m *MsgEarKeyCopy) GetTransferTokenId() string {
+	return m.ttid
+}
+
+func (m *MsgEarKeyCopy) GetDestination() string {
+	return m.destination
+}
+
+func (m *MsgEarKeyCopy) GetAuthCallback() func(*http.Request) error {
+	return m.authCallback
+}
+
+func (m *MsgEarKeyCopy) GetTLSConfig() *tls.Config {
+	return m.tlsConfig
+}
+
+func (m *MsgEarKeyCopy) IsPeerTransfer() bool {
+	return m.isPeerTransfer
+}
+
+func (m *MsgEarKeyCopy) GetCancelCh() <-chan struct{} {
+	return m.cancelCh
+}
+
+func (m *MsgEarKeyCopy) GetRespCh() chan error {
+	return m.respCh
 }
 
 func (m *MsgStartShardRestore) IsPeerTransfer() bool {
@@ -3560,6 +3659,41 @@ func (m *MsgEncryptionDropKey) GetRespCh() chan error {
 	return m.respCh
 }
 
+type MsgEncryptionImportKeys struct {
+	bucketDekPaths map[string][]string // bucketUUID -> full local file paths
+	bucketKeyIDs   map[string][]string // bucketUUID -> key IDs to mark in-rebalance-use
+	respCh         chan error
+}
+
+func (m *MsgEncryptionImportKeys) GetBucketDekPaths() map[string][]string {
+	return m.bucketDekPaths
+}
+
+func (m *MsgEncryptionImportKeys) GetMsgType() MsgType { return ENCRYPTION_IMPORT_KEYS }
+
+func (m *MsgEncryptionImportKeys) GetBucketKeyIDs() map[string][]string { return m.bucketKeyIDs }
+func (m *MsgEncryptionImportKeys) GetRespCh() chan error                { return m.respCh }
+
+type MsgEncryptionWaitDropKeys struct {
+	keyIDs []string
+	cancel <-chan struct{}
+	respCh chan error
+}
+
+func (m *MsgEncryptionWaitDropKeys) GetMsgType() MsgType { return ENCRYPTION_WAIT_DROP_KEYS }
+
+func (m *MsgEncryptionWaitDropKeys) GetKeyIDs() []string          { return m.keyIDs }
+func (m *MsgEncryptionWaitDropKeys) GetCancelCh() <-chan struct{} { return m.cancel }
+func (m *MsgEncryptionWaitDropKeys) GetRespCh() chan error        { return m.respCh }
+
+type MsgEncryptionRebalStart struct{}
+
+func (m *MsgEncryptionRebalStart) GetMsgType() MsgType { return ENCRYPTION_REBAL_START }
+
+type MsgEncryptionRebalDone struct{}
+
+func (m *MsgEncryptionRebalDone) GetMsgType() MsgType { return ENCRYPTION_REBAL_DONE }
+
 type MsgPopulateShardType struct {
 	transferId string
 	shardType  common.ShardType
@@ -3959,6 +4093,8 @@ func (m MsgType) String() string {
 		return "SHARD_TRANSFER_CLEANUP"
 	case START_SHARD_RESTORE:
 		return "START_SHARD_RESTORE"
+	case FETCH_SHARD_KEYS:
+		return "FETCH_SHARD_KEYS"
 	case DESTROY_LOCAL_SHARD:
 		return "DESTROY_LOCAL_SHARD"
 	case DESTROY_EMPTY_SHARD:
@@ -4003,6 +4139,16 @@ func (m MsgType) String() string {
 		return "ENCRYPTION_UPDATE_KEY"
 	case ENCRYPTION_DROP_KEY:
 		return "ENCRYPTION_DROP_KEY"
+	case ENCRYPTION_IMPORT_KEYS:
+		return "ENCRYPTION_IMPORT_KEYS"
+	case ENCRYPTION_WAIT_DROP_KEYS:
+		return "ENCRYPTION_WAIT_DROP_KEYS"
+	case ENCRYPTION_REBAL_START:
+		return "ENCRYPTION_REBAL_START"
+	case ENCRYPTION_REBAL_DONE:
+		return "ENCRYPTION_REBAL_DONE"
+	case START_EAR_KEY_COPY:
+		return "START_EAR_KEY_COPY"
 	default:
 		return "UNKNOWN_MSG_TYPE"
 	}
