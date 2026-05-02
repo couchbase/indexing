@@ -15,9 +15,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"gopkg.in/couchbase/gocb.v1"
 	c "github.com/couchbase/indexing/secondary/common"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
@@ -121,6 +123,32 @@ func skipIfNotMOI(t *testing.T) {
 		t.Skipf("Test %s is only valid with memory_optimized storage", t.Name())
 		return
 	}
+}
+
+func skipIfForestdb(t *testing.T) {
+	if clusterconfig.IndexUsing == "forestdb" {
+		t.Skipf("Test %s is invalid with forestdb storage", t.Name())
+		return
+	}
+}
+
+func getBackfillTempDir(t *testing.T) string {
+
+	var strIndexStorageDir string
+	workspace := os.Getenv("WORKSPACE")
+	if workspace == "" {
+		workspace = "../../../../../../../../"
+	}
+
+	if strings.HasSuffix(workspace, "/") == false {
+		workspace += "/"
+	}
+
+	strIndexStorageDir = workspace + "ns_server" + "/tmp"
+
+	absBackfillTempDir, err1 := filepath.Abs(strIndexStorageDir)
+	FailTestIfError(err1, "Error while finding absolute path", t)
+	return absBackfillTempDir
 }
 
 func getIndexStorageDirOnNode(nodeAddr string, t *testing.T) string {
@@ -1372,7 +1400,6 @@ func TestIndexEncryptionPlasmaRotationDrop(t *testing.T) {
 	ekeyId2, err := filterKeyId(ekeyIds2, excludeKeyIds)
 	tc.HandleError(err, "failed to filter key id")
 
-
 	plasmaEncrypted = verifyPlasmaEncryption(indexDir, ekeyId2, t)
 	if !plasmaEncrypted {
 		t.Errorf("Plasma files are NOT encrypted with correct key")
@@ -1600,10 +1627,10 @@ func TestPlasmaCodebookEncryption(t *testing.T) {
 	// Rotate Key & Drop Key
 	diffInSeconds := int(time.Since(keyUpdatedTime).Seconds())
 	setBypassEncrCfgRestrictions(nodeKv)
-	log.Printf("diffInSeconds:%d",diffInSeconds)
+	log.Printf("diffInSeconds:%d", diffInSeconds)
 	setDekRotationInterval("default", nodeKv, diffInSeconds+10)
 	setDekLifetime("default", nodeKv, diffInSeconds+30)
-	
+
 	time.Sleep(15 * time.Second)
 	ekeyIds2, err := getInUseKeyIds(nodeIndex, "service_bucket", bucketUUID)
 	tc.HandleError(err, "failed to get in use key ids")
@@ -1617,7 +1644,7 @@ func TestPlasmaCodebookEncryption(t *testing.T) {
 	// Make sure that ekeyId is not being used & ekeyId2 is being used
 	err = verifyCodebookEncryption(indexDir, ekeyId2)
 	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
-	
+
 	// Set to higher interval as one rotation should have happened
 	setDekRotationInterval("default", nodeKv, 86400)
 	setDekLifetime("default", nodeKv, 86400)
@@ -1633,7 +1660,7 @@ func TestPlasmaCodebookEncryption(t *testing.T) {
 	triggerIndexerCrash(nodeIndex)
 	time.Sleep(15 * time.Second) // wait for indexer to recover
 	secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
-	
+
 	verifyCodebookDecrypted(indexDir, t)
 
 	// Delete index
@@ -1694,7 +1721,7 @@ func TestPlasmaCodebookEncryption2(t *testing.T) {
 	// Build the index
 	err = secondaryindex.BuildIndexes2([]string{indexName}, bucketName, "_default", "_default", indexManagementAddress, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in building vector index", t)
-	
+
 	info, err := getBucketEncryptionInfo(bucketName, nodeKv)
 	if err != nil {
 		t.Fatalf("Failed to get bucket encryption info: %v", err)
@@ -1771,13 +1798,12 @@ func TestBhiveCodebookEncryption(t *testing.T) {
 	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
 	time.Sleep(2 * time.Second)
 
+	vectorSetup(t, bucketName, "", "", numDocs)
+	idx_bhive := "idx_bhive"
 
-    vectorSetup(t, bucketName, "", "", numDocs)
-    idx_bhive := "idx_bhive"
-
-    // Drop all indexes from earlier tests
-    e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
-    FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+	// Drop all indexes from earlier tests
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 
 	info, err := getBucketEncryptionInfo(bucketName, nodeKv)
 	if err != nil {
@@ -1816,17 +1842,17 @@ func TestBhiveCodebookEncryption(t *testing.T) {
 
 	node := clusterconfig.Nodes[nodeIndex]
 	// Create vector index
-    stmt := fmt.Sprintf("CREATE VECTOR INDEX " + idx_bhive +
-        " ON default(sift VECTOR)" +
-        " WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":true};", node)
-    err = createWithDeferAndBuild(idx_bhive, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
-    FailTestIfError(err, "Error in creating idx_sift10k", t)
+	stmt := fmt.Sprintf("CREATE VECTOR INDEX "+idx_bhive+
+		" ON default(sift VECTOR)"+
+		" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":true};", node)
+	err = createWithDeferAndBuild(idx_bhive, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_sift10k", t)
 
 	time.Sleep(15 * time.Second)
 
 	// Verify codebook encryption
 	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
-	storageDir = filepath.Join(storageDir,"@bhive")
+	storageDir = filepath.Join(storageDir, "@bhive")
 	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
 	tc.HandleError(err, "failed to get bucket UUID")
 	indexDirPrefix := filepath.Join(storageDir, bucketUUID+"_")
@@ -1856,10 +1882,10 @@ func TestBhiveCodebookEncryption(t *testing.T) {
 	// Rotate Key & Drop Key
 	diffInSeconds := int(time.Since(keyUpdatedTime).Seconds())
 	setBypassEncrCfgRestrictions(nodeKv)
-	log.Printf("diffInSeconds:%d",diffInSeconds)
+	log.Printf("diffInSeconds:%d", diffInSeconds)
 	setDekRotationInterval("default", nodeKv, diffInSeconds+10)
 	setDekLifetime("default", nodeKv, diffInSeconds+30)
-	
+
 	time.Sleep(15 * time.Second)
 	ekeyIds2, err := getInUseKeyIds(nodeIndex, "service_bucket", bucketUUID)
 	tc.HandleError(err, "failed to get in use key ids")
@@ -1873,7 +1899,7 @@ func TestBhiveCodebookEncryption(t *testing.T) {
 	// Make sure that ekeyId is not being used & ekeyId2 is being used
 	err = verifyCodebookEncryption(indexDir, ekeyId2)
 	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
-	
+
 	// Set to higher interval as one rotation should have happened
 	setDekRotationInterval("default", nodeKv, 86400)
 	setDekLifetime("default", nodeKv, 86400)
@@ -1924,22 +1950,21 @@ func TestBhiveCodebookEncryption2(t *testing.T) {
 	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
 	time.Sleep(2 * time.Second)
 
+	vectorSetup(t, bucketName, "", "", numDocs)
+	idx_bhive := "idx_bhive"
 
-    vectorSetup(t, bucketName, "", "", numDocs)
-    idx_bhive := "idx_bhive"
-
-    // Drop all indexes from earlier tests
-    e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
-    FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+	// Drop all indexes from earlier tests
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 
 	node := clusterconfig.Nodes[nodeIndex]
 	// Create vector index
-    stmt := fmt.Sprintf("CREATE VECTOR INDEX " + idx_bhive +
-        " ON default(sift VECTOR)" +
-        " WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":true};", node)
-    err := createWithDeferAndBuild(idx_bhive, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
-    FailTestIfError(err, "Error in creating idx_sift10k", t)
-	
+	stmt := fmt.Sprintf("CREATE VECTOR INDEX "+idx_bhive+
+		" ON default(sift VECTOR)"+
+		" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":true};", node)
+	err := createWithDeferAndBuild(idx_bhive, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_sift10k", t)
+
 	info, err := getBucketEncryptionInfo(bucketName, nodeKv)
 	if err != nil {
 		t.Fatalf("Failed to get bucket encryption info: %v", err)
@@ -1977,7 +2002,7 @@ func TestBhiveCodebookEncryption2(t *testing.T) {
 
 	// Verify codebook encryption
 	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
-	storageDir = filepath.Join(storageDir,"@bhive")
+	storageDir = filepath.Join(storageDir, "@bhive")
 	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
 	tc.HandleError(err, "failed to get bucket UUID")
 	indexDirPrefix := filepath.Join(storageDir, bucketUUID+"_")
@@ -1995,3 +2020,166 @@ func TestBhiveCodebookEncryption2(t *testing.T) {
 	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
 }
 
+func findScanResultFile(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		if e.Type().IsRegular() && strings.HasPrefix(e.Name(), "scan-result") {
+			return filepath.Join(dir, e.Name()), nil
+		}
+	}
+	return "", fmt.Errorf("no scan-result file found in %s", dir)
+}
+
+func TestBackfillEncryption(t *testing.T) {
+
+	skipIfForestdb(t)
+	nodeKv := 0
+	bucketName := "default"
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(4 * time.Second)
+
+	docs := 10000 // # docs to create
+	log.Printf("%v Creating %v documents", "TestBackfillEncryption", docs)
+	CreateDocs(docs)
+	log.Printf("%v %v documents created", "TestBackfillEncryption", docs)
+
+	addBucketEncryptionKey(nodeKv, "default", "key1", 30)
+
+	nodeIndex := 1
+	resp, err := getAllEncryptionKeys(nodeIndex)
+	log.Printf("All encryption keys: %v", resp)
+	FailTestIfError(err, "Error in getAllEncryptionKeys", t)
+
+	keyId := 0
+	for _, keymap := range resp {
+		usageIfc, ok := keymap["usage"].([]interface{})
+		if !ok {
+			t.Fatalf("Failed to get usage: %v", keymap["usage"])
+		}
+
+		var usage []string
+		for _, u := range usageIfc {
+			if str, ok := u.(string); ok {
+				usage = append(usage, str)
+			}
+		}
+		// verify that the key can be used for encryption of bucket
+		if hasBucketEncryptionUsage(bucketName, usage) {
+			log.Printf("keyId: %v, usage: %v", keymap["id"], usage)
+			keyId = max(keyId, int(math.Round(keymap["id"].(float64))))
+		}
+	}
+	keyIdStr := strconv.Itoa(keyId)
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, keyIdStr)
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+
+	node := clusterconfig.Nodes[nodeIndex]
+	with := "{\"nodes\": [\"" + node + "\"]}"
+	// Create index
+	indexName := "idx_backfill_age"
+	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress,
+		"", []string{"age"}, false, []byte(with), false, 60, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.queryport.backfill_pause_test_duration", 10, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+	defer func() {
+		err = secondaryindex.ChangeIndexerSettings("indexer.queryport.backfill_pause_test_duration", 0, clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Error in ChangeIndexerSettings")
+	}()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	respCh := make(chan error, 1)
+	go func(respCh chan error) {
+		defer wg.Done()
+		time.Sleep(4 * time.Second)
+		backfillTempDir := getBackfillTempDir(t)
+		path, err := findScanResultFile(backfillTempDir)
+		if err != nil {
+			err = fmt.Errorf("error finding backfill file path:%v err:%v", path, err)
+			respCh <- err
+			return
+		}
+		encrypted, err := IsFileEncrypted(path)
+		if err != nil {
+			err = fmt.Errorf("error checking if file %s is encrypted: %v", path, err)
+			respCh <- err
+			return
+		}
+		log.Printf("Backfill encryption:%v expected:true", encrypted)
+		if !encrypted {
+			err = fmt.Errorf("backfill file path:%s backfillTempDir:%v NOT encrypted", path, backfillTempDir)
+			respCh <- err
+			return
+		}
+		respCh <- err
+	}(respCh)
+	// With backfill encryption
+	n1qlstatement := "select * from " + bucketName + " where age > 10 and age < 90"
+	scanResults1, err := tc.ExecuteN1QLStatement(clusterconfig.KVAddress, clusterconfig.Username, clusterconfig.Password, bucketName, n1qlstatement, false, gocb.RequestPlus)
+	FailTestIfError(err, "Error in query execution", t)
+	log.Printf("Results n1ql count with encryption:%v", len(scanResults1))
+
+	wg.Wait()
+	err = <-respCh
+	//skip check if no file found
+	if err != nil && !strings.HasPrefix(err.Error(), "error finding backfill file") {
+		FailTestIfError(err, "Error in scan result validation with encryption", t)
+	}
+
+	time.Sleep(10 * time.Second)
+
+	wg.Add(1)
+	// Without backfill encryption
+	// Delete bucket encryption key
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, "-1")
+	time.Sleep(3 * time.Second)
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+	go func(respCh chan error) {
+		defer wg.Done()
+		time.Sleep(4 * time.Second)
+		backfillTempDir := getBackfillTempDir(t)
+		path, err := findScanResultFile(backfillTempDir)
+		if err != nil {
+			err = fmt.Errorf("error finding backfill file path:%v err:%v", path, err)
+			respCh <- err
+			return
+		}
+		encrypted, err := IsFileEncrypted(path)
+		if err != nil {
+			err = fmt.Errorf("error checking if file %s is encrypted: %v", path, err)
+			respCh <- err
+			return
+		}
+		log.Printf("Backfill encryption:%v expected:false", encrypted)
+		if encrypted {
+			err = fmt.Errorf("backfill file path:%s backfillTempDir:%v encrypted", path, backfillTempDir)
+			respCh <- err
+			return
+		}
+		respCh <- err
+	}(respCh)
+	n1qlstatement = "select * from " + bucketName + " where age > 10 and age < 90"
+	scanResults2, err := tc.ExecuteN1QLStatement(clusterconfig.KVAddress, clusterconfig.Username, clusterconfig.Password, bucketName, n1qlstatement, false, gocb.RequestPlus)
+	FailTestIfError(err, "Error in scan without encryption", t)
+	log.Printf("Results n1ql count without encryption:%v", len(scanResults2))
+
+	wg.Wait()
+	err = <-respCh
+	//skip check if no file found
+	if err != nil && !strings.HasPrefix(err.Error(), "error finding backfill file") {
+		FailTestIfError(err, "Error in scan result validation without encryption", t)
+	}
+	if len(scanResults1) != len(scanResults2) {
+		FailTestIfError(err, "Error in scan result counts", t)
+	}
+
+	// Disable encryption for bucket
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, "-1")
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+}
