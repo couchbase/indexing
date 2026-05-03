@@ -114,7 +114,7 @@ func NewMeteringManager(nodeID string, config common.Config, supvCmdCh MsgChanne
 // plane calls metering endpoint. It is used to account for duplicate units on
 // index recovery.
 func (m *MeteringThrottlingMgr) retrieveMeteringData() error {
-	persistedStats, err := m.persister.ReadPersistedStats()
+	persistedStats, err := m.persister.ReadPersistedStats(nil)
 	if err != nil {
 		logging.Warnf("Encountered error while reading persisted stats. Skipping read. Error: %v", err)
 		return err

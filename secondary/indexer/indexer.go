@@ -595,6 +595,11 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
+	idx.statsMgr.encCallbacks = StatsEncryptionCallbacks{
+		getKeyCipherById: idx.encryptionMgr.getKeyCipherById,
+		setInUseKeys:     idx.encryptionMgr.SetInUseKeys,
+	}
+
 	idx.setIndexerState(common.INDEXER_BOOTSTRAP)
 	idx.stats.indexerState.Set(int64(common.INDEXER_BOOTSTRAP))
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(nil)
@@ -1888,6 +1893,12 @@ func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 
 	switch msg.(type) {
 	case *MsgEncryptionGetInuseKeys:
+		kdt := msg.(*MsgEncryptionGetInuseKeys).GetKeyDataType()
+		if kdt.TypeName == "log" {
+			idx.statsMgrCmdCh <- msg
+			<-idx.statsMgrCmdCh
+			return
+		}
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
@@ -1896,9 +1907,6 @@ func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 
 	// ENCRYPT_TODO: Handle below types later
 	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
-	// case "log":
-	// case "audit":
-
 	default:
 		// ENCRYPT_TODO: Return error in this case
 		logging.Warnf("Indexer::handleEncryptionGetInUseKeys invalid type %T", msg)
@@ -1922,10 +1930,12 @@ func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 	case "service_bucket":
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
-
-	// ENCRYPT_TODO: Handle below types later
-	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
+		// ENCRYPT_TODO: Handle below types later
+		// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
 	case "log":
+		idx.statsMgrCmdCh <- msg
+		<-idx.statsMgrCmdCh
+
 	case "config":
 	case "audit":
 	case "other":
@@ -1956,6 +1966,9 @@ func (idx *indexer) handleEncryptionDropKeys(msg Message) {
 	// ENCRYPT_TODO: Handle below types later
 	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
 	case "log":
+		idx.statsMgrCmdCh <- msg
+		<-idx.statsMgrCmdCh
+
 	case "config":
 	case "audit":
 	case "other":
