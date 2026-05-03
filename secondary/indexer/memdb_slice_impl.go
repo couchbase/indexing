@@ -293,11 +293,11 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	for _, keyByte := range keys {
 		key := string(keyByte)
-		mdb.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxDefn.BucketUUID}, key)
+		mdb.sliceEncryptionCallbacks.setInUseKeys(GetBucketKDT(idxDefn.BucketUUID), key)
 	}
 	// If GetKeyIdList doesn't return any keys, mark "" key in-use thus GetInUseKeysCallback will know that there can some un-encrypted data.
 	if len(keys) == 0 {
-		mdb.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxDefn.BucketUUID}, "")
+		mdb.sliceEncryptionCallbacks.setInUseKeys(GetBucketKDT(idxDefn.BucketUUID), "")
 	}
 
 	// Array related initialization

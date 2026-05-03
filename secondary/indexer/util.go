@@ -512,8 +512,9 @@ func joinURIPath(parent string, elem ...string) string {
 	}
 }
 
+// genKeyFileStagingName - don't use any prefix/suffix otherwise ns_server will fail importKeys
 func genKeyFileStagingName(keyID string) string {
-	return fmt.Sprintf("key_%v", keyID)
+	return keyID
 }
 
 func Float32ToByteSlice(v []float32) []byte {
@@ -564,5 +565,12 @@ func removeEmptySliceDir(slicePath string) error {
 		return nil
 	default:
 		return fmt.Errorf("old slice path removal failed after remapping: %w", err)
+	}
+}
+
+func GetBucketKDT(bucketUUID string) KeyDataType {
+	return KeyDataType{
+		TypeName:   "service_bucket",
+		BucketUUID: bucketUUID,
 	}
 }

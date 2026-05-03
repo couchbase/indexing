@@ -1438,6 +1438,24 @@ loop:
 					}
 				}
 
+				////////// Ensure staging dir is created because this is source node
+				// create this dir here as plasma cleans up the staging dir on peer server start
+				if err := createStagingDir(sr.config); err != nil {
+					l.Errorf("ShardRebalancer::startShardTransfer create staging dir failed ttid:%v err:%v",
+						ttid, err)
+					sr.initiateShardTransferCleanup(
+						shardPaths,     // shardPaths []string
+						tt.Destination, // destination string
+						tt.Region,      // region string
+						ttid,           // ttid string
+						tt,             // tt *TransferToken
+						err,            // err error
+						false,          // syncCleanup bool
+					)
+					sr.setTransferTokenError(ttid, tt, err.Error())
+					return
+				}
+
 				////////// Re-read shard keys to capture any rotations during transfer
 				shardKeysBundle, err := sr.fetchShardKeys(ttid, tt)
 				if err != nil {
@@ -1597,17 +1615,14 @@ func (sr *ShardRebalancer) getDirToEaRKey(
 
 	////////// find the parent dir for the EaR keys
 	for _, bucketUUID := range getTokenBucketUUIDs(tt) {
-		var kdt = cbauth.KeyDataType{
-			TypeName:   "service_bucket",
-			BucketUUID: bucketUUID,
-		}
+		kdt := GetBucketKDT(bucketUUID)
 
 		dekInfo, err := cbauth.GetEncryptionKeys(kdt)
 
 		if err != nil {
 			logging.Warnf(
 				"ShardRebalancer::prepareShardKeyBundle: get encryption keys failed with err - %v for KDT - %v",
-				err, kdt,
+				err, logKDT(kdt),
 			)
 			dekInfo, err = cbauth.GetEncryptionKeysBlocking(ctx, kdt)
 		}
@@ -1645,7 +1660,8 @@ func (sr *ShardRebalancer) getDirToEaRKey(
 			}
 		}
 		l.Errorf("ShardRebalancer::getDirToEaRKey: couldn't locate path for keys %v",
-			missingKeys)
+			logKeyIDs(missingKeys...))
+
 		return nil, nil, 0, errMissingKeyPath
 	}
 
@@ -1658,6 +1674,14 @@ func (sr *ShardRebalancer) getDirToEaRKey(
 		}
 	}
 
+	var dirToKeysStr strings.Builder
+	for dir, keys := range dirToShardKeysMap {
+		dirToKeysStr.WriteString(dir)
+		dirToKeysStr.WriteString(":")
+		dirToKeysStr.WriteString(logKeyIDs(keys...))
+		dirToKeysStr.WriteByte('\n')
+	}
+	l.Infof("ShardRebalancer::getDirToEaRKey: located dir for keys - \n%v", dirToKeysStr.String())
 	return dirToShardKeysMap, bucketToShardKeysMap, keyCount, nil
 }
 
@@ -1675,7 +1699,7 @@ func (sr *ShardRebalancer) copySingleKey(
 	attempt int,
 ) (string, error) {
 
-	if attempt > 0 {
+	if attempt > 1 {
 		l.Infof(
 			"ShardRebalancer::prepareShardKeyBundles attempt %v to copy key %v from dir %v",
 			attempt, keyID, dir,
@@ -1685,7 +1709,7 @@ func (sr *ShardRebalancer) copySingleKey(
 	////////// Find the file
 	var fileNameWithVersion string
 	for _, file := range files {
-		if strings.Contains(keyID, file.Name()) {
+		if strings.Contains(file.Name(), keyID) {
 			fileNameWithVersion = file.Name()
 			break
 		}
@@ -1856,8 +1880,8 @@ func (sr *ShardRebalancer) prepareShardKeyBundles(
 	}
 
 	l.Infof(
-		"ShardRebalancer::prepareShardKeyBundles prepared shard keys %v for copy ttid %v",
-		bucketToKeyInfoMap, ttid)
+		"ShardRebalancer::prepareShardKeyBundles prepared shard keys for ttid %v - \n\t%v",
+		ttid, bucketToKeyInfoMap)
 
 	return bucketToKeyInfoMap, nil
 }
@@ -1938,8 +1962,10 @@ func (sr *ShardRebalancer) waitForDropKeys(shardKeys []c.ShardKeyBundle) error {
 		return nil
 	}
 
+	keyLogStr := logKeyIDs(keyIDs...)
+
 	l.Infof("ShardRebalancer::waitForDropKeys waiting for key drop"+
-		" to finish for keyIDs:%v", keyIDs)
+		" to finish for keyIDs:%v", keyLogStr)
 
 	respCh := make(chan error, 1)
 	msg := &MsgEncryptionWaitDropKeys{
@@ -1950,10 +1976,20 @@ func (sr *ShardRebalancer) waitForDropKeys(shardKeys []c.ShardKeyBundle) error {
 
 	respErr, err := sendMsgAndWaitForResp(sr.supvMsgch, msg, sr.cancel, respCh)
 	if err != nil {
-		l.Warnf("ShardRebalancer::waitForDropKeys got err %v", err)
+		l.Warnf("ShardRebalancer::waitForDropKeys for %v got err %v",
+			keyLogStr, err)
 		return err
 	}
-	return respErr
+
+	if respErr != nil {
+		l.Errorf("ShardRebalancer::waitForDropKeys failed for keys %v with err %v",
+			keyLogStr, respErr)
+		return respErr
+	}
+
+	l.Infof("ShardRebalancer::waitForDropKeys done for keys %v", keyLogStr)
+
+	return nil
 }
 
 func (sr *ShardRebalancer) importShardKeys(ttid string, tt *c.TransferToken) error {

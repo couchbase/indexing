@@ -420,7 +420,7 @@ func (stm *ShardTransferManager) fetchShardKeys(
 		}
 		logging.Infof(
 			"ShardTransferManager::fetchShardKeys: got keys %v for shardID - %v, shardType - %v, err - %v",
-			keys, shardID, shardType, retErr,
+			logKeyIDs(keys...), shardID, shardType, retErr,
 		)
 
 		bundles = append(bundles, keys)
@@ -2071,6 +2071,7 @@ func (stm *ShardTransferManager) processEarKeyCopyMessage(cmd Message) {
 	defer copier.Done()
 
 	storageDir, _ := c.GetStorageDirs(stm.config, c.Plasma_StorageEngine)
+	stagingDir := filepath.Join(storageDir, GetRPCRootDir())
 	copyRoot := getKeyCopyRootDir(meta)
 
 	for _, fileName := range msg.GetKeyFilePaths() {
@@ -2081,7 +2082,7 @@ func (stm *ShardTransferManager) processEarKeyCopyMessage(cmd Message) {
 		default:
 		}
 
-		srcPath := filepath.Join(storageDir, fileName)
+		srcPath := filepath.Join(stagingDir, fileName)
 		info, statErr := iowrap.Os_Stat(srcPath)
 		if statErr != nil {
 			err = fmt.Errorf("stat key file %s: %w", srcPath, statErr)

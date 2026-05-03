@@ -3144,6 +3144,14 @@ type ShardKeysResp struct {
 	err  error
 }
 
+func (res ShardKeysResp) String() string {
+	var keyStr strings.Builder
+	for _, bundle := range res.keys {
+		keyStr.WriteString(logKeyIDs(bundle...))
+	}
+	return fmt.Sprintf("{keys: %v, err: %v}", keyStr.String(), res.err)
+}
+
 // MsgFetchShardKeys -> [FETCH_SHARD_KEYS]
 type MsgFetchShardKeys struct {
 	shardIds  []common.ShardId
