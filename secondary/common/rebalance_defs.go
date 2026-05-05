@@ -310,7 +310,10 @@ type RebalKeyInfo struct {
 	FileName string
 }
 
-func (ri *RebalKeyInfo) String() string {
+func (ri RebalKeyInfo) String() string {
+	if ri.ID == "" {
+		return "rebal_key_info(keyID: <unencrypted>)"
+	}
 	return fmt.Sprintf("rebal_key_info(keyID: %v, fileName: %v)", ri.ID, ri.FileName)
 }
 

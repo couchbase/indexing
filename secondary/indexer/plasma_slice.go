@@ -349,11 +349,11 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 
 	for _, keyByte := range keys {
 		key := string(keyByte)
-		slice.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxDefn.BucketUUID}, key)
+		slice.sliceEncryptionCallbacks.setInUseKeys(GetBucketKDT(idxDefn.BucketUUID), key)
 	}
 	// If GetKeyIdList doesn't return any keys, mark "" key in-use thus GetInUseKeysCallback will know that there can some un-encrypted data.
 	if len(keys) == 0 {
-		slice.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxDefn.BucketUUID}, "")
+		slice.sliceEncryptionCallbacks.setInUseKeys(GetBucketKDT(idxDefn.BucketUUID), "")
 	}
 
 	if isInitialBuild {
@@ -1001,7 +1001,7 @@ func (s *plasmaSlice) SetCurrentEncryptionKey(masterEncryptionKey []byte, keyId 
 	if err != nil {
 		return err
 	}
-	s.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: s.idxDefn.BucketUUID}, string(keyId))
+	s.sliceEncryptionCallbacks.setInUseKeys(GetBucketKDT(s.idxDefn.BucketUUID), string(keyId))
 
 	if !s.isPrimary {
 		err := s.backstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)

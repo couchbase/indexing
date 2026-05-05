@@ -755,7 +755,7 @@ func (e *EncryptionMgr) cacheKeysForBootstrap() {
 		if bucket.UUID == common.BUCKET_UUID_NIL {
 			continue
 		}
-		kdt := KeyDataType{TypeName: kdtTypeServiceBucket, BucketUUID: bucket.UUID}
+		kdt := GetBucketKDT(bucket.UUID)
 		ctx := context.Background()
 		encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, kdt)
 		if err != nil {
@@ -847,7 +847,7 @@ func (e *EncryptionMgr) recoverInUseKeys() {
 	// This message is not for specific bucket thus bucketUUID is empty. This will get keys in use for all buckets.
 	respMapCh := make(chan map[KeyDataType][]string)
 	e.supvMsgch <- &MsgEncryptionGetInuseKeys{
-		keyDataType: KeyDataType{TypeName: kdtTypeServiceBucket, BucketUUID: ""},
+		keyDataType: GetBucketKDT(""),
 		respMapCh:   respMapCh,
 	}
 	kdtKeysMap := <-respMapCh
@@ -1149,7 +1149,7 @@ func (e *EncryptionMgr) getKeyCipherById(keyId string) ([]byte, string) {
 			if bucket.UUID == common.BUCKET_UUID_NIL {
 				continue
 			}
-			currKdt := KeyDataType{TypeName: kdtTypeServiceBucket, BucketUUID: bucket.UUID}
+			currKdt := GetBucketKDT(bucket.UUID)
 			ctx := context.Background()
 			encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, currKdt)
 			if err != nil {
@@ -1309,8 +1309,8 @@ func (e *EncryptionMgr) getInUseKeysCallback(kdt KeyDataType) ([]string, error) 
 
 // importTimeoutSecPerKey - each key is expected to be a file say around 8kb max size. reading it
 // should be 1s at max on slow HDDs with ~10-100 ms seek time. 30s is considered as max time
-// including ns_server operations per key.
-const importTimeoutSecPerKey = 30 // 30s
+// including ns_server operations per key. unit for timeout is ms aka 30000ms
+const importTimeoutSecPerKey = 30 * int(time.Second/time.Millisecond) // 30s
 
 // importShardKeys marks transferred DEKs as in-rebalance-use and calls
 // cbauth.ImportEncryptionKeys so that ns_server registers the key files.
@@ -1323,7 +1323,7 @@ func (e *EncryptionMgr) importShardKeys(msg *MsgEncryptionImportKeys) error {
 			continue
 		}
 
-		kdt := KeyDataType{TypeName: "bucket", BucketUUID: bucketUUID}
+		kdt := GetBucketKDT(bucketUUID)
 
 		if keyIDs, ok := bucketKeyIDs[bucketUUID]; ok {
 			e.SetInRebalanceKeys(kdt, keyIDs)

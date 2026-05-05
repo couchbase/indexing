@@ -3550,7 +3550,7 @@ func (s *storageMgr) handleEncryptionGetInUseKeys(msg Message) {
 				continue
 			}
 			bucketUUID := inst.Defn.BucketUUID
-			kdt := KeyDataType{TypeName: "service_bucket", BucketUUID: bucketUUID}
+			kdt := GetBucketKDT(bucketUUID)
 
 			if _, ok := kdtKeyMap[kdt]; !ok {
 				kdtKeyMap[kdt] = make(map[string]bool)
@@ -3685,7 +3685,7 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 							}
 						} else {
 							// Set in-use key if SetCurrentEncryptionKey is successful
-							slice.SetInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: inst.Defn.BucketUUID}, earkey.Id)
+							slice.SetInUseKeys(GetBucketKDT(inst.Defn.BucketUUID), earkey.Id)
 						}
 					}()
 

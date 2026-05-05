@@ -4871,8 +4871,8 @@ var SystemConfig = Config{
 		"",
 		"Projector log directory",
 		"",
-		false, // mutable
-		false, // case-insensitive
+		true, // immutable
+		true, // case-sensitive
 	},
 	"projector.statsLogFname": ConfigValue{
 		"projector_stats.log",

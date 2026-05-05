@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -4837,4 +4839,26 @@ func (m *RebalanceServiceManager) runCleanupEmptyShards() {
 			return
 		}
 	}
+}
+
+func createStagingDir(cfgHolder c.ConfigHolder) error {
+	cfg := cfgHolder.Load()
+
+	baseDir, _ := c.GetStorageDirs(cfg, c.Plasma_StorageEngine)
+
+	stagingDir := filepath.Join(baseDir, GetRPCRootDir())
+
+	_, err := os.Stat(stagingDir)
+	if os.IsNotExist(err) {
+		l.Infof("RebalanceServiceManager::createStagingDir: creating staging dir %v", stagingDir)
+		err = os.Mkdir(stagingDir, 0700) //nolint:mnd
+	} else if err == nil {
+		l.Infof("RebalanceServiceManager::createStagingDir: staging dir %v already exists", stagingDir)
+	}
+
+	if err != nil && !os.IsExist(err) {
+		return fmt.Errorf("staging dir creating failed with err %w", err)
+	}
+
+	return nil
 }
