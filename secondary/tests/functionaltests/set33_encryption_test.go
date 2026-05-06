@@ -2182,4 +2182,9 @@ func TestBackfillEncryption(t *testing.T) {
 	// Disable encryption for bucket
 	err = updateBucketEncryptionKey(bucketName, nodeIndex, "-1")
 	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(4 * time.Second)
+	vectorsLoaded = false
 }
