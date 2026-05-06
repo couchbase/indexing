@@ -122,8 +122,8 @@ reset_worktree() {
 
 # Function to install golangci-lint if not present
 ensure_golangci_lint() {
-  # Install golangci-lint v2.8.0 when missing
-  GOLANGCI_VERSION="v2.8.0"
+  # Install golangci-lint v2.11.4 when missing
+  GOLANGCI_VERSION="v2.11.4"
   if ! command -v golangci-lint &> /dev/null; then
     echo "Installing golangci-lint $GOLANGCI_VERSION (with v2 config format support)..."
     if command -v go &> /dev/null; then

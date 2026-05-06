@@ -4967,6 +4967,13 @@ var SystemConfig = Config{
 		Immutable:     false,
 		Casesensitive: false,
 	},
+	"indexer.queryport.backfill_pause_test_duration": ConfigValue{
+		Value:         0,	// seconds
+		Help:          "Enable backfill testing by pausing backfill reader",
+		DefaultVal:    0,
+		Immutable:     false,
+		Casesensitive: false,
+	},
 }
 
 // NewConfig from another

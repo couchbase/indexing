@@ -78,7 +78,7 @@ type ClientSettings struct {
 	enableScanReporting uint32
 
 	// Encryption
-	encryptBackfill atomic.Bool
+	backfillPauseDur int32
 }
 
 func NewClientSettings(needRefresh bool, toolsConfig common.Config) *ClientSettings {
@@ -463,15 +463,12 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: invalid setting value for maxDimension=%v", maxVectorDimension)
 	}
 
-	encryptBackfill, ok := config["indexer.encryption.enable_test"]
-	if ok {
-		if encryptBackfill.Bool() {
-			s.encryptBackfill.Store(true)
-		} else {
-			s.encryptBackfill.Store(false)
-		}
+	backfillPauseDur := int32(config["indexer.queryport.backfill_pause_test_duration"].Int())
+	if backfillPauseDur > 0 {
+		atomic.StoreInt32(&s.backfillPauseDur, backfillPauseDur)
+	} else {
+		atomic.StoreInt32(&s.backfillPauseDur, 0)
 	}
-
 	setShardDealerConfig(s, config)
 }
 
@@ -615,8 +612,8 @@ func (s *ClientSettings) EnableScanReporting() bool {
 	return atomic.LoadUint32(&s.enableScanReporting) == 1
 }
 
-func (s *ClientSettings) EncryptBackfill() bool {
-	return s.encryptBackfill.Load()
+func (s *ClientSettings) BackfillPause() int32 {
+	return atomic.LoadInt32(&s.backfillPauseDur)
 }
 
 func setShardDealerConfig(s *ClientSettings, config common.Config) {

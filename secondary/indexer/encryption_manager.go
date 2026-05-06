@@ -20,11 +20,10 @@ import (
 
 	"github.com/couchbase/indexing/secondary/audit"
 
-	"github.com/couchbase/gocbcrypto"
-
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/gocbcrypto"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
@@ -732,6 +731,9 @@ func (e *EncryptionMgr) handleRebalDone() {
 	}
 	e.cbMu.Unlock()
 
+	// ENCRYPTION_TODO: triggger a key collection to update book keeping with
+	// file based rebalance keys
+
 	e.rebalRunning.Store(false)
 	e.supvCmdch <- &MsgSuccess{}
 }
@@ -1395,7 +1397,7 @@ func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 				"EncryptionMgr:RefreshKeysCallback:duplicate to active msg for keydatatype:%v keyid:%v.",
 				logKDT(kdt), logKeyIDs(earkey.Id),
 			)
-			return fmt.Errorf("Duplicate to ongoing request")
+			return nil
 		}
 
 		skipAddPending := e.isDuplicatePending(kdt, msg)
@@ -1414,7 +1416,7 @@ func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 			"EncryptionMgr:RefreshKeysCallback:duplicate to pending msg for keydatatype:%v keyid:%v.",
 			logKDT(kdt), logKeyIDs(earkey.Id),
 		)
-		return fmt.Errorf("Duplicate to pending request ")
+		return nil
 	}
 
 	// As the there is no ongoing key drop/update, adding msg to wrkrQueue

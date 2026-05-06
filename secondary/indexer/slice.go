@@ -10,7 +10,6 @@ package indexer
 
 import (
 	"context"
-
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
@@ -79,6 +78,10 @@ type Slice interface {
 	GetKeyIdList() ([][]byte, error)
 
 	SetInUseKeys(kdt KeyDataType, key string)
+
+	SetCodebookEncryptionKey([]byte, string, string, KeyDataType) error
+	DropCodebookEncryptionKey([]string, EaRKey, KeyDataType) error
+	GetCodebookEncryptionKeyId() (string, error)
 }
 
 type SliceEncryptionCallbacks struct {

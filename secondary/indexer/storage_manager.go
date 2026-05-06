@@ -3587,32 +3587,33 @@ func (s *storageMgr) handleEncryptionGetInUseKeys(msg Message) {
 		}
 
 		//Get keys used by codebook
-		//for _, inst := range indexInstMap {
-		//	if !inst.Defn.IsVectorIndex {
-		//		continue
-		//	}
-		//	partnMap, ok := indexPartnMap[inst.InstId]
-		//	if !ok {
-		//		logging.Warnf("getCodebookInUseKeys: partition map missing for indexInstId:%v", inst.InstId)
-		//		continue
-		//	}
-		//
-		//	_ = partnMap
-		//	kdt := KeyDataType{TypeName: "service_bucket", BucketUUID: inst.Defn.BucketUUID}
-		//	if _, ok := kdtKeyMap[kdt]; !ok {
-		//		kdtKeyMap[kdt] = make(map[string]bool, 0)
-		//	}
-		// ENCRYPT_TODO: Implement function to get codebook encryption key
-		//for _, partnMap := range idx.indexPartnMap {
-		//	for _, partnInst := range partnMap {
-		//		sc := partnInst.Sc
-		//		for _, slice := range sc.GetAllSlices() {
-		//			// ENCRYPT_TODO:Get key used for codebook encryption
-		//			key := slice.GetCodebookKey()
-		//			kdtKeyMap[kdt][key] = true
-		//		}
-		//	}
-		//}
+		for _, inst := range indexInstMap {
+			if !inst.Defn.IsVectorIndex {
+				continue
+			}
+			partnMap, ok := indexPartnMap[inst.InstId]
+			if !ok {
+				logging.Warnf("StorageMgr::handleEncryptionGetInUseKeys codebook partition map missing for indexInstId:%v", inst.InstId)
+				continue
+			}
+
+			kdt := KeyDataType{TypeName: "service_bucket", BucketUUID: inst.Defn.BucketUUID}
+			if _, ok := kdtKeyMap[kdt]; !ok {
+				kdtKeyMap[kdt] = make(map[string]bool)
+			}
+
+			for _, partnInst := range partnMap {
+				sc := partnInst.Sc
+				for _, slice := range sc.GetAllSlices() {
+					key, err := slice.GetCodebookEncryptionKeyId()
+					if err != nil {
+						logging.Warnf("StorageMgr::handleEncryptionGetInUseKeys codebook err:%v for instId %v", err, inst.InstId)
+						continue
+					}
+					kdtKeyMap[kdt][key] = true
+				}
+			}
+		}
 
 		// Transform kdtKeyMap map[KeyDataType]map[string]bool to keyMap map[KeyDataType][]string
 		for kdt, keyBoolMap := range kdtKeyMap {
@@ -3693,36 +3694,38 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 			}
 		}
 
-		// ENCRYPT_TODO:
-		// Codebook encryption
-		//for instId, inst := range indexInstMap {
-		//  if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex {
-		//      continue
-		//  }
-		//  partnMap, ok := indexPartnMap[instId]
-		//  if !ok {
-		//      logging.Infof("StorageMgr::handleEncryptionUpdateKey No partitions found for instId %v", instId)
-		//      continue
-		//  }
-		//  for _, partnInst := range partnMap {
-		//      sc := partnInst.Sc
-		//      for _, slice := range sc.GetAllSlices() {
-		//          err := slice.SetCodebookEncryptionKey(earkey.Data, []byte(earkey.Id), earkey.Cipher)
-		//          if err != nil {
-		//              respCh <- err
-		//              return
-		//          }
-		//      }
-		//  }
-		//}
-
 		wg.Wait()
 		select {
 		case err := <-errCh:
 			respCh <- err
+			return
 		default:
-			respCh <- nil
+			logging.Infof("StorageMgr::handleEncryptionUpdateKey done for storage slices %v", kdt)
 		}
+
+		// Codebook encryption
+		for instId, inst := range indexInstMap {
+			if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex {
+				continue
+			}
+			partnMap, ok := indexPartnMap[instId]
+			if !ok {
+				logging.Infof("StorageMgr::handleEncryptionUpdateKey No partitions found for instId %v", instId)
+				continue
+			}
+			for _, partnInst := range partnMap {
+				sc := partnInst.Sc
+				for _, slice := range sc.GetAllSlices() {
+					err := slice.SetCodebookEncryptionKey(earkey.Key, earkey.Id, earkey.Cipher, kdt)
+					if err != nil {
+						respCh <- err
+						return
+					}
+				}
+			}
+		}
+		respCh <- nil
+		logging.Infof("StorageMgr::handleEncryptionUpdateKey done for codebooks %v", kdt)
 	}()
 }
 
@@ -3732,6 +3735,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 
 	kdt := cmd.(*MsgEncryptionDropKey).GetKeyDataType()
 	dropKeyIds := cmd.(*MsgEncryptionDropKey).GetDropKeyIds()
+	activeEarKey := cmd.(*MsgEncryptionDropKey).GetActiveEarKey()
 	respCh := cmd.(*MsgEncryptionDropKey).GetRespCh()
 	earkey := cmd.(*MsgEncryptionDropKey).GetActiveEarKey()
 	logging.Infof("StorageMgr::handleEncryptionDropKey keydatatype:%v", kdt)
@@ -3844,35 +3848,34 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 		select {
 		case err = <-errCh:
 			respCh <- err
+			return
 		default:
-			respCh <- nil
+			logging.Infof("StorageMgr::handleEncryptionDropKey done for storage slices %v", kdt)
 		}
 
-		// ENCRYPT_TODO:
 		// Codebook encryption
-		//outerLoop2:
-		//for instId, inst := range indexInstMap {
-		//  if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex  {
-		//      continue
-		//  }
-		//  partnMap, ok := indexPartnMap[instId]
-		//  if !ok {
-		//      logging.Infof("StorageMgr::handleEncryptionDropKey No partitions found for instId %v", instId)
-		//      continue
-		//  }
-		//  for _, partnInst := range partnMap {
-		//      sc := partnInst.Sc
-		//      for _, slice := range sc.GetAllSlices() {
-		//          //Handle dropKeyId==""
-		//          errResp:=slice.DropKeysCodebook(dropKeyIds)
-		//          if errResp != nil {
-		//              err = errResp
-		//              break outerLoop2
-		//          }
-		//      }
-		//  }
-		//}
-		//respCh <- err
-
+		for instId, inst := range indexInstMap {
+			if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex {
+				continue
+			}
+			partnMap, ok := indexPartnMap[instId]
+			if !ok {
+				logging.Infof("StorageMgr::handleEncryptionDropKey No partitions found for instId %v", instId)
+				continue
+			}
+			for _, partnInst := range partnMap {
+				sc := partnInst.Sc
+				for _, slice := range sc.GetAllSlices() {
+					err := slice.DropCodebookEncryptionKey(dropKeyIds, activeEarKey, kdt)
+					if err != nil {
+						logging.Errorf("StorageMgr::handleEncryptionDropKey for instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), err)
+						respCh <- err
+						return
+					}
+				}
+			}
+		}
+		logging.Infof("StorageMgr::handleEncryptionDropKey done for codebooks %v", kdt)
+		respCh <- nil
 	}()
 }

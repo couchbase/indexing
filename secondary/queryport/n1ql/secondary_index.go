@@ -54,6 +54,7 @@ const BACKFILLPREFIX = "scan-results"
 const BACKFILLTICK = 5
 
 var scanKDFLabelCtx = []byte("indexing/n1ql")
+var cryptFileWriterReaderBufSz = uint32(4096)
 
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(
@@ -2167,26 +2168,21 @@ func (si *secondaryIndex6) DefnStorageStatistics(requestid string) (
 // private functions for secondaryIndex
 //-------------------------------------
 
-func encryptBackfill(conn *datastore.IndexConnection, encrypt bool) (bool, string, []byte, string) {
-
-	// ENCRYPT_TODO: Use query function when changes are merged.
-	//ekeyid, ekey, cipher, err := conn.EncryptionKey()
-	//encryptFile := false
-	//if len(keyId) > 0 && len(key) == 32 && err == nil && cipher == "AES-256-GCM" {
-	//	encryptFile = true
-	//}
-	// Use static key until then if queryport.encryption.enable_test is set
+func encryptBackfill(conn *datastore.IndexConnection) (bool, string, []byte, string) {
 
 	encryptFile := false
 	ekeyid := ""
 	ekey := []byte("")
 	cipher := ""
 
-	if encrypt {
+	eaRKey := conn.EncryptionKey()
+	if eaRKey != nil {
+		// Errors 1)invalid key and/or 2)invalid cipher will returned during newEncryptionCtx in makeResponsehandler
+		// Scans will be errored out
+		ekeyid = string(eaRKey.Id)
+		ekey = eaRKey.Key
+		cipher = string(eaRKey.Cipher)
 		encryptFile = true
-		ekeyid = "abc123"
-		ekey = []byte("m4n8xv0gZ9Xv2Qq7V9cP0F1lY0mRr8y3")
-		cipher = "AES-256-GCM"
 	}
 
 	return encryptFile, ekeyid, ekey, cipher
@@ -2207,7 +2203,7 @@ func makeRequestBroker(
 
 	broker.SetDataEncodingFormat(dataEncFmt)
 
-	shouldEncrypt, ekeyid, ekey, cipher := encryptBackfill(conn, client.Settings().EncryptBackfill())
+	shouldEncrypt, ekeyid, ekey, cipher := encryptBackfill(conn)
 
 	factory := func(id qclient.ResponseHandlerId, instId uint64, partitions []c.PartitionId) qclient.ResponseHandler {
 		return makeResponsehandler(id, requestId, si, client, conn, broker, config, waitGroup, backfillSync, instId, partitions, shouldEncrypt, ekeyid, ekey, cipher)
@@ -2272,7 +2268,6 @@ func makeResponsehandler(
 
 	var cfw *gocbcrypto.CryptFileWriter
 	var cfr *gocbcrypto.CryptFileReader
-	var bufSz = uint32(4096)
 	var aligned = false
 	var encbuf bytes.Buffer
 	var decbuf bytes.Buffer
@@ -2330,6 +2325,11 @@ func makeResponsehandler(
 		}()
 		l.Debugf(
 			"%v %q started temp file read for %v ...\n", lprefix, requestId, name)
+		backfillPauseDur := client.Settings().BackfillPause()
+		if backfillPauseDur > 0 {
+			l.Debugf("%v %q paused temp file read for %vs %v ...\n", lprefix, requestId, name, backfillPauseDur)
+			time.Sleep(time.Duration(backfillPauseDur) * time.Second)
+		}
 		for {
 			var skeys c.ScanResultEntries
 
@@ -2512,14 +2512,20 @@ func makeResponsehandler(
 					if err != nil {
 						fmsg := "%v newEncryptionCtx err:%v"
 						err := fmt.Errorf(fmsg, requestId, err)
+						tmpfile = nil
+						fmsg2 := "%v %q newEncryptionCtx err:%v"
+						l.Errorf(fmsg2, lprefix, requestId, name, err)
 						conn.Error(n1qlError(client, err))
 						broker.Error(err, instId, partitions)
 						return false
 					}
-					cfw, err = gocbcrypto.NewCryptFileWriter(tmpfile, ctx, bufSz, aligned, nil)
+					cfw, err = gocbcrypto.NewCryptFileWriter(tmpfile, ctx, cryptFileWriterReaderBufSz, aligned, nil)
 					if err != nil {
 						fmsg := "%v NewCryptFileWriter err:%v"
 						err := fmt.Errorf(fmsg, requestId, err)
+						tmpfile = nil
+						fmsg2 := "%v %q NewCryptFileWriter err:%v"
+						l.Errorf(fmsg2, lprefix, requestId, name, err)
 						conn.Error(n1qlError(client, err))
 						broker.Error(err, instId, partitions)
 						return false
@@ -2529,6 +2535,9 @@ func makeResponsehandler(
 					if err != nil {
 						fmsg := "%v CryptFileWriter writeHeader err:%v"
 						err := fmt.Errorf(fmsg, requestId, err)
+						tmpfile = nil
+						fmsg2 := "%v %q CryptFileWriter writeHeader err:%v"
+						l.Errorf(fmsg2, lprefix, requestId, name, err)
 						conn.Error(n1qlError(client, err))
 						broker.Error(err, instId, partitions)
 						return false
@@ -2539,6 +2548,9 @@ func makeResponsehandler(
 					if err != nil {
 						fmsg := "%v CryptFileWriter flush err:%v"
 						err := fmt.Errorf(fmsg, requestId, err)
+						tmpfile = nil
+						fmsg2 := "%v %q CryptFileWriter flush err:%v"
+						l.Errorf(fmsg2, lprefix, requestId, name, err)
 						conn.Error(n1qlError(client, err))
 						broker.Error(err, instId, partitions)
 						return false
@@ -2559,10 +2571,12 @@ func makeResponsehandler(
 				// decoder
 				if shouldEncrypt {
 					// Read and decrypt temp file and load result to decbuf and reset the buffer
-					cfr, err = gocbcrypto.NewCryptFileReaderWithLabel(readfd, getKeyById, scanKDFLabelCtx, bufSz, aligned, nil)
+					cfr, err = gocbcrypto.NewCryptFileReaderWithLabel(readfd, getKeyById, scanKDFLabelCtx, cryptFileWriterReaderBufSz, aligned, nil)
 					if err != nil {
 						fmsg := "%v crypt file reader err:%v"
 						err := fmt.Errorf(fmsg, requestId, err)
+						fmsg2 := "%v %q crypt file reader err:%v"
+						l.Errorf(fmsg2, lprefix, requestId, name, err)
 						conn.Error(n1qlError(client, err))
 						broker.Error(err, instId, partitions)
 						return false
