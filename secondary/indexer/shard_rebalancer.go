@@ -3511,14 +3511,23 @@ loop:
 					}
 				}
 
-				// Wait for merge of partitioned indexes (or) RState update to finish before returning
-				// if any one of the partition encounters an error, it signifies that either the rebalance
-				// got cancelled or done. Return the error
-				if err := partnMergeWaitErrGroup.Wait(); err != nil {
-					return err
-				}
-
+				// MB-70099: Defer Wait() until all entries have been dispatched
+				// (processedInsts empty). Calling Wait() every iteration blocked
+				// the loop when a merge goroutine waited on a cross-token RState
+				// flip, preventing remaining ID-swap entries from dispatching and
+				// creating a circular wait between tokens.
 				if len(processedInsts) == 0 {
+
+					l.Infof("ShardRebalancer::waitForIndexState All entries dispatched "+
+						"for token: %v. Waiting for in-flight merge/RState goroutines to finish.", ttid)
+
+					// Wait for merge of partitioned indexes (or) RState update to finish before
+					// returning. If any partition encounters an error, it signifies that either
+					// the rebalance got cancelled or done. Return the error.
+					if err := partnMergeWaitErrGroup.Wait(); err != nil {
+						return err
+					}
+
 					l.Infof("ShardRebalancer::waitForIndexState All indexes are active and "+
 						"caught up for token: %v. Returning from waitForIndexState", ttid)
 					return nil

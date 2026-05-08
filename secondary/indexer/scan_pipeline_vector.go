@@ -277,7 +277,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		var m *allocator
 		if v := w.r.connCtx.Get(fmt.Sprintf("%v%v", VectorScanWorker, id)); v == nil {
 			bufPool := w.r.connCtx.GetVectorBufPool(id)
-			m = newAllocator(int64(bufferInitBatchSize), bufPool)
+			m = newAllocator(0, bufPool)
 		} else {
 			m = v.(*allocator)
 		}
