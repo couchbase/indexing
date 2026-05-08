@@ -1345,7 +1345,7 @@ func (stm *ShardTransferManager) RestoreCodebook(
 	for _, renameMap := range instRenameMap {
 		currCodebookPath, _ := generateCodebookRenamePaths2(
 			renameMap,
-			vectorInst.Defn.BucketUUID,
+			vectorInst.Defn.Bucket, vectorInst.Defn.Name, vectorInst.Defn.BucketUUID,
 			partnId, vectorInst.InstId,
 		)
 		if currCodebookPath != "" {

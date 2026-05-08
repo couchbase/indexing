@@ -701,18 +701,21 @@ func getRenamePath2(index *IndexUsage, newInstId common.IndexInstId) (string, st
 	var sourcePath string
 
 	var sourceShardCompatVersion int
+	var sourceShardInstId common.IndexInstId
 	if index.initialNode != nil {
 		sourceShardCompatVersion = index.initialNode.ShardCompatVersion
+		sourceShardInstId = index.InstId
 	} else if index.siblingIndex.initialNode != nil {
 		sourceShardCompatVersion = index.siblingIndex.initialNode.ShardCompatVersion
+		sourceShardInstId = index.siblingIndex.InstId
 	}
 
 	if sourceShardCompatVersion == 1 {
 		sourcePath = fmt.Sprintf("%v_%v_%v_%v.index",
-			index.Bucket, index.Name, index.siblingIndex.InstId, index.PartnId)
+			index.Bucket, index.Name, sourceShardInstId, index.PartnId)
 	} else {
 		sourcePath = fmt.Sprintf("%v_%v_%v.index",
-			index.Instance.Defn.BucketUUID, index.siblingIndex.InstId, index.PartnId)
+			index.Instance.Defn.BucketUUID, sourceShardInstId, index.PartnId)
 	}
 
 	return sourcePath, newPath
@@ -725,11 +728,11 @@ func addToInstRenamePath2(
 	targetShardIds []common.ShardId,
 ) {
 
-	if index.initialNode != nil || index.siblingIndex == nil {
+	currPathInMeta2, newPathInMeta2 := getRenamePath2(index, newInstId)
+
+	if currPathInMeta2 == newPathInMeta2 {
 		return
 	}
-
-	currPathInMeta2, newPathInMeta2 := getRenamePath2(index, newInstId)
 
 	if token.InstRenameMap == nil {
 		token.InstRenameMap = make(map[common.ShardId]map[string]string)
@@ -1459,11 +1462,14 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 				if shardMovementCompatCheck(index, realIndex) {
 
-					if (realIndex.siblingIndex != nil &&
-						token.TransferMode == common.TokenTransferModeCopy) || // copy rename
-						(token.TransferMode == common.TokenTransferModeMove &&
-							index.initialNode != nil && // upgrade rename
-							index.initialNode.ShardCompatVersion < index.destNode.ShardCompatVersion) {
+					var isReplicaRepair = (realIndex.siblingIndex != nil &&
+						token.TransferMode == common.TokenTransferModeCopy)
+
+					var isShardCompatUpgrade = token.TransferMode == common.TokenTransferModeMove &&
+						index.initialNode != nil && // upgrade rename
+						index.initialNode.ShardCompatVersion < index.destNode.ShardCompatVersion
+
+					if isReplicaRepair || isShardCompatUpgrade {
 						// set InstRenameMap in the root token itself
 						addToInstRenamePath2(&token, realIndex, realIndex.InstId, targetShardIds)
 					}
