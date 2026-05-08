@@ -4899,6 +4899,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"platform.disable_thp": ConfigValue{
+		Value: true,
+		Help: "This config flag controls if indexer/projector should disable THP if its detected " +
+			"to be enabled. Only applies to startup of the process. Any config change will require process restart",
+		DefaultVal:    true,
+		Immutable:     false, // mutable
+		Casesensitive: false, // case-insensitive
+	},
 }
 
 // NewConfig from another

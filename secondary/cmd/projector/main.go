@@ -147,6 +147,20 @@ func main() {
 		c.CrashOnError(err)
 	}
 
+	var err error
+	config, err = c.GetSettingsConfig(config)
+	if err != nil {
+		c.CrashOnError(err)
+	}
+
+	if config["platform.disable_thp"].Bool() {
+		err = platform.EnsureTHPDisabled()
+		if err != nil {
+			logging.Warnf("Projector failure to disable THP %v. Potential high memory usage due to THP being enabled",
+				err)
+		}
+	}
+
 	// setup cbauth
 	if options.auth != "" {
 		up := strings.Split(options.auth, ":")

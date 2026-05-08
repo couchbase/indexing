@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# verify_thp - Verify THP is disabled for indexer and projector processes.
+#
+# Reads AnonHugePages from /proc/<pid>/smaps_rollup (Linux 4.14+) or falls
+# back to summing across /proc/<pid>/smaps.  A non-zero value means the kernel
+# has promoted memory to transparent huge pages in that process.
+#
+# Usage:
+#   ./verify_thp                   # checks all indexer and projector pids
+#   ./verify_thp <pid> [<pid>...]  # checks specific pids
+
+set -uo pipefail
+
+TARGETS=("indexer" "projector")
+overall_rc=0
+checked=0
+
+# ---- helpers ----------------------------------------------------------------
+
+anon_huge_pages() {
+    local pid="$1"
+    if [[ -f "/proc/$pid/smaps_rollup" ]]; then
+        awk '/^AnonHugePages:/ { print $2; exit }' "/proc/$pid/smaps_rollup"
+    elif [[ -f "/proc/$pid/smaps" ]]; then
+        awk '/^AnonHugePages:/ { sum += $2 } END { print sum+0 }' "/proc/$pid/smaps"
+    else
+        echo "unavailable"
+    fi
+}
+
+vmas_with_thp() {
+    local pid="$1"
+    [[ -f "/proc/$pid/smaps" ]] || return
+    awk '
+        /^[0-9a-f]+-[0-9a-f]+/ { vma = $0 }
+        /^AnonHugePages:/ && $2 > 0 { printf "      %-60s  AnonHugePages: %d kB\n", vma, $2 }
+    ' "/proc/$pid/smaps"
+}
+
+check_pid() {
+    local name="$1"
+    local pid="$2"
+    checked=$((checked + 1))
+
+    printf "\n[%s  pid=%s]\n" "$name" "$pid"
+
+    if [[ ! -d "/proc/$pid" ]]; then
+        echo "  ERROR: /proc/$pid not found — process may have exited"
+        return 1
+    fi
+
+    local kb
+    kb=$(anon_huge_pages "$pid")
+
+    if [[ "$kb" == "unavailable" ]]; then
+        echo "  ERROR: cannot read smaps for pid $pid (permission denied?)"
+        return 1
+    fi
+
+    printf "  AnonHugePages : %d kB\n" "$kb"
+
+    if [[ "$kb" -eq 0 ]]; then
+        echo "  result        : PASS — THP is disabled"
+        return 0
+    else
+        echo "  result        : FAIL — THP is active"
+        local vmas
+        vmas=$(vmas_with_thp "$pid")
+        if [[ -n "$vmas" ]]; then
+            echo "  VMAs with THP :"
+            echo "$vmas"
+        fi
+        return 1
+    fi
+}
+
+# ---- main -------------------------------------------------------------------
+
+if [[ $# -gt 0 ]]; then
+    # explicit pids on command line
+    for pid in "$@"; do
+        name=$(cat "/proc/$pid/comm" 2>/dev/null || echo "pid-$pid")
+        check_pid "$name" "$pid" || overall_rc=1
+    done
+else
+    # discover indexer and projector pids
+    for proc_name in "${TARGETS[@]}"; do
+        while IFS= read -r pid; do
+            [[ -z "$pid" ]] && continue
+            check_pid "$proc_name" "$pid" || overall_rc=1
+        done < <(pgrep -x "$proc_name" 2>/dev/null || true)
+    done
+fi
+
+echo ""
+if [[ "$checked" -eq 0 ]]; then
+    echo "No indexer or projector processes found. Pass a pid explicitly if the"
+    echo "binary has a different name: ./verify_thp <pid>"
+    exit 1
+fi
+
+if [[ "$overall_rc" -eq 0 ]]; then
+    echo "All $checked process(es) checked — AnonHugePages = 0 on all. THP is disabled."
+else
+    echo "One or more processes have AnonHugePages > 0. THP is NOT fully disabled."
+fi
+
+exit "$overall_rc"
