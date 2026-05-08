@@ -4513,6 +4513,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.thisNodeOnly.simulateShardCompatV1": ConfigValue{
+		false,
+		"Simulate ShardCompatVersion=1 (old index path format) for upgrade rebalance testing. Not for production",
+		false,
+		false,
+		false,
+	},
 	"indexer.bhive.topNScan": ConfigValue{
 		0,
 		"return top N results from each centroid ",

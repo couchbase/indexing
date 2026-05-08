@@ -2159,6 +2159,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	logging.Infof("Indexer: Vector Max Training CPU set to %v\n", allocatedVectorCores)
 
 	idx.config = newConfig
+	testcode.SetSimulateShardCompatV1(newConfig["thisNodeOnly.simulateShardCompatV1"].Bool())
 
 	emptyShardDestroyInterval := oldConfig["empty_shard_destroy_interval"].Int()
 	if emptyShardDestroyInterval == 0 && newConfig["empty_shard_destroy_interval"].Int() > 0 {
@@ -11570,9 +11571,13 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 		common.CrashOnError(e)
 	}
 
-	path := filepath.Join(storeEngineDir, IndexPath2(indInst, partnInst.Defn.GetPartitionId(), id))
-
 	partitionId := partnInst.Defn.GetPartitionId()
+	relPath := IndexPath2(indInst, partitionId, id)
+	if testcode.UseOldIndexPath(conf) {
+		relPath = IndexPath(indInst, partitionId, id)
+		logging.Infof("testcode: using old index path %v for index - %v", relPath, indInst.DisplayName())
+	}
+	path := filepath.Join(storeEngineDir, relPath)
 	numPartitions := indInst.Pc.GetNumPartitions()
 	instId := GetRealIndexInstId(indInst)
 
@@ -11586,15 +11591,20 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 		slice, err = NewForestDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			partnStats[partitionId])
 	case common.PlasmaDB:
+		cbPath := CodebookPath2(indInst, partitionId, id)
+		if testcode.UseOldIndexPath(conf) {
+			cbPath = CodebookPath(indInst, partitionId, id)
+			logging.Infof("testcode: using old codebook path %v for index - %v", cbPath, indInst.DisplayName())
+		}
 		if indInst.Defn.IsVectorIndex && indInst.Defn.VectorMeta.IsBhive {
 			// safety call to make sure base dir exists before bhive directory is created
 			slice, err = NewBhiveSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
-				CodebookPath2(indInst, partitionId, id), indInst.BhiveGraphStatus[partitionId], sliceEncryptionCallbacks)
+				cbPath, indInst.BhiveGraphStatus[partitionId], sliceEncryptionCallbacks)
 		} else {
 			slice, err = NewPlasmaSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
-				CodebookPath2(indInst, partitionId, id), sliceEncryptionCallbacks)
+				cbPath, sliceEncryptionCallbacks)
 		}
 
 	}
@@ -15332,15 +15342,21 @@ func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 	idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId,
 	codebook []byte) error {
 
-	// Initialize codebook if it does not exist
-	if err := InitCodebookDir(storeEngineDir, idxInst, partnId, sliceId); err != nil {
+	// Select index path and codebook path based on compat mode.
+	indexRelPath := IndexPath2(idxInst, partnId, sliceId)
+	cbRelPath := CodebookPath2(idxInst, partnId, sliceId)
+	if testcode.UseOldIndexPath(idx.config) {
+		indexRelPath = IndexPath(idxInst, partnId, sliceId)
+		cbRelPath = CodebookPath(idxInst, partnId, sliceId)
+	}
+	if err := InitCodebookDirAt(storeEngineDir, indexRelPath); err != nil {
 		logging.Errorf("Indexer::persistCodebookToDisk Error observed while initializing codebook dir for "+
 			"instId: %v, partnId: %v, sliceId: %v", idxInst.InstId, partnId, sliceId)
 		return err
 	}
 
 	// Construct the codebook path
-	codebookPath := filepath.Join(storeEngineDir, CodebookPath2(idxInst, partnId, sliceId))
+	codebookPath := filepath.Join(storeEngineDir, cbRelPath)
 	if err := idx.removeResidualFile(codebookPath); err != nil {
 		logging.Errorf("Indexer::persistCodebookToDisk Error observed while removing residual files at path: %v, err: %v", codebookPath, err)
 		return err
@@ -15358,10 +15374,10 @@ func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 			return err
 		}
 
-        var aligned = false
-        chunkSize := codebookChunkSize
-        reader := bytes.NewReader(codebook)
-        buffer := make([]byte,chunkSize)
+		var aligned = false
+		chunkSize := codebookChunkSize
+		reader := bytes.NewReader(codebook)
+		buffer := make([]byte, chunkSize)
 		fd, err := os.OpenFile(codebookPath, os.O_WRONLY|os.O_CREATE, 0755)
 		if err != nil {
 			logging.Errorf("Indexer::persistCodebookToDisk Error observed on opening file err:%v", err)

@@ -20,3 +20,9 @@ func IgnoreAlternateShardIds(cfg common.Config, defn *common.IndexDefn) {
 func CorruptIndex(cfg common.Config, index *common.IndexInst) {
 	// No-op
 }
+
+func SetSimulateShardCompatV1(v bool) {}
+
+func UseOldIndexPath(cfg common.Config) bool { return false }
+
+func OverrideShardCompatVersion(actual int) int { return actual }

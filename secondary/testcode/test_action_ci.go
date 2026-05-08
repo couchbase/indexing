@@ -10,12 +10,43 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 )
+
+// simulateShardCompatV1 is an atomic flag set when thisNodeOnly.simulateShardCompatV1
+// is enabled. Using an atomic avoids threading config through PopulateIndexerStats.
+// Safe to use as a package-level var since each indexer node is its own OS process.
+var simulateShardCompatV1 int32 // 0=off, 1=on
+
+func SetSimulateShardCompatV1(v bool) {
+	logging.Infof("testcode: setting shard compat simulation to %v", v)
+	if v {
+		atomic.StoreInt32(&simulateShardCompatV1, 1)
+	} else {
+		atomic.StoreInt32(&simulateShardCompatV1, 0)
+	}
+}
+
+// UseOldIndexPath returns true when simulateShardCompatV1 is enabled for this node,
+// directing NewSlice to create storage at the old IndexPath format instead of IndexPath2.
+func UseOldIndexPath(cfg common.Config) bool {
+	val, ok := cfg["thisNodeOnly.simulateShardCompatV1"]
+	return ok && val.Bool()
+}
+
+// OverrideShardCompatVersion returns 1 when simulateShardCompatV1 is active,
+// making this node report the old compat version to the planner via stats.
+func OverrideShardCompatVersion(actual int) int {
+	if atomic.LoadInt32(&simulateShardCompatV1) == 1 {
+		return 1
+	}
+	return actual
+}
 
 func TestActionAtTag(cfg common.Config, tag TestActionTag) error {
 	execTestAction := cfg["shardRebalance.execTestAction"].Bool()
