@@ -3545,10 +3545,10 @@ func (s *storageMgr) handleEncryptionGetInUseKeys(msg Message) {
 	go func() {
 		//Get keys used by storage
 		for instId, inst := range indexInstMap {
-			// ENCRYPT_TODO: Address this in plasma/bhive gsi integration. Keep only MOI for now.
-			if inst.StorageMode != common.MemDB && inst.StorageMode != common.MemoryOptimized {
+			if common.GetStorageMode() == common.FORESTDB || inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
+
 			bucketUUID := inst.Defn.BucketUUID
 			kdt := GetBucketKDT(bucketUUID)
 
@@ -3588,6 +3588,7 @@ func (s *storageMgr) handleEncryptionGetInUseKeys(msg Message) {
 
 		//Get keys used by codebook
 		for _, inst := range indexInstMap {
+
 			if !inst.Defn.IsVectorIndex {
 				continue
 			}
@@ -3597,7 +3598,7 @@ func (s *storageMgr) handleEncryptionGetInUseKeys(msg Message) {
 				continue
 			}
 
-			kdt := KeyDataType{TypeName: "service_bucket", BucketUUID: inst.Defn.BucketUUID}
+			kdt := GetBucketKDT(inst.Defn.BucketUUID)
 			if _, ok := kdtKeyMap[kdt]; !ok {
 				kdtKeyMap[kdt] = make(map[string]bool)
 			}
@@ -3638,7 +3639,7 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 
 	respCh := cmd.(*MsgEncryptionUpdateKey).GetRespCh()
-	if kdt.TypeName != "service_bucket" {
+	if kdt.TypeName != kdtTypeServiceBucket {
 		respCh <- nil
 		return
 	}
@@ -3653,14 +3654,8 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 	go func() {
 		//Storage encryption
 		for instId, inst := range indexInstMap {
-			// ENCRYPT_TODO: Address bhive gsi integration. Keep this for now.
-			if common.GetStorageMode() != common.MOI && common.GetStorageMode() != common.PLASMA {
-				continue
-			}
-			if inst.Defn.IsVectorIndex && inst.Defn.VectorMeta.IsBhive {
-				continue
-			}
-			if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
+
+			if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED || common.GetStorageMode() == common.FORESTDB {
 				continue
 			}
 			partnMap, ok := indexPartnMap[instId]
@@ -3705,9 +3700,10 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 
 		// Codebook encryption
 		for instId, inst := range indexInstMap {
-			if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex {
+			if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex || inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
+
 			partnMap, ok := indexPartnMap[instId]
 			if !ok {
 				logging.Infof("StorageMgr::handleEncryptionUpdateKey No partitions found for instId %v", instId)
@@ -3748,7 +3744,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 	indexInstMap := s.indexInstMap.Get()
 	indexPartnMap := s.indexPartnMap.Get()
 
-	if kdt.TypeName != "service_bucket" {
+	if kdt.TypeName != kdtTypeServiceBucket {
 		respCh <- nil
 		return
 	}
@@ -3761,14 +3757,8 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 
 		//Storage encryption
 		for instId, inst := range indexInstMap {
-			// ENCRYPT_TODO: Address bhive gsi integration. Keep this for now.
-			if common.GetStorageMode() != common.MOI && common.GetStorageMode() != common.PLASMA {
-				continue
-			}
-			if inst.Defn.IsVectorIndex && inst.Defn.VectorMeta.IsBhive {
-				continue
-			}
-			if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
+
+			if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED || common.GetStorageMode() == common.FORESTDB {
 				continue
 			}
 			partnMap, ok := indexPartnMap[instId]
@@ -3855,7 +3845,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 
 		// Codebook encryption
 		for instId, inst := range indexInstMap {
-			if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex {
+			if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex || inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
 			partnMap, ok := indexPartnMap[instId]

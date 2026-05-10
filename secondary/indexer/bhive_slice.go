@@ -298,6 +298,26 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 		return nil, err
 	}
 
+	// Mark in use key for encryption as initStores updates the slice keys
+	keys, err := slice.GetKeyIdList()
+	if err != nil {
+		logging.Errorf("bhiveSlice:NewBhiveSlice:GetKeyIdList Id %v IndexInstId %v "+
+			"failed error: %v", sliceId, idxInstId, err)
+		return nil, err
+	}
+
+	for _, keyByte := range keys {
+		key := string(keyByte)
+		slice.sliceEncryptionCallbacks.setInUseKeys(GetBucketKDT(idxDefn.BucketUUID), key)
+	}
+	// If GetKeyIdList doesn't return any keys, mark "" key in-use thus GetInUseKeysCallback will know that there can some un-encrypted data.
+	if len(keys) == 0 {
+		slice.sliceEncryptionCallbacks.setInUseKeys(GetBucketKDT(idxDefn.BucketUUID), "")
+	}
+
+	// Initialize Bhive DropKeyManager
+	bhive.RunDropKeyManager()
+
 	if isInitialBuild {
 		atomic.StoreInt32(&slice.isInitialBuild, 1)
 	}
@@ -604,6 +624,12 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 		mCfg.UseShardId = plasma.ShardId(slice.shardIds[0])
 		bCfg.UseShardId = plasma.ShardId(slice.shardIds[1])
 	}
+
+	// callback will be used by storage to get keydata for keyId
+	mCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
+	bCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
+	mCfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
+	bCfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
 
 	var wg sync.WaitGroup
 	var mErr, bErr error
@@ -1819,7 +1845,7 @@ func (mdb *bhiveSlice) recoverCodebook(codebookPath string) error {
 		}
 
 		// Set empty keyid in-use if un-encrypted
-		mdb.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: mdb.idxDefn.BucketUUID}, "")
+		mdb.sliceEncryptionCallbacks.setInUseKeys(GetBucketKDT(mdb.idxDefn.BucketUUID), "")
 	} else {
 		//Encryption: If codebook is in encrypted, decrypt before storing in memory.
 		getKeyById := func(keyid []byte) []byte {
@@ -1840,7 +1866,7 @@ func (mdb *bhiveSlice) recoverCodebook(codebookPath string) error {
 			return errCodebookCorrupted
 		}
 
-		mdb.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: mdb.idxDefn.BucketUUID}, string(inUseKeyId))
+		mdb.sliceEncryptionCallbacks.setInUseKeys(GetBucketKDT(mdb.idxDefn.BucketUUID), string(inUseKeyId))
 	}
 
 	logging.Infof("bhiveSlice::recoverCodebook: reading from disk is successful for path: %v isEncrypted: %v", newFilePath, isEncrypted)
@@ -3133,19 +3159,106 @@ func (mdb *bhiveSlice) Destroy() {
 	}
 }
 
+func (mdb *bhiveSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, string) {
+
+	var rk string
+	var cipher string
+	var rkeyId []byte
+	var masterEncryptionKeyBytes []byte
+
+	// Methods getActiveKeyIdCipher, getKeyCipherById do EncryptionMgr cache lookup and then cbauth.GetEncryptionKeysBlocking()
+	// Thus key must be available, if key is not available it is treated as hard error in below calls.
+	if len(keyId) == 0 {
+		buuid := mdb.idxDefn.BucketUUID
+		masterEncryptionKeyBytes, rk, cipher = mdb.sliceEncryptionCallbacks.getActiveKeyIdCipher(kdtTypeServiceBucket, buuid)
+		rkeyId = []byte(rk)
+	} else {
+		// Bhive instance belonging to a bucket can ask for key related to another bucket
+		keyIdStr := string(keyId)
+		masterEncryptionKeyBytes, cipher = mdb.sliceEncryptionCallbacks.getKeyCipherById(keyIdStr)
+		rkeyId = keyId
+	}
+
+	return masterEncryptionKeyBytes, rkeyId, cipher
+}
+
+func (mdb *bhiveSlice) GetActiveKeyByPathCb(path string) ([]byte, []byte, string) {
+	bucketUUID := GetBucketUUIDIndexPath2(path)
+
+	logging.Infof("bhiveSlice::GetActiveKeyByPathCb path: %v bucketUUID: %v", path, bucketUUID)
+	//ENCRYPT_TODO: Add extra validation to check the bucketUUID is valid in cluster
+
+	if bucketUUID == common.BUCKET_UUID_NIL {
+		return []byte{}, []byte{}, CipherNameNone
+	}
+	masterEncryptionKeyBytes, rk, cipher := mdb.sliceEncryptionCallbacks.getActiveKeyIdCipher(kdtTypeServiceBucket, bucketUUID)
+	rkeyId := []byte(rk)
+	return masterEncryptionKeyBytes, rkeyId, cipher
+}
+
 func (mdb *bhiveSlice) SetCurrentEncryptionKey(masterEncryptionKey []byte, keyId []byte, cipher string) error {
-	// ENCRYPT_TODO: Update after storage changes
+
+	err := mdb.mainstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
+	if err != nil {
+		return err
+	}
+	mdb.sliceEncryptionCallbacks.setInUseKeys(GetBucketKDT(mdb.idxDefn.BucketUUID), string(keyId))
+
+	err = mdb.backstore.SetCurrentEncryptionKey(masterEncryptionKey, keyId, cipher)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func (mdb *bhiveSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
-	// ENCRYPT_TODO: Update after storage changes
-	doneCh <- nil
+
+	kids := make([][]byte, len(keyIds))
+	for i := range keyIds {
+		kids[i] = make([]byte, len(keyIds[i]))
+		copy(kids[i], keyIds[i])
+	}
+
+	go func() {
+		var err error
+		defer func() {
+			if doneCh != nil {
+				doneCh <- err
+			}
+		}()
+
+		doneCh2 := make(chan error, 2)
+
+		// initiate drop key
+		mdb.mainstore.DropKeys(kids, doneCh2)
+		mdb.backstore.DropKeys(kids, doneCh2)
+
+		// wait for completion
+		err = <-doneCh2
+		if err2 := <-doneCh2; err == nil {
+			err = err2
+		}
+		close(doneCh2)
+	}()
 }
 
 func (mdb *bhiveSlice) GetKeyIdList() ([][]byte, error) {
-	// ENCRYPT_TODO: Update after storage changes
-	return [][]byte{}, nil
+	keyIds, err := mdb.mainstore.GetKeyIdList()
+	if err != nil {
+		return nil, err
+	}
+
+	keyIds2, err := mdb.backstore.GetKeyIdList()
+	if err != nil {
+		return nil, err
+	}
+	for _, kid := range keyIds2 {
+		//ENCRYPT_TODO: Check if bhive exposes AppendUniqueKeyId
+		keyIds = plasma.AppendUniqueKeyId(keyIds, kid)
+	}
+
+	return keyIds, nil
 }
 
 func (mdb *bhiveSlice) SetCodebookEncryptionKey(key []byte, keyId string, cipher string, kdt KeyDataType) error {

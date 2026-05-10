@@ -4967,6 +4967,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.encryption.maxStorageDropKeyRetry": ConfigValue{
+		Value:         5,
+		Help:          "Maximum number of retries for storage drop key operation, set to 0 for non-positive values and no retry",
+		DefaultVal:    5,
+		Immutable:     false,
+		Casesensitive: false,
+	},
+	"indexer.encryption.dropKeyRetryInterval": ConfigValue{
+		Value:         30,
+		Help:          "Time interval to wait before issuing dropKey again to storage, set to 0 for non-positive values and no wait",
+		DefaultVal:    30,
+		Immutable:     false,
+		Casesensitive: false,
+	},
 	"indexer.encryption.enable_test": ConfigValue{
 		Value:         false,
 		Help:          "Enable testing by using encryption test REST apis",

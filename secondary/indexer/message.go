@@ -3645,6 +3645,7 @@ type MsgEncryptionDropKey struct {
 	dropKeyIds   []string
 	activeEarkey EaRKey
 	respCh       chan error
+	retryCount   int
 }
 
 func (m *MsgEncryptionDropKey) GetMsgType() MsgType {
@@ -3665,6 +3666,14 @@ func (m *MsgEncryptionDropKey) GetDropKeyIds() []string {
 
 func (m *MsgEncryptionDropKey) GetRespCh() chan error {
 	return m.respCh
+}
+
+func (m *MsgEncryptionDropKey) GetRetryCount() int {
+	return m.retryCount
+}
+
+func (m *MsgEncryptionDropKey) SetRetryCount(count int) {
+	m.retryCount = count
 }
 
 type MsgEncryptionImportKeys struct {

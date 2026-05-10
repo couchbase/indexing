@@ -1948,7 +1948,7 @@ func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 	}
 
 	switch kdt.TypeName {
-	case "service_bucket":
+	case kdtTypeServiceBucket:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 		// ENCRYPT_TODO: Handle below types later
@@ -1981,7 +1981,7 @@ func (idx *indexer) handleEncryptionDropKeys(msg Message) {
 	logging.Infof("Indexer::handleEncryptionDropKeys...")
 
 	switch kdt.TypeName {
-	case "service_bucket":
+	case kdtTypeServiceBucket:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
@@ -15387,7 +15387,7 @@ func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 		return err
 	}
 
-	key, keyid, cipher := idx.encryptionMgr.getActiveKeyIdCipher("service_bucket", idxInst.Defn.BucketUUID)
+	key, keyid, cipher := idx.encryptionMgr.getActiveKeyIdCipher(kdtTypeServiceBucket, idxInst.Defn.BucketUUID)
 
 	isEncryptionRequired := !(cipher == CipherNameNone || keyid == "" || key == nil)
 
@@ -15455,7 +15455,7 @@ func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 		}
 
 		// Set in-use key for codebook
-		idx.encryptionMgr.SetInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxInst.Defn.BucketUUID}, keyid)
+		idx.encryptionMgr.SetInUseKeys(GetBucketKDT(idxInst.Defn.BucketUUID), keyid)
 	} else {
 		// Persist un-encrypted codebook
 		err := common.WriteFileWithSync(codebookPath, codebook, 0755)
@@ -15464,7 +15464,7 @@ func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 			return err
 		}
 		// Set "" in-use key for codebook
-		idx.encryptionMgr.SetInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxInst.Defn.BucketUUID}, "")
+		idx.encryptionMgr.SetInUseKeys(GetBucketKDT(idxInst.Defn.BucketUUID), "")
 	}
 
 	logging.Infof("Indexer::persistCodebookToDisk: Persistance to disk is successful for path: %v isEncrypted:%v keyid:%v", codebookPath, isEncryptionRequired, keyid)

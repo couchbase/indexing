@@ -9,6 +9,7 @@ import (
 	"os"
 
 	gocbcrypto "github.com/couchbase/gocbcrypto"
+	"github.com/couchbase/plasma"
 )
 
 const (
@@ -18,6 +19,7 @@ const (
 
 var EncryptionChunkSize = gocbcrypto.ChunkSize
 var ErrCipherKeyLookup = gocbcrypto.ErrCipherKeyLookup
+var ErrRetryDropKey = plasma.ErrRetryDropKey
 
 func NewEncryptionCtx(keyId string, keyData []byte, cipher string, kdfLabel []byte) (EncryptionCtx, error) {
 	switch cipher {

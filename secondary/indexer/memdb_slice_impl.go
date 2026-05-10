@@ -2192,7 +2192,7 @@ func (s *memdbSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, strin
 	// Thus key must be available, if key is not available it is treated as hard error in below calls.
 	if len(keyId) == 0 {
 		buuid := s.idxDefn.BucketUUID
-		masterEncryptionKeyBytes, rk, cipher = s.sliceEncryptionCallbacks.getActiveKeyIdCipher("service_bucket", buuid)
+		masterEncryptionKeyBytes, rk, cipher = s.sliceEncryptionCallbacks.getActiveKeyIdCipher(kdtTypeServiceBucket, buuid)
 		rkeyId = []byte(rk)
 	} else {
 		// Plasma instance belonging to a bucket can ask for key related to another bucket

@@ -492,10 +492,6 @@ func backupCorruptedSlice_Plasma(storageDir string, prefix string, rename func(s
 	return plasma.BackupCorruptedInstance(storageDir, prefix, rename, clean)
 }
 
-type GetKeyByIdCb func(keyId []byte) (masterEncryptionKey []byte, returnedKeyId []byte, cipher string)
-
-type GetActiveKeyByPathCb func(path string) (masterKey []byte, outKeyId []byte, cipher string)
-
 func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) error {
 	var err error
 
@@ -965,7 +961,7 @@ func (s *plasmaSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, stri
 	// Thus key must be available, if key is not available it is treated as hard error in below calls.
 	if len(keyId) == 0 {
 		buuid := s.idxDefn.BucketUUID
-		masterEncryptionKeyBytes, rk, cipher = s.sliceEncryptionCallbacks.getActiveKeyIdCipher("service_bucket", buuid)
+		masterEncryptionKeyBytes, rk, cipher = s.sliceEncryptionCallbacks.getActiveKeyIdCipher(kdtTypeServiceBucket, buuid)
 		rkeyId = []byte(rk)
 	} else {
 		// Plasma instance belonging to a bucket can ask for key related to another bucket
@@ -986,7 +982,7 @@ func (s *plasmaSlice) GetActiveKeyByPathCb(path string) ([]byte, []byte, string)
 	if bucketUUID == common.BUCKET_UUID_NIL {
 		return []byte{}, []byte{}, CipherNameNone
 	}
-	masterEncryptionKeyBytes, rk, cipher := s.sliceEncryptionCallbacks.getActiveKeyIdCipher("service_bucket", bucketUUID)
+	masterEncryptionKeyBytes, rk, cipher := s.sliceEncryptionCallbacks.getActiveKeyIdCipher(kdtTypeServiceBucket, bucketUUID)
 	rkeyId := []byte(rk)
 	return masterEncryptionKeyBytes, rkeyId, cipher
 }
@@ -6509,7 +6505,7 @@ func (mdb *plasmaSlice) recoverCodebook(codebookPath string) error {
 		}
 
 		// Set empty keyid in-use if un-encrypted
-		mdb.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: mdb.idxDefn.BucketUUID}, "")
+		mdb.sliceEncryptionCallbacks.setInUseKeys(GetBucketKDT(mdb.idxDefn.BucketUUID), "")
 	} else {
 		//Encryption: If codebook is in encrypted, decrypt before storing in memory.
 		getKeyById := func(keyid []byte) []byte {
@@ -6530,7 +6526,7 @@ func (mdb *plasmaSlice) recoverCodebook(codebookPath string) error {
 			return errCodebookCorrupted
 		}
 
-		mdb.sliceEncryptionCallbacks.setInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: mdb.idxDefn.BucketUUID}, string(inUseKeyId))
+		mdb.sliceEncryptionCallbacks.setInUseKeys(GetBucketKDT(mdb.idxDefn.BucketUUID), string(inUseKeyId))
 	}
 
 	logging.Infof("plasmaSlice::recoverCodebook: reading from disk is successful for path: %v isEncrypted: %v", newFilePath, isEncrypted)
