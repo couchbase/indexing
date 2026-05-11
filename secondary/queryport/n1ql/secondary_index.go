@@ -23,7 +23,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/couchbase/gocbcrypto"
 	"github.com/couchbase/indexing/secondary/common"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/stats"
@@ -55,6 +54,18 @@ const BACKFILLTICK = 5
 
 var scanKDFLabelCtx = []byte("indexing/n1ql")
 var cryptFileWriterReaderBufSz = uint32(4096)
+
+type backfillCryptWriter interface {
+	WriteHeader() (int, error)
+	Flush() error
+	EncryptAndWriteBlock([]byte) (int, error)
+	Reset()
+}
+
+type backfillCryptReader interface {
+	ReadAndDecryptBlock() ([]byte, error)
+	Reset()
+}
 
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(
@@ -2228,17 +2239,6 @@ func makeRequestBroker(
 	return broker
 }
 
-func newEncryptionCtx(cipher string, encryptionKeyId string, getKeyById func([]byte) []byte) (gocbcrypto.EncryptionContext, error) {
-
-	switch cipher {
-	case "AES-256-GCM":
-		ctx, err := gocbcrypto.NewAESGCM256ContextWithOpenSSL([]byte(encryptionKeyId), getKeyById([]byte(encryptionKeyId)), scanKDFLabelCtx, 0)
-		return ctx, err
-	default:
-		return nil, fmt.Errorf("invalid cipher:%v", cipher)
-	}
-}
-
 func makeResponsehandler(
 	id qclient.ResponseHandlerId,
 	requestId string,
@@ -2266,8 +2266,8 @@ func makeResponsehandler(
 	// For encrypted files, encoder writes data to encbuf, encrypted buffer is written to file
 	//  and decrypted data is stored to decbuf which is later read by decoder.
 
-	var cfw *gocbcrypto.CryptFileWriter
-	var cfr *gocbcrypto.CryptFileReader
+	var cfw backfillCryptWriter
+	var cfr backfillCryptReader
 	var aligned = false
 	var encbuf bytes.Buffer
 	var decbuf bytes.Buffer
@@ -2358,7 +2358,7 @@ func makeResponsehandler(
 				//Read block from file, dec/decbuf is initialized before starting backfill
 				bs, err := cfr.ReadAndDecryptBlock()
 				if err != nil {
-					if gocbcrypto.IsDecryptionError(err) {
+					if isDecryptionError(err) {
 						err = fmt.Errorf("fatal - %w", err)
 					}
 					conn.Error(n1qlError(client, err))
@@ -2520,23 +2520,12 @@ func makeResponsehandler(
 				// encoder
 				if shouldEncrypt {
 					enc = gob.NewEncoder(&encbuf)
-					ctx, err := newEncryptionCtx(cipher, encryptionKeyId, getKeyById)
+					cfw, err = newBackfillCryptWriter(tmpfile, cipher, encryptionKeyId, getKeyById, cryptFileWriterReaderBufSz, aligned)
 					if err != nil {
-						fmsg := "%v newEncryptionCtx err:%v"
+						fmsg := "%v newBackfillCryptWriter err:%v"
 						err := fmt.Errorf(fmsg, requestId, err)
 						tmpfile = nil
-						fmsg2 := "%v %q newEncryptionCtx err:%v"
-						l.Errorf(fmsg2, lprefix, requestId, name, err)
-						conn.Error(n1qlError(client, err))
-						broker.Error(err, instId, partitions)
-						return false
-					}
-					cfw, err = gocbcrypto.NewCryptFileWriter(tmpfile, ctx, cryptFileWriterReaderBufSz, aligned, nil)
-					if err != nil {
-						fmsg := "%v NewCryptFileWriter err:%v"
-						err := fmt.Errorf(fmsg, requestId, err)
-						tmpfile = nil
-						fmsg2 := "%v %q NewCryptFileWriter err:%v"
+						fmsg2 := "%v %q newBackfillCryptWriter err:%v"
 						l.Errorf(fmsg2, lprefix, requestId, name, err)
 						conn.Error(n1qlError(client, err))
 						broker.Error(err, instId, partitions)
@@ -2583,7 +2572,7 @@ func makeResponsehandler(
 				// decoder
 				if shouldEncrypt {
 					// Read and decrypt temp file and load result to decbuf and reset the buffer
-					cfr, err = gocbcrypto.NewCryptFileReaderWithLabel(readfd, getKeyById, scanKDFLabelCtx, cryptFileWriterReaderBufSz, aligned, nil)
+					cfr, err = newBackfillCryptReader(readfd, getKeyById, scanKDFLabelCtx, cryptFileWriterReaderBufSz, aligned)
 					if err != nil {
 						fmsg := "%v crypt file reader err:%v"
 						err := fmt.Errorf(fmsg, requestId, err)
