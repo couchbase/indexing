@@ -2445,13 +2445,25 @@ func makeResponsehandler(
 			conn.RecordGsiRU(tenant.Unit(readUnits))
 		}
 
-		// Scan report is sent as part of StreamEndResponse and does not contain
-		// any entries. So we can return false here.
-		// Another case is when there is an error in server, the error is
-		// already handled prior to repsponse handler callback invocation.
+		// Scan report arrives either in StreamEndResponse (normal completion) or in a
+		// ResponseStream that also carries a server-side error.
+		//
+		// Error case (ResponseStream + error + scan report):
+		//   scan_client.go invokes the callback so the partial report is captured.
+		//
+		// Normal completion case (StreamEndResponse + scan report, no error):
+		//   Do NOT return early. The code below sends the end-of-stream signal
+		//   (empty pkeys/skeys), which is required to:
+		//     1. Exit the backfill goroutine via SendEntries returning false,
+		//        unblocking scatterScan2's c.waiter() (prevents deadlock).
+		//     2. Enqueue the r.last=true sentinel to gather queues for
+		//        multi-partition scans (prevents forward/gather from hanging).
 		if serverScanReport := data.GetServerScanReport(); serverScanReport != nil {
 			broker.AttachIndexerScanReport(serverScanReport, int(id))
-			return false
+			if data.Error() != nil {
+				// Error case: error handled outside.
+				return false
+			}
 		}
 
 		err := data.Error()

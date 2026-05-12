@@ -1619,6 +1619,8 @@ func (c *GsiScanClient) streamResponse(
 	} else if streamResp, ok := resp.(*protobuf.ResponseStream); ok {
 		// To retain the existing behaviour i.e. returning the error rather than
 		// handling in the callback, this condition is necessary.
+		// When there is an error but the scan report is present, still invoke the
+		// callback so the partial scan report is captured before the error is handled.
 		if err = streamResp.Error(); err == nil || streamResp.GetServerScanReport() != nil {
 			cont = callb(streamResp)
 		}
