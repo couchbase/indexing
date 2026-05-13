@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/couchbase/indexing/secondary/logging"
@@ -1332,4 +1333,59 @@ func (v ConciseSparseVector) Values() []float32 {
 		return nil
 	}
 	return []float32(v[1+nnz:])
+}
+
+// TruncateConciseTopN returns a concise sparse vector restricted to the
+// maxNNZ entries with the largest absolute value (SPLADE-style top-N pruning).
+// The relative sort order of the kept dim indices is preserved so the result
+// remains a valid concise vector for downstream merge-based scoring.
+//
+// If maxNNZ <= 0 or the input already has <= maxNNZ entries, in is returned
+// unchanged and truncated is false. Otherwise the truncated vector is written
+// into buf (grown if needed) and (buf, true) is returned. Callers that cache
+// buf across calls should reassign it from the returned slice when truncated
+// is true.
+func TruncateConciseTopN(in []float32, maxNNZ int, buf []float32) (out []float32, truncated bool) {
+	if maxNNZ <= 0 || len(in) == 0 {
+		return in, false
+	}
+	nnz := int(in[0])
+	if nnz <= maxNNZ || len(in) < 1+2*nnz {
+		return in, false
+	}
+
+	values := in[1+nnz : 1+2*nnz]
+
+	// Pick the top-maxNNZ positions by |value|. Stable tiebreak by original
+	// position keeps the truncation deterministic for identical inputs.
+	pos := make([]int, nnz)
+	for i := range pos {
+		pos[i] = i
+	}
+	sort.SliceStable(pos, func(a, b int) bool {
+		va, vb := values[pos[a]], values[pos[b]]
+		if va < 0 {
+			va = -va
+		}
+		if vb < 0 {
+			vb = -vb
+		}
+		return va > vb
+	})
+	pos = pos[:maxNNZ]
+	// Restore ascending order of original positions so kept dims stay sorted.
+	sort.Ints(pos)
+
+	outLen := 1 + 2*maxNNZ
+	if cap(buf) < outLen {
+		buf = make([]float32, outLen)
+	} else {
+		buf = buf[:outLen]
+	}
+	buf[0] = float32(maxNNZ)
+	for i, p := range pos {
+		buf[1+i] = in[1+p]              // dim index
+		buf[1+maxNNZ+i] = in[1+nnz+p]   // value
+	}
+	return buf, true
 }

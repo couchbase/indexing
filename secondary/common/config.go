@@ -5126,6 +5126,13 @@ var SystemConfig = Config{
 		Immutable:     false,
 		Casesensitive: false,
 	},
+	"indexer.vector.sparse.maxNNZ": ConfigValue{
+		70,
+		"Max non-zero dims kept per stored sparse vector (SPLADE top-N pruning by |value|). 0 disables truncation.",
+		70,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.encryption.enable_test": ConfigValue{
 		Value:         false,
 		Help:          "Enable testing by using encryption test REST apis",
