@@ -371,6 +371,14 @@ type IndexStats struct {
 
 	// Vector scan admission stats
 	vectorScanQueued stats.Int64Val
+
+	// Sparse vector stats. sparseTotalNNZ accumulates the NNZ count of every
+	// stored sparse vector (post top-N truncation if enabled). sparseNumVecsIndexed
+	// is the count of sparse vector inserts. avgSparseNNZ is the derived
+	// avg = sparseTotalNNZ / sparseNumVecsIndexed, populated at stats-emit time.
+	sparseTotalNNZ       stats.Int64Val
+	sparseNumVecsIndexed stats.Int64Val
+	avgSparseNNZ         stats.Int64Val
 }
 
 type IndexerStatsHolder struct {
@@ -651,6 +659,9 @@ func (s *IndexStats) Init() {
 	s.codebookSize.Init()
 	s.cbTrainDuration.Init()
 	s.graphBuildProgress.Init()
+	s.sparseTotalNNZ.Init()
+	s.sparseNumVecsIndexed.Init()
+	s.avgSparseNNZ.Init()
 
 	// Set filters
 	// Note that the filters will be set on both: instance level stats and
@@ -2377,6 +2388,21 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 				return ss.graphBuildProgress.Value()
 			},
 			&s.graphBuildProgress, s.partnAvgInt64Stats)
+
+		// Average NNZ across all stored sparse vectors. Aggregates sum and count
+		// across partitions before dividing to avoid the average-of-averages skew.
+		totalNNZ := s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.sparseTotalNNZ.Value()
+		})
+		numVecs := s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.sparseNumVecsIndexed.Value()
+		})
+		var avg int64
+		if numVecs > 0 {
+			avg = totalNNZ / numVecs
+		}
+		s.avgSparseNNZ.Set(avg)
+		statMap.AddStatValueFiltered("avg_sparse_nnz", &s.avgSparseNNZ)
 	}
 
 	// -------------------------------

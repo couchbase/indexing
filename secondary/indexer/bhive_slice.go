@@ -1420,6 +1420,11 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 			mdb.idxStats.rawDataSize.Add(mainIndexEntrySz)
 			addKeySizeStat(mdb.idxStats, int(mainIndexEntrySz))
 			atomic.AddInt64(&mdb.insert_bytes, mainIndexEntrySz)
+
+			if isSparseVector && len(vec) > 0 {
+				mdb.idxStats.sparseTotalNNZ.Add(int64(common.ConciseSparseVector(vec).NNZ()))
+				mdb.idxStats.sparseNumVecsIndexed.Add(1)
+			}
 		}
 
 		// insert into back index

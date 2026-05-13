@@ -2433,6 +2433,11 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 			mdb.idxStats.rawDataSize.Add(int64(len(mainIndexEntry) + len(quantizedCodeOrConciseVec)))
 			addKeySizeStat(mdb.idxStats, len(mainIndexEntry))
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(mainIndexEntry)+len(quantizedCodeOrConciseVec)))
+
+			if isSparseVector && len(vec) > 0 {
+				mdb.idxStats.sparseTotalNNZ.Add(int64(common.ConciseSparseVector(vec).NNZ()))
+				mdb.idxStats.sparseNumVecsIndexed.Add(1)
+			}
 		}
 
 		backIndexEntry := entry2VectorBackIndexEntry(mainIndexEntry, encodedSHA)
