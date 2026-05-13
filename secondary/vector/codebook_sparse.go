@@ -20,7 +20,7 @@ import (
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
-const DEFAULT_SPARSEJL_DIM = 128
+const DEFAULT_SPARSEJL_DIM = 2048
 
 // getSparseNormalizationEnabled returns whether L2 normalization is enabled
 // for sparse vector training and query operations.
