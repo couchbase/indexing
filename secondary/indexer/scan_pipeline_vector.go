@@ -46,6 +46,11 @@ type ScanJob struct {
 	// give the total rows that are processed in the scan pipeline
 	rowsFiltered uint64
 
+	// Candidate rows skipped by Transpose during sparse vector scans because
+	// the document had no overlap with any query term. Useful to gauge how
+	// often the IVF probe brings back useless candidates.
+	sparseScanNoMatchSkips uint64
+
 	decodeDur int64
 	decodeCnt int64
 
@@ -84,8 +89,8 @@ func (j *ScanJob) SetStartTime() {
 
 func (j *ScanJob) PrintStats() {
 	getDebugStr := func() string {
-		s := fmt.Sprintf("%v %v stats rowsScanned: %v, rowsReturned: %v, rowsFiltered: %v",
-			j.logPrefix, j.debugString, j.rowsScanned, j.rowsReturned, j.rowsFiltered)
+		s := fmt.Sprintf("%v %v stats rowsScanned: %v, rowsReturned: %v, rowsFiltered: %v, sparseScanNoMatchSkips: %v",
+			j.logPrefix, j.debugString, j.rowsScanned, j.rowsReturned, j.rowsFiltered, j.sparseScanNoMatchSkips)
 		if logging.IsEnabled(logging.Timing) {
 			s += fmt.Sprintf(" timeTaken: %v", time.Since(j.startTime))
 		}
@@ -656,6 +661,13 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 
 	atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
 	atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
+
+	// Track candidate rows that produced no query-term match. These rows would
+	// otherwise be passed through ComputeDistance unnecessarily; their volume
+	// is a useful signal for tuning IVF probe count and the input quality.
+	if skipped := vecCount - validCount; skipped > 0 {
+		w.currJob.sparseScanNoMatchSkips += uint64(skipped)
+	}
 
 	// Every surviving row already had a valid stored distance; nothing to compute.
 	if computeCount == 0 {
@@ -2320,6 +2332,7 @@ func (s *IndexScanSource2) Routine() error {
 				s.p.decodeCnt += job.decodeCnt
 				s.p.distCmpDur += job.distCmpDur
 				s.p.distCmpCnt += job.distCmpCnt
+				s.p.sparseScanNoMatchSkips += job.sparseScanNoMatchSkips
 			}
 		}
 		s.p.rowsReranked += fanIn.rowsReranked

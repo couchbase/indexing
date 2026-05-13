@@ -379,6 +379,11 @@ type IndexStats struct {
 	sparseTotalNNZ       stats.Int64Val
 	sparseNumVecsIndexed stats.Int64Val
 	avgSparseNNZ         stats.Int64Val
+
+	// Count of candidate rows skipped by Transpose during sparse vector scans
+	// because the document had no overlap with any query term. Useful to
+	// gauge how often the IVF probe is bringing back useless candidates.
+	sparseScanNoMatchSkips stats.Int64Val
 }
 
 type IndexerStatsHolder struct {
@@ -662,6 +667,7 @@ func (s *IndexStats) Init() {
 	s.sparseTotalNNZ.Init()
 	s.sparseNumVecsIndexed.Init()
 	s.avgSparseNNZ.Init()
+	s.sparseScanNoMatchSkips.Init()
 
 	// Set filters
 	// Note that the filters will be set on both: instance level stats and
@@ -2403,6 +2409,12 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		}
 		s.avgSparseNNZ.Set(avg)
 		statMap.AddStatValueFiltered("avg_sparse_nnz", &s.avgSparseNNZ)
+
+		statMap.AddAggrStatFiltered("sparse_scan_no_match_skips",
+			func(ss *IndexStats) int64 {
+				return ss.sparseScanNoMatchSkips.Value()
+			},
+			&s.sparseScanNoMatchSkips, s.partnInt64Stats)
 	}
 
 	// -------------------------------

@@ -756,6 +756,7 @@ func (s *scanCoordinator) handleVectorScanRequest(req *ScanRequest, w ScanRespon
 		req.Stats.numRowsScanned.Add(int64(scanPipeline.RowsScanned()))
 		req.Stats.numRowsFiltered.Add(int64(scanPipeline.RowsFiltered()))
 		req.Stats.numRowsReranked.Add(int64(scanPipeline.RowsReranked()))
+		req.Stats.sparseScanNoMatchSkips.Add(int64(scanPipeline.SparseScanNoMatchSkips()))
 		req.Stats.scanBytesRead.Add(int64(scanPipeline.BytesRead()))
 		req.Stats.scanDuration.Add(scanTime.Nanoseconds())
 		req.Stats.scanWaitDuration.Add(waitTime.Nanoseconds())
