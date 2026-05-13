@@ -34,7 +34,7 @@ import (
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	l "github.com/couchbase/indexing/secondary/logging"
 
-	"github.com/couchbase/gocbcrypto"
+
 	gomr "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
@@ -15327,17 +15327,6 @@ func (idx *indexer) isTransientErrorForVectorBuild(err error, isRebalOrResume bo
 	return true
 }
 
-func newEncryptionCtx(cipher string, encryptionKeyId string, key []byte) (gocbcrypto.EncryptionContext, error) {
-
-	switch cipher {
-	case "AES-256-GCM":
-		ctx, err := gocbcrypto.NewAESGCM256ContextWithOpenSSL([]byte(encryptionKeyId), key, codebookKDFLabelCtx, 0)
-		return ctx, err
-	default:
-		return nil, fmt.Errorf("invalid cipher:%v", cipher)
-	}
-}
-
 func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 	idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId,
 	codebook []byte) error {
@@ -15364,14 +15353,20 @@ func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 
 	key, keyid, cipher := idx.encryptionMgr.getActiveKeyIdCipher("service_bucket", idxInst.Defn.BucketUUID)
 
-	isEncryptionRequired := !(cipher == gocbcrypto.CipherNameNone || keyid == "" || key == nil)
+	isEncryptionRequired := !(cipher == CipherNameNone || keyid == "" || key == nil)
 
 	if isEncryptionRequired {
 		// Persist encrypted codebook
-		ctx, err := newEncryptionCtx(cipher, keyid, key)
+		ctx, err := NewEncryptionCtx(keyid, key, cipher, codebookKDFLabelCtx)
 		if err != nil {
-			logging.Errorf("Indexer::persistCodebookToDisk Error observed on newEncryptionCtx err:%v", err)
+			logging.Errorf("Indexer::persistCodebookToDisk Error observed on NewEncryptionCtx err:%v", err)
 			return err
+		} else if ctx == nil {
+			// If err & ctx both are nil, cipher must be none
+			// For that cases if CryptFileWriter used, it can add empty encryption header for un-encrypted data
+			// Thus return error
+			logging.Errorf("Indexer::persistCodebookToDisk encryption path followed for none cipher")
+			return fmt.Errorf("Encryption for none cipher")
 		}
 
 		var aligned = false
@@ -15385,7 +15380,7 @@ func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 		}
 		defer fd.Close()
 
-		cfw, err := gocbcrypto.NewCryptFileWriter(fd, ctx, cryptFileWriterReaderBufSz, aligned, nil)
+		cfw, err := NewCryptFileWriter(fd, ctx, cryptFileWriterReaderBufSz, aligned, nil)
 		if err != nil {
 			logging.Errorf("Indexer::persistCodebookToDisk Error observed on NewCryptFileWriter err:%v", err)
 			return err

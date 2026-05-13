@@ -23,7 +23,7 @@ import (
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 
 	"github.com/couchbase/cbauth"
-	"github.com/couchbase/gocbcrypto"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
@@ -892,13 +892,6 @@ func (e *EncryptionMgr) RegisterRestEndpoints() {
 	mux := GetHTTPMux()
 	mux.HandleFunc("/encryption/GetInUseKeys", e.getInUseKeysHandler)
 	if e.testRunning == false && e.enableTest.Load() {
-		//mux.HandleFunc("/test/RefreshKeysCallback", addEncryptionKey)
-		//mux.HandleFunc("/test/DropKeysCallback", dropEncryptionKey)
-		//mux.HandleFunc("/test/DisableEncryption", disableEncryption)
-		//mux.HandleFunc("/test/GetInUseKeys", getInUseKeys)
-		//mux.HandleFunc("/test/GetToBeUsedKeys", getToBeUsedKeys)
-
-		// ENCRYPT_TODO: Remove endpoints when test-framework not required
 		e.testRunning = true
 	}
 }
@@ -1128,7 +1121,7 @@ func (e *EncryptionMgr) getKeyCacheByKeyid(kdt KeyDataType, keyid string) (EaRKe
 func (e *EncryptionMgr) getKeyCipherById(keyId string) ([]byte, string) {
 
 	if keyId == "" {
-		return []byte{}, gocbcrypto.CipherNameNone
+		return []byte{}, CipherNameNone
 	}
 
 	e.mu.Lock()
@@ -1175,7 +1168,7 @@ func (e *EncryptionMgr) getKeyCipherById(keyId string) ([]byte, string) {
 
 		// No keydata is available for keyId for all possible keydatatypes
 		if !kdtFound {
-			return []byte{}, gocbcrypto.CipherNameNone
+			return []byte{}, CipherNameNone
 		}
 
 	} else {
@@ -1213,7 +1206,7 @@ func (e *EncryptionMgr) getKeyCipherById(keyId string) ([]byte, string) {
 		}
 	}
 
-	return []byte{}, gocbcrypto.CipherNameNone
+	return []byte{}, CipherNameNone
 }
 
 // Get active key for keydatatype
@@ -1231,7 +1224,7 @@ func (e *EncryptionMgr) getActiveKeyIdCipher(typename, bucketUUID string) ([]byt
 		key, keyid, cipher := getActiveKeyIdCipherFromEncrKeysInfo(encrKeysInfo)
 		if len(key) == 0 && keyid == "" && cipher == "" {
 			//Encryption disabled for keydatatype thus keydata can be empty
-			return key, keyid, gocbcrypto.CipherNameNone
+			return key, keyid, CipherNameNone
 		} else if len(key) == 0 || keyid == "" || cipher == "" {
 			//Try getting latest info from cbauth
 			logging.Warnf(
@@ -1265,31 +1258,31 @@ func (e *EncryptionMgr) getActiveKeyIdCipher(typename, bucketUUID string) ([]byt
 		key, keyid, cipher := getActiveKeyIdCipherFromEncrKeysInfo(encrKeysInfo)
 		if len(key) == 0 && keyid == "" && cipher == "" {
 			//Encryption disabled for keydatatype thus keydata can be empty
-			return key, keyid, gocbcrypto.CipherNameNone
+			return key, keyid, CipherNameNone
 		} else if len(key) == 0 || keyid == "" || cipher == "" {
 			//It is safe to assume activeKey is present in encrKeys from GetEncryptionKeysBlocking, still log warning if key data has some fields missing
 			logging.Warnf(
 				"EncryptionMgr:getActiveKeyIdCipher cbauth no key data keylength:%d keyid:%v cipher:%v",
 				len(key), logKeyIDs(keyid), cipher,
 			)
-			return []byte{}, "", gocbcrypto.CipherNameNone
+			return []byte{}, "", CipherNameNone
 		} else {
 			return key, keyid, cipher
 		}
 	}
 
 	// Encryption can be disabled i.e. empty active key.
-	return []byte{}, "", gocbcrypto.CipherNameNone
+	return []byte{}, "", CipherNameNone
 }
 
 func getActiveKeyIdCipherTest(typename, bucketUUID string) ([]byte, string, string) {
 	// empty for storage test
-	return []byte{}, "", gocbcrypto.CipherNameNone
+	return []byte{}, "", CipherNameNone
 }
 
 func getKeyCipherByIdTest(keyId string) ([]byte, string) {
 	// empty for storage test
-	return []byte{}, gocbcrypto.CipherNameNone
+	return []byte{}, CipherNameNone
 }
 
 func setInUseKeysTest(kdt KeyDataType, keyId string) {
@@ -1540,7 +1533,6 @@ func (e *EncryptionMgr) dropKeysCallback(kdt KeyDataType, keyids []string) {
 }
 
 func (e *EncryptionMgr) synchronizeKeyFilesCallback(kdt KeyDataType) error {
-	// ENCRYPT_TODO: Add synchronizeKeyFilesCallback for rebalance
 	logging.Infof("EncryptionMgr:synchronizeKeyFilesCallback...")
 	return nil
 }
@@ -1600,7 +1592,7 @@ func getActiveEarKeyFromEncrKeysInfo(encrKeysInfo EncrKeysInfo) EaRKey {
 	// gocbcrypto is used for encryption of data
 	// gocbcrypto uses cipher mode "None" for un-encrypted data
 	if encrKeysInfo.ActiveKeyId == "" {
-		earkey.Cipher = gocbcrypto.CipherNameNone
+		earkey.Cipher = CipherNameNone
 	}
 
 	return earkey
