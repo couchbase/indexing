@@ -1389,6 +1389,24 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 			return false
 		}
 
+		// hasSiblingPartitionActive checks if any other partition of the same instance
+		// is in ACTIVE state. This is used to skip adding deferred index partitions
+		// from Create Command Token when sibling partitions are already ACTIVE.
+		// In such cases, addPartitionIfNecessary in planner.go will handle adding
+		// the missing partition with the correct state (cloned from existing partition).
+		hasSiblingPartitionActive := func(instId common.IndexInstId) bool {
+			for _, indexer := range indexers {
+				for _, index := range indexer.Indexes {
+					if index.InstId == instId && index.Instance != nil &&
+						index.Instance.State == common.INDEX_STATE_ACTIVE {
+
+						return true
+					}
+				}
+			}
+			return false
+		}
+
 		makeIndexUsage := func(defn *common.IndexDefn, partition common.PartitionId, shardIds []common.ShardId) *IndexUsage {
 			index := makeIndexUsageFromDefn(defn, defn.InstId, partition, uint64(defn.NumPartitions), shardIds, nil)
 
@@ -1443,6 +1461,16 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 
 					for _, partition := range defn.Partitions {
 						if !findPartition(defn.InstId, partition) {
+							// For deferred indexes, skip adding partition from Create Token if any
+							// sibling partition is already ACTIVE. This prevents state mismatch during
+							// merge (source in CREATED vs target in ACTIVE). The missing partition will
+							// be handled by addPartitionIfNecessary which clones state from existing partition.
+							if defn.Deferred && hasSiblingPartitionActive(defn.InstId) {
+								logging.Infof("Planner::processCreateToken: Skip deferred index partition (%v, %v, %v) "+
+									"as sibling partition is ACTIVE.", defn.DefnId, defn.InstId, partition)
+								continue
+							}
+
 							if addIndex(indexerId, makeIndexUsage(&defn, partition, nil)) {
 								logging.Infof("Planner::processCreateToken: Add index (%v, %v, %v, %v, %v, %v, %v)",
 									defn.DefnId, defn.InstId, partition, defn.Name, defn.Bucket, defn.Scope, defn.Collection)
