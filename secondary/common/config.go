@@ -5140,6 +5140,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.vector.sparse.maxQueryNNZ": ConfigValue{
+		10,
+		"Max query terms kept per sparse vector scan (top-N by |value|). Caps per-vector Transpose cost at scan time. 0 disables; 10-20 is a typical SPLADE setting.",
+		10,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.encryption.enable_test": ConfigValue{
 		Value:         false,
 		Help:          "Enable testing by using encryption test REST apis",

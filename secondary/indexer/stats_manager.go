@@ -384,6 +384,11 @@ type IndexStats struct {
 	// because the document had no overlap with any query term. Useful to
 	// gauge how often the IVF probe is bringing back useless candidates.
 	sparseScanNoMatchSkips stats.Int64Val
+
+	// Cumulative count of query terms dropped by top-K pruning across all
+	// sparse vector scans (incremented by originalNNZ-prunedNNZ per scan).
+	// Pair with num_completed_requests to derive avg terms pruned per query.
+	sparseQueryTermsPruned stats.Int64Val
 }
 
 type IndexerStatsHolder struct {
@@ -668,6 +673,7 @@ func (s *IndexStats) Init() {
 	s.sparseNumVecsIndexed.Init()
 	s.avgSparseNNZ.Init()
 	s.sparseScanNoMatchSkips.Init()
+	s.sparseQueryTermsPruned.Init()
 
 	// Set filters
 	// Note that the filters will be set on both: instance level stats and
@@ -2415,6 +2421,12 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 				return ss.sparseScanNoMatchSkips.Value()
 			},
 			&s.sparseScanNoMatchSkips, s.partnInt64Stats)
+
+		statMap.AddAggrStatFiltered("sparse_query_terms_pruned",
+			func(ss *IndexStats) int64 {
+				return ss.sparseQueryTermsPruned.Value()
+			},
+			&s.sparseQueryTermsPruned, s.partnInt64Stats)
 	}
 
 	// -------------------------------

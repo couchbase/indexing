@@ -808,6 +808,8 @@ func (r *ScanRequest) getNearestCentroids() error {
 		}
 		sparseJLDim := sparseCb.Dimension()
 		jlVec := make([]float32, sparseJLDim)
+		// Centroid lookup uses the full (unpruned) query: it's a one-time
+		// cheap operation and benefits from the most accurate query signal.
 		if err := sparseCb.Concise2SparseJL([]float32(r.sparseQueryVector), jlVec); err != nil {
 			return fmt.Errorf("error projecting sparse query vector to SparseJL: %v", err)
 		}
@@ -823,6 +825,23 @@ func (r *ScanRequest) getNearestCentroids() error {
 			}
 			centroids = pruneInvalidCentroids(centroids)
 			r.centroidMap[pid] = centroids
+		}
+
+		// Top-K query pruning, applied after centroid lookup. The pruned query
+		// is what each cell-scan worker uses for Transpose, where nqdim
+		// linearly drives per-vector cost. Per Lassance et al. (SIGIR 2023)
+		// and Two-Step SPLADE (2024), top-N query pruning gives ~2x scan
+		// speedup at <2% effectiveness drop on SPLADE workloads.
+		cfg := r.sco.config.Load()
+		maxQueryNNZ := cfg["vector.sparse.maxQueryNNZ"].Int()
+		if maxQueryNNZ > 0 {
+			origNNZ := r.sparseQueryVector.NNZ()
+			if pruned, ok := common.TruncateConciseTopN([]float32(r.sparseQueryVector), maxQueryNNZ, nil); ok {
+				r.sparseQueryVector = common.ConciseSparseVector(pruned)
+				if r.Stats != nil {
+					r.Stats.sparseQueryTermsPruned.Add(int64(origNNZ - r.sparseQueryVector.NNZ()))
+				}
+			}
 		}
 		return nil
 	}
