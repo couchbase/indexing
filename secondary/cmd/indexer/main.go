@@ -204,6 +204,19 @@ func main() {
 
 	common.SetIpv6(isIPv6)
 
+	config, err = common.GetSettingsConfig(config)
+	if err != nil {
+		common.CrashOnError(err)
+	}
+
+	if config["platform.disable_thp"].Bool() {
+		err := platform.EnsureTHPDisabled()
+		if err != nil {
+			logging.Warnf("Indexer failure to disable THP %v. Potential high memory usage due to THP being enabled",
+				err)
+		}
+	}
+
 	_, msg := indexer.NewIndexer(config)
 
 	if msg.GetMsgType() != indexer.MSG_SUCCESS {

@@ -4968,11 +4968,19 @@ var SystemConfig = Config{
 		Casesensitive: false,
 	},
 	"indexer.queryport.backfill_pause_test_duration": ConfigValue{
-		Value:         0,	// seconds
+		Value:         0, // seconds
 		Help:          "Enable backfill testing by pausing backfill reader",
 		DefaultVal:    0,
 		Immutable:     false,
 		Casesensitive: false,
+	},
+	"platform.disable_thp": ConfigValue{
+		Value: true,
+		Help: "This config flag controls if indexer/projector should disable THP if its detected " +
+			"to be enabled. Only applies to startup of the process. Any config change will require process restart",
+		DefaultVal:    true,
+		Immutable:     false, // mutable
+		Casesensitive: false, // case-insensitive
 	},
 }
 

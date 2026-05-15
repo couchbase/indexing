@@ -30,7 +30,7 @@ var idx_sif10k_partn = "idx_sift10k_partn"
 var idx_base64 = "idx_base64"
 var vectorIndexActiveTimeout = int64(180) //3 min
 
-const SPARSE_DIMENSION int = 128
+const SPARSE_DIMENSION int = 2048
 
 // Fist queryvector from SIFT10K
 var indexVector = &datastore.IndexVector{
