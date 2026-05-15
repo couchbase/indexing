@@ -235,6 +235,9 @@ type plasmaSlice struct {
 	// For Sparse vector index, scratch buffer per writer used for top-N
 	// pruned concise vector when indexer.vector.sparse.maxNNZ > 0.
 	sparseTruncBuf [][]float32
+	// For Sparse vector index, scratch buffer per writer used for
+	// threshold-pruned concise vector when indexer.vector.sparse.minAbsWeight > 0.
+	sparseThreshBuf [][]float32
 
 	codebook codebook.Codebook
 
@@ -2367,7 +2370,12 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 		} else {
 			mdb.confLock.RLock()
 			maxNNZ := mdb.sysconf["vector.sparse.maxNNZ"].Int()
+			minAbsWeight := float32(mdb.sysconf["vector.sparse.minAbsWeight"].Float64())
 			mdb.confLock.RUnlock()
+			if pruned, ok := common.PruneConciseByThreshold(vec, minAbsWeight, mdb.sparseThreshBuf[workerId]); ok {
+				mdb.sparseThreshBuf[workerId] = pruned
+				vec = pruned
+			}
 			if truncated, ok := common.TruncateConciseTopN(vec, maxNNZ, mdb.sparseTruncBuf[workerId]); ok {
 				mdb.sparseTruncBuf[workerId] = truncated
 				vec = truncated
@@ -5587,6 +5595,7 @@ func (slice *plasmaSlice) setupWriters() {
 	if slice.idxDefn.HasSparseVector() {
 		slice.sparseJLBuf = make([][]float32, 0, slice.maxNumWriters)
 		slice.sparseTruncBuf = make([][]float32, 0, slice.maxNumWriters)
+		slice.sparseThreshBuf = make([][]float32, 0, slice.maxNumWriters)
 	}
 
 	// initialize comand handler
@@ -5628,10 +5637,12 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 	if slice.idxDefn.IsVectorIndex && slice.idxDefn.HasSparseVector() {
 		slice.sparseJLBuf = slice.sparseJLBuf[:numWriters]
 		slice.sparseTruncBuf = slice.sparseTruncBuf[:numWriters]
+		slice.sparseThreshBuf = slice.sparseThreshBuf[:numWriters]
 		for i := curNumWriters; i < numWriters; i++ {
 			// After training is completed, the sparse JL vector buffer will be resized
 			slice.sparseJLBuf[i] = make([]float32, 0)
 			slice.sparseTruncBuf[i] = nil
+			slice.sparseThreshBuf[i] = nil
 		}
 	}
 

@@ -5133,6 +5133,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.vector.sparse.minAbsWeight": ConfigValue{
+		0.07,
+		"Minimum |value| retained per dim in a stored sparse vector. Drops noise-tail dims below this raw weight. 0 disables; 0.07 is a conservative starter for SPLADE-style weights.",
+		0.07,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.encryption.enable_test": ConfigValue{
 		Value:         false,
 		Help:          "Enable testing by using encryption test REST apis",

@@ -1384,8 +1384,69 @@ func TruncateConciseTopN(in []float32, maxNNZ int, buf []float32) (out []float32
 	}
 	buf[0] = float32(maxNNZ)
 	for i, p := range pos {
-		buf[1+i] = in[1+p]              // dim index
-		buf[1+maxNNZ+i] = in[1+nnz+p]   // value
+		buf[1+i] = in[1+p]            // dim index
+		buf[1+maxNNZ+i] = in[1+nnz+p] // value
+	}
+	return buf, true
+}
+
+// PruneConciseByThreshold drops entries whose |value| is strictly less than
+// minAbsWeight. The dim sort order of surviving entries is preserved.
+//
+// Returns (in, false) when minAbsWeight <= 0, when no entry falls below the
+// threshold, or when every entry would be dropped (callers don't want to store
+// an empty vector that would break centroid assignment downstream). Otherwise
+// buf is grown if needed, the pruned vector is written there, and (buf, true)
+// is returned.
+func PruneConciseByThreshold(in []float32, minAbsWeight float32, buf []float32) (out []float32, pruned bool) {
+	if minAbsWeight <= 0 || len(in) == 0 {
+		return in, false
+	}
+	nnz := int(in[0])
+	if nnz == 0 || len(in) < 1+2*nnz {
+		return in, false
+	}
+
+	values := in[1+nnz : 1+2*nnz]
+
+	keepCount := 0
+	for _, v := range values {
+		if v < 0 {
+			v = -v
+		}
+		if v >= minAbsWeight {
+			keepCount++
+		}
+	}
+	if keepCount == nnz {
+		return in, false
+	}
+	if keepCount == 0 {
+		// All entries below threshold. Falling back to the original avoids
+		// emitting an empty vector that would skew centroid assignment.
+		return in, false
+	}
+
+	outLen := 1 + 2*keepCount
+	if cap(buf) < outLen {
+		buf = make([]float32, outLen)
+	} else {
+		buf = buf[:outLen]
+	}
+	buf[0] = float32(keepCount)
+
+	j := 0
+	for k := 0; k < nnz; k++ {
+		v := values[k]
+		absv := v
+		if absv < 0 {
+			absv = -absv
+		}
+		if absv >= minAbsWeight {
+			buf[1+j] = in[1+k] // dim index
+			buf[1+keepCount+j] = v
+			j++
+		}
 	}
 	return buf, true
 }
