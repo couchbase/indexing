@@ -1158,6 +1158,18 @@ func (e *EncryptionMgr) SetInRebalanceKeys(kdt KeyDataType, keys []string) {
 	e.rebalTransferKeyIDs[kdt] = append(e.rebalTransferKeyIDs[kdt], keys...)
 }
 
+func (e *EncryptionMgr) IsAnyBucketEncryptionEnabled() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	for kdt, info := range e.dataTypeKeyInfoMap {
+		if kdt.TypeName == "service_bucket" && info != nil && info.ActiveKeyId != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *EncryptionMgr) GetClusterEncrKeysInfo(kdt KeyDataType) (EncrKeysInfo, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

@@ -34,7 +34,6 @@ import (
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	l "github.com/couchbase/indexing/secondary/logging"
 
-
 	gomr "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
@@ -1955,8 +1954,7 @@ func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 	case kdtTypeServiceBucket:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
-		// ENCRYPT_TODO: Handle below types later
-		// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
+		idx.cleanupCorruptDataDirIfEncrypted()
 	case "log":
 		handlerContext.rhc.HandleEncryptionUpdateKey(encMsg.GetEarKey(), kdt)
 		idx.statsMgrCmdCh <- msg
@@ -9425,6 +9423,10 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 		os.Exit(0)
 	}
 
+	// Startup sweep: if a crash interrupted a previous os.RemoveAll during handleEncryptionUpdateKey,
+	// stale plaintext files may remain in .corruptData.
+	idx.cleanupCorruptDataDirIfEncrypted()
+
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
@@ -10147,6 +10149,29 @@ func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
 	}
 }
 
+// cleanupCorruptDataDirIfEncrypted removes the .corruptData directory for all storage engines
+// if any bucket has storage encryption enabled.
+func (idx *indexer) cleanupCorruptDataDirIfEncrypted() {
+	if !idx.config["settings.enable_corrupt_index_backup"].Bool() {
+		return
+	}
+	if !idx.encryptionMgr.IsAnyBucketEncryptionEnabled() {
+		return
+	}
+	for _, engine := range []c.StorageEngine{c.Plasma_StorageEngine, c.Bhive_StorageEngine} {
+		_, engineDir := c.GetStorageDirs(idx.config, engine)
+		corruptDataDir := filepath.Join(engineDir, CORRUPT_DATA_SUBDIR)
+		if _, err := os.Stat(corruptDataDir); os.IsNotExist(err) {
+			continue
+		}
+		if err := os.RemoveAll(corruptDataDir); err != nil {
+			logging.Errorf("Indexer::cleanupCorruptDataDirIfEncrypted error removing %v: %v", corruptDataDir, err)
+		} else {
+			logging.Infof("Indexer::cleanupCorruptDataDirIfEncrypted removed %v", corruptDataDir)
+		}
+	}
+}
+
 // "move" the data files from original location to backup location.
 // return true if any error has occured during backup and cleanup is needed.
 // return false if "move" is successful and no need to cleanup data.
@@ -10158,6 +10183,14 @@ func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
 	if idx.config["settings.corrupt_index_num_backups"].Int() < 1 {
 		logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v no need to backup as num backups is < 1",
 			indexInst.InstId, partnId)
+		needsDataCleanup = true
+		return
+	}
+
+	if idx.encryptionMgr.IsAnyBucketEncryptionEnabled() {
+		logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v skipping backup: bucket encryption is active",
+			indexInst.InstId, partnId)
+		idx.cleanupCorruptDataDirIfEncrypted()
 		needsDataCleanup = true
 		return
 	}
