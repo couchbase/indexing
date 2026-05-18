@@ -51,53 +51,85 @@ echo "</pre><h3>Building</h3><pre>"
 >$WORKSPACE/versions.cfg
 >$WORKSPACE/make.log
 
-if [ ! -d ~/.reference ]; then
-  mkdir ~/.reference
-  cd ~/.reference
-  repo init -u ssh://github.com/couchbase/build-manifests -b master -m $MANIFEST -g all --mirror 1>>$WORKSPACE/make.log 2>&1
-  test $? -eq 0 || error_exit "Repo Init"
+# When the workspace is pre-populated (baked into the Docker image), skip the
+# expensive repo sync and only reset repos to their pre-patch state from the
+# previous run. Otherwise fall through to the full sync path.
+WORKSPACE_READY=false
+if [ -d "$WORKSPACE/goproj/src/github.com/couchbase/indexing" ] && \
+   [ -d "$WORKSPACE/cbbuild" ]; then
+  WORKSPACE_READY=true
 fi
 
-echo "Started building at $(date +'%Y/%m/%d %H:%M:%S')"
-test "$BLD_NUM" = "0" || echo "Using pegged server, $BLD_NUM build"
-echo "Calculating base"
-rm -rf ~/.manifests
-git clone ssh://github.com/couchbase/build-manifests ~/.manifests 1>>$WORKSPACE/make.log 2>&1
-cd ~/.manifests
-
-test "$BLD_NUM" = "0" && BLD_NUM="$(git log --oneline | grep "couchbase-server" | grep -F "$RELEASE-" | head -1 | sed "s/^.*$RELEASE-\([0-9]*\).*$/\1/g")"
-SHA=$(git log --oneline | grep "couchbase-server" | grep "$RELEASE-$BLD_NUM" | head -1 | awk '{print $1}')
-git branch thisrun $SHA 1>>$WORKSPACE/make.log 2>&1
-
-num_cores=0
-core_read_commands=("nproc --all" "sysctl -n hw.ncpu" "echo 32")
-for cmd in $core_read_commands; do
-  val=$(eval $cmd)
-  if [ $? -eq 0 ]; then
-    num_cores=$val
-    break
+if [ "$WORKSPACE_READY" = "true" ]; then
+  echo "Workspace pre-populated from image; resetting repos to pre-patch state"
+  cd $WORKSPACE
+  rm -rf analytics/CMakeLists.txt
+  # Undo any gerrit cherry-picks from the previous run so git pull can fast-forward.
+  # ~/indexing.pre-patch-head etc. are saved just before the gerrit section below.
+  for repo_spec in \
+      "indexing:goproj/src/github.com/couchbase/indexing" \
+      "plasma:goproj/src/github.com/couchbase/plasma" \
+      "nitro:goproj/src/github.com/couchbase/nitro" \
+      "bhive:goproj/src/github.com/couchbase/bhive" \
+      "gometa:goproj/src/github.com/couchbase/gometa"; do
+    repo_name="${repo_spec%%:*}"
+    repo_path="$WORKSPACE/${repo_spec##*:}"
+    if [ -d "$repo_path" ] && [ -f ~/${repo_name}.pre-patch-head ]; then
+      git -C "$repo_path" reset --hard "$(cat ~/${repo_name}.pre-patch-head)" \
+        1>>$WORKSPACE/make.log 2>&1 || true
+      git -C "$repo_path" clean -fd 1>>$WORKSPACE/make.log 2>&1 || true
+    fi
+  done
+else
+  # Full sync (fallback: workspace not pre-populated from image).
+  if [ ! -d ~/.reference ]; then
+    mkdir ~/.reference
+    cd ~/.reference
+    repo init -u ssh://github.com/couchbase/build-manifests -b master -m $MANIFEST -g all,-analytics --mirror 1>>$WORKSPACE/make.log 2>&1
+    test $? -eq 0 || error_exit "Repo Init"
   fi
-done
 
-echo "Updating mirror"
-cd ~/.reference
-repo sync -j $num_cores 1>>$WORKSPACE/make.log 2>&1
+  echo "Started building at $(date +'%Y/%m/%d %H:%M:%S')"
+  test "$BLD_NUM" = "0" || echo "Using pegged server, $BLD_NUM build"
+  echo "Calculating base"
+  rm -rf ~/.manifests
+  git clone ssh://github.com/couchbase/build-manifests ~/.manifests 1>>$WORKSPACE/make.log 2>&1
+  cd ~/.manifests
 
-echo "Basing run on $RELEASE-$BLD_NUM <a href=https://github.com/couchbase/build-manifests/blob/$SHA/$MANIFEST>$SHA</a>"
-find $WORKSPACE -mindepth 1 -not -name '*.log' -exec rm -rf {} + 1>>$WORKSPACE/make.log 2>&1
-mkdir -p $WORKSPACE 1>>$WORKSPACE/make.log 2>&1
-cd $WORKSPACE
-repo init -u ~/.manifests -b thisrun -m $MANIFEST -g all --reference=~/.reference 1>>$WORKSPACE/make.log 2>&1
-test $? -eq 0 || error_exit "Repo Init at $SHA"
+  test "$BLD_NUM" = "0" && BLD_NUM="$(git log --oneline | grep "couchbase-server" | grep -F "$RELEASE-" | head -1 | sed "s/^.*$RELEASE-\([0-9]*\).*$/\1/g")"
+  SHA=$(git log --oneline | grep "couchbase-server" | grep "$RELEASE-$BLD_NUM" | head -1 | awk '{print $1}')
+  git branch thisrun $SHA 1>>$WORKSPACE/make.log 2>&1
 
-echo "Updating tree for run $TS"
-cd $WORKSPACE
-repo sync --no-clone-bundle --no-tags -j $num_cores 1>>$WORKSPACE/make.log 2>&1
-test $? -eq 0 || error_exit "Updating tree"
-test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find voltron"
+  num_cores=0
+  core_read_commands=("nproc --all" "sysctl -n hw.ncpu" "echo 32")
+  for cmd in $core_read_commands; do
+    val=$(eval $cmd)
+    if [ $? -eq 0 ]; then
+      num_cores=$val
+      break
+    fi
+  done
 
-cd $WORKSPACE
-rm -rf analytics/CMakeLists.txt
+  echo "Updating mirror"
+  cd ~/.reference
+  repo sync -j $num_cores 1>>$WORKSPACE/make.log 2>&1
+
+  echo "Basing run on $RELEASE-$BLD_NUM <a href=https://github.com/couchbase/build-manifests/blob/$SHA/$MANIFEST>$SHA</a>"
+  find $WORKSPACE -mindepth 1 -not -name '*.log' -exec rm -rf {} + 1>>$WORKSPACE/make.log 2>&1
+  mkdir -p $WORKSPACE 1>>$WORKSPACE/make.log 2>&1
+  cd $WORKSPACE
+  repo init -u ~/.manifests -b thisrun -m $MANIFEST -g all,-analytics --reference=~/.reference 1>>$WORKSPACE/make.log 2>&1
+  test $? -eq 0 || error_exit "Repo Init at $SHA"
+
+  echo "Updating tree for run $TS"
+  cd $WORKSPACE
+  repo sync --no-clone-bundle --no-tags -j $num_cores 1>>$WORKSPACE/make.log 2>&1
+  test $? -eq 0 || error_exit "Updating tree"
+  test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find voltron"
+
+  cd $WORKSPACE
+  rm -rf analytics/CMakeLists.txt
+fi
 
 note_version query $WORKSPACE/goproj/src/github.com/couchbase/query
 note_version gometa $WORKSPACE/goproj/src/github.com/couchbase/gometa
@@ -161,6 +193,19 @@ echo "Switching gocbcrypto to main"
 git checkout main 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout main"
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 note_version gocbcrypto $WORKSPACE/goproj/src/github.com/couchbase/gocbcrypto
+
+# Snapshot HEAD for each repo that receives gerrit cherry-picks. The next run's
+# light-sync path resets to these snapshots to cleanly undo patches before pulling.
+for repo_spec in \
+    "indexing:goproj/src/github.com/couchbase/indexing" \
+    "plasma:goproj/src/github.com/couchbase/plasma" \
+    "nitro:goproj/src/github.com/couchbase/nitro" \
+    "bhive:goproj/src/github.com/couchbase/bhive" \
+    "gometa:goproj/src/github.com/couchbase/gometa"; do
+  repo_name="${repo_spec%%:*}"
+  repo_path="$WORKSPACE/${repo_spec##*:}"
+  [ -d "$repo_path" ] && git -C "$repo_path" rev-parse HEAD > ~/${repo_name}.pre-patch-head
+done
 
 >~/gerrit.list
 if [ "$CIBOT" = "true" ]; then

@@ -1,6 +1,6 @@
 module github.com/couchbase/indexing
 
-go 1.25.0
+go 1.26.2
 
 replace github.com/couchbase/cbft => ../../../../../cbft
 

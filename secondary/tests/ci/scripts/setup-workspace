@@ -1,0 +1,100 @@
+#!/bin/bash
+
+# One-time workspace initialization: full repo sync + EE build.
+# Called from ci_machine.dockerfile during image build so the monorepo and
+# compiled CGO artifacts are baked into the image layer.
+#
+# NOT called at runtime — dobuild handles incremental repo pulls there.
+# Only EE build is run (CE pass is skipped to save build time).
+
+set -e
+
+source ~/.cienv   # provides WORKSPACE, RELEASE, MANIFEST, BRANCH, PEGGED, STORAGE
+export PATH=$PATH:~/bin
+
+if [ "$WORKSPACE" = "" ]; then
+  echo 'WORKSPACE not set'; exit 2
+fi
+if [ "$RELEASE" = "" ]; then
+  echo 'RELEASE not set'; exit 2
+fi
+if [ "$MANIFEST" = "" ]; then
+  echo 'MANIFEST not set'; exit 2
+fi
+
+if [ "$PEGGED" = "" ]; then
+  export BLD_NUM=0
+else
+  export BLD_NUM=$PEGGED
+fi
+
+num_cores=$(nproc --all 2>/dev/null || echo 8)
+
+echo "setup-workspace: initializing reference mirror"
+if [ ! -d ~/.reference ]; then
+  mkdir ~/.reference
+  cd ~/.reference
+  repo init -u ssh://github.com/couchbase/build-manifests -b master -m $MANIFEST -g all,-analytics --mirror
+fi
+
+echo "setup-workspace: cloning build manifests"
+rm -rf ~/.manifests
+git clone -q ssh://github.com/couchbase/build-manifests ~/.manifests
+cd ~/.manifests
+
+test "$BLD_NUM" = "0" && BLD_NUM="$(git log --oneline | grep "couchbase-server" | grep -F "$RELEASE-" | head -1 | sed "s/^.*$RELEASE-\([0-9]*\).*$/\1/g")"
+SHA=$(git log --oneline | grep "couchbase-server" | grep "$RELEASE-$BLD_NUM" | head -1 | awk '{print $1}')
+git branch thisrun $SHA
+
+echo "setup-workspace: syncing reference mirror"
+cd ~/.reference
+repo sync -j $num_cores
+
+echo "setup-workspace: basing image on $RELEASE-$BLD_NUM ($SHA)"
+mkdir -p $WORKSPACE
+cd $WORKSPACE
+repo init -u ~/.manifests -b thisrun -m $MANIFEST -g all,-analytics --reference=~/.reference
+repo sync --no-clone-bundle --no-tags -j $num_cores
+
+test -d $WORKSPACE/cbbuild && test -d $WORKSPACE/voltron || { echo "Unable to find voltron"; exit 2; }
+rm -rf $WORKSPACE/analytics/CMakeLists.txt
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
+echo "Switching indexing to $BRANCH"
+git checkout $BRANCH && git pull
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
+echo "Switching plasma to $BRANCH"
+git checkout $BRANCH && git pull
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/nitro
+echo "Switching nitro to $BRANCH"
+git checkout $BRANCH && git pull
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/bhive
+echo "Switching bhive to main"
+git checkout main && git pull
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
+echo "Switching gometa to master"
+git checkout master && git pull
+
+cd $WORKSPACE/testrunner
+echo "Switching testrunner to master"
+git checkout master && git pull
+git submodule init
+git submodule update --init --force --remote
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/gocbcrypto
+echo "Switching gocbcrypto to main"
+git checkout main && git pull
+
+# Patch CMakeLists.txt for 2ici_test tag (needed by CI test compilation)
+sed -i 's/SET (TAGS "jemalloc")/SET (TAGS "jemalloc 2ici_test")/' \
+  $WORKSPACE/goproj/src/github.com/couchbase/indexing/CMakeLists.txt
+
+echo "setup-workspace: starting EE build (CE pass skipped)"
+cd $WORKSPACE
+builder
+
+echo "setup-workspace: complete"

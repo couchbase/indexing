@@ -1,0 +1,82 @@
+#!/bin/bash
+
+# Linter service polling loop.
+# The image already has the full monorepo built via setup-workspace (run at
+# docker build time), so no initial build is needed here.
+#
+# Each iteration delegates to gerrit_chain_runner.py (LINT_ONLY=true) which:
+#   - discovers all open gerrit changes for the CI user
+#   - groups them into dependency chains
+#   - for each chain: applies patches, writes ~/gerrit.list, runs dolint, resets
+
+set -u
+export PATH=$PATH:~/bin
+source ~/.cienv
+
+LINT_INTERVAL="${LINT_INTERVAL:-300}"
+
+# ---------------------------------------------------------------------------
+# Bootstrap ciscripts (same pattern as `build`)
+# ---------------------------------------------------------------------------
+rm -rf ~/.ciscripts
+git clone -q ssh://github.com/couchbase/indexing ~/.ciscripts
+cd ~/.ciscripts
+git checkout "$BRANCH"
+
+refresh_scripts() {
+  cd ~/.ciscripts
+  git pull -q
+  find secondary/tests/ci/scripts \
+       -not -name 'build' -and -not -name 'lint-loop' -and -not -name '.*' \
+       -type f -exec cp -v {} ~/bin/ \;
+}
+refresh_scripts
+
+export TS="$(date +%d.%m.%Y-%H.%M)"
+LINT_HTML="/var/www/${CINAME:-ci2i-lint}-current.html"
+mkdir -p /var/www
+echo '<html><head></head><body><pre>' > "$LINT_HTML"
+chmod a+rx "$LINT_HTML"
+
+echo "linter: image workspace ready, entering lint loop" | tee -a "$LINT_HTML"
+
+# ---------------------------------------------------------------------------
+# Forever loop
+# ---------------------------------------------------------------------------
+
+# Repos that can appear in gerrit chains — pull latest before each cycle so
+# cherry-picks apply cleanly against the current upstream state.
+declare -A CHAIN_REPOS=(
+  ["$WORKSPACE/goproj/src/github.com/couchbase/indexing"]="$BRANCH"
+  ["$WORKSPACE/goproj/src/github.com/couchbase/gometa"]="master"
+  ["$WORKSPACE/goproj/src/github.com/couchbase/plasma"]="$BRANCH"
+  ["$WORKSPACE/goproj/src/github.com/couchbase/nitro"]="$BRANCH"
+  ["$WORKSPACE/goproj/src/github.com/couchbase/bhive"]="main"
+)
+
+while true; do
+  refresh_scripts
+
+  export TS="$(date +%d.%m.%Y-%H.%M)"
+  echo "================================================================="
+  echo "linter: cycle starting at $TS"
+  echo "================================================================="
+
+  # Pull latest on all repos that can participate in gerrit chains.
+  for repo_path in "${!CHAIN_REPOS[@]}"; do
+    branch="${CHAIN_REPOS[$repo_path]}"
+    if [ -d "$repo_path" ]; then
+      (cd "$repo_path" && git checkout "$branch" -q && git pull -q) \
+        || echo "linter: warning — git pull failed for $repo_path"
+    fi
+  done
+
+  # Chain-aware lint: discovers chains, applies patches per chain, writes
+  # ~/gerrit.list for each chain, runs dolint, posts to gerrit, resets.
+  LINT_ONLY=true python3 \
+    ~/.ciscripts/secondary/tests/ci/scripts/gerrit_chain_runner.py \
+    2>&1 | tee -a "$LINT_HTML"
+
+  echo "linter: sleeping ${LINT_INTERVAL}s"
+  sleep "$LINT_INTERVAL"
+done
