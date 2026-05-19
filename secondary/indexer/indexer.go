@@ -1891,6 +1891,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		// no need to wait for response to indexer
 		idx.encryptionMgrCmdCh <- msg
 
+	case ENCRYPTION_GET_KEY_INFO_FOR_REBAL:
+		// no need to wait for response to indexer
+		idx.encryptionMgrCmdCh <- msg
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))

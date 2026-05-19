@@ -620,6 +620,11 @@ func (e *EncryptionMgr) handleSupervisorCommands(cmd Message) {
 		e.handleRebalStart()
 	case ENCRYPTION_REBAL_DONE:
 		e.handleRebalDone()
+	case ENCRYPTION_GET_KEY_INFO_FOR_REBAL:
+		msg, ok := cmd.(*MsgEncryptionGetKeyInfoForRebal)
+		if ok {
+			go e.handleGetKeyInfoForRebal(msg)
+		}
 	}
 }
 
@@ -807,6 +812,30 @@ func (e *EncryptionMgr) handleRebalDone() {
 
 	e.rebalRunning.Store(false)
 	e.supvCmdch <- &MsgSuccess{}
+}
+
+func (e *EncryptionMgr) handleGetKeyInfoForRebal(msg *MsgEncryptionGetKeyInfoForRebal) {
+	result := make(map[KeyDataType]*EncryptionKeyPathInfo, len(msg.GetKDTs()))
+
+	for _, kdt := range msg.GetKDTs() {
+		info := &EncryptionKeyPathInfo{}
+
+		func() {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if dekInfo, ok := e.dataTypeKeyInfoMap[kdt]; ok && dekInfo != nil {
+				info.Path = dekInfo.Path
+			}
+		}()
+
+		e.muid.Lock()
+		info.KeyIDs = append(info.KeyIDs, e.indexerUsedKeyIds[kdt]...)
+		e.muid.Unlock()
+
+		result[kdt] = info
+	}
+
+	msg.GetRespCh() <- result
 }
 
 func (e *EncryptionMgr) cacheKeysForBootstrap() {
