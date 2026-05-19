@@ -8,7 +8,6 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"maps"
 	"net"
 	"net/http"
 	"reflect"
@@ -22,6 +21,8 @@ import (
 	manager "github.com/couchbase/indexing/secondary/manager"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 )
+
+var errConfigValueMismatch = errors.New("config value does not match")
 
 type IndexProperties struct {
 	HostNode      string
@@ -340,6 +341,43 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 	return nil
 }
 
+func isConfigSubsetOfConfig(cfg map[string]interface{}, respB []byte) (bool, error) {
+	var idxrCfg = c.SystemConfig
+	if err := idxrCfg.Update(respB); err != nil {
+		log.Printf("WARN update fail err - %v mkcb - %v", err, respB)
+		return false, fmt.Errorf("isConfigSubsetOfConfig: %w", err)
+	}
+
+	for k, v := range cfg {
+		metaV, ok := idxrCfg[k]
+		if !ok {
+			return false, fmt.Errorf("%w: key %v expected %v actual N/A", errConfigValueMismatch, k, v)
+		}
+		if isAnyNumberType(v) && isAnyNumberType(metaV.Value) && toFloat64(v) == toFloat64(metaV.Value) {
+			continue
+		}
+		if reflect.TypeOf(v) == reflect.TypeOf(map[string]interface{}{}) {
+			strV, err := json.Marshal(v)
+			if err != nil {
+				return false, fmt.Errorf("isConfigSubsetOfConfig: marshal expected value for key %v: %w", k, err)
+			}
+			strMetaV, err := json.Marshal(metaV.Value)
+			if err != nil {
+				return false, fmt.Errorf("isConfigSubsetOfConfig: marshal actual value for key %v: %w", k, err)
+			}
+			if string(strV) != string(strMetaV) {
+				return false, fmt.Errorf("%w: key %v expected %v (%T) actual %v (%T)",
+					errConfigValueMismatch, k, v, v, metaV.Value, metaV.Value)
+			}
+		} else if !reflect.DeepEqual(v, metaV.Value) {
+			return false, fmt.Errorf("%w: key %v expected %v (%T) actual %v (%T)",
+				errConfigValueMismatch, k, v, v, metaV.Value, metaV.Value)
+		}
+	}
+
+	return true, nil
+}
+
 func doRetriedSettingChangeWithValidation(configs map[string]interface{}, req *http.Request) error {
 	var client = http.Client{}
 	var body []byte
@@ -371,29 +409,8 @@ func doRetriedSettingChangeWithValidation(configs map[string]interface{}, req *h
 			return err
 		}
 
-		var metakvConfig = c.SystemConfig
-		if err = metakvConfig.Update(metakvConfigBytes); err != nil {
-			log.Printf("WARN update fail err - %v mkcb - %v", err, metakvConfigBytes)
+		if isSubset, err := isConfigSubsetOfConfig(configs, metakvConfigBytes); !isSubset {
 			return err
-		}
-
-		for k, v := range configs {
-			metaV, ok := metakvConfig[k]
-			if !ok {
-				return fmt.Errorf("config %v value does not match; expected %v actual N/A", k, v)
-			}
-			if isAnyNumberType(v) && isAnyNumberType(metaV.Value) && toFloat64(v) == toFloat64(metaV.Value) {
-				continue
-			}
-			if reflect.TypeOf(v) == reflect.TypeOf(map[string]interface{}{}) {
-				strV, _ := json.Marshal(v)
-				strMetaV, _ := json.Marshal(metaV.Value)
-				if string(strV) != string(strMetaV) {
-					return fmt.Errorf("config %v value does not match; expected %v (%T) actual %v (%T)", k, v, v, metaV.Value, metaV.Value)
-				}
-			} else if !reflect.DeepEqual(v, metaV.Value) {
-				return fmt.Errorf("config %v value does not match; expected %v (%T) actual %v (%T)", k, v, v, metaV.Value, metaV.Value)
-			}
 		}
 
 		if attempt != 0 {
@@ -524,11 +541,9 @@ func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserNam
 				}
 				defer respThisNodeOnly.Body.Close()
 
-				config := make(map[string]interface{})
 				respB, _ := io.ReadAll(respThisNodeOnly.Body)
-				json.Unmarshal(respB, &config)
-				if !maps.Equal[map[string]interface{}](config, jThisNodeBody) {
-					return fmt.Errorf("failed to change node setting to %v. Current value is %v", jThisNodeBody, config)
+				if isSubset, err := isConfigSubsetOfConfig(jThisNodeBody, respB); !isSubset {
+					return err
 				}
 
 				if attempt != 0 {

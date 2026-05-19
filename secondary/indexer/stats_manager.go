@@ -41,6 +41,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
+	"github.com/couchbase/indexing/secondary/testcode"
 	"github.com/couchbase/logstats/logstats"
 	"github.com/golang/snappy"
 )
@@ -1461,7 +1462,7 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 		statMap.AddStat("rebalance_transfer_progress", is.RebalanceTransferProgress.Get())
 	}
 
-	is.ShardCompatVersion.Set(int64(GetShardCompatVersion_Plasma()))
+	is.ShardCompatVersion.Set(int64(testcode.OverrideShardCompatVersion(GetShardCompatVersion_Plasma())))
 	statMap.AddStatValueFiltered("shard_compat_version", &is.ShardCompatVersion)
 
 	statMap.AddStatValueFiltered("maint_port_blocked_hist", &is.datapMaintBlockedDurHist)

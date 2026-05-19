@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/gocbcrypto"
 	"math"
 	"os"
 	"path/filepath"
@@ -1804,7 +1803,7 @@ func (mdb *bhiveSlice) recoverCodebook(codebookPath string) error {
 
 	// Codebook path exists. Recover codebook from disk
 
-	isEncrypted, err := gocbcrypto.IsFileEncrypted(newFilePath)
+	isEncrypted, err := IsFileEncrypted(newFilePath)
 	if err != nil {
 		logging.Errorf("bhiveSlice::recoverCodebook: Error observed while IsFileEncrypted for path: %v, err: %v", newFilePath, err)
 		return errCodebookCorrupted
@@ -3167,12 +3166,13 @@ func (mdb *bhiveSlice) SetCodebookEncryptionKey(key []byte, keyId string, cipher
 
 	// function for creating write context
 	// New context for encryption
-	var eCtx gocbcrypto.EncryptionContext
+	// If NewEncryptionCtx function used, no ctx will be returned for CipherNameNone
+	var eCtx EncryptionCtx
 	switch cipher {
-	case gocbcrypto.CipherNameNone:
-		eCtx = gocbcrypto.NewNullContext()
-	case gocbcrypto.CipherNameAES256GCM:
-		eCtx, err = gocbcrypto.NewAESGCM256ContextWithOpenSSL([]byte(keyId), key, codebookKDFLabelCtx, 0)
+	case CipherNameNone:
+		eCtx = NewNullContext()
+	case CipherNameAES256GCM:
+		eCtx, err = NewAESGCM256ContextWithOpenSSL(keyId, key, codebookKDFLabelCtx, 0)
 		if err != nil {
 			logging.Errorf("bhiveSlice:SetCodebookEncryptionKey for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
 			return err
@@ -3183,7 +3183,7 @@ func (mdb *bhiveSlice) SetCodebookEncryptionKey(key []byte, keyId string, cipher
 
 	tmpEncryptionPath := codebookPath + ".tmp"
 
-	isEncrypted, err := gocbcrypto.IsFileEncrypted(codebookPath)
+	isEncrypted, err := IsFileEncrypted(codebookPath)
 	if err != nil {
 		logging.Errorf("bhiveSlice:SetCodebookEncryptionKey isFileEncrypted failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
 		return err
@@ -3196,11 +3196,11 @@ func (mdb *bhiveSlice) SetCodebookEncryptionKey(key []byte, keyId string, cipher
 	// -----------------------------------------------------------------------
 	// | Action      | Re-encrypt  | Encrypt     | Decrypt     | no-op       |	---> Action to do for codebook
 	// +-------------+-------------+-------------+-------------+-------------+
-	if isEncrypted && cipher != gocbcrypto.CipherNameNone {
+	if isEncrypted && cipher != CipherNameNone {
 
 		// Re-encrypt the codebook
 		// ReencryptFileByChunk closes files
-		bytesWritten, err := gocbcrypto.ReencryptFileByChunk(context.TODO(), codebookPath, tmpEncryptionPath, eCtx, getKeyById, codebookKDFLabelCtx, nil)
+		bytesWritten, err := ReencryptFileByChunk(context.TODO(), codebookPath, tmpEncryptionPath, eCtx, getKeyById, codebookKDFLabelCtx, nil)
 		if err != nil {
 			logging.Errorf("bhiveSlice:SetCodebookEncryptionKey re-encryption failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
 			err2 := os.Remove(tmpEncryptionPath)
@@ -3214,7 +3214,7 @@ func (mdb *bhiveSlice) SetCodebookEncryptionKey(key []byte, keyId string, cipher
 			return nil
 		}
 
-	} else if !isEncrypted && cipher != gocbcrypto.CipherNameNone {
+	} else if !isEncrypted && cipher != CipherNameNone {
 
 		// Encrypt the unencrypted codebook
 		err := encryptCodebookByChunk(codebookPath, tmpEncryptionPath, eCtx)
@@ -3223,7 +3223,7 @@ func (mdb *bhiveSlice) SetCodebookEncryptionKey(key []byte, keyId string, cipher
 			return err
 		}
 
-	} else if isEncrypted && cipher == gocbcrypto.CipherNameNone {
+	} else if isEncrypted && cipher == CipherNameNone {
 		// Decrypt the codebook
 		content, err := decryptCodebookByChunk(codebookPath, getKeyById, codebookKDFLabelCtx)
 		if err != nil {
@@ -3239,7 +3239,7 @@ func (mdb *bhiveSlice) SetCodebookEncryptionKey(key []byte, keyId string, cipher
 			}
 			return err
 		}
-	} else if !isEncrypted && cipher == gocbcrypto.CipherNameNone {
+	} else if !isEncrypted && cipher == CipherNameNone {
 		logging.Infof("bhiveSlice:SetCodebookEncryptionKey no-op for instId:%v partnId:%v keyId:%v", mdb.idxInstId, mdb.idxPartnId, keyId)
 		return nil
 	} else {
@@ -3277,12 +3277,13 @@ func (mdb *bhiveSlice) DropCodebookEncryptionKey(dropkeyIds []string, activeEark
 
 	// function for creating write context
 	// New context for encryption
-	var eCtx gocbcrypto.EncryptionContext
+	// If NewEncryptionCtx function used, for eCtx.KeyID() eCtx can be nil.
+	var eCtx EncryptionCtx
 	switch activeEarkey.Cipher {
-	case gocbcrypto.CipherNameNone:
-		eCtx = gocbcrypto.NewNullContext()
-	case gocbcrypto.CipherNameAES256GCM:
-		eCtx, err = gocbcrypto.NewAESGCM256ContextWithOpenSSL([]byte(activeEarkey.Id), activeEarkey.Key, codebookKDFLabelCtx, 0)
+	case CipherNameNone:
+		eCtx = NewNullContext()
+	case CipherNameAES256GCM:
+		eCtx, err = NewAESGCM256ContextWithOpenSSL(activeEarkey.Id, activeEarkey.Key, codebookKDFLabelCtx, 0)
 		if err != nil {
 			logging.Errorf("bhiveSlice:DropCodebookEncryptionKey for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
 			return err
@@ -3300,7 +3301,7 @@ func (mdb *bhiveSlice) DropCodebookEncryptionKey(dropkeyIds []string, activeEark
 
 	//Abort if no key from dropkeyIds is being used for codebook encryption
 	var codebookEKey string
-	isEncrypted, err := gocbcrypto.IsFileEncrypted(codebookPath)
+	isEncrypted, err := IsFileEncrypted(codebookPath)
 	if err != nil {
 		logging.Errorf("bhiveSlice:DropCodebookEncryptionKey isFileEncrypted failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
 		return err
@@ -3335,7 +3336,7 @@ func (mdb *bhiveSlice) DropCodebookEncryptionKey(dropkeyIds []string, activeEark
 
 	} else if isEncrypted && eCtx.KeyID() != nil {
 		// Re-encrypt
-		bytesWritten, err := gocbcrypto.ReencryptFileByChunk(context.TODO(), codebookPath, tmpEncryptionPath, eCtx, getKeyById, codebookKDFLabelCtx, nil)
+		bytesWritten, err := ReencryptFileByChunk(context.TODO(), codebookPath, tmpEncryptionPath, eCtx, getKeyById, codebookKDFLabelCtx, nil)
 		if err != nil {
 			logging.Errorf("bhiveSlice:DropCodebookEncryptionKey re-encryption failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
 			err2 := os.Remove(tmpEncryptionPath)
@@ -3399,7 +3400,7 @@ func (mdb *bhiveSlice) DropCodebookEncryptionKey(dropkeyIds []string, activeEark
 func (mdb *bhiveSlice) GetCodebookEncryptionKeyId() (string, error) {
 
 	codebookPath := filepath.Join(mdb.storageDir, mdb.codebookPath)
-	isEncrypted, err := gocbcrypto.IsFileEncrypted(codebookPath)
+	isEncrypted, err := IsFileEncrypted(codebookPath)
 	if err != nil {
 		logging.Errorf("bhiveSlice:GetCodebookEncryptionKeyId isFileEncrypted failed for instId:%v partnId:%v err:%v", mdb.idxInstId, mdb.idxPartnId, err)
 		return "", err
@@ -3420,7 +3421,7 @@ func (mdb *bhiveSlice) GetCodebookEncryptionKeyId() (string, error) {
 	}
 	defer fd.Close()
 
-	rd, err := gocbcrypto.NewCryptFileReaderWithLabel(fd, getKeyById, codebookKDFLabelCtx, cryptFileWriterReaderBufSz, false, nil)
+	rd, err := NewCryptFileReaderWithLabel(fd, getKeyById, codebookKDFLabelCtx, cryptFileWriterReaderBufSz, false, nil)
 	if err != nil {
 		logging.Errorf("bhiveSlice::GetCodebookEncryptionKeyId: Error observed while reading in-use key from disk for path: %v, err: %v", codebookPath, err)
 		return "", err

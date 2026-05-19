@@ -50,6 +50,8 @@ var errInvalidVectorScanworkerMediumBatchSize = errors.New(
 	"setting vector.scanworker_medium_batch_size should be an integer greater than 0",
 )
 
+var errUnsupportedThisNodeOnlyConfig = errors.New("found unsupported config for this endpoint")
+
 // settingsManager implements dynamic settings management for indexer.
 type settingsManager struct {
 	supvCmdch        MsgChannel
@@ -316,10 +318,16 @@ func (s *settingsManager) handlePerNodeSettingsReq(w http.ResponseWriter, r *htt
 			return
 		}
 
-		if _, ok := newConfig["indexer.thisNodeOnly.ignoreAlternateShardIds"]; !ok {
-			err = fmt.Errorf("Found unsupported config for this endpoint. newConfig: %v", newConfig)
-			s.writeError(w, err)
-			return
+		allowedThisNodeOnlyKeys := map[string]bool{
+			"indexer.thisNodeOnly.ignoreAlternateShardIds": true,
+			"indexer.thisNodeOnly.simulateShardCompatV1":   true,
+		}
+		for key := range newConfig {
+			if !allowedThisNodeOnlyKeys[key] {
+				err = errUnsupportedThisNodeOnlyConfig
+				s.writeError(w, err)
+				return
+			}
 		}
 
 		if bytes, _, err = common.MapSettings(bytes); err != nil {

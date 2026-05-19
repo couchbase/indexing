@@ -27,7 +27,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/couchbase/gocbcrypto"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/iowrap"
@@ -400,7 +400,7 @@ func (mdb *memdbSlice) initStores() error {
 	cfg.SetKeyComparator(byteItemCompare)
 
 	// GSI place holder for encryption callback setup
-	cfg.SetEncryption(mdb.GetEncryptionKeyByIdCb, gocbcrypto.ChunkSize)
+	cfg.SetEncryption(mdb.GetEncryptionKeyByIdCb, EncryptionChunkSize)
 
 	cfg.Path = mdb.path
 
@@ -1246,9 +1246,11 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 				bs, err = json.Marshal(s.info)
 				if err == nil {
 					if len(keyId) > 0 {
-						var ctx gocbcrypto.EncryptionContext
-						if ctx, err = store.NewEncryptionContext(keyId, cipher); err == nil {
-							err = gocbcrypto.WriteFile(manifest, bs, memdb.FilePermMode, ctx, iowrap.CountDiskFailures)
+						encCtx, encErr := store.NewEncryptionContext(keyId, cipher)
+						if encErr == nil {
+							err = WriteEncryptedFile(manifest, bs, memdb.FilePermMode, encCtx.(EncryptionCtx), iowrap.CountDiskFailures)
+						} else {
+							err = encErr
 						}
 					} else {
 						err = common.WriteFileWithSync(manifest, bs, memdb.FilePermMode)
@@ -1443,11 +1445,11 @@ func (mdb *memdbSlice) getSnapshots() ([]SnapshotInfo, []string, error) {
 			bs, err := iowrap.Ioutil_ReadAll(fd)
 			iowrap.File_Close(fd)
 			if err == nil {
-				if gocbcrypto.IsBytesEncrypted(bs) {
-					bs, err = gocbcrypto.ReadFile(f, mdb.mainstore.GetEncryptionKeyById, memdb.KDFLabelCtx, iowrap.CountDiskFailures)
+				if IsBytesEncrypted(bs) {
+					bs, err = ReadEncryptedFile(f, mdb.mainstore.GetEncryptionKeyById, memdb.KDFLabelCtx, iowrap.CountDiskFailures)
 					// TBD: we never return error even before encryption changes; need to revisit
 					if err != nil && !errors.Is(err, fs.ErrNotExist) {
-						if errors.Is(err, gocbcrypto.ErrCipherKeyLookup) {
+						if errors.Is(err, ErrCipherKeyLookup) {
 							err = fmt.Errorf("%v: %w", memdb.ErrSnapshotKeyIdMissing, err)
 						}
 						logging.Errorf("MemDB::%v getSnapshots file:%v error:%v", mdb.Path, f, err)

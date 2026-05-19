@@ -5540,21 +5540,19 @@ func getCodebookPaths(tt *c.TransferToken) (codebookPaths []string) {
 			for _, partnId := range idxInst.Defn.Partitions {
 
 				codebookPath := CodebookPath2(&idxInst, partnId, SliceId(0))
-				if tt.TransferMode == common.TokenTransferModeCopy { // if it is a replica repair, the codebook source will be from the sibling index
-					for _, renameMap := range tt.InstRenameMap {
-						currCodebookPath, newCodebookPath := generateCodebookRenamePaths2(
-							renameMap,
-							idxInst.Defn.BucketUUID,
-							partnId, idxInst.InstId,
-						)
-						if currCodebookPath != "" && newCodebookPath != "" {
-							codebookPath = currCodebookPath
-							break
-						}
+				// For replica repair (Copy) the codebook lives on the sibling index node; for
+				// upgrade moves (Move) the source node may be v1-compat with old-format paths.
+				// In both cases InstRenameMap carries the authoritative source path.
+				for _, renameMap := range tt.InstRenameMap {
+					currCodebookPath, _ := generateCodebookRenamePaths2(
+						renameMap,
+						idxInst.Defn.Bucket, idxInst.Defn.Name, idxInst.Defn.BucketUUID,
+						partnId, idxInst.InstId,
+					)
+					if currCodebookPath != "" {
+						codebookPath = currCodebookPath
+						break
 					}
-					// Every replica repair instance has an entry in the renameMap, if for TokenTransferModeCopy the
-					// entry is not found in the renameMap, the standard CodebookPath will be appended as a fallback.
-					// It is an impossible path if the codebookPath has not been updated using the renameMap.
 				}
 
 				if idxInst.Defn.IsBhive() {
@@ -5652,44 +5650,52 @@ func extractIndexInfoFromRenamePath(trimmedCurrPath, trimmedNewPath string) (cur
 	return
 }
 
-// This function is inline with the executor.go::getRenamePath2() function called during tt generation
+// This function is inline with the executor.go::getRenamePath2() function called during tt generation.
+// It handles three rename scenarios that appear in InstRenameMap:
+//   - v2 source → v2 dest (normal rebalance or replica repair between same-version nodes)
+//   - v1 source → v2 dest (upgrade: source key uses "<bucket>_<name>_" prefix)
 func generateCodebookRenamePaths2(
 	renameMap map[string]string,
-	bucketUUID string, partnId common.PartitionId,
+	bucket, name, bucketUUID string,
+	partnId common.PartitionId,
 	instId common.IndexInstId) (string, string) {
 
-	indexPrefix := fmt.Sprintf("%s_", bucketUUID)
+	v2Prefix := fmt.Sprintf("%s_", bucketUUID)
+	v1Prefix := fmt.Sprintf("%s_%s_", bucket, name)
 
 	for currPath, newPath := range renameMap {
-		if trimmedCurrPath, foundPrefix := strings.CutPrefix(currPath, indexPrefix); foundPrefix {
+		// v2 source → v2 dest
+		if trimmedCurrPath, ok := strings.CutPrefix(currPath, v2Prefix); ok {
 			currInstId, newInstId, extractedPartnId, err := extractIndexInfoFromRenamePath(
-				trimmedCurrPath, strings.TrimPrefix(newPath, indexPrefix),
+				trimmedCurrPath, strings.TrimPrefix(newPath, v2Prefix),
 			)
-			if err != nil {
-				l.Warnf("ShardRebalancer::generateCodebookRenamePaths for InstId: %v, err: %v", instId, err)
-				return "", ""
-			}
-
-			if partnId != extractedPartnId {
+			if err != nil || extractedPartnId != partnId || newInstId != instId {
 				continue
 			}
-
-			if instId != newInstId {
-				continue
-			}
-
 			currIndexPath := fmt.Sprintf("%s_%d_%d.index", bucketUUID, currInstId, partnId)
-			currCodebook := fmt.Sprintf("%v_%d.codebook", currInstId, partnId)
-
 			newIndexPath := fmt.Sprintf("%s_%d_%d.index", bucketUUID, newInstId, partnId)
-			newCodebook := fmt.Sprintf("%v_%d.codebook", newInstId, partnId)
-
-			return filepath.Join(currIndexPath, CODEBOOK_DIR, currCodebook),
-				filepath.Join(newIndexPath, CODEBOOK_DIR, newCodebook)
+			return filepath.Join(currIndexPath, CODEBOOK_DIR, fmt.Sprintf("%d_%d.codebook", currInstId, partnId)),
+				filepath.Join(newIndexPath, CODEBOOK_DIR, fmt.Sprintf("%d_%d.codebook", newInstId, partnId))
 		}
 
-		// STORAGE_PATH_UPGRADE_TODO: fix for multi-version rename (source is old convention
-		// and destination is new convention)
+		// v1 source → v2 dest (upgrade path)
+		if trimmedCurrPath, ok := strings.CutPrefix(currPath, v1Prefix); ok {
+			var currInstId common.IndexInstId
+			var extractedPartnId common.PartitionId
+			if n, err := fmt.Sscanf(trimmedCurrPath, "%d_%d.index", &currInstId, &extractedPartnId); err != nil || n != 2 || extractedPartnId != partnId {
+				continue
+			}
+			trimmedNewPath := strings.TrimPrefix(newPath, v2Prefix)
+			var newInstId common.IndexInstId
+			var destPartnId common.PartitionId
+			if n, err := fmt.Sscanf(trimmedNewPath, "%d_%d.index", &newInstId, &destPartnId); err != nil || n != 2 || destPartnId != partnId || newInstId != instId {
+				continue
+			}
+			srcIndexPath := fmt.Sprintf("%s_%s_%d_%d.index", bucket, name, currInstId, partnId)
+			dstIndexPath := fmt.Sprintf("%s_%d_%d.index", bucketUUID, newInstId, partnId)
+			return filepath.Join(srcIndexPath, CODEBOOK_DIR, fmt.Sprintf("%s_%s_%d_%d.codebook", bucket, name, currInstId, partnId)),
+				filepath.Join(dstIndexPath, CODEBOOK_DIR, fmt.Sprintf("%d_%d.codebook", newInstId, partnId))
+		}
 	}
 	return "", ""
 }

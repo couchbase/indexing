@@ -140,22 +140,20 @@ func InitCodebookDir(
 	storeEngineDir string, idxInst *common.IndexInst,
 	partnId common.PartitionId, sliceId SliceId,
 ) error {
-	// Construct codebookDirPath path
-	codebookDirPath := filepath.Join(
-		storeEngineDir,
-		IndexPath2(idxInst, partnId, sliceId),
-		CODEBOOK_DIR,
-	)
+	return InitCodebookDirAt(storeEngineDir, IndexPath2(idxInst, partnId, sliceId))
+}
 
-	//  Check the presence of codebook dir. Create one if it does not exist
+// InitCodebookDirAt creates the codebook subdirectory under an already-computed
+// index path. Use this when the caller has already selected v1 or v2 layout.
+func InitCodebookDirAt(storeEngineDir, relIndexPath string) error {
+	codebookDirPath := filepath.Join(storeEngineDir, relIndexPath, CODEBOOK_DIR)
 	if _, err := iowrap.Os_Stat(codebookDirPath); err != nil {
 		if os.IsNotExist(err) {
 			return iowrap.Os_MkdirAll(codebookDirPath, 0755)
-		} else {
-			logging.Errorf("InitCodebookDir: Error observed while checking the presence of "+
-				"codebookDir: %v, err: %v", codebookDirPath, err)
-			return err
 		}
+		logging.Errorf("InitCodebookDirAt: Error observed while checking the presence of "+
+			"codebookDir: %v, err: %v", codebookDirPath, err)
+		return err
 	}
 	return nil
 }
