@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -24,11 +25,14 @@ import (
 // node. A successful rebalance + scan verifies the MB-71635 fix end-to-end.
 
 const (
-	set34IndexName    = "set34_idx_age"
-	set34VecIndexName = "set34_idx_sift"
-	set34Bucket       = BUCKET // "default"
-	set34Scope        = "_default"
-	set34Coll         = "_default"
+	set34IndexName           = "set34_idx_age"
+	set34VecIndexName        = "set34_idx_sift"
+	set34BhiveIndexName      = "set34_idx_bhive_sift"
+	set34BhiveFailedIdxName  = "set34_idx_bhive_fail"
+	set34PlasmaFailedIdxName = "set34_idx_plasma_fail"
+	set34Bucket              = BUCKET // "default"
+	set34Scope               = "_default"
+	set34Coll                = "_default"
 )
 
 // set34GetStorageDir returns the abs path of the indexer storage dir on clusterNode.
@@ -41,6 +45,35 @@ func set34GetStorageDir(t *testing.T, clusterNode string) string {
 	abs, err := filepath.Abs(fmt.Sprintf("%v", raw))
 	FailTestIfError(err, "set34GetStorageDir: filepath.Abs", t)
 	return abs
+}
+
+// set34GetBhiveStorageDir returns the abs path of the bhive storage dir on clusterNode
+// (storageDir/@bhive).
+func set34GetBhiveStorageDir(t *testing.T, clusterNode string) string {
+	return filepath.Join(set34GetStorageDir(t, clusterNode), c.BHIVE_DIR_PREFIX)
+}
+
+// set34WaitForIndexError polls clusterNode's /getIndexStatus until idxName reports
+// Status=="Error", which indicates a training failure. Fails the test on timeout.
+func set34WaitForIndexError(t *testing.T, caller, clusterNode, idxName string) {
+	indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(
+		clusterconfig.Username, clusterconfig.Password, clusterNode)
+	deadline := time.Now().Add(time.Duration(defaultIndexActiveTimeout) * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := tc.GetIndexStatusResponse(indexerAddr,
+			clusterconfig.Username, clusterconfig.Password)
+		if err == nil {
+			for _, s := range resp.Status {
+				if s.IndexName == idxName && s.Bucket == set34Bucket && s.Status == "Error" {
+					log.Printf("%v index %v reached error state (training failure): %v",
+						caller, idxName, s.Error)
+					return
+				}
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("%v index %v did not reach error state within timeout", caller, idxName)
 }
 
 // set34ValidateOldFormat verifies that every index in names has an old-format
@@ -114,6 +147,76 @@ func set34ValidateNewFormat(t *testing.T, caller, clusterNode string, names []st
 	}
 }
 
+// set34ValidateOldFormatBhive verifies that every bhive index in names has an old-format
+// directory under the @bhive storage subdir on clusterNode.
+func set34ValidateOldFormatBhive(t *testing.T, caller, clusterNode string, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	storageDir := set34GetBhiveStorageDir(t, clusterNode)
+	for _, name := range names {
+		path, err := tc.GetIndexSlicePath(name, set34Bucket, storageDir, 0)
+		if err != nil {
+			t.Fatalf("%v old-format bhive path missing for %v in %v: %v",
+				caller, name, storageDir, err)
+		}
+		log.Printf("%v old-format bhive path confirmed for %v: %v", caller, name, path)
+	}
+}
+
+// set34ValidateNewFormatBhive verifies that every bhive index in names has at least one
+// instance with a new-format directory under the @bhive storage subdir on clusterNode,
+// and that no old-format directory for that index exists there.
+func set34ValidateNewFormatBhive(t *testing.T, caller, clusterNode string, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(
+		clusterconfig.Username, clusterconfig.Password, clusterNode)
+	storageDir := set34GetBhiveStorageDir(t, clusterNode)
+
+	bucketUUID, err := tc.GetBucketUUID(indexManagementAddress,
+		clusterconfig.Username, clusterconfig.Password, set34Bucket)
+	FailTestIfError(err, caller+" GetBucketUUID (bhive)", t)
+
+	resp, err := tc.GetIndexStatusResponse(indexerAddr,
+		clusterconfig.Username, clusterconfig.Password)
+	FailTestIfError(err, caller+" GetIndexStatusResponse (bhive)", t)
+
+	for _, name := range names {
+		var validated bool
+		for _, status := range resp.Status {
+			if status.IndexName != name || status.Bucket != set34Bucket {
+				continue
+			}
+			partnIds := status.PartitionMap[clusterNode]
+			if len(partnIds) == 0 {
+				continue
+			}
+			for _, partnId := range partnIds {
+				pid := c.PartitionId(partnId)
+				newPath, err := tc.GetIndexSlicePath2(bucketUUID, status.InstId, storageDir, pid)
+				if err != nil {
+					t.Fatalf("%v new-format bhive path missing for %v instId=%v partnId=%v: %v",
+						caller, name, status.InstId, pid, err)
+				}
+				log.Printf("%v new-format bhive path confirmed for %v instId=%v partnId=%v: %v",
+					caller, name, status.InstId, pid, newPath)
+
+				oldPath, _ := tc.GetIndexSlicePath(name, set34Bucket, storageDir, pid)
+				if oldPath != "" {
+					t.Fatalf("%v old-format bhive path unexpectedly present on dest node for %v: %v",
+						caller, name, oldPath)
+				}
+				validated = true
+			}
+		}
+		if !validated {
+			t.Fatalf("%v no bhive instance of %v found on node %v", caller, name, clusterNode)
+		}
+	}
+}
+
 // set34ConfigCompatV1 applies the compat-v1 simulation settings to clusterNode:
 // enables shard affinity, sets simulateShardCompatV1=true, and optionally
 // disables the shard dealer when shouldTestWithShardDealer is false.
@@ -132,24 +235,21 @@ func set34ConfigCompatV1(t *testing.T, caller, clusterNode string) {
 	log.Printf("%v simulateShardCompatV1=true on %v", caller, clusterNode)
 }
 
-// set34CreateIndexes creates the scalar (and optionally vector) set34 indexes.
+// set34CreateIndexes creates the scalar (and optionally vector/bhive) set34 indexes.
 // withReplica=true adds num_replica:1 to each index statement.
 func set34CreateIndexes(t *testing.T, caller string, withReplica bool) {
 	replicaClause := ""
 	if withReplica {
-		replicaClause = `, "num_replica":1`
+		replicaClause = `"num_replica":1`
 	}
 
+	scalarWith := ``
+	if replicaClause != "" {
+		scalarWith = replicaClause
+	}
 	scalarStmt := fmt.Sprintf(
 		`CREATE INDEX %v ON `+"`%v`.`%v`.`%v`"+`(age) WITH {%v}`,
-		set34IndexName, set34Bucket, set34Scope, set34Coll,
-		// strip leading comma if empty
-		func() string {
-			if replicaClause == "" {
-				return ``
-			}
-			return `"num_replica":1`
-		}(),
+		set34IndexName, set34Bucket, set34Scope, set34Coll, scalarWith,
 	)
 	executeN1qlStmt(scalarStmt, set34Bucket, caller, t)
 	log.Printf("%v Scalar index %v created (replica=%v)", caller, set34IndexName, withReplica)
@@ -158,6 +258,8 @@ func set34CreateIndexes(t *testing.T, caller string, withReplica bool) {
 		if err := loadVectorData(t, set34Bucket, set34Scope, set34Coll, 10000); err != nil {
 			tc.HandleError(err, fmt.Sprintf("%v Error loading vector data", caller))
 		}
+
+		// Plasma composite vector index (IVF256) — trains successfully.
 		vecWith := `"dimension":128,"description":"IVF256,PQ32x8","similarity":"L2_SQUARED","defer_build":true`
 		if withReplica {
 			vecWith += `,"num_replica":1`
@@ -170,27 +272,87 @@ func set34CreateIndexes(t *testing.T, caller string, withReplica bool) {
 			vecStmt, defaultIndexActiveTimeout*2)
 		FailTestIfError(err, fmt.Sprintf("%v Error creating vector index %v", caller, set34VecIndexName), t)
 		log.Printf("%v Vector index %v created (replica=%v)", caller, set34VecIndexName, withReplica)
+
+		// Bhive vector index (IVF256) — trains successfully.
+		bhiveWith := `"dimension":128,"description":"IVF256,PQ32x8","similarity":"L2_SQUARED","defer_build":true`
+		if withReplica {
+			bhiveWith += `,"num_replica":1`
+		}
+		bhiveStmt := fmt.Sprintf(
+			`CREATE VECTOR INDEX %v ON `+"`%v`.`%v`.`%v`"+`(sift VECTOR) WITH {%v}`,
+			set34BhiveIndexName, set34Bucket, set34Scope, set34Coll, bhiveWith,
+		)
+		err = createWithDeferAndBuild(set34BhiveIndexName, set34Bucket, set34Scope, set34Coll,
+			bhiveStmt, defaultIndexActiveTimeout*2)
+		FailTestIfError(err, fmt.Sprintf("%v Error creating bhive index %v", caller, set34BhiveIndexName), t)
+		log.Printf("%v Bhive index %v created (replica=%v)", caller, set34BhiveIndexName, withReplica)
+
+		// Bhive vector index with intentionally failed training (IVF100000 > 10000 docs).
+		bhiveFailWith := `"dimension":128,"description":"IVF100000,PQ32x8","similarity":"L2_SQUARED","defer_build":true`
+		if withReplica {
+			bhiveFailWith += `,"num_replica":1`
+		}
+		bhiveFailStmt := fmt.Sprintf(
+			`CREATE VECTOR INDEX %v ON `+"`%v`.`%v`.`%v`"+`(sift VECTOR) WITH {%v}`,
+			set34BhiveFailedIdxName, set34Bucket, set34Scope, set34Coll, bhiveFailWith,
+		)
+		_, err = execN1QL(set34Bucket, bhiveFailStmt)
+		FailTestIfError(err, fmt.Sprintf("%v Error creating bhive failed-training index %v", caller, set34BhiveFailedIdxName), t)
+		issueBuildStatement(set34Bucket, set34Scope, set34Coll, []string{set34BhiveFailedIdxName})
+		set34WaitForIndexError(t, caller, clusterconfig.Nodes[1], set34BhiveFailedIdxName)
+		log.Printf("%v Bhive failed-training index %v in error state (replica=%v)", caller, set34BhiveFailedIdxName, withReplica)
+
+		// Plasma composite vector index with intentionally failed training (IVF100000 > 10000 docs).
+		plasmaFailWith := `"dimension":128,"description":"IVF100000,PQ32x8","similarity":"L2_SQUARED","defer_build":true`
+		if withReplica {
+			plasmaFailWith += `,"num_replica":1`
+		}
+		plasmaFailStmt := fmt.Sprintf(
+			`CREATE INDEX %v ON `+"`%v`.`%v`.`%v`"+`(sift VECTOR) WITH {%v}`,
+			set34PlasmaFailedIdxName, set34Bucket, set34Scope, set34Coll, plasmaFailWith,
+		)
+		_, err = execN1QL(set34Bucket, plasmaFailStmt)
+		FailTestIfError(err, fmt.Sprintf("%v Error creating plasma failed-training index %v", caller, set34PlasmaFailedIdxName), t)
+		issueBuildStatement(set34Bucket, set34Scope, set34Coll, []string{set34PlasmaFailedIdxName})
+		set34WaitForIndexError(t, caller, clusterconfig.Nodes[1], set34PlasmaFailedIdxName)
+		log.Printf("%v Plasma failed-training index %v in error state (replica=%v)", caller, set34PlasmaFailedIdxName, withReplica)
 	}
 }
 
-// set34DropIndexes drops the scalar (and optionally vector) set34 indexes.
+// set34DropIndexes drops all set34 indexes.
 func set34DropIndexes(t *testing.T, caller string) {
 	err := secondaryindex.DropSecondaryIndex(set34IndexName, set34Bucket, indexManagementAddress)
 	FailTestIfError(err, fmt.Sprintf("%v Error dropping %v", caller, set34IndexName), t)
 	if clusterconfig.IndexUsing == "plasma" {
-		err = secondaryindex.DropSecondaryIndex(set34VecIndexName, set34Bucket, indexManagementAddress)
-		FailTestIfError(err, fmt.Sprintf("%v Error dropping %v", caller, set34VecIndexName), t)
+		for _, name := range []string{
+			set34VecIndexName,
+			set34BhiveIndexName,
+			set34BhiveFailedIdxName,
+			set34PlasmaFailedIdxName,
+		} {
+			err = secondaryindex.DropSecondaryIndex(name, set34Bucket, indexManagementAddress)
+			FailTestIfError(err, fmt.Sprintf("%v Error dropping %v", caller, name), t)
+		}
 	}
 }
 
-// set34IndexesToCheck returns the set of index names to validate, always
-// including the scalar index and adding the vector index when storage is plasma.
-func set34IndexesToCheck() []string {
+// set34PlasmaIndexesToCheck returns plasma (non-bhive) index names: the scalar index
+// and, for plasma storage, the active plasma vector index and the plasma failed-training index.
+func set34PlasmaIndexesToCheck() []string {
 	names := []string{set34IndexName}
 	if clusterconfig.IndexUsing == "plasma" {
-		names = append(names, set34VecIndexName)
+		names = append(names, set34VecIndexName, set34PlasmaFailedIdxName)
 	}
 	return names
+}
+
+// set34BhiveIndexesToCheck returns bhive index names for plasma storage: the active
+// bhive vector index and the bhive failed-training index.
+func set34BhiveIndexesToCheck() []string {
+	if clusterconfig.IndexUsing != "plasma" {
+		return nil
+	}
+	return []string{set34BhiveIndexName, set34BhiveFailedIdxName}
 }
 
 // set34ScanIndexes verifies the set34 indexes are queryable after a rebalance.
@@ -259,7 +421,8 @@ func TestPathUpgrade_CreateIndexOnCompatV1Node(t *testing.T) {
 	}
 
 	set34CreateIndexes(t, caller, false /* no replica */)
-	set34ValidateOldFormat(t, caller, clusterconfig.Nodes[1], set34IndexesToCheck())
+	set34ValidateOldFormat(t, caller, clusterconfig.Nodes[1], set34PlasmaIndexesToCheck())
+	set34ValidateOldFormatBhive(t, caller, clusterconfig.Nodes[1], set34BhiveIndexesToCheck())
 
 	printClusterConfig(caller, "exit")
 }
@@ -280,8 +443,7 @@ func TestPathUpgrade_SwapRebalanceCompatV1ToV2(t *testing.T) {
 		return
 	}
 
-	addNode(clusterconfig.Nodes[2], "index", t)
-	removeNode(clusterconfig.Nodes[1], t)
+	swapRebalance(t, 2, 1)
 
 	expectedStatus := map[string][]string{
 		clusterconfig.Nodes[0]: {"kv", "n1ql"},
@@ -291,33 +453,9 @@ func TestPathUpgrade_SwapRebalanceCompatV1ToV2(t *testing.T) {
 	waitForRebalanceCleanup()
 
 	set34ScanIndexes(t, caller)
-	set34ValidateNewFormat(t, caller, clusterconfig.Nodes[2], set34IndexesToCheck())
+	set34ValidateNewFormat(t, caller, clusterconfig.Nodes[2], set34PlasmaIndexesToCheck())
+	set34ValidateNewFormatBhive(t, caller, clusterconfig.Nodes[2], set34BhiveIndexesToCheck())
 
-	printClusterConfig(caller, "exit")
-}
-
-// TestPathUpgrade_RebalanceCleanup drops the indexes, disables
-// simulateShardCompatV1 on the current index node, and resets the cluster.
-//
-//	Starting config: [0: kv n1ql] [2: index]
-//	Ending config:   [0: kv n1ql] [1: index]
-func TestPathUpgrade_RebalanceCleanup(t *testing.T) {
-	const caller = "set34_upgrade_compat_rebalance_test.go::TestPathUpgrade_RebalanceCleanup:"
-	printClusterConfig(caller, "entry")
-	if skipTest() {
-		log.Printf("%v Test skipped", caller)
-		return
-	}
-
-	set34DropIndexes(t, caller)
-
-	err := secondaryindex.ChangeMultipleIndexerSettings(
-		map[string]interface{}{"indexer.thisNodeOnly.simulateShardCompatV1": false},
-		clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[2],
-	)
-	tc.HandleError(err, fmt.Sprintf("%v Error disabling simulateShardCompatV1 on Nodes[2]", caller))
-
-	setupCluster(t) // reset back to [0: kv n1ql] [1: index]
 	printClusterConfig(caller, "exit")
 }
 
@@ -340,7 +478,7 @@ func TestPathUpgrade_RebalanceCleanup(t *testing.T) {
 // and validates that old-format paths are present on Nodes[1] and new-format
 // paths on Nodes[2].
 //
-//	Starting config: [0: kv n1ql] [1: index]
+//	Starting config: [0: kv n1ql] [2: index]
 //	Ending config:   [0: kv n1ql] [1: index] [2: index]
 func TestPathUpgrade_ReplicaRepairCompatV1ToV2Setup(t *testing.T) {
 	const caller = "set34_upgrade_compat_rebalance_test.go::TestPathUpgrade_ReplicaRepairCompatV1ToV2Setup:"
@@ -350,12 +488,11 @@ func TestPathUpgrade_ReplicaRepairCompatV1ToV2Setup(t *testing.T) {
 		return
 	}
 
-	setupCluster(t) // ensures [0: kv n1ql] [1: index]
-	set34ConfigCompatV1(t, caller, clusterconfig.Nodes[1])
+	err := secondaryindex.DropAllSecondaryIndexes(clusterconfig.Nodes[2])
+	tc.HandleError(err, "failed to drop indexes")
 
-	// Add Nodes[2] as a clean compat-v2 node before creating the indexes so
-	// the planner can place one instance on each node.
-	addNodeAndRebalance(clusterconfig.Nodes[2], "index", t)
+	addNodeAndRebalance(clusterconfig.Nodes[1], "index", t)
+	set34ConfigCompatV1(t, caller, clusterconfig.Nodes[1])
 
 	expectedStatus := map[string][]string{
 		clusterconfig.Nodes[0]: {"kv", "n1ql"},
@@ -370,8 +507,10 @@ func TestPathUpgrade_ReplicaRepairCompatV1ToV2Setup(t *testing.T) {
 	set34CreateIndexes(t, caller, true /* withReplica */)
 
 	// Confirm the expected on-disk path formats before failover.
-	set34ValidateOldFormat(t, caller, clusterconfig.Nodes[1], set34IndexesToCheck())
-	set34ValidateNewFormat(t, caller, clusterconfig.Nodes[2], set34IndexesToCheck())
+	set34ValidateOldFormat(t, caller, clusterconfig.Nodes[1], set34PlasmaIndexesToCheck())
+	set34ValidateNewFormat(t, caller, clusterconfig.Nodes[2], set34PlasmaIndexesToCheck())
+	set34ValidateOldFormatBhive(t, caller, clusterconfig.Nodes[1], set34BhiveIndexesToCheck())
+	set34ValidateNewFormatBhive(t, caller, clusterconfig.Nodes[2], set34BhiveIndexesToCheck())
 
 	printClusterConfig(caller, "exit")
 }
@@ -423,8 +562,43 @@ func TestPathUpgrade_ReplicaRepairCompatV1ToV2(t *testing.T) {
 	set34ScanIndexes(t, caller)
 
 	// Validate path formats: Nodes[1] unchanged (old-format), Nodes[3] new-format.
-	set34ValidateOldFormat(t, caller, clusterconfig.Nodes[1], set34IndexesToCheck())
-	set34ValidateNewFormat(t, caller, clusterconfig.Nodes[3], set34IndexesToCheck())
+	set34ValidateOldFormat(t, caller, clusterconfig.Nodes[1], set34PlasmaIndexesToCheck())
+	set34ValidateNewFormat(t, caller, clusterconfig.Nodes[3], set34PlasmaIndexesToCheck())
+	set34ValidateOldFormatBhive(t, caller, clusterconfig.Nodes[1], set34BhiveIndexesToCheck())
+	set34ValidateNewFormatBhive(t, caller, clusterconfig.Nodes[3], set34BhiveIndexesToCheck())
+
+	printClusterConfig(caller, "exit")
+}
+
+func TestPathUpgrade_RestartPathUpgrade(t *testing.T) {
+	const caller = "set34_upgrade_compat_rebalance_test.go::TestPathUpgrade_RestartPathUpgrade:"
+	printClusterConfig(caller, "entry")
+	if skipTest() {
+		log.Printf("%v Test skipped", caller)
+		return
+	}
+
+	err := secondaryindex.ChangeMultipleIndexerSettings(
+		map[string]interface{}{"indexer.thisNodeOnly.simulateShardCompatV1": false},
+		clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1],
+	)
+	tc.HandleError(err, fmt.Sprintf("%v Error disabling simulateShardCompatV1 on Nodes[1]", caller))
+
+	log.Printf("%v Restarting indexer to test path upgrade", caller)
+
+	forceKillIndexer()
+
+	err = secondaryindex.WaitForIndexerActive(
+		clusterconfig.Username, clusterconfig.Password,
+		clusterconfig.Nodes[1],
+	)
+
+	tc.HandleError(err, "Node 1 not active after timeout")
+
+	log.Printf("%v verifying if path upgrades is performed after restart or not", caller)
+
+	set34ValidateNewFormat(t, caller, clusterconfig.Nodes[1], set34PlasmaIndexesToCheck())
+	set34ValidateNewFormatBhive(t, caller, clusterconfig.Nodes[1], set34BhiveIndexesToCheck())
 
 	printClusterConfig(caller, "exit")
 }

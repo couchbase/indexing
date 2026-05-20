@@ -10,6 +10,7 @@ package indexer
 
 import (
 	"context"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
@@ -88,6 +89,17 @@ type SliceEncryptionCallbacks struct {
 	getActiveKeyIdCipher func(typename, bucketUUID string) ([]byte, string, string)
 	getKeyCipherById     func(keyId string) ([]byte, string)
 	setInUseKeys         func(kdt KeyDataType, key string)
+}
+
+// nopSliceEncryptionCallbacks returns a SliceEncryptionCallbacks whose functions
+// are all no-ops (returning zero values). Used in v1-compat simulation mode where
+// old-format index paths would cause path-based encryption key lookups to fail.
+func nopSliceEncryptionCallbacks() SliceEncryptionCallbacks {
+	return SliceEncryptionCallbacks{
+		getActiveKeyIdCipher: func(_, _ string) ([]byte, string, string) { return []byte{}, "", CipherNameNone },
+		getKeyCipherById:     func(_ string) ([]byte, string) { return []byte{}, CipherNameNone },
+		setInUseKeys:         func(_ KeyDataType, _ string) {},
+	}
 }
 
 // cursorCtx implements IndexReaderContext and is used

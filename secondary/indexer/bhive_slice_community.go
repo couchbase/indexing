@@ -58,3 +58,7 @@ func RecoveryDone_Bhive() {}
 func GetShardCompatVersion_Bhive() int {
 	return -1
 }
+
+func createBhiveSliceDir(storageDir string, path string, isNew bool) error {
+	return nil
+}

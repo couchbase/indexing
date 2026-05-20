@@ -1333,7 +1333,7 @@ func (stm *ShardTransferManager) RestoreCodebook(
 	if vectorInst.Defn.IsBhive() {
 		err = createBhiveSliceDir(storeEngineDir, filepath.Join(storeEngineDir, relIdxPath), false)
 	} else {
-		err = createSliceDir(storeEngineDir, filepath.Join(storeEngineDir, relIdxPath), false)
+		err = createPlasmaSliceDir(storeEngineDir, filepath.Join(storeEngineDir, relIdxPath), false)
 	}
 	if err != nil {
 		err = fmt.Errorf("error encountered for Index path: %v, err: %v", relIdxPath, err)

@@ -25,6 +25,7 @@ import (
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
+	"github.com/couchbase/indexing/secondary/testcode"
 	"github.com/couchbase/indexing/secondary/vector"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	"github.com/couchbase/plasma"
@@ -406,6 +407,8 @@ func RemapSlice_Bhive(storageDir string, idxInst *common.IndexInst, partnId comm
 		logging.Warnf("remapSlice_Bhive: dir sync for %v error: %v", newPath, err)
 	}
 
+	// always perform this as the last operation; this helps replay upgrade if we crash in
+	// while remap is going on
 	if err = removeEmptySliceDir(oldPath); err != nil {
 		err = fmt.Errorf("remapSlice_Bhive: %w", err)
 		return
@@ -630,6 +633,14 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 	bCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
 	mCfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
 	bCfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
+
+	// if override is set then reset the get keys to nil
+	if testcode.OverrideShardCompatVersion(0) == 1 {
+		mCfg.GetKeyById = nil
+		bCfg.GetKeyById = nil
+		mCfg.GetActiveKeyByPath = nil
+		bCfg.GetActiveKeyByPath = nil
+	}
 
 	var wg sync.WaitGroup
 	var mErr, bErr error
@@ -3179,6 +3190,10 @@ func (mdb *bhiveSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, str
 		rkeyId = keyId
 	}
 
+	if cipher == CipherNameNone {
+		return nil, nil, ""
+	}
+
 	return masterEncryptionKeyBytes, rkeyId, cipher
 }
 
@@ -3189,10 +3204,13 @@ func (mdb *bhiveSlice) GetActiveKeyByPathCb(path string) ([]byte, []byte, string
 	//ENCRYPT_TODO: Add extra validation to check the bucketUUID is valid in cluster
 
 	if bucketUUID == common.BUCKET_UUID_NIL {
-		return []byte{}, []byte{}, CipherNameNone
+		return nil, nil, ""
 	}
 	masterEncryptionKeyBytes, rk, cipher := mdb.sliceEncryptionCallbacks.getActiveKeyIdCipher(kdtTypeServiceBucket, bucketUUID)
 	rkeyId := []byte(rk)
+	if cipher == CipherNameNone {
+		return nil, nil, ""
+	}
 	return masterEncryptionKeyBytes, rkeyId, cipher
 }
 
