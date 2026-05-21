@@ -585,6 +585,53 @@ func verifyPlasmaEncryption(indexDir string, keyId string, t *testing.T) bool {
 	return plasmaEncrypted
 }
 
+func verifyBhiveEncryption(indexDir string, keyId string, t *testing.T) bool {
+	dirsToCheck := []string{
+		filepath.Join(indexDir, "mainIndex"),
+		filepath.Join(indexDir, "docIndex"),
+		// filepath.Join(indexDir, "mainIndex", "recovery"),
+		// filepath.Join(indexDir, "docIndex", "recovery"),
+	}
+
+	bhiveEncrypted := true
+	for _, dir := range dirsToCheck {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+
+			if info.IsDir() && info.Name() == "recovery" {
+				return filepath.SkipDir
+			}
+
+			matched, _ := filepath.Match("log.*.data", filepath.Base(path))
+			if !matched {
+				return nil
+			}
+
+			hasKey, err := FileHasKey(path, keyId)
+			if err != nil {
+				t.Errorf("Error checking if file %s has key %s: %v", path, keyId, err)
+				bhiveEncrypted = false
+			} else if !hasKey {
+				t.Errorf("File %s does NOT have expected keyId: %s", path, keyId)
+				bhiveEncrypted = false
+			} else {
+				log.Printf("File %s is encrypted with keyId: %s", path, keyId)
+			}
+
+			return nil
+		})
+		if err != nil {
+			t.Errorf("Error walking directory %s: %v", dir, err)
+		}
+	}
+	return bhiveEncrypted
+}
+
 // Check if dropped key is still in use for indexDir files
 func verifyPlasmaEncryptionWithDroppedKey(indexDir string, dropKeyId string, t *testing.T) bool {
 	dirsToCheck := []string{
@@ -1510,7 +1557,7 @@ func verifyCodebookEncryption(indexDir string, keyid string) error {
 	return nil
 }
 
-// TestVectorIndexCodebookEncryption tests that codebook files for vector indexes
+// TestPlasmaCodebookEncryption tests that codebook files for vector indexes
 // are encrypted when bucket encryption is enabled.
 // Steps:
 // 1. Add bucket encryption key
@@ -2031,6 +2078,470 @@ func findScanResultFile(dir string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no scan-result file found in %s", dir)
+}
+
+// Add bucket encryption key
+// Modify persistent snapshot settings
+// Create index
+// Revert persistent snapshot settings
+// Verify index encryption
+// Delete index
+// Delete bucket encryption key
+// For plasma log files, there will not be encryption header at start of the file and only keyId can be present at starting of the blocks
+func TestIndexEncryptionBhive(t *testing.T) {
+
+	skipIfNotPlasma(t)
+
+	// Bucket is residing on node n_0 thus bucket encryption info should be fetched from n_0
+	bucketName := "default"
+	nodeKv := 0
+
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(2 * time.Second)
+
+	vectorSetup(t, bucketName, "", "", numDocs)
+
+	info, err := getBucketEncryptionInfo(bucketName, nodeKv)
+	if err != nil {
+		t.Fatalf("Failed to get bucket encryption info: %v", err)
+	}
+
+	log.Printf("encryptionAtRestInfo: %v", info["encryptionAtRestInfo"])
+
+	dataStatus, err := getDataStatus(info)
+	if err != nil {
+		t.Fatalf("Failed to get dataStatus: %v", err)
+	}
+	log.Printf("Extracted dataStatus: %v", dataStatus)
+
+	dekNumber, err := getDekNumber(info)
+	if err != nil {
+		t.Fatalf("Failed to get dekNumber: %v", err)
+	}
+	log.Printf("Extracted dekNumber: %v", dekNumber)
+
+	addBucketEncryptionKey(nodeKv, "default", "key1", 30)
+	keyId, err := getEncryptionAtRestKeyId(info)
+	if err != nil {
+		t.Fatalf("Failed to get encryptionAtRestKeyId: %v", err)
+	}
+	log.Printf("Current encryptionAtRestKeyId: %v", keyId)
+
+	nodeIndex := 1
+	resp, err := getAllEncryptionKeys(nodeIndex)
+	log.Printf("All encryption keys: %v", resp)
+	FailTestIfError(err, "Error in getAllEncryptionKeys", t)
+
+	keyId = 0
+	for _, keymap := range resp {
+		usageIfc, ok := keymap["usage"].([]interface{})
+		if !ok {
+			t.Fatalf("Failed to get usage: %v", keymap["usage"])
+		}
+
+		var usage []string
+		for _, u := range usageIfc {
+			if str, ok := u.(string); ok {
+				usage = append(usage, str)
+			}
+		}
+		// verify that the key can be used for encryption of bucket
+		if hasBucketEncryptionUsage(bucketName, usage) {
+			log.Printf("keyId: %v, usage: %v", keymap["id"], usage)
+			keyId = max(keyId, int(math.Round(keymap["id"].(float64))))
+		}
+	}
+	keyIdStr := strconv.Itoa(keyId)
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, keyIdStr)
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+
+	// Key Rotation not required for basic test
+	// setBypassEncrCfgRestrictions(nodeKv)
+	// setDekRotationInterval("default", nodeKv, 60)
+	// setDekLifetime("default", nodeKv, 90)
+
+	// Modify settings to trigger encryption of newly created persistent snapshot within minutes
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot_init_build.interval", float64(15), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.interval", float64(15), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	time.Sleep(7 * time.Second)
+
+	idx_bhive := "idx_bhive"
+	node := clusterconfig.Nodes[nodeIndex]
+	// Create vector index
+	stmt := fmt.Sprintf("CREATE VECTOR INDEX "+idx_bhive+
+		" ON default(sift VECTOR)"+
+		" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":true};", node)
+	err = createWithDeferAndBuild(idx_bhive, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_sift10k", t)
+
+	time.Sleep(15 * time.Second)
+
+	// Revert persistent snapshot settings
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot_init_build.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
+	tc.HandleError(err, "failed to get bucket UUID")
+
+	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
+	storageDir = filepath.Join(storageDir, "@bhive")
+	indexDirPrefix := filepath.Join(storageDir, bucketUUID+"_")
+	indexDir, err := getDirWithPrefix(indexDirPrefix)
+	FailTestIfError(err, "Failed to get index directory", t)
+	log.Printf("Index directory: %s", indexDir)
+
+	ekeyIds, err := getInUseKeyIds(nodeIndex, "service_bucket", bucketUUID)
+	tc.HandleError(err, "failed to get in use key ids")
+
+	ekeyId, err := filterNonEmptyKeyId(ekeyIds)
+	tc.HandleError(err, "failed to filter non empty key id")
+
+	time.Sleep(2*time.Second)
+	bhiveEncrypted := verifyBhiveEncryption(indexDir, ekeyId, t)
+	if !bhiveEncrypted {
+		t.Errorf("Bhive files are NOT encrypted")
+	}
+
+	triggerIndexerCrash(nodeIndex)
+	time.Sleep(15 * time.Second) // wait for indexer to recover
+	secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	// Verify encryption after recovery
+	bhiveEncrypted = verifyBhiveEncryption(indexDir, ekeyId, t)
+	if !bhiveEncrypted {
+		t.Errorf("Bhive files are NOT encrypted after recovery")
+	}
+
+	// Disable encryption for bucket
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, "-1")
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+
+	// Delete index
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	// Delete bucket
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(2 * time.Second)
+
+	// Delete bucket encryption key
+	err = deleteBucketEncryptionKey(nodeIndex, keyIdStr)
+	FailTestIfError(err, "Error in deleteBucketEncryptionKey", t)
+
+}
+
+func TestIndexEncryptionBhiveMultiBucket(t *testing.T) {
+
+	skipIfNotPlasma(t)
+
+	bucket1 := "default"
+	bucket2 := "bucket2"
+	nodeKv := 0
+	nodeIndex := 1
+
+	// Setup buckets
+	for _, b := range []string{bucket1, bucket2} {
+		kvutility.DeleteBucket(b, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		kvutility.CreateBucket(b, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+		time.Sleep(2 * time.Second)
+		
+		kvutility.FlushBucket(b, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		e := loadVectorData(t, b, "", "", numDocs)
+		FailTestIfError(e, "Error in loading vector data", t)	
+	}
+
+	defer resetVectorDataSetupFlags()
+
+	// Add encryption keys for both buckets
+	addBucketEncryptionKey(nodeKv, bucket1, "key1", 30)
+	addBucketEncryptionKey(nodeKv, bucket2, "key2", 30)
+
+	// Function to get the latest key for a bucket from all keys
+	getLatestKeyIdForBucket := func(bName string) string {
+		resp, _ := getAllEncryptionKeys(nodeIndex)
+		var kId int
+		for _, keymap := range resp {
+			usageIfc := keymap["usage"].([]interface{})
+			var usage []string
+			for _, u := range usageIfc {
+				usage = append(usage, u.(string))
+			}
+			if hasBucketEncryptionUsage(bName, usage) {
+				kId = max(kId, int(math.Round(keymap["id"].(float64))))
+			}
+		}
+		return strconv.Itoa(kId)
+	}
+
+	keyId1Str := getLatestKeyIdForBucket(bucket1)
+	keyId2Str := getLatestKeyIdForBucket(bucket2)
+
+	updateBucketEncryptionKey(bucket1, nodeIndex, keyId1Str)
+	updateBucketEncryptionKey(bucket2, nodeIndex, keyId2Str)
+
+	// Trigger quick snapshots
+	secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot_init_build.interval", float64(15), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.interval", float64(15), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(7 * time.Second)
+
+	node := clusterconfig.Nodes[nodeIndex]
+	idx1 := "idx1_bhive"
+	idx2 := "idx2_bhive"
+
+	// Create vector index
+	stmt := fmt.Sprintf("CREATE VECTOR INDEX "+idx1+
+	" ON default(sift VECTOR)"+
+	" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":true};", node)
+	err := createWithDeferAndBuild(idx1, bucket1, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_sift10k", t)
+
+	time.Sleep(3*time.Second)
+
+	stmt = fmt.Sprintf("CREATE VECTOR INDEX "+idx2+
+	" ON default(sift VECTOR)"+
+	" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":false};", node)
+	
+	_, err = execN1QL(bucket, stmt)
+	// err = createWithDeferAndBuild(idx2, bucket2, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_sift10k", t)
+
+	time.Sleep(45 * time.Second)
+
+	// Revert snapshot settings
+	secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot_init_build.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	verifyAndPostCrash := func() {
+		for _, b := range []string{bucket1, bucket2} {
+			idxName := idx1
+			if b == bucket2 {
+				idxName = idx2
+			}
+			storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
+			storageDir = filepath.Join(storageDir, "@bhive")
+			indexDir, _ := getDirWithPrefix(filepath.Join(storageDir, b+"_"+idxName))
+			uuid, _ := c.GetBucketUUID(kvaddress, b)
+			ids, _ := getInUseKeyIds(nodeIndex, "service_bucket", uuid)
+			eid, _ := filterNonEmptyKeyId(ids)
+
+			if !verifyBhiveEncryption(indexDir, eid, t) {
+				t.Errorf("Encryption failed for bucket %s index %s", b, idxName)
+			}
+		}
+	}
+
+	log.Printf("Verifying encryption before crash")
+	verifyAndPostCrash()
+
+	triggerIndexerCrash(nodeIndex)
+	time.Sleep(15 * time.Second)
+	secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	log.Printf("Verifying encryption after recovery")
+	verifyAndPostCrash()
+
+	// Cleanup
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	for _, b := range []string{bucket1, bucket2} {
+		updateBucketEncryptionKey(b, nodeIndex, "-1")
+		kvutility.DeleteBucket(b, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	}
+	deleteBucketEncryptionKey(nodeIndex, keyId1Str)
+	deleteBucketEncryptionKey(nodeIndex, keyId2Str)
+}
+
+func TestIndexEncryptionBhiveRotationDrop(t *testing.T) {
+
+	t.Skipf("Test %s can be added after bhive drop key bug fixed", t.Name())
+
+	skipIfNotPlasma(t)
+
+	// Bucket is residing on node n_0 thus bucket encryption info should be fetched from n_0
+	bucketName := "default"
+	nodeKv := 0
+
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(2 * time.Second)
+
+	vectorSetup(t, bucketName, "", "", numDocs)
+
+	info, err := getBucketEncryptionInfo(bucketName, nodeKv)
+	if err != nil {
+		t.Fatalf("Failed to get bucket encryption info: %v", err)
+	}
+
+	log.Printf("encryptionAtRestInfo: %v", info["encryptionAtRestInfo"])
+
+	dataStatus, err := getDataStatus(info)
+	if err != nil {
+		t.Fatalf("Failed to get dataStatus: %v", err)
+	}
+	log.Printf("Extracted dataStatus: %v", dataStatus)
+
+	dekNumber, err := getDekNumber(info)
+	if err != nil {
+		t.Fatalf("Failed to get dekNumber: %v", err)
+	}
+	log.Printf("Extracted dekNumber: %v", dekNumber)
+
+	addBucketEncryptionKey(nodeKv, "default", "key1", 30)
+	keyUpdatedTime := time.Now()
+	keyId, err := getEncryptionAtRestKeyId(info)
+	if err != nil {
+		t.Fatalf("Failed to get encryptionAtRestKeyId: %v", err)
+	}
+	log.Printf("Current encryptionAtRestKeyId: %v", keyId)
+
+	nodeIndex := 1
+	resp, err := getAllEncryptionKeys(nodeIndex)
+	log.Printf("All encryption keys: %v", resp)
+	FailTestIfError(err, "Error in getAllEncryptionKeys", t)
+
+	keyId = 0
+	for _, keymap := range resp {
+		usageIfc, ok := keymap["usage"].([]interface{})
+		if !ok {
+			t.Fatalf("Failed to get usage: %v", keymap["usage"])
+		}
+
+		var usage []string
+		for _, u := range usageIfc {
+			if str, ok := u.(string); ok {
+				usage = append(usage, str)
+			}
+		}
+		// verify that the key can be used for encryption of bucket
+		if hasBucketEncryptionUsage(bucketName, usage) {
+			log.Printf("keyId: %v, usage: %v", keymap["id"], usage)
+			keyId = max(keyId, int(math.Round(keymap["id"].(float64))))
+		}
+	}
+	keyIdStr := strconv.Itoa(keyId)
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, keyIdStr)
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+
+	// Modify settings to trigger encryption of newly created persistent snapshot within minutes
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot_init_build.interval", float64(15), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.interval", float64(15), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	time.Sleep(7 * time.Second)
+
+	node := clusterconfig.Nodes[nodeIndex]
+
+	idx1 := "idx_bhive_erd"
+	// Create vector index
+	stmt := fmt.Sprintf("CREATE VECTOR INDEX "+idx1+
+	" ON default(sift VECTOR)"+
+	" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":true};", node)
+	err = createWithDeferAndBuild(idx1, bucketName, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating idx_sift10k", t)
+	
+	time.Sleep(30 * time.Second)
+
+	// Revert moi persistent snapshot settings
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot_init_build.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
+	tc.HandleError(err, "failed to get bucket UUID")
+
+	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
+	storageDir = filepath.Join(storageDir, "@bhive")
+	indexDirPrefix := filepath.Join(storageDir, bucketUUID+"_")
+	indexDir, err := getDirWithPrefix(indexDirPrefix)
+	FailTestIfError(err, "Failed to get index directory", t)
+	log.Printf("Index directory: %s", indexDir)
+
+	ekeyIds, err := getInUseKeyIds(nodeIndex, "service_bucket", bucketUUID)
+	tc.HandleError(err, "failed to get in use key ids")
+
+	ekeyId, err := filterNonEmptyKeyId(ekeyIds)
+	tc.HandleError(err, "failed to filter non empty key id")
+
+	bhiveEncrypted := verifyBhiveEncryption(indexDir, ekeyId, t)
+	if !bhiveEncrypted {
+		t.Errorf("Bhive files are NOT encrypted")
+	}
+
+	// Key Rotation test, plasma must have received newer keys & data should be encrypted using newer keys.
+	diffInSeconds := int(time.Since(keyUpdatedTime).Seconds())
+	setBypassEncrCfgRestrictions(nodeKv)
+	log.Printf("diffInSeconds:%d", diffInSeconds)
+	setDekRotationInterval("default", nodeKv, diffInSeconds+5)
+	setDekLifetime("default", nodeKv, diffInSeconds+20)
+
+	time.Sleep(6 * time.Second)
+	ekeyIds2, err := getInUseKeyIds(nodeIndex, "service_bucket", bucketUUID)
+	tc.HandleError(err, "failed to get in use key ids")
+
+	//Set to higher interval as one rotation should have happened
+	setDekRotationInterval("default", nodeKv, 86400)
+	setDekLifetime("default", nodeKv, 86400)
+
+	excludeKeyIds := []string{"", ekeyId}
+	ekeyId2, err := filterKeyId(ekeyIds2, excludeKeyIds)
+	tc.HandleError(err, "failed to filter key id")
+
+	bhiveEncrypted = verifyBhiveEncryption(indexDir, ekeyId2, t)
+	if !bhiveEncrypted {
+		t.Errorf("Bhive files are NOT encrypted with correct key")
+	}
+
+	time.Sleep(11 * time.Second)
+	// Skip this check: MB-71420
+	// ekeyId should have been dropped by now.
+	// encryptedWithDroppedKey := verifyBhiveEncryptionWithDroppedKey(indexDir, ekeyId, t)
+	// if encryptedWithDroppedKey {
+	// 	t.Errorf("Plasma files are encrypted with dropped key")
+	// }
+
+	triggerIndexerCrash(nodeIndex)
+	time.Sleep(10 * time.Second) // wait for indexer to recover
+	secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	bhiveEncrypted = verifyBhiveEncryption(indexDir, ekeyId2, t)
+	if !bhiveEncrypted {
+		t.Errorf("Bhive files are NOT encrypted with correct key after recovery")
+	}
+
+	// Skip this check: MB-71420
+	// encryptedWithDroppedKey = verifyBhiveEncryptionWithDroppedKey(indexDir, ekeyId, t)
+	// if encryptedWithDroppedKey {
+	// 	t.Errorf("Plasma files are encrypted with dropped key")
+	// }
+
+	// Disable encryption for bucket
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, "-1")
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+
+	// Delete index
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	// Delete bucket
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(2 * time.Second)
+
+	// Delete bucket encryption key
+	err = deleteBucketEncryptionKey(nodeIndex, keyIdStr)
+	FailTestIfError(err, "Error in deleteBucketEncryptionKey", t)
+
 }
 
 func TestBackfillEncryption(t *testing.T) {

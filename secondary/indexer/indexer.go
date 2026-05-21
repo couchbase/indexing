@@ -621,6 +621,11 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		common.CrashOnError(err)
 	}
 
+	handlerContext.rhc.SetEncryptionCallbacks(CacheEncryptionCallbacks{
+		getKeyCipherById: idx.encryptionMgr.getKeyCipherById,
+		setInUseKeys:     idx.encryptionMgr.SetInUseKeys,
+	})
+
 	// Start internal version monitor only after starting http server.
 	go common.MonitorInternalVersion(int64(common.INDEXER_76_VERSION), common.MIN_VER_SRV_AUTH,
 		idx.config["clusterAddr"].String())
@@ -1897,12 +1902,22 @@ func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 
 	logging.Infof("Indexer::handleEncryptionGetInUseKeys...")
 
-	switch msg.(type) {
+	switch e := msg.(type) {
 	case *MsgEncryptionGetInuseKeys:
-		kdt := msg.(*MsgEncryptionGetInuseKeys).GetKeyDataType()
-		if kdt.TypeName == "log" {
-			idx.statsMgrCmdCh <- msg
+		kdt := e.GetKeyDataType()
+		if kdt.TypeName == LogdataKDT.TypeName {
+			statsRespCh := make(chan map[KeyDataType][]string, 1)
+			rhcRespCh := make(chan map[KeyDataType][]string, 1)
+			idx.statsMgrCmdCh <- &MsgEncryptionGetInuseKeys{keyDataType: kdt, respMapCh: statsRespCh}
 			<-idx.statsMgrCmdCh
+
+			handlerContext.rhc.HandleGetInUseKeys(kdt, rhcRespCh)
+
+			go func() {
+				statsResult := <-statsRespCh
+				rhcResult := <-rhcRespCh
+				e.GetKeyMapCh() <- mergeMap(statsResult, rhcResult)
+			}()
 			return
 		}
 		idx.storageMgrCmdCh <- msg
@@ -1915,30 +1930,31 @@ func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
 	default:
 		// ENCRYPT_TODO: Return error in this case
-		logging.Warnf("Indexer::handleEncryptionGetInUseKeys invalid type %T", msg)
+		logging.Warnf("Indexer::handleEncryptionGetInUseKeys invalid type %T", e)
 	}
 }
 
 func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 
-	kdt := msg.(*MsgEncryptionUpdateKey).GetKeyDataType()
+	encMsg := msg.(*MsgEncryptionUpdateKey)
+	kdt := encMsg.GetKeyDataType()
 	logging.Infof("Indexer::handleEncryptionUpdateKey keydatatype: %v", kdt)
 
 	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
 		// ENCRYPT_TODO: Revisit if required, MOI encryption APIs are not pause aware
 		logging.Infof("Indexer::handleEncryptionUpdateKey aborted keydatatype: %v", kdt)
-		respCh := msg.(*MsgEncryptionUpdateKey).GetRespCh()
-		respCh <- ErrIndexerNotActive
+		encMsg.GetRespCh() <- ErrIndexerNotActive
 		return
 	}
 
 	switch kdt.TypeName {
-	case "service_bucket":
+	case kdtTypeServiceBucket:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 		// ENCRYPT_TODO: Handle below types later
 		// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
 	case "log":
+		handlerContext.rhc.HandleEncryptionUpdateKey(encMsg.GetEarKey(), kdt)
 		idx.statsMgrCmdCh <- msg
 		<-idx.statsMgrCmdCh
 
@@ -1954,26 +1970,46 @@ func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 
 func (idx *indexer) handleEncryptionDropKeys(msg Message) {
 
-	kdt := msg.(*MsgEncryptionDropKey).GetKeyDataType()
+	dropMsg := msg.(*MsgEncryptionDropKey)
+	kdt := dropMsg.GetKeyDataType()
 	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
 		// ENCRYPT_TODO: Revisit if required, MOI encryption APIs are not pause aware
 		logging.Infof("Indexer::handleEncryptionDropKeys aborted keydatatype: %v", kdt)
-		respCh := msg.(*MsgEncryptionDropKey).GetRespCh()
-		respCh <- ErrIndexerNotActive
+		dropMsg.GetRespCh() <- ErrIndexerNotActive
 		return
 	}
 	logging.Infof("Indexer::handleEncryptionDropKeys...")
 
 	switch kdt.TypeName {
-	case "service_bucket":
+	case kdtTypeServiceBucket:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
 	// ENCRYPT_TODO: Handle below types later
 	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
 	case "log":
-		idx.statsMgrCmdCh <- msg
-		<-idx.statsMgrCmdCh
+		encMgrRespCh := dropMsg.GetRespCh()
+
+		rhcDone := handlerContext.rhc.HandleEncryptionDropKey(
+			dropMsg.GetActiveEarKey(), dropMsg.GetDropKeyIds(), kdt)
+
+		// Send a fresh message to statsMgr with a proxy respCh so it signals us
+		// rather than EncryptionMgr directly.
+		proxyRespCh := make(chan error, 1)
+		idx.statsMgrCmdCh <- &MsgEncryptionDropKey{
+			keyDataType:  kdt,
+			activeEarkey: dropMsg.GetActiveEarKey(),
+			dropKeyIds:   dropMsg.GetDropKeyIds(),
+			respCh:       proxyRespCh,
+		}
+		<-idx.statsMgrCmdCh // wait for statsMgr ack
+
+		// Both rhc and statsMgr must complete re-encryption before old keys can be dropped.
+		go func() {
+			rhcErr := <-rhcDone
+			statsErr := <-proxyRespCh
+			encMgrRespCh <- errors.Join(rhcErr, statsErr)
+		}()
 
 	case "config":
 	case "audit":
@@ -15351,7 +15387,7 @@ func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 		return err
 	}
 
-	key, keyid, cipher := idx.encryptionMgr.getActiveKeyIdCipher("service_bucket", idxInst.Defn.BucketUUID)
+	key, keyid, cipher := idx.encryptionMgr.getActiveKeyIdCipher(kdtTypeServiceBucket, idxInst.Defn.BucketUUID)
 
 	isEncryptionRequired := !(cipher == CipherNameNone || keyid == "" || key == nil)
 
@@ -15419,7 +15455,7 @@ func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 		}
 
 		// Set in-use key for codebook
-		idx.encryptionMgr.SetInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxInst.Defn.BucketUUID}, keyid)
+		idx.encryptionMgr.SetInUseKeys(GetBucketKDT(idxInst.Defn.BucketUUID), keyid)
 	} else {
 		// Persist un-encrypted codebook
 		err := common.WriteFileWithSync(codebookPath, codebook, 0755)
@@ -15428,7 +15464,7 @@ func (idx *indexer) persistCodebookToDisk(storeEngineDir string,
 			return err
 		}
 		// Set "" in-use key for codebook
-		idx.encryptionMgr.SetInUseKeys(KeyDataType{TypeName: "service_bucket", BucketUUID: idxInst.Defn.BucketUUID}, "")
+		idx.encryptionMgr.SetInUseKeys(GetBucketKDT(idxInst.Defn.BucketUUID), "")
 	}
 
 	logging.Infof("Indexer::persistCodebookToDisk: Persistance to disk is successful for path: %v isEncrypted:%v keyid:%v", codebookPath, isEncryptionRequired, keyid)

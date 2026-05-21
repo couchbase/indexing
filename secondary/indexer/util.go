@@ -568,7 +568,7 @@ func removeEmptySliceDir(slicePath string) error {
 
 func GetBucketKDT(bucketUUID string) KeyDataType {
 	return KeyDataType{
-		TypeName:   "service_bucket",
+		TypeName:   kdtTypeServiceBucket,
 		BucketUUID: bucketUUID,
 	}
 }

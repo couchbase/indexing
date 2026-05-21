@@ -135,6 +135,9 @@ type EncryptionMgr struct {
 	testRunning bool
 	enableTest  atomic.Bool
 
+	maxDropKeyRetry      atomic.Int32
+	dropKeyRetryInterval atomic.Int32
+
 	wrkrQueue     MsgChannel // as multiple concurrent encryption messages can be received, they will be queued and processed async after following signals.
 	bootstrapDone chan bool  // closed channel means indexer bootstrap is done.
 	recoveryDone  chan bool  // closed channel means indexerUsedKeyIds update is completed after inputs from indexer components.
@@ -203,6 +206,8 @@ func NewEncryptionMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 
 	encryptionMgr.enableTest.Store(false)
 	encryptionMgr.setEnableTest()
+	encryptionMgr.setMaxDropKeyRetry()
+	encryptionMgr.setDropKeyRetryInterval()
 
 	encryptionMgr.isRecoveryDone.Store(false)
 
@@ -271,6 +276,38 @@ func (e *EncryptionMgr) setEnableTest() {
 		}
 		logging.Infof("EncryptionMgr:setEnableTest set to %v", e.enableTest.Load())
 	}
+}
+
+func (e *EncryptionMgr) setMaxDropKeyRetry() {
+	val, ok := e.config["encryption.maxStorageDropKeyRetry"]
+	if ok {
+		v := int32(val.Int())
+		if v < 0 {
+			v = 0
+		}
+		e.maxDropKeyRetry.Store(v)
+		logging.Infof("EncryptionMgr:setMaxDropKeyRetry set to %v", e.getMaxDropKeyRetry())
+	}
+}
+
+func (e *EncryptionMgr) getMaxDropKeyRetry() int {
+	return int(e.maxDropKeyRetry.Load())
+}
+
+func (e *EncryptionMgr) setDropKeyRetryInterval() {
+	val, ok := e.config["encryption.dropKeyRetryInterval"]
+	if ok {
+		v := int32(val.Int())
+		if v < 0 {
+			v = 0
+		}
+		e.dropKeyRetryInterval.Store(v)
+		logging.Infof("EncryptionMgr:setDropKeyRetryInterval set to %v", e.getDropKeyRetryInterval())
+	}
+}
+
+func (e *EncryptionMgr) getDropKeyRetryInterval() int {
+	return int(e.dropKeyRetryInterval.Load())
 }
 
 func (e *EncryptionMgr) run() {
@@ -375,6 +412,38 @@ func (e *EncryptionMgr) trackDropKeys(msg Message) {
 
 	err := <-respCh
 	if err != nil {
+		// If err is ErrRetryDropKey, storage expects indexer to retry
+		if kdt.TypeName == kdtTypeServiceBucket && err == ErrRetryDropKey {
+
+			maxRetry := e.getMaxDropKeyRetry()
+			currRetry := msg.(*MsgEncryptionDropKey).GetRetryCount()
+			if maxRetry > currRetry {
+				retryWaitInterval := e.getDropKeyRetryInterval()
+
+				msg.(*MsgEncryptionDropKey).SetRetryCount(currRetry + 1)
+				logging.Infof(
+					"EncryptionMgr:trackDropKeys retry:%v for keydatatype:%v drop keyids:%v retryWaitInterval:%v",
+					currRetry+1, logKDT(kdt), logKeyIDs(dropKeyids...), retryWaitInterval,
+				)
+				if retryWaitInterval > 0 {
+					time.Sleep(time.Duration(retryWaitInterval) * time.Second)
+				}
+
+				func() {
+					e.cbMu.Lock()
+					defer e.cbMu.Unlock()
+
+					e.enqueue(msg)
+				}()
+				// Skip updating book-keeping, notifying cbauth as this operation is queued and will be tried again
+				return
+			} else {
+				logging.Warnf(
+					"EncryptionMgr:trackDropKeys retry:%v, retry stopped for keydatatype:%v drop keyids:%v",
+					maxRetry, logKDT(kdt), logKeyIDs(dropKeyids...),
+				)
+			}
+		}
 		logging.Warnf(
 			"EncryptionMgr:trackDropKeys err:%v for keydatatype:%v drop keyids:%v",
 			err, logKDT(kdt), logKeyIDs(dropKeyids...),
@@ -588,6 +657,8 @@ func (e *EncryptionMgr) handleConfigUpdate(cmd Message) {
 	e.config = cfgUpdate.GetConfig()
 
 	e.setEnableTest()
+	e.setMaxDropKeyRetry()
+	e.setDropKeyRetryInterval()
 	//ENCRYPT_TODO: Remove persisted test keys when test-framework not required
 	//e.RegisterRestEndpoints()
 
@@ -786,14 +857,13 @@ func (e *EncryptionMgr) cacheKeysForBootstrap() {
 	//kdt = KeyDataType{TypeName: "audit", BucketUUID: ""}
 	//encrKeysInfo = cbmockGetEncryptionKeysBlocking(kdt)
 	//e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
-	logKdt := KeyDataType{TypeName: "log", BucketUUID: ""}
 	logCtx := context.Background()
-	logEncrKeysInfo, logErr := cbauth.GetEncryptionKeysBlocking(logCtx, logKdt)
+	logEncrKeysInfo, logErr := cbauth.GetEncryptionKeysBlocking(logCtx, LogdataKDT)
 	if logErr != nil {
 		logging.Fatalf("EncryptionMgr:caching keys for log err:%v", logErr)
 		panic(logErr)
 	}
-	e.SetClusterEncrKeysInfo(logKdt, logEncrKeysInfo)
+	e.SetClusterEncrKeysInfo(LogdataKDT, logEncrKeysInfo)
 	logging.Infof("EncryptionMgr:cached keys for log")
 
 	close(e.cachingDone)
@@ -873,7 +943,7 @@ func (e *EncryptionMgr) recoverInUseKeys() {
 	//e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: KeyDataType{TypeName: "audit", BucketUUID: ""}, respMapCh: respMapCh}
 	//kdtKeysMap = <-respMapCh
 	//allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
-	e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: KeyDataType{TypeName: "log", BucketUUID: ""}, respMapCh: respMapCh}
+	e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: LogdataKDT, respMapCh: respMapCh}
 	kdtKeysMap = <-respMapCh
 	allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
 
@@ -1481,7 +1551,8 @@ func (e *EncryptionMgr) dropKeysCallback(kdt KeyDataType, keyids []string) {
 	}
 
 	respCh := make(chan error, 1)
-	msg := &MsgEncryptionDropKey{kdt, keyids, earkey, respCh}
+	retryCount := 0
+	msg := &MsgEncryptionDropKey{kdt, keyids, earkey, respCh, retryCount}
 
 	e.cbMu.Lock()
 	defer e.cbMu.Unlock()
@@ -1538,6 +1609,7 @@ func (e *EncryptionMgr) synchronizeKeyFilesCallback(kdt KeyDataType) error {
 }
 
 var MetadataKDT = KeyDataType{TypeName: "other"}
+var LogdataKDT = KeyDataType{TypeName: "log", BucketUUID: ""}
 
 func (e *EncryptionMgr) getActiveKeyCipherMetadataCb() (*EaRKey, error) {
 	key, id, cipher := e.getActiveKeyIdCipher(
