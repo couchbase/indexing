@@ -382,7 +382,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 	}
 
 	if req.hasRollback != nil && req.hasRollback.Load() == true {
-		err = w.Error(ErrIndexRollback, nil)
+		err = w.Error(ErrIndexRollback)
 	}
 
 	if s.tryRespondWithError(w, req, err) {
@@ -1278,7 +1278,7 @@ func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanReq
 			logging.Infof("%s RESPONSE status:(error = %s), requestId: %v %v", req.LogPrefix, err, req.RequestId, errList)
 		}
 		s.updateErrStats(req, err)
-		s.handleError(req.LogPrefix, w.Error(err, req.srvrScanReport))
+		s.handleError(req.LogPrefix, w.Error(err))
 		return true
 	}
 

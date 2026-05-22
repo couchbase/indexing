@@ -141,7 +141,12 @@ type RequestBroker struct {
 	scanReport       *report.ScanReportState
 	perHostReportIds []string
 	hostIdOffset     int // cumulative count of host IDs added before current scatter attempt
+	reportIdsMapLock sync.Mutex
+	closeStreamWG    sync.WaitGroup
+	scanReportWaitTimeout time.Duration
 }
+
+const defaultScanReportWaitTimeout = 15 * time.Second
 
 type doneStatus struct {
 	err     error
@@ -305,10 +310,18 @@ func (b *RequestBroker) GetScanReport() *report.ScanReportState {
 	return b.scanReport
 }
 
+func (b *RequestBroker) SetScanReportWaitTimeout(d time.Duration) {
+	b.scanReportWaitTimeout = d
+}
+
 func (b *RequestBroker) SetPerHostReportIds(ids []string) {
 	if b.scanReport == nil {
 		return
 	}
+
+	b.reportIdsMapLock.Lock()
+	defer b.reportIdsMapLock.Unlock()
+
 	// Record offset before appending so AttachIndexerScanReport can use
 	// hostIdOffset + responseHandlerIndex to locate the correct entry.
 	b.hostIdOffset = len(b.perHostReportIds)
@@ -327,6 +340,9 @@ func (b *RequestBroker) AttachIndexerScanReport(hostReport *report.HostScanRepor
 		logging.Errorf("scan report is not initialized but received scan report from indexer for requestId: %v", b.requestId)
 		return
 	}
+
+	b.reportIdsMapLock.Lock()
+	defer b.reportIdsMapLock.Unlock()
 
 	// Use hostIdOffset to map the response handler index (0-based per scatter
 	// attempt) to the global index in perHostReportIds which accumulates
@@ -353,14 +369,35 @@ func (b *RequestBroker) DoRetry() bool {
 	return b.retry
 }
 
+func (b *RequestBroker) closeStreamTaskDone() {
+	b.closeStreamWG.Done()
+}
+
 func (b *RequestBroker) SendFinalReport(conn *datastore.IndexConnection) {
 	if b.scanReport == nil {
 		return
 	}
 
+	timeout := b.scanReportWaitTimeout
+	if timeout <= 0 {
+		timeout = defaultScanReportWaitTimeout
+	}
+	if !b.waitCloseStreamWithTimeout(timeout) {
+		logging.Warnf("SendFinalReport: timed out after %v waiting for indexer "+
+			"scan reports; finalizing partial report for requestId: %v",
+			timeout, b.requestId)
+	}
+
 	sr := b.scanReport
 	includeDetailed := conn.IsDetailedIndexScanReport()
+
+	// Hold reportIdsMapLock while reading the per-host reports: if we timed out
+	// above, closeStream goroutines may still be calling AttachIndexerScanReport
+	// (which mutates HostScanReport entries under the same lock) concurrently.
+	b.reportIdsMapLock.Lock()
 	newReport := sr.ToMap(includeDetailed)
+	b.reportIdsMapLock.Unlock()
+
 	conn.AggregateScanReport(report.AggregateScanReportsFn, newReport)
 
 	if logging.IsEnabled(logging.Debug) {
@@ -370,6 +407,28 @@ func (b *RequestBroker) SendFinalReport(conn *datastore.IndexConnection) {
 		} else {
 			logging.Debugf("Final scan report sent: %v", string(reportJson))
 		}
+	}
+}
+
+// waitCloseStreamWithTimeout waits for all closeStream goroutines to finish,
+// returning true if they completed within d and false if d elapsed first. The
+// background waiter goroutine exits once the WaitGroup reaches zero (bounded by
+// the connection readDeadline), so it does not leak.
+func (b *RequestBroker) waitCloseStreamWithTimeout(d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		b.closeStreamWG.Wait()
+		close(done)
+	}()
+
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
 	}
 }
 
@@ -1333,8 +1392,19 @@ func (c *RequestBroker) scanSingleNode(id ResponseHandlerId, client *GsiScanClie
 		return
 	}
 
+	// closeStreamWG is incremented inside doStreamingWithRetry, only when a
+	// closeStream goroutine is actually launched - that is the only path on
+	// which the indexer scan report is attached asynchronously. Pass the
+	// WaitGroup only when a scan report is being generated; otherwise there is
+	// nothing for SendFinalReport to wait on.
+	var wg *sync.WaitGroup
+	if c.scanReport != nil {
+		wg = &c.closeStreamWG
+	}
+
 	begin := time.Now()
-	err, partial := c.scan(client, index, rollback, partition, c.factory(id, instId, partition))
+	err, partial := c.scan(client, index, rollback,
+		partition, c.factory(id, instId, partition), wg)
 	if err != nil {
 		// If there is any error, then stop the broker.
 		// This will force other go-routine to terminate.

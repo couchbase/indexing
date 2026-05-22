@@ -17,6 +17,7 @@ import (
 	"net"
 	"time"
 
+	"sync"
 	"sync/atomic"
 
 	"github.com/couchbase/indexing/secondary/common"
@@ -202,7 +203,8 @@ func (c *GsiScanClient) Lookup(
 	partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat,
 	retry bool, scanParams map[string]interface{},
-	reqDeadline time.Time, reqDeadlineSlack time.Duration) (error, bool) {
+	reqDeadline time.Time, reqDeadlineSlack time.Duration,
+	wg *sync.WaitGroup) (error, bool) {
 
 	// serialize lookup value.
 	equals := make([][]byte, 0, len(values))
@@ -239,7 +241,7 @@ func (c *GsiScanClient) Lookup(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
-	return c.doStreamingWithRetry(requestId, req, callb, "Lookup", retry)
+	return c.doStreamingWithRetry(requestId, req, callb, "Lookup", retry, wg)
 }
 
 func (c *GsiScanClient) doStreamingWithRetry(
@@ -248,6 +250,7 @@ func (c *GsiScanClient) doStreamingWithRetry(
 	callb ResponseHandler,
 	caller string,
 	retry bool,
+	wg *sync.WaitGroup,
 ) (error, bool /*partial*/) {
 
 	partial, healthy, closeStream := false, true, false
@@ -262,6 +265,10 @@ func (c *GsiScanClient) doStreamingWithRetry(
 	defer func() {
 		go func() {
 			if healthy && closeStream {
+				if wg != nil {
+					wg.Add(1)
+				}
+
 				conn, pkt := connectn.conn, connectn.pkt
 				var closeErr error
 				closeErr, healthy = c.closeStream(conn, pkt, requestId, callb)
@@ -271,7 +278,12 @@ func (c *GsiScanClient) doStreamingWithRetry(
 						c.logPrefix, requestId, closeErr,
 					)
 				}
+				
+				if wg != nil {
+					wg.Done()
+				}
 			}
+
 			c.pool.Return(connectn, healthy)
 		}()
 	}()
@@ -354,7 +366,8 @@ func (c *GsiScanClient) Range(
 	distinct bool, limit int64, cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
-	reqDeadline time.Time, reqDeadlineSlack time.Duration) (error, bool) {
+	reqDeadline time.Time, reqDeadlineSlack time.Duration,
+	wg *sync.WaitGroup) (error, bool) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -395,7 +408,7 @@ func (c *GsiScanClient) Range(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
-	return c.doStreamingWithRetry(requestId, req, callb, "Range", retry)
+	return c.doStreamingWithRetry(requestId, req, callb, "Range", retry, wg)
 }
 
 // Range scan index between low and high.
@@ -404,7 +417,8 @@ func (c *GsiScanClient) RangePrimary(
 	distinct bool, limit int64, cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
-	reqDeadline time.Time, reqDeadlineSlack time.Duration) (error, bool) {
+	reqDeadline time.Time, reqDeadlineSlack time.Duration,
+	wg *sync.WaitGroup) (error, bool) {
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -436,7 +450,7 @@ func (c *GsiScanClient) RangePrimary(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
-	return c.doStreamingWithRetry(requestId, req, callb, "RangePrimary", retry)
+	return c.doStreamingWithRetry(requestId, req, callb, "RangePrimary", retry, wg)
 }
 
 // ScanAll for full table scan.
@@ -445,7 +459,8 @@ func (c *GsiScanClient) ScanAll(
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
-	reqDeadline time.Time, reqDeadlineSlack time.Duration, generateScanReport bool) (error, bool) {
+	reqDeadline time.Time, reqDeadlineSlack time.Duration, generateScanReport bool,
+	wg *sync.WaitGroup) (error, bool) {
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -470,7 +485,7 @@ func (c *GsiScanClient) ScanAll(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
-	return c.doStreamingWithRetry(requestId, req, callb, "ScanAll", retry)
+	return c.doStreamingWithRetry(requestId, req, callb, "ScanAll", retry, wg)
 }
 
 func (c *GsiScanClient) MultiScan(
@@ -479,7 +494,8 @@ func (c *GsiScanClient) MultiScan(
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
-	reqDeadline time.Time, reqDeadlineSlack time.Duration) (error, bool) {
+	reqDeadline time.Time, reqDeadlineSlack time.Duration,
+	wg *sync.WaitGroup) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -574,7 +590,7 @@ func (c *GsiScanClient) MultiScan(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
-	return c.doStreamingWithRetry(requestId, req, callb, "MultiScan", retry)
+	return c.doStreamingWithRetry(requestId, req, callb, "MultiScan", retry, wg)
 }
 
 func (c *GsiScanClient) MultiScanPrimary(
@@ -583,7 +599,8 @@ func (c *GsiScanClient) MultiScanPrimary(
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
-	reqDeadline time.Time, reqDeadlineSlack time.Duration) (error, bool) {
+	reqDeadline time.Time, reqDeadlineSlack time.Duration,
+	wg *sync.WaitGroup) (error, bool) {
 
 	var what string
 	// serialize scans
@@ -683,7 +700,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
-	return c.doStreamingWithRetry(requestId, req, callb, "MultiScanPrimary", retry)
+	return c.doStreamingWithRetry(requestId, req, callb, "MultiScanPrimary", retry, wg)
 }
 
 // CountLookup to count number entries for given set of keys.
@@ -1127,7 +1144,8 @@ func (c *GsiScanClient) Scan(
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
 	indexVector *IndexVector, reqDeadline time.Time, reqDeadlineSlack time.Duration,
 	indexOrderForVector *IndexKeyOrder, indexKeyNames []string,
-	inlineFilter string, includeColumnScans Scans, generateScanReport bool) (error, bool) {
+	inlineFilter string, includeColumnScans Scans, generateScanReport bool,
+	wg *sync.WaitGroup) (error, bool) {
 
 	// serialize scans
 	protoScans, err := getProtoScansFromScans(scans)
@@ -1269,7 +1287,7 @@ func (c *GsiScanClient) Scan(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
-	return c.doStreamingWithRetry(requestId, req, callb, "Scan", retry)
+	return c.doStreamingWithRetry(requestId, req, callb, "Scan", retry, wg)
 }
 
 func (c *GsiScanClient) ScanPrimary(
@@ -1279,7 +1297,8 @@ func (c *GsiScanClient) ScanPrimary(
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
-	reqDeadline time.Time, reqDeadlineSlack time.Duration, generateScanReport bool) (error, bool) {
+	reqDeadline time.Time, reqDeadlineSlack time.Duration, generateScanReport bool,
+	wg *sync.WaitGroup) (error, bool) {
 
 	var what string
 	// serialize scans
@@ -1419,7 +1438,7 @@ func (c *GsiScanClient) ScanPrimary(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
-	return c.doStreamingWithRetry(requestId, req, callb, "ScanPrimary", retry)
+	return c.doStreamingWithRetry(requestId, req, callb, "ScanPrimary", retry, wg)
 }
 
 func (c *GsiScanClient) Close() error {
@@ -1617,11 +1636,7 @@ func (c *GsiScanClient) streamResponse(
 			return
 		}
 	} else if streamResp, ok := resp.(*protobuf.ResponseStream); ok {
-		// To retain the existing behaviour i.e. returning the error rather than
-		// handling in the callback, this condition is necessary.
-		// When there is an error but the scan report is present, still invoke the
-		// callback so the partial scan report is captured before the error is handled.
-		if err = streamResp.Error(); err == nil || streamResp.GetServerScanReport() != nil {
+		if err = streamResp.Error(); err == nil {
 			cont = callb(streamResp)
 		}
 		healthy = true

@@ -564,8 +564,7 @@ func (d *IndexScanWriter) Routine() error {
 	defer func() {
 		// Send error to the client if not client requested cancel.
 		if err != nil && err.Error() != c.ErrClientCancel.Error() {
-			srvrScanReport := d.p.req.srvrScanReport
-			if writeErr := d.w.Error(err, srvrScanReport); writeErr != nil {
+			if writeErr := d.w.Error(err); writeErr != nil {
 				l.Warnf("Failed to send error to client: %v", writeErr)
 			}
 		}
