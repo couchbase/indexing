@@ -1,7 +1,6 @@
 package indexer
 
 import (
-	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -1587,65 +1586,46 @@ func (sr *ShardRebalancer) getDirToEaRKey(
 		shardKeysMap         = make(map[c.KeyID]bool)
 		dirToShardKeysMap    = make(map[string][]c.KeyID)
 		bucketToShardKeysMap = make(map[string][]c.KeyID) // bucketUUID -> key IDs
-		hasUnencryptedData   bool
 		keyCount             = 0
-		doneCh               = make(chan struct{})
 	)
-	defer close(doneCh)
 
 	for _, bundle := range bundles {
 		for _, key := range bundle {
+			shardKeysMap[key] = key != "" // mark as not done (aka false) for empty key
 			if key == "" {
-				hasUnencryptedData = true
-				continue // no file to look up for unencrypted data
+				keyCount = 1
 			}
-			shardKeysMap[key] = true
 		}
 	}
 
-	var ctx, cancel = context.WithCancelCause(context.Background())
-	go func() {
-		select {
-		case <-sr.cancel:
-			cancel(ErrRebalanceCancel)
-		case <-doneCh:
-			cancel(nil)
+	////////// find the parent dir for the EaR keys via encryption manager
+	bucketUUIDs := getTokenBucketUUIDs(tt)
+	kdts := make([]KeyDataType, 0, len(bucketUUIDs))
+	for _, bucketUUID := range bucketUUIDs {
+		kdts = append(kdts, GetBucketKDT(bucketUUID))
+	}
+
+	respCh := make(chan map[KeyDataType]*EncryptionKeyPathInfo, 1)
+	msg := &MsgEncryptionGetKeyInfoForRebal{kdts: kdts, respCh: respCh}
+	keyInfoMap, err := sendMsgAndWaitForResp(sr.supvMsgch, msg, sr.cancel, respCh)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	for _, bucketUUID := range bucketUUIDs {
+		keyInfo := keyInfoMap[GetBucketKDT(bucketUUID)]
+		if keyInfo == nil {
+			continue
 		}
-	}()
-
-	////////// find the parent dir for the EaR keys
-	for _, bucketUUID := range getTokenBucketUUIDs(tt) {
-		kdt := GetBucketKDT(bucketUUID)
-
-		dekInfo, err := cbauth.GetEncryptionKeys(kdt)
-
-		if err != nil {
-			logging.Warnf(
-				"ShardRebalancer::prepareShardKeyBundle: get encryption keys failed with err - %v for KDT - %v",
-				err, logKDT(kdt),
-			)
-			dekInfo, err = cbauth.GetEncryptionKeysBlocking(ctx, kdt)
-		}
-
-		if err != nil {
-			err = fmt.Errorf("failed to read DEK for bucket UUID %v with err %w",
-				bucketUUID, err)
-			return nil, nil, 0, err
-		} else if dekInfo == nil {
-			l.Errorf("ShardRebalancer::prepareShardKeyBundle: couldn't read DEK info for bucket %v",
-				bucketUUID)
-			return nil, nil, 0, errMissingKeyPath
-		}
-
-		for _, key := range dekInfo.Keys {
-			if notDone, ok := shardKeysMap[key.Id]; notDone {
-				dirToShardKeysMap[dekInfo.Path] = append(dirToShardKeysMap[dekInfo.Path], key.Id)
-				bucketToShardKeysMap[bucketUUID] = append(bucketToShardKeysMap[bucketUUID], key.Id)
+		for _, keyID := range keyInfo.KeyIDs {
+			if notDone, ok := shardKeysMap[keyID]; notDone {
+				dirToShardKeysMap[keyInfo.Path] = append(dirToShardKeysMap[keyInfo.Path], keyID)
+				bucketToShardKeysMap[bucketUUID] = append(bucketToShardKeysMap[bucketUUID], keyID)
 				keyCount++
-				shardKeysMap[key.Id] = false // <DEK --1:n-- buckets> possible
+				shardKeysMap[keyID] = false // <DEK --1:n-- buckets> possible
 			} else if ok {
 				// same keyID is used in other bucket too which is on the same shard
-				bucketToShardKeysMap[bucketUUID] = append(bucketToShardKeysMap[bucketUUID], key.Id)
+				bucketToShardKeysMap[bucketUUID] = append(bucketToShardKeysMap[bucketUUID], keyID)
 			}
 		}
 	}
@@ -1663,15 +1643,6 @@ func (sr *ShardRebalancer) getDirToEaRKey(
 			logKeyIDs(missingKeys...))
 
 		return nil, nil, 0, errMissingKeyPath
-	}
-
-	// Record that unencrypted data exists for every bucket on these shards.
-	// The empty key ID is reported in GetInUseKeys so ns_server knows not to
-	// force re-encryption while rebalance is in progress.
-	if hasUnencryptedData {
-		for bucketUUID := range bucketToShardKeysMap {
-			bucketToShardKeysMap[bucketUUID] = append(bucketToShardKeysMap[bucketUUID], "")
-		}
 	}
 
 	var dirToKeysStr strings.Builder

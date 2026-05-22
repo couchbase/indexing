@@ -246,6 +246,7 @@ const (
 	ENCRYPTION_WAIT_DROP_KEYS
 	ENCRYPTION_REBAL_START
 	ENCRYPTION_REBAL_DONE
+	ENCRYPTION_GET_KEY_INFO_FOR_REBAL
 
 	START_EAR_KEY_COPY
 )
@@ -3711,6 +3712,25 @@ type MsgEncryptionRebalDone struct{}
 
 func (m *MsgEncryptionRebalDone) GetMsgType() MsgType { return ENCRYPTION_REBAL_DONE }
 
+// EncryptionKeyPathInfo is the per-KDT response for ENCRYPTION_GET_KEY_INFO_FOR_REBAL.
+type EncryptionKeyPathInfo struct {
+	Path   string   // directory containing EaR key files; "" if bucket is unencrypted
+	KeyIDs []string // key IDs in use by local storage engine; includes "" for unencrypted data
+}
+
+type MsgEncryptionGetKeyInfoForRebal struct {
+	kdts   []KeyDataType
+	respCh chan map[KeyDataType]*EncryptionKeyPathInfo
+}
+
+func (m *MsgEncryptionGetKeyInfoForRebal) GetMsgType() MsgType {
+	return ENCRYPTION_GET_KEY_INFO_FOR_REBAL
+}
+func (m *MsgEncryptionGetKeyInfoForRebal) GetKDTs() []KeyDataType { return m.kdts }
+func (m *MsgEncryptionGetKeyInfoForRebal) GetRespCh() chan map[KeyDataType]*EncryptionKeyPathInfo {
+	return m.respCh
+}
+
 type MsgPopulateShardType struct {
 	transferId string
 	shardType  common.ShardType
@@ -4164,6 +4184,8 @@ func (m MsgType) String() string {
 		return "ENCRYPTION_REBAL_START"
 	case ENCRYPTION_REBAL_DONE:
 		return "ENCRYPTION_REBAL_DONE"
+	case ENCRYPTION_GET_KEY_INFO_FOR_REBAL:
+		return "ENCRYPTION_GET_KEY_INFO_FOR_REBAL"
 	case START_EAR_KEY_COPY:
 		return "START_EAR_KEY_COPY"
 	default:
