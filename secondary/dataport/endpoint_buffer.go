@@ -2,7 +2,6 @@ package dataport
 
 import (
 	"net"
-	"strconv"
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
@@ -105,14 +104,10 @@ func (b *endpointBuffers) flushBuffers(
 	conn net.Conn,
 	pkt *transport.TransportPacket) error {
 
-	getKey := func(keyspace string, vb uint16) string {
-		return keyspace + ":" + strconv.FormatUint(uint64(vb), 10)
-	}
-
 	vbs := make([]*c.VbKeyVersions, 0, len(b.vbs))
 	for uuid, vb := range b.vbs {
 		vbs = append(vbs, vb)
-		key := getKey(vb.KeyspaceId, vb.Vbucket)
+		key := uuid
 		for _, kv := range vb.Kvs {
 			if kv.Ctime > 0 {
 				now := time.Now().UnixNano()
@@ -172,7 +167,7 @@ func (b *endpointBuffers) checkSeqOrder(kv *c.KeyVersions, endpoint *RouterEndpo
 			logging.Fatalf("%v error count for sequence number ordering is %v", endpoint.logPrefix, s.GetErrCount())
 		}
 
-		endpoint.seqOrders[key] = nil
+		delete(endpoint.seqOrders, key)
 
 	case c.Snapshot:
 		if s, ok := endpoint.seqOrders[key]; ok && s != nil {
