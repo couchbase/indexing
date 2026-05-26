@@ -4309,7 +4309,7 @@ func (s *statsManager) handleRefreshTimestampedCountsReq(w http.ResponseWriter, 
 
 func (s *statsManager) getStorageStatsMap(spec *statsSpec) map[string]interface{} {
 	result := make(map[string]interface{}, 1)
-	replych := make(chan []IndexStorageStats)
+	replych := make(chan []IndexStorageStats, 1)
 	statReq := &MsgIndexStorageStats{respch: replych, spec: spec}
 	s.supvMsgch <- statReq
 
@@ -5294,6 +5294,11 @@ func readFromChanWithTimeout[T any](respCh chan T, timeout time.Duration) (T, bo
 		return res, true
 	case <-ticker.C:
 		var def T
+		if cap(respCh) == 0 {
+			go func() {
+				<-respCh
+			}()
+		}
 		return def, false
 	}
 }
