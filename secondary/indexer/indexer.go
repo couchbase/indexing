@@ -606,6 +606,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.statsMgr.encCallbacks = StatsEncryptionCallbacks{
 		getKeyCipherById: idx.encryptionMgr.getKeyCipherById,
 		setInUseKeys:     idx.encryptionMgr.SetInUseKeys,
+		getLogStatsKey:   idx.statsMgr.getLogStatsKey,
 	}
 
 	idx.setIndexerState(common.INDEXER_BOOTSTRAP)
