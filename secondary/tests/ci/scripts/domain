@@ -60,7 +60,7 @@ echo "Version: <a href='versions-$TS.cfg'>versions-$TS.cfg</a>" >> /var/www/gsi-
 echo "Build Log: <a href='make-$TS.log'>make-$TS.log</a>" >> /var/www/gsi-current.html
 echo "Server Log: <a href='logs-$TS.tar.gz'>logs-$TS.tar.gz</a>" >> /var/www/gsi-current.html
 echo "</pre><h1>Finished</h1></body></html>" >> /var/www/gsi-current.html
-cp  /var/www/gsi-current.html /var/www/gsi-$TS.$status.html
+cp  /var/www/gsi-current.html /var/www/gsi-$TS.$STORAGE.$status.html
 mv ${WORKSPACE}/make.log /var/www/make-$TS.log
 mv ${WORKSPACE}/logs.tar.gz /var/www/logs-$TS.tar.gz
 mv ${WORKSPACE}/versions.cfg /var/www/versions-$TS.cfg
