@@ -47,12 +47,13 @@ require (
 	github.com/couchbase/gocbcrypto v0.0.0-00010101000000-000000000000
 	github.com/couchbase/goforestdb v0.0.0-20161215171854-0b501227de0e
 	github.com/couchbase/gometa v0.0.0-20220803182802-05cb6b2e299f
-	github.com/couchbase/goutils v0.1.2
-	github.com/couchbase/logstats v1.0.0
+	github.com/couchbase/goutils v0.2.0
+	github.com/couchbase/logstats v1.1.1
 	github.com/couchbase/nitro v0.0.0-20220707133503-f65f7a599cdf
 	github.com/couchbase/plasma v0.0.0-00010101000000-000000000000
 	github.com/couchbase/query v0.0.0-00010101000000-000000000000
 	github.com/couchbase/regulator v0.0.0-00010101000000-000000000000
+	github.com/couchbase/tools-common/couchbase/v4 v4.1.0
 	github.com/golang/protobuf v1.5.4
 	github.com/golang/snappy v1.0.0
 	github.com/kshard/fvecs v0.0.2
@@ -109,6 +110,7 @@ require (
 	github.com/couchbaselabs/c-snappy v0.0.0-20160212203049-a52f87e8ffc5 // indirect
 	github.com/couchbaselabs/gocbconnstr/v2 v2.0.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/dsnet/compress v0.0.2-0.20210315054119-f66993602bf5 // indirect
 	github.com/edsrzf/mmap-go v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -117,6 +119,7 @@ require (
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/ianlancetaylor/cgosymbolizer v0.0.0-20250210230444-5fae499d98fc // indirect
+	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
