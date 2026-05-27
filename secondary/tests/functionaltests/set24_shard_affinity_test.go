@@ -1115,7 +1115,7 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 			break
 		}
 		if _, exists := dropIndicesMap[defn.Name]; !exists {
-			if strings.Contains(defn.Name, "#primary") {
+			if strings.Contains(defn.Name, "#primary") || strings.Contains(defn.Scope, "_system") {
 				continue
 			}
 			// pick the replica ID of the first instance
@@ -1131,7 +1131,7 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 			break
 		}
 		if _, exists := dropIndicesMap[defn.Name]; !exists {
-			if strings.Contains(defn.Name, "#primary") {
+			if strings.Contains(defn.Name, "#primary") || strings.Contains(defn.Scope, "_system") {
 				continue
 			}
 			// pick the replica ID of the first instance

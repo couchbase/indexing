@@ -53,7 +53,7 @@ linters:
     - gocyclo
     - goheader
     - mnd
-    - gomodguard
+    - gomodguard_v2
     - goprintffuncname
     - gosec
     - makezero
