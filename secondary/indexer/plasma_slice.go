@@ -238,6 +238,11 @@ type plasmaSlice struct {
 	// For Sparse vector index, scratch buffer per writer used for
 	// threshold-pruned concise vector when indexer.vector.sparse.minAbsWeight > 0.
 	sparseThreshBuf [][]float32
+	// Cached prune threshold derived from the sparse codebook's training-time
+	// weight histogram. Refreshed whenever the codebook is trained or loaded.
+	// At insert time, max(operator-set minAbsWeight, cachedSparseDerivedTau)
+	// is used as the effective threshold. 0 means no histogram present.
+	cachedSparseDerivedTau float32
 
 	codebook codebook.Codebook
 
@@ -2372,6 +2377,11 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 			maxNNZ := mdb.sysconf["vector.sparse.maxNNZ"].Int()
 			minAbsWeight := float32(mdb.sysconf["vector.sparse.minAbsWeight"].Float64())
 			mdb.confLock.RUnlock()
+			// The codebook's training-time derived τ is honored as an
+			// additional floor. Operator setting can only tighten it further.
+			if mdb.cachedSparseDerivedTau > minAbsWeight {
+				minAbsWeight = mdb.cachedSparseDerivedTau
+			}
 			if pruned, ok := common.PruneConciseByThreshold(vec, minAbsWeight, mdb.sparseThreshBuf[workerId]); ok {
 				mdb.sparseThreshBuf[workerId] = pruned
 				vec = pruned
@@ -6277,8 +6287,33 @@ func (mdb *plasmaSlice) InitCodebookFromSerialized(content []byte) error {
 	mdb.initQuantizedCodeBuf()
 	if mdb.idxDefn.HasSparseVector() {
 		mdb.initSparseJLBuf()
+		mdb.refreshSparseDerivedTau()
 	}
 	return nil
+}
+
+// refreshSparseDerivedTau pulls the derived τ off the current sparse
+// codebook into the slice's cached field. Called whenever the codebook is
+// trained or loaded from disk. Also emits the three histogram stats.
+func (mdb *plasmaSlice) refreshSparseDerivedTau() {
+	if mdb.codebook == nil || !mdb.idxDefn.HasSparseVector() {
+		return
+	}
+	sparseCb, ok := mdb.codebook.(codebook.SparseCodebook)
+	if !ok {
+		return
+	}
+	mdb.cachedSparseDerivedTau = sparseCb.DerivedTau()
+	if obs, retained, tau, available := sparseCb.WeightHistogramSummary(); available {
+		// τ stored as fixed-point ×1e6, retention as basis points ×10000.
+		mdb.idxStats.sparseDerivedTau.Set(int64(tau * 1e6))
+		mdb.idxStats.sparseHistogramTotalObservations.Set(int64(obs))
+		mdb.idxStats.sparseHistogramL1Retained.Set(int64(retained * 10000))
+	} else {
+		mdb.idxStats.sparseDerivedTau.Set(0)
+		mdb.idxStats.sparseHistogramTotalObservations.Set(0)
+		mdb.idxStats.sparseHistogramL1Retained.Set(0)
+	}
 }
 
 func (mdb *plasmaSlice) Train(vecs []float32) error {
@@ -6286,11 +6321,27 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 		return ErrorCodebookNotInitialized
 	}
 
+	// Sparse path: observe weights into a histogram while iterating the
+	// training set for JL projection. After codebook.Train succeeds, derive
+	// τ from the histogram and attach it so it gets persisted along with
+	// the trained codebook.
+	var sparseCb codebook.SparseCodebook
+	var sparseHist *common.WeightHistogram
+	var sparseHistRetention float64
 	if mdb.idxDefn.HasSparseVector() {
-		sparseCb, ok := mdb.codebook.(codebook.SparseCodebook)
+		var ok bool
+		sparseCb, ok = mdb.codebook.(codebook.SparseCodebook)
 		if !ok {
 			return codebook.ErrIncorrectCodebook
 		}
+
+		mdb.confLock.RLock()
+		sparseHistRetention = mdb.sysconf["vector.sparse.histogramL1Retention"].Float64()
+		mdb.confLock.RUnlock()
+		if sparseHistRetention > 0 {
+			sparseHist = common.NewWeightHistogram()
+		}
+
 		totalVecs, err := common.FindTotalVectorsInSparse(vecs)
 		if err != nil {
 			return fmt.Errorf("training failed: %w", err)
@@ -6301,8 +6352,12 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 		for vecNum := 0; vecNum < totalVecs && idx < len(vecs); vecNum++ {
 			size := int(vecs[idx])
 			nextIdx := idx + (2 * size) + 1
+			conciseVec := vecs[idx:nextIdx]
+			if sparseHist != nil {
+				sparseHist.ObserveConcise(conciseVec)
+			}
 			if err := sparseCb.Concise2SparseJL(
-				vecs[idx:nextIdx],
+				conciseVec,
 				outVecs[vecNum*sparseJLDim:(vecNum+1)*sparseJLDim]); err != nil {
 				return err
 			}
@@ -6331,6 +6386,26 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 	mdb.initQuantizedCodeBuf()
 	if mdb.idxDefn.HasSparseVector() {
 		mdb.initSparseJLBuf()
+
+		// Attach histogram + derived τ to the trained codebook. Skipped on
+		// tiny training sets to avoid setting τ from noise.
+		const minHistObservations uint64 = 10000
+		if sparseHist != nil && sparseHist.TotalObs >= minHistObservations {
+			tau, retained := sparseHist.ThresholdForL1Retention(sparseHistRetention)
+			if setErr := sparseCb.SetWeightHistogram(sparseHist, tau, retained); setErr != nil {
+				logging.Warnf("plasmaSlice::Train SetWeightHistogram failed instId %v: %v",
+					mdb.idxInstId, setErr)
+			} else {
+				logging.Infof("plasmaSlice::Train sparse %s", sparseHist.Summary())
+				logging.Infof("plasmaSlice::Train instId %v derived τ=%.4f at %.4f L1 retention (target %.4f)",
+					mdb.idxInstId, tau, retained, sparseHistRetention)
+			}
+		} else if sparseHist != nil {
+			logging.Infof("plasmaSlice::Train instId %v skipping histogram-derived τ "+
+				"(only %d observations, need %d)",
+				mdb.idxInstId, sparseHist.TotalObs, minHistObservations)
+		}
+		mdb.refreshSparseDerivedTau()
 	}
 	return nil
 }

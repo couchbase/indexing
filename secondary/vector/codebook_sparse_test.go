@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/common"
 	cbpkg "github.com/couchbase/indexing/secondary/vector/codebook"
 )
 
@@ -185,5 +186,114 @@ func TestCodebookSparse(t *testing.T) {
 				t.Errorf("Error closing codebook %v", err)
 			}
 		})
+	}
+}
+
+// TestCodebookSparseHistogramRoundTrip exercises the histogram persistence
+// added alongside derived τ pruning: train a tiny codebook, attach a
+// histogram, marshal, recover, assert the histogram, derived τ, and retained
+// L1 fraction survived intact and DerivedTau() / WeightHistogramSummary()
+// report consistent values.
+func TestCodebookSparseHistogramRoundTrip(t *testing.T) {
+	const dim = 16
+	const nlist = 2
+
+	cb, err := NewCodebookSparse(dim, nlist)
+	if err != nil {
+		t.Fatalf("NewCodebookSparse: %v", err)
+	}
+	defer cb.Close()
+
+	// Train with the smallest valid set: nlist vectors so faiss skips its
+	// usual k-means and seeds centroids directly from input.
+	tvecs := make([]float32, dim*nlist)
+	for i := range tvecs {
+		tvecs[i] = float32(i) * 0.01
+	}
+	if err := cb.Train(tvecs); err != nil {
+		t.Fatalf("Train: %v", err)
+	}
+
+	hist := common.NewWeightHistogram()
+	for i := 0; i < 1000; i++ {
+		hist.Observe(0.01)
+	}
+	for i := 0; i < 100; i++ {
+		hist.Observe(0.5)
+	}
+	wantTau := float32(0.05)
+	wantRetained := 0.97
+	if err := cb.SetWeightHistogram(hist, wantTau, wantRetained); err != nil {
+		t.Fatalf("SetWeightHistogram: %v", err)
+	}
+
+	data, err := cb.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	rec, err := recoverCodebookSparse(data)
+	if err != nil {
+		t.Fatalf("recoverCodebookSparse: %v", err)
+	}
+	defer rec.Close()
+
+	if got := rec.DerivedTau(); got != wantTau {
+		t.Fatalf("DerivedTau after round-trip: want %v got %v", wantTau, got)
+	}
+	obs, retained, tau, ok := rec.WeightHistogramSummary()
+	if !ok {
+		t.Fatalf("WeightHistogramSummary: available=false after round-trip")
+	}
+	if obs != hist.TotalObs {
+		t.Fatalf("TotalObs: want %d got %d", hist.TotalObs, obs)
+	}
+	if retained != wantRetained {
+		t.Fatalf("retainedL1Frac: want %v got %v", wantRetained, retained)
+	}
+	if tau != wantTau {
+		t.Fatalf("derivedTau: want %v got %v", wantTau, tau)
+	}
+}
+
+// TestCodebookSparseHistogramAbsentForOlderCodebook simulates an older
+// codebook payload (no histogram fields) by training+marshaling without
+// SetWeightHistogram and confirms recover yields a codebook whose
+// histogram methods report "absent".
+func TestCodebookSparseHistogramAbsentForOlderCodebook(t *testing.T) {
+	const dim = 16
+	const nlist = 2
+
+	cb, err := NewCodebookSparse(dim, nlist)
+	if err != nil {
+		t.Fatalf("NewCodebookSparse: %v", err)
+	}
+	defer cb.Close()
+
+	tvecs := make([]float32, dim*nlist)
+	for i := range tvecs {
+		tvecs[i] = float32(i) * 0.01
+	}
+	if err := cb.Train(tvecs); err != nil {
+		t.Fatalf("Train: %v", err)
+	}
+
+	data, err := cb.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	rec, err := recoverCodebookSparse(data)
+	if err != nil {
+		t.Fatalf("recoverCodebookSparse: %v", err)
+	}
+	defer rec.Close()
+
+	if got := rec.DerivedTau(); got != 0 {
+		t.Fatalf("DerivedTau: want 0 for no-histogram codebook, got %v", got)
+	}
+	_, _, _, ok := rec.WeightHistogramSummary()
+	if ok {
+		t.Fatalf("WeightHistogramSummary: want available=false, got true")
 	}
 }

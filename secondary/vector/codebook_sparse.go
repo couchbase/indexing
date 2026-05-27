@@ -40,6 +40,13 @@ type codebookSparse struct {
 	metric c.MetricType //metric is inner product for Sparse
 
 	index *faiss.IndexImpl
+
+	// Training-time weight histogram and derived prune threshold. nil when
+	// histogram-based pruning was disabled at training, or when loading an
+	// older codebook that predates this field.
+	weightHist     *common.WeightHistogram
+	derivedTau     float32
+	retainedL1Frac float64
 }
 
 type codebookSparse_IO struct {
@@ -53,6 +60,13 @@ type codebookSparse_IO struct {
 	CodebookVer CodebookVer `json:"codebookver,omitempty"`
 
 	Index []byte `json:"index,omitempty"`
+
+	// Optional, added post-CodebookVer1. omitempty keeps older codebooks
+	// (no histogram fields in JSON) deserializing cleanly into a struct
+	// where these stay zero/nil.
+	WeightHist     *common.WeightHistogram `json:"weight_hist,omitempty"`
+	DerivedTau     float32                 `json:"derived_tau,omitempty"`
+	RetainedL1Frac float64                 `json:"retained_l1_frac,omitempty"`
 }
 
 // Create a new Sparse codebook.
@@ -281,6 +295,11 @@ func (cb *codebookSparse) Marshal() ([]byte, error) {
 	cbio.CodebookVer = CodebookVer1
 	cbio.Checksum = crc32.ChecksumIEEE(data)
 
+	// Histogram fields are optional; only round-trip them when present.
+	cbio.WeightHist = cb.weightHist
+	cbio.DerivedTau = cb.derivedTau
+	cbio.RetainedL1Frac = cb.retainedL1Frac
+
 	return json.Marshal(cbio)
 }
 
@@ -290,6 +309,42 @@ func (cb *codebookSparse) NumCentroids() int {
 
 func (cb *codebookSparse) MetricType() c.MetricType {
 	return cb.metric
+}
+
+// SetWeightHistogram stores the training-time weight histogram and the
+// derived prune threshold on the codebook so they survive Marshal/recover.
+// Intended to be called by the slice once, immediately after Train completes
+// successfully and before the codebook is persisted.
+func (cb *codebookSparse) SetWeightHistogram(hist *common.WeightHistogram,
+	derivedTau float32, retainedL1Frac float64) error {
+
+	token := c.AcquireGlobal()
+	defer c.ReleaseGlobal(token)
+
+	if cb.index == nil {
+		return c.ErrCodebookClosed
+	}
+	cb.weightHist = hist
+	cb.derivedTau = derivedTau
+	cb.retainedL1Frac = retainedL1Frac
+	return nil
+}
+
+// DerivedTau returns the threshold computed from the training histogram, or
+// 0 when no histogram has been attached.
+func (cb *codebookSparse) DerivedTau() float32 {
+	return cb.derivedTau
+}
+
+// WeightHistogramSummary returns persisted histogram observations and the
+// derived threshold for stats and logging. available=false signals there is
+// no histogram on the codebook (older codebook, or feature was off at
+// training time).
+func (cb *codebookSparse) WeightHistogramSummary() (uint64, float64, float32, bool) {
+	if cb.weightHist == nil {
+		return 0, 0, 0, false
+	}
+	return cb.weightHist.TotalObs, cb.retainedL1Frac, cb.derivedTau, true
 }
 
 func recoverCodebookSparse(data []byte) (c.SparseCodebook, error) {
@@ -314,6 +369,11 @@ func recoverCodebookSparse(data []byte) (c.SparseCodebook, error) {
 	cb.nlist = cbio.Nlist
 	cb.isTrained = cbio.IsTrained
 	cb.metric = cbio.Metric
+
+	// Optional fields — zero values on older codebooks mean "no histogram".
+	cb.weightHist = cbio.WeightHist
+	cb.derivedTau = cbio.DerivedTau
+	cb.retainedL1Frac = cbio.RetainedL1Frac
 
 	var err error
 	cb.index, err = faiss.ReadIndexFromBuffer(cbio.Index, faiss.IOFlagMmap)

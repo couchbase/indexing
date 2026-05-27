@@ -5147,6 +5147,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.vector.sparse.histogramL1Retention": ConfigValue{
+		0.0,
+		"Target fraction of training-set L1 weight mass to retain when deriving the sparse prune threshold from the training histogram. Read at training time only — changing post-training has no effect until retraining. 0 disables histogram-based pruning. 0.98 is a good starting point.",
+		0.0,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.encryption.enable_test": ConfigValue{
 		Value:         false,
 		Help:          "Enable testing by using encryption test REST apis",

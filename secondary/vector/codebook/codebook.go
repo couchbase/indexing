@@ -153,6 +153,21 @@ type SparseCodebook interface {
 	// any matching terms.
 	// Input for q and s must be in the concise format.
 	Transpose(q []float32, s []float32, result []float32) bool
+
+	// SetWeightHistogram attaches a training-time weight histogram plus the
+	// derived prune threshold and the L1 mass fraction retained at that
+	// threshold. Persisted with the codebook on Marshal so insert-time
+	// pruning can apply the derived threshold across restarts.
+	SetWeightHistogram(hist *common.WeightHistogram, derivedTau float32, retainedL1Frac float64) error
+
+	// DerivedTau returns the prune threshold derived from the training-time
+	// histogram, or 0 if no histogram has been attached (older codebook,
+	// or histogram-based pruning disabled at training time).
+	DerivedTau() float32
+
+	// WeightHistogramSummary returns the persisted histogram statistics for
+	// observability. `available` is false when no histogram is attached.
+	WeightHistogramSummary() (totalObs uint64, retainedL1Frac float64, derivedTau float32, available bool)
 }
 
 // SetMaxCPU sets the max number of cores that can be used by the
