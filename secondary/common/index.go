@@ -619,6 +619,13 @@ func (defn *IndexDefn) NonBhiveVectorIndex() bool {
 	return false
 }
 
+func (defn *IndexDefn) IsComposite() bool {
+	if defn.IsVectorIndex && defn.VectorMeta != nil && defn.VectorMeta.IsCompositeIndex == true {
+		return true
+	}
+	return false
+}
+
 func (idx IndexInst) IsProxy() bool {
 	return idx.RealInstId != 0
 }
