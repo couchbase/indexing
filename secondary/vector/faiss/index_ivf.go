@@ -373,6 +373,66 @@ func (idx *IndexImpl) ComputeDistanceEncoded(qvec []float32,
 	return
 }
 
+// ComputeDistanceEncodedWithPrecomputed computes distances using the
+// precomputed-query optimization. On the first call (len(queryBP) == 0),
+// it allocates a buffer, computes and caches the query state, and returns
+// the buffer. On subsequent calls (len(queryBP) > 0), it reuses the cached
+// state for fast distance computation.
+//
+// Returns the queryBP buffer (allocated on first call, same slice on reuse).
+func (idx *IndexImpl) ComputeDistanceEncodedWithPrecomputed(
+	qvec []float32,
+	nx int,
+	codes []byte,
+	dists []float32,
+	listno int64,
+	queryBP []byte,
+) ([]byte, error) {
+
+	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
+	if ivfPtr == nil {
+		return nil, fmt.Errorf("index is not of ivf type")
+	}
+
+	firstCall := len(queryBP) == 0
+	if firstCall {
+		var requiredSize C.size_t
+		if C.faiss_IndexIVFRaBitQ_query_bitplanes_size(ivfPtr, &requiredSize) != 0 {
+			return nil, getLastError()
+		}
+		if requiredSize == 0 {
+			return nil, fmt.Errorf("query bitplanes size is zero")
+		}
+		// Reuse the caller's backing array when it already has capacity
+		// (per-worker buffer reuse); otherwise allocate. This keeps steady
+		// state allocation-free after the first traversal on a worker.
+		if cap(queryBP) >= int(requiredSize) {
+			queryBP = queryBP[:requiredSize]
+		} else {
+			queryBP = make([]byte, requiredSize)
+		}
+	}
+
+	bpSize := C.size_t(len(queryBP))
+	if firstCall {
+		bpSize = 0
+	}
+
+	if C.faiss_IndexIVFRaBitQ_compute_distance_with_precomputed(
+		ivfPtr,
+		C.faiss_idx_t(listno),
+		(*C.float)(&qvec[0]),
+		C.faiss_idx_t(nx),
+		(*C.uint8_t)(&codes[0]),
+		(*C.float)(&dists[0]),
+		(*C.uint8_t)(&queryBP[0]),
+		&bpSize) != 0 {
+		return nil, getLastError()
+	}
+
+	return queryBP, nil
+}
+
 func (idx *IndexImpl) ComputeDistanceTable(qvec []float32, dtable []float32) (err error) {
 
 	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())

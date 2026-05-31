@@ -1584,6 +1584,14 @@ func (mdb *bhiveSlice) createVectorFuncCtx() *bhive.VectorFuncCtx {
 		Dimension:       dimension,
 	}
 
+	// Wire precomputed-query optimization if the codebook supports it
+	if pde, ok := mdb.codebook.(codebook.PrecomputedDistanceEncoder); ok {
+		ctx.DistanceEncodedPrecomputed = func(q []float32, n int, codes []byte,
+			dist []float32, cid int64, queryBP []byte) ([]byte, error) {
+			return pde.ComputeDistanceEncodedWithPrecomputed(q, n, codes, dist, cid, queryBP)
+		}
+	}
+
 	return ctx
 }
 

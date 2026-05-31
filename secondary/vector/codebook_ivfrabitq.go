@@ -385,6 +385,32 @@ func (cb *codebookIVFRaBitQ) ComputeDistanceEncoded(
 	return nil
 }
 
+func (cb *codebookIVFRaBitQ) ComputeDistanceEncodedWithPrecomputed(
+	qvec []float32,
+	n int,
+	codes []byte,
+	dists []float32,
+	listno int64,
+	queryBP []byte,
+) ([]byte, error) {
+
+	token := c.AcquireGlobal()
+	defer c.ReleaseGlobal(token)
+
+	bpOut, err := cb.index.ComputeDistanceEncodedWithPrecomputed(
+		qvec, n, codes, dists, listno, queryBP,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("compute encoded distance with precomputed: %w", err)
+	}
+
+	if cb.metric == c.METRIC_INNER_PRODUCT {
+		cb.applyInnerProductDistanceTransform(dists)
+	}
+
+	return bpOut, nil
+}
+
 func (cb *codebookIVFRaBitQ) Size() int64 {
 	var totalSize int64
 
