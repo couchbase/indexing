@@ -548,8 +548,25 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 		w.sparseQueryValues = qvec.Values()
 	}
 
-	t0 := time.Now()
-	// Pre-allocate fvecs for the whole batch upfront to avoid per-vector allocations.
+	// A batch may mix two kinds of rows:
+	//   - Rows carrying a valid stored (quantized) search distance produced by
+	//     the graph search (row.distValid). Their on-disk payload may have been
+	//     dropped, so they must NOT be decoded/recomputed - we reuse the stored
+	//     distance directly (which may legitimately be 0, e.g. -IP == 0).
+	//   - Rows without a stored distance (served from the flush buffer / disk).
+	//     These must be term-matched and have their distance computed here.
+	// We make a single pass: stored rows keep their distance; compute rows are
+	// term-matched and staged contiguously into fvecs. Surviving rows are
+	// compacted in place (order preserved). The staged distances are written
+	// back afterwards.
+	if cap(w.dists) < vecCount {
+		w.dists = make([]float32, vecCount)
+	} else {
+		w.dists = w.dists[:vecCount]
+	}
+
+	// Pre-allocate fvecs for the worst case (every row needs a computed
+	// distance) to avoid per-vector allocations.
 	needed := vecCount * queryDim
 	if cap(w.fvecs) < needed {
 		w.fvecs = make([]float32, needed)
@@ -557,11 +574,26 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 		w.fvecs = w.fvecs[:needed]
 	}
 
-	// Track valid vectors (those with matching query terms)
-	validCount := 0
-	for i := 0; i < vecCount; i++ {
-		valBytes := w.currBatchRows[i].value
+	t0 := time.Now()
 
+	validCount := 0   // surviving rows (write cursor for in-place compaction)
+	computeCount := 0 // rows staged into fvecs needing ComputeDistance
+	for i := 0; i < vecCount; i++ {
+		row := w.currBatchRows[i]
+
+		if row.distValid {
+			// Reuse the stored search distance; keep the row as-is.
+			if validCount != i {
+				w.currBatchRows[validCount] = row
+			}
+			w.dists[validCount] = row.dist
+			validCount++
+			continue
+		}
+
+		// No stored distance: decode the sparse vector and term-match it
+		// against the query.
+		valBytes := row.value
 		if len(valBytes) < 4 {
 			return errors.New("sparse vector too short")
 		}
@@ -575,7 +607,7 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 				len(valBytes), expectedSize, nnz)
 		}
 
-		result := w.fvecs[validCount*queryDim : (validCount+1)*queryDim]
+		result := w.fvecs[computeCount*queryDim : (computeCount+1)*queryDim]
 		// Zero the slot - Transpose only writes matching terms; unmatched positions must be 0.
 		for j := range result {
 			result[j] = 0
@@ -584,53 +616,70 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 		keep := sparseCb.Transpose([]float32(qvec), []float32(concise), result)
 		if !keep {
 			// No matching terms between query and document vector - skip this document
-			w.currBatchRows[i].free() // Return row to pool to prevent pool exhaustion
+			row.free() // Return row to pool to prevent pool exhaustion
 			w.currBatchRows[i] = nil
 			continue
 		}
 
-		// Keep this row - move it to the validCount position if needed
+		// Keep this row - move it to the validCount position if needed.
 		if validCount != i {
-			w.currBatchRows[validCount] = w.currBatchRows[i]
+			w.currBatchRows[validCount] = row
 		}
 		validCount++
+		computeCount++
 	}
 
-	// Update currBatchRows and fvecs to only contain valid rows
+	// Restrict to surviving rows.
 	w.currBatchRows = w.currBatchRows[:validCount]
-	w.fvecs = w.fvecs[:validCount*queryDim]
+	w.dists = w.dists[:validCount]
 
 	atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
 	atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
 
-	// No valid vectors after term-matching; nothing to compute.
-	if validCount == 0 {
+	// Every surviving row already had a valid stored distance; nothing to compute.
+	if computeCount == 0 {
 		return nil
 	}
 
-	// Compute distance using the transposed vectors (all queryDim size)
+	// Compute distances for the staged (term-matched) rows. They sit
+	// contiguously at the front of fvecs in surviving order.
+	//
+	// For ComputeDistance, pass only the values portion of the concise query
+	// vector. concise format: [nnz, idx1, ..., idxN, val1, ..., valN]. After
+	// Transpose, each fvec block is queryDim values aligned to query term
+	// positions. Using the full concise qvec (length 1+2*queryDim) would make
+	// MockCodebook use the wrong stride, causing out-of-bounds panics. Pass
+	// qvecValues (length queryDim) so ComputeDistance correctly strides fvecs
+	// in queryDim-sized blocks.
 	t0 = time.Now()
-
-	// Ensure w.dists has sufficient capacity for validCount distances
-	if cap(w.dists) < validCount {
-		w.dists = make([]float32, validCount)
+	if computeCount == validCount {
+		// Fast path: no stored-distance rows, so the surviving rows align 1:1
+		// with the staged compute rows - write straight into w.dists.
+		err := sparseCb.ComputeDistance(w.sparseQueryValues, w.fvecs[:computeCount*queryDim], w.dists)
+		if err != nil {
+			logging.Verbosef("%v processSparseVectorBatch ComputeDistance error: %v", w.logPrefix, err)
+			return err
+		}
 	} else {
-		w.dists = w.dists[:validCount]
-	}
-
-	// For ComputeDistance, pass only the values portion of the concise query vector.
-	// concise format: [nnz, idx1, ..., idxN, val1, ..., valN]
-	// After Transpose, each fvec block is queryDim values aligned to query term positions.
-	// Using the full concise qvec (length 1+2*queryDim) would make MockCodebook use the
-	// wrong stride, causing out-of-bounds panics. Pass qvecValues (length queryDim) so
-	// ComputeDistance correctly strides fvecs in queryDim-sized blocks.
-	err := sparseCb.ComputeDistance(w.sparseQueryValues, w.fvecs[:validCount*queryDim], w.dists)
-	if err != nil {
-		logging.Verbosef("%v processSparseVectorBatch ComputeDistance error: %v", w.logPrefix, err)
-		return err
+		// Mixed batch: compute into a temporary buffer, then scatter the
+		// results back to the surviving rows that lacked a stored distance,
+		// in the same order they were staged.
+		computed := make([]float32, computeCount)
+		err := sparseCb.ComputeDistance(w.sparseQueryValues, w.fvecs[:computeCount*queryDim], computed)
+		if err != nil {
+			logging.Verbosef("%v processSparseVectorBatch ComputeDistance error: %v", w.logPrefix, err)
+			return err
+		}
+		k := 0
+		for s := 0; s < validCount; s++ {
+			if !w.currBatchRows[s].distValid {
+				w.dists[s] = computed[k]
+				k++
+			}
+		}
 	}
 	atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
-	atomic.AddInt64(&w.currJob.distCmpCnt, int64(validCount))
+	atomic.AddInt64(&w.currJob.distCmpCnt, int64(computeCount))
 
 	return nil
 }
@@ -1125,6 +1174,19 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 		newRow.copyForBhive(&w.itrRow)
 	}
 
+	// Carry the (quantized) search distance from the iterator side channel.
+	// Establish a clean default first: a pooled Row (heap path) is not reset
+	// for scalar fields by AtomicRowBuffer.Put, so it could otherwise retain a
+	// stale distValid=true from a previous use and be wrongly treated as having
+	// a valid stored distance. Only a BHIVE reader context supplies a real
+	// stored distance; everything else must be computed downstream.
+	newRow.dist = 0
+	newRow.distValid = false
+	if rctx, ok := w.currJob.ctx.(*bhiveReaderCtx); ok {
+		newRow.dist = rctx.dist
+		newRow.distValid = rctx.distValid
+	}
+
 	select {
 	case <-w.stopCh:
 		return ErrScanWorkerStopped
@@ -1145,6 +1207,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	if !w.r.useHeapForVectorIndex() {
 		w.itrRow.len = 0
 		w.itrRow.dist = 0
+		w.itrRow.distValid = false
 		w.itrRow.last = false
 		w.itrRow.key = nil
 		w.itrRow.value = nil

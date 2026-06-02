@@ -2021,6 +2021,15 @@ type bhiveReaderCtx struct {
 	readUnits        uint64
 	user             string
 	skipReadMetering bool
+	// dist is a per-iteration side channel carrying the (quantized) search
+	// distance of the record currently being handed to the EntryCallback.
+	// It is meaningful only when distValid is true; a valid distance may be
+	// 0 (e.g. -IP == 0), so the zero value must not be read as "no distance".
+	dist float32
+	// distValid is true when dist carries a real search distance (graph search
+	// path) and false when the distance must be computed downstream (records
+	// from the flush buffer / disk or the non-graph Execute path).
+	distValid bool
 }
 
 func (ctx *bhiveReaderCtx) Init(donech chan bool) bool {
@@ -3751,6 +3760,11 @@ func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, que
 		if err != nil {
 			return err
 		}
+
+		// Stash the search distance for this record so the scan callback can
+		// reuse it instead of recomputing. distValid is false when no search
+		// distance is available and the scan layer must compute it.
+		reader.dist, reader.distValid = iter.GetDist()
 
 		if err := callb(rawKey, rawMeta); err != nil {
 			return err
