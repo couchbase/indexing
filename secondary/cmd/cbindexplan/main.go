@@ -240,6 +240,20 @@ func main() {
 
 	const binSize uint64 = common.DEFAULT_BIN_SIZE
 
+	if gOutput != "" || gGenStmt != "" {
+		if gClusterUrl == "" {
+			logging.Fatalf("cbindexplan: -cluster is required with file output to verify encryption-at-rest status.")
+			return
+		}
+		earEnabled, err := common.IsEncryptionAtRestEnabled(gClusterUrl, gUsername, gPassword)
+		if err != nil {
+			logging.Errorf("cbindexplan: could not determine encryption-at-rest status: %v", err)
+		} else if earEnabled {
+			logging.Fatalf("cbindexplan: file output is not supported when encryption at rest is enabled.")
+			return
+		}
+	}
+
 	if os.Getenv("CBAUTH_REVRPC_URL") == "" && gClusterUrl != "" {
 		// unfortunately, above is read at init, so we have to respawn
 		revrpc := fmt.Sprintf("http://%v:%v@%v", gUsername, gPassword, gClusterUrl)
@@ -377,8 +391,8 @@ func main() {
 			return
 		}
 
-	tokens, _, err := planner.ExecuteRebalanceInternal(gClusterUrl, change, masterId, true,
-		gDetail, true, false, false, 0, 0, false, 100, 20000, binSize, 0, gEnableShardAffinity, false, nil)
+		tokens, _, err := planner.ExecuteRebalanceInternal(gClusterUrl, change, masterId, true,
+			gDetail, true, false, false, 0, 0, false, 100, 20000, binSize, 0, gEnableShardAffinity, false, nil)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return
