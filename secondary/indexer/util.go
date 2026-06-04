@@ -181,6 +181,25 @@ func RemoveCodebookDir(
 	return iowrap.Os_RemoveAll(codebookDirPath)
 }
 
+/*
+RemapCodebookDir handles the complexities of renaming codebook for supporting storage engines
+during upgrades and is restart safe (aka can be called multiple times)
+
+There are 2 storage engines to support: Plasma and Bhive.
+Bhive has only dedicated instances and plasma has both shared + dedicated instances. We are always
+going to have the new path directory created but the index data may/may not be in it depending on
+the instance being shared or dedicated. in both cases codebook needs to be transferred to the new
+directories if the instance had a codebook (aka it active and trained instances)
+
+Remap goes as follows -
+<storageDir>/"old_index_path".index/codebook/"bucket_index_partn".codebook
+=>
+<storageDir>/"new_index_path".index/codebook/"instID_partn".codebook
+
+Its performed in 2 phases:
+1. Update the `codebook` dir parent directory to the "new index path"
+2. Rename the codebook file itself to the new file
+*/
 func RemapCodebookDir(
 	storeEngineDir string, idxInst *common.IndexInst,
 	partnId common.PartitionId, sliceId SliceId,
@@ -195,17 +214,100 @@ func RemapCodebookDir(
 		return nil
 	}
 
-	oldCbDir := filepath.Join(oldIndexPath, CODEBOOK_DIR)
 	newCbDir := filepath.Join(newIndexPath, CODEBOOK_DIR)
-	err := iowrap.Os_Rename(oldCbDir, newCbDir)
-	if err != nil && !os.IsNotExist(err) {
+	newCb := filepath.Join(newCbDir, CodebookName2(idxInst, partnId, sliceId))
+
+	_, newCbExistsErr := iowrap.Os_Stat(newCb)
+	if newCbExistsErr == nil {
+		// codebook already exists at new path. return early
+		logging.Infof("RemapCodebookDir: codebook already at new path for index %v. skipping",
+			idxInst.DisplayName())
+		return nil
+	}
+
+	// | oldCbDirExists	| newCbDirExists	| action								|
+	// | true			| true				| likely rename not atomic. Skip rename |
+	// | false			| true				| likely partial upgrade. Skip rename 	|
+	// | true			| false				| rename 								|
+	// | false			| false				| if inst active then codebook missing, |
+	// | 				| 					| return err							|
+	// | 				| 					| else likely failed training so ret nil|
+	{
+		////////// phase 1: verify if old index path has codebook dir or not
+		oldCbDir := filepath.Join(oldIndexPath, CODEBOOK_DIR)
+
+		_, oldPathErr := iowrap.Os_Stat(oldCbDir)
+		_, newPathErr := iowrap.Os_Stat(newCbDir)
+		if oldPathErr != nil {
+			// old and new codebook dir does not exist; if the index is active then this is unexpected
+			// unless we have crashed before deleting old slice dir
+			if os.IsNotExist(oldPathErr) && os.IsNotExist(newPathErr) {
+				if idxInst.State == common.INDEX_STATE_ACTIVE {
+					err := fmt.Errorf("index %v state ACTIVE but no codebook found on old path - %w",
+						idxInst.DisplayName(), oldPathErr)
+					logging.Errorf("RemapCodebookDir: %v", err)
+
+					return err
+				}
+				logging.Infof("RemapCodebook: inst %v not in ACTIVE state and no codebook exists. continue...",
+					idxInst.DisplayName())
+				return nil
+			} else if os.IsNotExist(oldPathErr) && newPathErr == nil {
+				// old codebook dir does not exist but new codebook dir does exist don't attempt
+				// rename from [oldCbDir] to [newCbdir]
+				logging.Infof("RemapCodebook: skip old codebook dir to new codebook dir rename for"+
+					" index %v as old codebook dir does not exist",
+					idxInst.DisplayName(),
+				)
+				goto phase2
+			}
+
+			err := fmt.Errorf("failed to stat codebook dir %v with err %w",
+				oldCbDir, oldPathErr)
+
+			logging.Errorf("RemapCodebook: %v", err)
+			return err
+		}
+
+		// because we are using OS.rename APIs and we expect the paths to be on the same disk
+		// the rename should be atomic (guaranteed on unix). so if the oldCbDir exists then
+		// we don't expect the newCbDir to exist. but if it does due to other OSes not having
+		// atomic renames then rename call below can fail so skip forward to phase 2
+		if newPathErr == nil {
+			logging.Infof("RemapCodebook: old and new codebook dir both exist for index %v. skipping rename...",
+				idxInst.DisplayName())
+			goto phase2
+		}
+
+		////////// phase 1: oldCbDir exists. call rename to update codebook's parent dir
+		err := iowrap.Os_Rename(oldCbDir, newCbDir)
+		if err != nil {
+			err = fmt.Errorf("failed to remap codebook to %v with err %w", newCbDir, err)
+			logging.Errorf("RemapCodebook: %v", err)
+			return err
+		}
+	}
+
+	////////// phase 1 guarantees newCbDir exists. now we need to rename old path format
+	// to new format for the codebook file in phase 2
+phase2:
+	_, newPathErr := iowrap.Os_Stat(newCbDir)
+	if newPathErr != nil {
+		// newCbDir still does not exist. there's a likely issue with system
+		err := fmt.Errorf("codebook dir couldn't be found at new path %v even after rename. err - %w",
+			newIndexPath, newPathErr)
+		logging.Errorf("RemapCodebookDir: %v", err)
 		return err
 	}
 
-	oldCb := filepath.Join(oldCbDir, CodebookName(idxInst, partnId, sliceId))
-	newCb := filepath.Join(newCbDir, CodebookName2(idxInst, partnId, sliceId))
-	err = iowrap.Os_Rename(oldCb, newCb)
-	if err != nil && !os.IsNotExist(err) {
+	////////// phase 2: rename codebook file
+	oldCb := filepath.Join(newCbDir, CodebookName(idxInst, partnId, sliceId))
+
+	err := iowrap.Os_Rename(oldCb, newCb)
+	if err != nil {
+		err = fmt.Errorf("failed to rename codebook file %v with err %w",
+			newCb, err)
+		logging.Errorf("RemapCodebookDir: %v", err)
 		return err
 	}
 

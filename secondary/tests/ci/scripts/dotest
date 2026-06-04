@@ -182,7 +182,7 @@ error_exit() {
     patchset=$(echo "$line" | cut -d',' -f3)
     query_id=$(echo "$patch_id,$patchset")
     ssh review.couchbase.org gerrit query change:${query_id%,*} AND reviewer:self AND status:open | grep -qs 'rowCount: 0' && continue
-    failure_str=$(printf "MAYBE FAIL %s with storage %s. See http://%s.northscale.in/gsi-%s.fail.html;\nFailure reason %s;\nTests failed - %s" "$MODE" "$STORAGE" "$CINAME" "$TS" "$1" "$2")
+    failure_str=$(printf "MAYBE FAIL %s with storage %s. See http://%s.northscale.in/gsi-%s.%s.fail.html;\nFailure reason %s;\nTests failed - %s" "$MODE" "$STORAGE" "$CINAME" "$TS" "$STORAGE" "$1" "$2")
     ssh review.couchbase.org gerrit review --code-review 0 -m "'$failure_str'" $query_id
   done
   error_email
@@ -426,7 +426,7 @@ if [ "$CIBOT" = "true" ]; then
     query_id=$(echo "$patch_id,$patchset")
 
     ssh review.couchbase.org gerrit query change:${query_id%,*} AND reviewer:self AND status:open | grep -qs 'rowCount: 0' && continue
-    ssh review.couchbase.org gerrit review --code-review 1 -m "'PASS $MODE with storage $STORAGE. See http://$CINAME.northscale.in/gsi-$TS.pass.html'" $query_id
+    ssh review.couchbase.org gerrit review --code-review 1 -m "'PASS $MODE with storage $STORAGE. See http://$CINAME.northscale.in/gsi-$TS.$STORAGE.pass.html'" $query_id
   done
 fi
 

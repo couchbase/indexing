@@ -100,11 +100,14 @@ var (
 	ErrBucketEphemeral          = errors.New("Ephemeral Buckets Must Use MOI or PLASMA Storage")
 	ErrBucketEphemeralStd       = errors.New("Standard GSI Index on ephemeral bucket requires fully upgraded cluster")
 	ErrTrainingInProgress       = errors.New("Training in progress")
+	ErrSliceDirNotADirectory    = errors.New("path exists but is not a directory")
+	ErrInvalidSliceDirMode      = errors.New("invalid storage mode")
 )
 
 // Backup corrupt index data files
 const (
 	CORRUPT_DATA_SUBDIR = ".corruptData"
+	sliceDirPerm        = 0o777
 )
 
 var codebookKDFLabelCtx = []byte("indexing/codebook")
@@ -10547,12 +10550,7 @@ func (idx *indexer) upgradeStoragePathForInst(inst *common.IndexInst) {
 		oldPath := filepath.Join(storeEngineDir, oldRelPath)
 		newPath := filepath.Join(storeEngineDir, newRelPath)
 
-		if _, err := iowrap.Os_Stat(newPath); err == nil {
-			logging.Infof("upgradeStoragePathForInst: inst %v partn %v already at new path, skipping",
-				inst.InstId, partnId)
-			continue
-		}
-
+		////////// If old directory exists then we have not yet upgraded successfully
 		if _, err := iowrap.Os_Stat(oldPath); os.IsNotExist(err) {
 			continue
 		} else if err != nil {
@@ -10560,16 +10558,33 @@ func (idx *indexer) upgradeStoragePathForInst(inst *common.IndexInst) {
 			continue
 		}
 
+		//////////// inconsistent state found. don't cleanup anything as we could loose data here
+		if _, err := iowrap.Os_Stat(newPath); err == nil {
+			logging.Warnf("upgradeStoragePathForInst: inst %v partn %v already at new path, incomplete upgrade possible",
+				inst.InstId, partnId)
+		}
+
 		logging.Infof("upgradeStoragePathForInst: remapping inst %v partn %v: %v -> %v",
 			inst.InstId, partnId, oldPath, newPath)
 
+		if storageMode == c.PLASMA {
+			////////// create slice dir before as this dir is always created by indexer not storage
+			if err := createSliceDir(storageMode, storeEngineDir, newPath, false); err != nil {
+				logging.Warnf("upgradeStoragePathForInst: failed to create new path %v with err %v",
+					newPath, err)
+			}
+		}
+
+		////////// Remap slice according to the relevant storage. expect the old paths to now be
+		// deleted to mark the upgrade complete
 		if err := RemapSlice(storageMode, storeEngineDir, inst, partnId, sliceId, oldPath, newPath); err != nil {
 			logging.Warnf("upgradeStoragePathForInst: RemapSlice failed inst %v partn %v: %v",
 				inst.InstId, partnId, err)
-		} else {
-			logging.Infof("upgradeStoragePathForInst: inst %v partn %v remapped successfully",
-				inst.InstId, partnId)
+			continue
 		}
+		logging.Infof("upgradeStoragePathForInst: inst %v partn %v remapped successfully",
+			inst.InstId, partnId)
+
 	}
 }
 
@@ -11649,6 +11664,9 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	if testcode.UseOldIndexPath(conf) {
 		relPath = IndexPath(indInst, partitionId, id)
 		logging.Infof("testcode: using old index path %v for index - %v", relPath, indInst.DisplayName())
+		// Disable all encryption callbacks: path-based key lookups do not understand
+		// old-format paths, and v1-compat nodes are never encrypted in test scenarios.
+		sliceEncryptionCallbacks = nopSliceEncryptionCallbacks()
 	}
 	path := filepath.Join(storeEngineDir, relPath)
 	numPartitions := indInst.Pc.GetNumPartitions()
@@ -11699,6 +11717,32 @@ func DestroySlice(mode common.StorageMode, storeEngineDir string, path string) e
 	}
 
 	return fmt.Errorf("unable to delete instance %v : unrecognized storage type %v", path, mode)
+}
+
+func createSliceDir(
+	mode common.StorageMode, storeEngineDir, path string,
+	isNew bool) error {
+
+	switch mode {
+	case common.FORESTDB, common.MOI:
+		info, err := iowrap.Os_Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return iowrap.Os_Mkdir(path, sliceDirPerm) //nolint:wrapcheck
+			}
+			return fmt.Errorf("createSliceDir stat %v: %w", path, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("createSliceDir %v: %w", path, ErrSliceDirNotADirectory)
+		}
+		return nil
+	case common.PLASMA:
+		if strings.HasSuffix(storeEngineDir, common.BHIVE_DIR_PREFIX) {
+			return createBhiveSliceDir(storeEngineDir, path, isNew)
+		}
+		return createPlasmaSliceDir(storeEngineDir, path, isNew)
+	}
+	return fmt.Errorf("createSliceDir storage mode %v: %w", mode, ErrInvalidSliceDirMode)
 }
 
 func RemapSlice(mode common.StorageMode, storeEngineDir string, idxInst *common.IndexInst,

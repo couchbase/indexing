@@ -82,3 +82,7 @@ func GetRPCRootDir() string {
 func GetShardCompatVersion_Plasma() int {
 	return 0
 }
+
+func createPlasmaSliceDir(storageDir string, path string, isNew bool) error {
+	return nil
+}

@@ -34,6 +34,7 @@ import (
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
+	"github.com/couchbase/indexing/secondary/testcode"
 	"github.com/couchbase/indexing/secondary/vector"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	"github.com/couchbase/plasma"
@@ -255,7 +256,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 
 	slice := &plasmaSlice{}
 
-	err := createSliceDir(storage_dir, path, isNew)
+	err := createPlasmaSliceDir(storage_dir, path, isNew)
 	if err != nil {
 		return nil, err
 	}
@@ -405,8 +406,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	return slice, nil
 }
 
-func createSliceDir(storageDir string, path string, isNew bool) error {
-
+func createPlasmaSliceDir(storageDir string, path string, isNew bool) error {
 	_, err := iowrap.Os_Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -476,6 +476,8 @@ func remapSlice_Plasma(storageDir string, idxInst *common.IndexInst,
 		logging.Warnf("remapSlice_Plasma: dir sync for %v error: %v", newPath, err)
 	}
 
+	// always perform this as the last operation; this helps replay upgrade if we crash in
+	// while remap is going on
 	if err = removeEmptySliceDir(oldPath); err != nil {
 		err = fmt.Errorf("remapSlice_Plasma: %w", err)
 		return
@@ -727,6 +729,17 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		bCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
 		mCfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
 		bCfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
+
+		// When simulating v1-compat mode the index files are at old-format paths;
+		// the path-based key lookup callbacks do not understand those paths, so
+		// disable them to avoid spurious encryption failures during testing.
+		if testcode.OverrideShardCompatVersion(0) == 1 {
+			mCfg.GetKeyById = nil
+			bCfg.GetKeyById = nil
+			mCfg.GetActiveKeyByPath = nil
+			bCfg.GetActiveKeyByPath = nil
+		}
+
 		return mCfg, bCfg
 	}()
 
