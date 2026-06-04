@@ -2459,6 +2459,14 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.recovery.checkpointReplayThresh": ConfigValue{
+		uint64(512 * 1024 * 1024),
+		"maximum allowed byte gap between the last checkpointed replayOffset and " +
+			"data LSS tail before forcing checkpoint block. 0 disables triggering",
+		uint64(512 * 1024 * 1024),
+		false,
+		false,
+	},
 	"indexer.plasma.recovery.enableFullReplayOnError": ConfigValue{
 		true,
 		"enable full data replay upon error",
