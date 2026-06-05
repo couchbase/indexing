@@ -1566,11 +1566,23 @@ type WriteItem func(...[]byte) error
 
 // MergeOperator will read from recvQ, based on distances and either stores
 // in heap or forwards row to down stream
+// rowDedupKey uniquely identifies a doc across scan sources. (storeId,
+// recordId) is identical for the per-cell and sentinel copies of the
+// same doc (both read the same stored entry) and globally unique
+// (storeId disambiguates per-kvstore recordId numbering).
+type rowDedupKey struct {
+	storeId  uint64
+	recordId uint64
+}
+
 type MergeOperator struct {
 	req *ScanRequest
 
 	recvCh <-chan *Row
 	heap   *TopKRowHeap
+
+	// track candidates seen so far for dedup
+	seen map[rowDedupKey]struct{}
 
 	errCh    chan error
 	mergerWg sync.WaitGroup
@@ -1617,6 +1629,12 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 		fio.heap, err = NewTopKRowHeap(int(heapSize), false, r.getRowCompare())
 		if err != nil {
 			return nil, err
+		}
+
+		if r.useHeapForVectorIndex() &&
+			r.IndexInst.Defn.IsBhive() &&
+			r.IsSparseVectorIndexScan() {
+			fio.seen = make(map[rowDedupKey]struct{}, int(heapSize)*4)
 		}
 	}
 
@@ -1743,6 +1761,19 @@ func (fio *MergeOperator) Collector() {
 		}
 
 		fio.rowsReceived++
+
+		// Dedup rows already seen from prior centriod scan
+		if fio.req.useHeapForVectorIndex() &&
+			fio.req.IndexInst.Defn.IsBhive() &&
+			fio.req.IsSparseVectorIndexScan() &&
+			fio.req.dedup {
+			k := rowDedupKey{storeId: row.storeId, recordId: row.recordId}
+			if _, dup := fio.seen[k]; dup {
+				row.free()
+				continue
+			}
+			fio.seen[k] = struct{}{}
+		}
 
 		if fio.req.useHeapForVectorIndex() {
 			fio.heap.Push(row)
@@ -2189,26 +2220,31 @@ func (s *IndexScanSource2) Routine() error {
 
 	// Note: Current batchId generation logic can have holes in the batchId ranges but it meets
 	// all the requirements mentioned above
+
+	// vectorScans is an ordered slice of centroids per partition, so the
+	// common-inverted-index sentinel — appended last in fillVectorScans —
+	// gets the highest index c, hence the highest batchId, and runs in the
+	// last batch. That places it after the per-cell centroids that feed the
+	// running top-K threshold it prunes against (it may share the last batch
+	// with a few of them, which is fine — the majority have already fed it).
 	jobMap := make(map[int][]*ScanJob, 0)
 	maxBatchId := 0
 	for _, pid := range s.p.req.PartitionIds {
 		cidScans := scans[pid]
-		c := 0
-		for cid, scanList := range cidScans {
-			for sid, scan := range scanList {
+		for c, g := range cidScans {
+			for sid, scan := range g.scans {
 				batchId := sid*numBatchesPerScan + (c / readersPerPartition)
 				if batchId > maxBatchId {
 					maxBatchId = batchId
 				}
 				ctx := ctxs[pid][c%readersPerPartition]
-				job := NewScanJob(s.p.req, batchId, pid, cid, scan, snaps[pid], ctx, codebooks[pid])
+				job := NewScanJob(s.p.req, batchId, pid, g.cid, scan, snaps[pid], ctx, codebooks[pid])
 				_, ok := jobMap[batchId]
 				if !ok {
 					jobMap[batchId] = make([]*ScanJob, 0)
 				}
 				jobMap[batchId] = append(jobMap[batchId], job)
 			}
-			c++
 		}
 	}
 
