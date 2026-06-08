@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -191,6 +192,10 @@ type statsManager struct {
 	config                   common.ConfigHolder
 	statLogger               logstats.LogStats
 	encMgr                   *EncryptionMgr
+
+	logStatsKeyMu sync.RWMutex
+	logStatsKeyID string
+	logStatsKey   []byte
 }
 
 func NewStatsManager(
@@ -568,22 +573,79 @@ func Accmulate(wrkr []interface{}) string {
 // handleEncryptionUpdateKey is invoked by EncryptionMgr when cbauth signals a
 // new active "log" key.
 func (sm *statsManager) handleEncryptionUpdateKey(earkey common.EaRKey) error {
-	// ENCRYPTION_TODO: forward to sm.fileHandler once the logstats FileHandler
-	// API lands. Target API:
-	//   return sm.fileHandler.(common.LogStatsFileHandler).UpdateActiveKey(earkey)
-	logging.Infof("statsManager:handleEncryptionUpdateKey received keyId=%v (no-op until file handler lands)", earkey.Id)
+	sm.logStatsKeyMu.Lock()
+	keyChanged := earkey.Id != sm.logStatsKeyID
+	sm.logStatsKeyID = earkey.Id
+	sm.logStatsKey = earkey.Key
+	sm.logStatsKeyMu.Unlock()
+
+	if keyChanged {
+		common.ForceRotateStatsLog()
+	}
+
+	if sm.encMgr != nil {
+		sm.encMgr.SetInUseKeys(earkey.Id)
+	}
+
+	logging.Infof("statsManager:handleEncryptionUpdateKey keyId=%v keyChanged=%v", earkey.Id, keyChanged)
 	return nil
 }
 
 // handleEncryptionDropKey is invoked by EncryptionMgr when cbauth requests
 // retirement of key IDs.
 func (sm *statsManager) handleEncryptionDropKey(activeEarKey common.EaRKey, dropKeyIDs []string) error {
-	// ENCRYPTION_TODO: forward to sm.fileHandler once the logstats FileHandler
-	// API lands. Target API:
-	//   return sm.fileHandler.(common.LogStatsFileHandler).HandleDropKey(activeEarKey, dropKeyIDs)
-	logging.Infof("statsManager:handleEncryptionDropKey active=%v drop=%v (no-op until file handler lands)",
-		activeEarKey.Id, dropKeyIDs)
-	return nil
+	config := sm.config.Load()
+	logDir := config["projector.log_dir"].String()
+	baseName := config["projector.statsLogFname"].String()
+
+	emptyDropKeys := len(dropKeyIDs) == 0 || (len(dropKeyIDs) == 1 && dropKeyIDs[0] == "")
+	if emptyDropKeys {
+		dropKeyIDs = []string{""}
+	}
+
+	var err error
+	if activeEarKey.Id != "" {
+		if logDir != "" && baseName != "" {
+			err = common.ReencryptStatsLogFiles(
+				logDir, baseName, dropKeyIDs,
+				activeEarKey.Id, activeEarKey.Key,
+				sm.getKeyCipherByID,
+			)
+			if err != nil {
+				logging.Errorf("statsManager:handleEncryptionDropKey reencryptStatsLogFiles: %v", err)
+			}
+		}
+		if err == nil && sm.encMgr != nil {
+			sm.encMgr.SetInUseKeys(activeEarKey.Id)
+		}
+	} else if len(dropKeyIDs) > 0 {
+		if logDir != "" && baseName != "" {
+			err = common.DecryptStatsLogFiles(logDir, baseName, dropKeyIDs, sm.getKeyCipherByID)
+			if err != nil {
+				logging.Errorf("statsManager:handleEncryptionDropKey decryptStatsLogFiles: %v", err)
+			}
+		}
+		if err == nil && sm.encMgr != nil {
+			sm.encMgr.SetInUseKeys("")
+		}
+	}
+
+	logging.Infof("statsManager:handleEncryptionDropKey active=%v drop=%v err=%v",
+		activeEarKey.Id, dropKeyIDs, err)
+	return err
+}
+
+func (sm *statsManager) getLogStatsKey() (string, []byte) {
+	sm.logStatsKeyMu.RLock()
+	defer sm.logStatsKeyMu.RUnlock()
+	return sm.logStatsKeyID, sm.logStatsKey
+}
+
+func (sm *statsManager) getKeyCipherByID(keyID string) ([]byte, string) {
+	if sm.encMgr == nil {
+		return []byte{}, CipherNameNone
+	}
+	return sm.encMgr.GetKeyCipherById(keyID)
 }
 
 func (sm *statsManager) setupLogStatsLogger() error {
@@ -603,24 +665,13 @@ func (sm *statsManager) setupLogStatsLogger() error {
 
 	var err error
 
-	// ENCRYPTION_TODO: replace NewDedupeLogStats with NewDedupeLogStatsWithFileHandler
-	// (requires logstats v1.1.1) and pass a common.LogStatsFileHandler built from the
-	// EncryptionMgr's accessor methods. Until that API lands, stats log files are
-	// written as plaintext exactly as before.
-	//
-	//   fileHandler := common.NewLogStatsFileHandler(common.LogStatsFileHandlerCallbacks{
-	//       GetKeyCipherById:     sm.encMgr.GetKeyCipherById,
-	//       GetActiveKeyIdCipher: sm.encMgr.GetActiveKeyIdCipher,
-	//       SetInUseKeys:         sm.encMgr.SetInUseKeys,
-	//   })
-	//   sm.statLogger, err = logstats.NewDedupeLogStatsWithFileHandler(
-	//       filefullpath, sizelimit, numfiles, common.STAT_LOG_TS_FORMAT, fileHandler,
-	//   )
-	sm.statLogger, err = logstats.NewDedupeLogStats(
+	handler := common.NewLogStatsFileHandler(sm.getLogStatsKey, sm.getKeyCipherByID)
+	sm.statLogger, err = logstats.NewDedupeLogStatsWithFileHandler(
 		filefullpath,              // fileName
 		sizelimit,                 // sizeLimit
 		numfiles,                  // numFiles
 		common.STAT_LOG_TS_FORMAT, // tsFormat
+		handler,                   // fileHandler
 	)
 
 	return err
