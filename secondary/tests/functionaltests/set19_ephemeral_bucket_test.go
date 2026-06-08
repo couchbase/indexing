@@ -127,6 +127,9 @@ func TestEphemeralBucketRecovery(t *testing.T) {
 
 	forceKillIndexer()
 
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	FailTestIfError(err, "Error in WaitForIndexerActive", t)
+
 	// Scan index of default bucket which is of couchbase type
 	docScanResults = datautility.ExpectedScanResponse_int64(bucketDocs[0], indexFields[0], 30, 50, 1)
 	scanResults, err = secondaryindex.Range(indexNames[0], bucketNames[0], indexScanAddress, []interface{}{30}, []interface{}{50}, 1, false, defaultlimit, c.SessionConsistency, nil)

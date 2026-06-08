@@ -692,7 +692,7 @@ func BuildAllSecondaryIndexes(server string, indexActiveTimeoutSeconds int64) er
 
 func CorruptIndex(indexName, bucketName, bucketUUID, dirPath, indexUsing string, instId c.IndexInstId, partnId c.PartitionId) error {
 	if indexUsing == "forestdb" {
-		return corruptForestdbIndex(indexName, bucketUUID, dirPath, instId, partnId)
+		return corruptForestdbIndex(indexName, bucketName, dirPath, partnId)
 	} else if indexUsing == "plasma" {
 		return corruptPlasmaIndex(indexName, bucketUUID, dirPath, instId, partnId)
 	} else if indexUsing == "memory_optimized" {
@@ -765,10 +765,10 @@ func corruptMOIIndex(indexName, bucketUUID, dirPath string, instId c.IndexInstId
 	return nil
 }
 
-func corruptForestdbIndex(indexName, bucketUUID, dirPath string, instId c.IndexInstId, partnId c.PartitionId) error {
+func corruptForestdbIndex(indexName, bucketName, dirPath string, partnId c.PartitionId) error {
 	var err error
 	var slicePath string
-	slicePath, err = tc.GetIndexSlicePath2(bucketUUID, instId, dirPath, partnId)
+	slicePath, err = tc.GetIndexSlicePath(indexName, bucketName, dirPath, partnId)
 	if err != nil {
 		return err
 	}

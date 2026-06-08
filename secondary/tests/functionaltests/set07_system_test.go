@@ -1490,6 +1490,9 @@ func TestOrphanIndexCleanup(t *testing.T) {
 	// restart the indexer
 	forceKillIndexer()
 
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	FailTestIfError(err, "Error in WaitForIndexerActive", t)
+
 	// Verify that the idexer has come up - and query on non-orphan index succeeds.
 	_, err = secondaryindex.Range("idx1_age_regular", "default", indexScanAddress, []interface{}{35},
 		[]interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
@@ -1560,6 +1563,9 @@ func TestOrphanPartitionCleanup(t *testing.T) {
 
 	// restart the indexer
 	forceKillIndexer()
+
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	FailTestIfError(err, "Error in WaitForIndexerActive", t)
 
 	// Verify that the indexer has come up - and query on non-orphan index succeeds.
 	_, err = secondaryindex.Range("idx3_age_regular", "default", indexScanAddress, []interface{}{35},

@@ -5,6 +5,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,7 +125,13 @@ func set34ValidateNewFormat(t *testing.T, caller, clusterNode string, names []st
 			}
 			for _, partnId := range partnIds {
 				pid := c.PartitionId(partnId)
-				newPath, err := tc.GetIndexSlicePath2(bucketUUID, status.InstId, storageDir, pid)
+				var newPath string
+				var err error
+				if clusterconfig.IndexUsing == "forestdb" {
+					newPath, err = tc.GetIndexSlicePath(name, set34Bucket, storageDir, pid)
+				} else {
+					newPath, err = tc.GetIndexSlicePath2(bucketUUID, status.InstId, storageDir, pid)
+				}
 				if err != nil {
 					t.Fatalf("%v new-format path missing for %v instId=%v partnId=%v: %v",
 						caller, name, status.InstId, pid, err)
@@ -132,11 +139,13 @@ func set34ValidateNewFormat(t *testing.T, caller, clusterNode string, names []st
 				log.Printf("%v new-format path confirmed for %v instId=%v partnId=%v: %v",
 					caller, name, status.InstId, pid, newPath)
 
-				// Old-format must be absent on the destination node.
-				oldPath, _ := tc.GetIndexSlicePath(name, set34Bucket, storageDir, pid)
-				if oldPath != "" {
-					t.Fatalf("%v old-format path unexpectedly present on dest node for %v: %v",
-						caller, name, oldPath)
+				if clusterconfig.IndexUsing != "forestdb" {
+					// Old-format must be absent on the destination node.
+					oldPath, _ := tc.GetIndexSlicePath(name, set34Bucket, storageDir, pid)
+					if oldPath != "" {
+						t.Fatalf("%v old-format path unexpectedly present on dest node for %v: %v",
+							caller, name, oldPath)
+					}
 				}
 				validated = true
 			}
@@ -268,10 +277,10 @@ func set34CreateIndexes(t *testing.T, caller string, withReplica bool) {
 			`CREATE INDEX %v ON `+"`%v`.`%v`.`%v`"+`(sift VECTOR) WITH {%v}`,
 			set34VecIndexName, set34Bucket, set34Scope, set34Coll, vecWith,
 		)
-		err := createWithDeferAndBuild(set34VecIndexName, set34Bucket, set34Scope, set34Coll,
-			vecStmt, defaultIndexActiveTimeout*2)
+
+		res, err := execN1QL(set34Bucket, vecStmt)
 		FailTestIfError(err, fmt.Sprintf("%v Error creating vector index %v", caller, set34VecIndexName), t)
-		log.Printf("%v Vector index %v created (replica=%v)", caller, set34VecIndexName, withReplica)
+		log.Printf("%v Vector index %v created (replica=%v) res %v", caller, set34VecIndexName, withReplica, res)
 
 		// Bhive vector index (IVF256) — trains successfully.
 		bhiveWith := `"dimension":128,"description":"IVF256,PQ32x8","similarity":"L2_SQUARED","defer_build":true`
@@ -282,10 +291,38 @@ func set34CreateIndexes(t *testing.T, caller string, withReplica bool) {
 			`CREATE VECTOR INDEX %v ON `+"`%v`.`%v`.`%v`"+`(sift VECTOR) WITH {%v}`,
 			set34BhiveIndexName, set34Bucket, set34Scope, set34Coll, bhiveWith,
 		)
-		err = createWithDeferAndBuild(set34BhiveIndexName, set34Bucket, set34Scope, set34Coll,
-			bhiveStmt, defaultIndexActiveTimeout*2)
+
+		res, err = execN1QL(set34Bucket, bhiveStmt)
 		FailTestIfError(err, fmt.Sprintf("%v Error creating bhive index %v", caller, set34BhiveIndexName), t)
-		log.Printf("%v Bhive index %v created (replica=%v)", caller, set34BhiveIndexName, withReplica)
+		log.Printf("%v Bhive index %v created (replica=%v) with res %v", caller, set34BhiveIndexName, withReplica, res)
+
+		err = issueBuildStatement(set34Bucket, set34Scope, set34Coll, []string{set34BhiveIndexName, set34VecIndexName})
+		FailTestIfError(err, "Error in building vector indexes", t)
+
+		var wg sync.WaitGroup
+
+		for _, name := range []string{
+			set34BhiveIndexName,
+			fmt.Sprintf("%v (replica 1)", set34BhiveIndexName),
+			set34VecIndexName,
+			fmt.Sprintf("%v (replica 1)", set34VecIndexName),
+		} {
+			wg.Add(1)
+			go func(name string) {
+				defer func() {
+					e := recover()
+					wg.Done()
+					if e != nil {
+						t.Errorf("%v", e)
+					}
+				}()
+				waitForIndexActiveWithTimeout(set34Bucket, name, 15*time.Minute, t)
+			}(name)
+		}
+
+		wg.Wait()
+
+		log.Printf("%v Done with building valid vector indexes %v,%v", caller, set34VecIndexName, set34BhiveIndexName)
 
 		// Bhive vector index with intentionally failed training (IVF100000 > 10000 docs).
 		bhiveFailWith := `"dimension":128,"description":"IVF100000,PQ32x8","similarity":"L2_SQUARED","defer_build":true`
