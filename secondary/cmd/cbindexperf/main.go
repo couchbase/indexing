@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -12,10 +13,39 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth"
+	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/querycmd"
 	"github.com/couchbase/indexing/secondary/security"
 )
+
+// rejectFileOutputIfEAREnabled checks whether any file output flag is set and,
+// if so, queries the cluster to verify encryption at rest is not enabled.
+// Returns false when the caller should abort (EAR is on), true to continue.
+func rejectFileOutputIfEAREnabled(cluster, auth, outfile, statsfile, cpuprofile, memprofile string) bool {
+	if outfile == "" && statsfile == "" && cpuprofile == "" && memprofile == "" {
+		return true
+	}
+	earCreds := strings.SplitN(auth, ":", 2)
+	if len(earCreds) != 2 {
+		return true // invalid creds; later validation will catch this
+	}
+	mgmtAddr := cluster
+	if _, _, err := net.SplitHostPort(cluster); err != nil {
+		logging.Fatalf("cbindexperf: could not split host port %v due to err %v", cluster, err)
+		return false
+	}
+	earEnabled, err := c.IsEncryptionAtRestEnabled(mgmtAddr, earCreds[0], earCreds[1])
+	if err != nil {
+		logging.Errorf("cbindexperf: could not determine encryption-at-rest status: %v", err)
+		return true
+	}
+	if earEnabled {
+		logging.Fatalf("cbindexperf: file output is not supported when encryption at rest is enabled.")
+		return false
+	}
+	return true
+}
 
 func handleError(err error) {
 	if err != nil {
@@ -48,6 +78,12 @@ func main() {
 	if *help {
 		flag.PrintDefaults()
 		os.Exit(0)
+	}
+
+	// Check for file output before opening any output files.
+	// resultfile always has a non-empty default, so this covers the normal run path.
+	if !rejectFileOutputIfEAREnabled(*cluster, *auth, *outfile, *statsfile, *cpuprofile, *memprofile) {
+		return
 	}
 
 	if *cpuprofile != "" {

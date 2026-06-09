@@ -190,13 +190,18 @@ type statsManager struct {
 	lastStatTime             time.Time
 	config                   common.ConfigHolder
 	statLogger               logstats.LogStats
+	encMgr                   *EncryptionMgr
 }
 
-func NewStatsManager(cmdCh chan []interface{}, stopCh chan bool, config common.Config) *statsManager {
+func NewStatsManager(
+	cmdCh chan []interface{}, stopCh chan bool, config common.Config, encMgr *EncryptionMgr,
+) *statsManager {
+
 	sm := &statsManager{
 		cmdCh:        cmdCh,
 		stopCh:       stopCh,
 		lastStatTime: time.Unix(0, 0),
+		encMgr:       encMgr,
 	}
 
 	if val, ok := config["projector.statsLogDumpInterval"]; ok {
@@ -242,6 +247,15 @@ func NewStatsManager(cmdCh chan []interface{}, stopCh chan bool, config common.C
 		go common.MemstatLogger2(sm.statLogger, int64(config["projector.memstatTick"].Int()))
 	} else {
 		go common.MemstatLogger(int64(config["projector.memstatTick"].Int()))
+	}
+
+	// Register encryption hooks and unblock cbauth callbacks.
+	if encMgr != nil {
+		encMgr.SetStatsHooks(StatsHooks{
+			UpdateActiveKey: sm.handleEncryptionUpdateKey,
+			DropKey:         sm.handleEncryptionDropKey,
+		})
+		encMgr.MarkReady()
 	}
 
 	go sm.run()
@@ -551,6 +565,27 @@ func Accmulate(wrkr []interface{}) string {
 		"{\"datachLen\":%v,\"outgoingMut\":%v,\"updateSeqno\":%v,\"txnSystemMut\":%v}", dataChLen, outgoingMut, updateSeqno, txnSystemMut)
 }
 
+// handleEncryptionUpdateKey is invoked by EncryptionMgr when cbauth signals a
+// new active "log" key.
+func (sm *statsManager) handleEncryptionUpdateKey(earkey common.EaRKey) error {
+	// ENCRYPTION_TODO: forward to sm.fileHandler once the logstats FileHandler
+	// API lands. Target API:
+	//   return sm.fileHandler.(common.LogStatsFileHandler).UpdateActiveKey(earkey)
+	logging.Infof("statsManager:handleEncryptionUpdateKey received keyId=%v (no-op until file handler lands)", earkey.Id)
+	return nil
+}
+
+// handleEncryptionDropKey is invoked by EncryptionMgr when cbauth requests
+// retirement of key IDs.
+func (sm *statsManager) handleEncryptionDropKey(activeEarKey common.EaRKey, dropKeyIDs []string) error {
+	// ENCRYPTION_TODO: forward to sm.fileHandler once the logstats FileHandler
+	// API lands. Target API:
+	//   return sm.fileHandler.(common.LogStatsFileHandler).HandleDropKey(activeEarKey, dropKeyIDs)
+	logging.Infof("statsManager:handleEncryptionDropKey active=%v drop=%v (no-op until file handler lands)",
+		activeEarKey.Id, dropKeyIDs)
+	return nil
+}
+
 func (sm *statsManager) setupLogStatsLogger() error {
 	config := sm.config.Load()
 
@@ -568,6 +603,19 @@ func (sm *statsManager) setupLogStatsLogger() error {
 
 	var err error
 
+	// ENCRYPTION_TODO: replace NewDedupeLogStats with NewDedupeLogStatsWithFileHandler
+	// (requires logstats v1.1.1) and pass a common.LogStatsFileHandler built from the
+	// EncryptionMgr's accessor methods. Until that API lands, stats log files are
+	// written as plaintext exactly as before.
+	//
+	//   fileHandler := common.NewLogStatsFileHandler(common.LogStatsFileHandlerCallbacks{
+	//       GetKeyCipherById:     sm.encMgr.GetKeyCipherById,
+	//       GetActiveKeyIdCipher: sm.encMgr.GetActiveKeyIdCipher,
+	//       SetInUseKeys:         sm.encMgr.SetInUseKeys,
+	//   })
+	//   sm.statLogger, err = logstats.NewDedupeLogStatsWithFileHandler(
+	//       filefullpath, sizelimit, numfiles, common.STAT_LOG_TS_FORMAT, fileHandler,
+	//   )
 	sm.statLogger, err = logstats.NewDedupeLogStats(
 		filefullpath,              // fileName
 		sizelimit,                 // sizeLimit

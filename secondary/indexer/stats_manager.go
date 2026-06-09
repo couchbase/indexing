@@ -3471,6 +3471,7 @@ func (l *statLogger) writeMetadataStats() {
 type StatsEncryptionCallbacks struct {
 	getKeyCipherById func(keyId string) ([]byte, string)
 	setInUseKeys     func(kdt cbauth.KeyDataType, key string)
+	getLogStatsKey   func() (keyID string, key []byte)
 }
 
 type statsManager struct {
@@ -3494,7 +3495,17 @@ type statsManager struct {
 	stReqRecCount uint64
 	meteringMgr   *MeteringThrottlingMgr
 
-	encCallbacks StatsEncryptionCallbacks // encryption callbacks from EncryptionMgr
+	encCallbacks StatsEncryptionCallbacks
+
+	logStatsKeyMu sync.RWMutex
+	logStatsKeyID string
+	logStatsKey   []byte
+}
+
+func (s *statsManager) getLogStatsKey() (string, []byte) {
+	s.logStatsKeyMu.RLock()
+	defer s.logStatsKeyMu.RUnlock()
+	return s.logStatsKeyID, s.logStatsKey
 }
 
 // NewStatsManager is the constructor for statsManager.
@@ -4955,13 +4966,16 @@ func (s *statsManager) tryEnableStatsLog() (bool, logstats.LogStats) {
 
 	if ok1 && ok2 && ok3 {
 		fpath := filepath.Join(logdir, fname.String())
-		sLogger, err := logstats.NewDedupeLogStats(fpath, fsize.Int(), fcount.Int(), common.STAT_LOG_TS_FORMAT)
+		handler := common.NewLogStatsFileHandler(
+			s.encCallbacks.getLogStatsKey,
+			s.encCallbacks.getKeyCipherById,
+		)
+		sLogger, err := logstats.NewDedupeLogStatsWithFileHandler(fpath, fsize.Int(), fcount.Int(), common.STAT_LOG_TS_FORMAT, handler)
 		if err != nil {
-			logging.Infof("Error in NewDedupeLogStats %v. Disabling stats logging.", err)
+			logging.Infof("Error in NewDedupeLogStatsWithFileHandler %v. Disabling stats logging.", err)
 			return false, nil
-		} else {
-			return true, sLogger
 		}
+		return true, sLogger
 	}
 
 	return false, nil
@@ -4973,6 +4987,9 @@ func (s *statsManager) runStatsDumpLogger() {
 
 	var lastLogTime time.Time
 	enableStatsLog, sLogger := s.tryEnableStatsLog()
+	if sLogger != nil {
+		logstats.SetGlobalStatLogger(sLogger)
+	}
 	logger := newStatLogger(s, enableStatsLog, sLogger)
 	ticker := time.NewTicker(time.Duration(1) * time.Second)
 
@@ -5655,9 +5672,17 @@ func (s *statsManager) handleGetInUseKeys(cmd Message) {
 		return
 	}
 
+	kdt := msg.GetKeyDataType()
 	if fp.encCtx != nil {
-		kdt := msg.GetKeyDataType()
-		result[kdt] = []string{string(fp.encCtx.KeyID())}
+		result[kdt] = append(result[kdt], string(fp.encCtx.KeyID()))
+	}
+	s.logStatsKeyMu.RLock()
+	logKeyID := s.logStatsKeyID
+	s.logStatsKeyMu.RUnlock()
+	if logKeyID != "" {
+		if fp.encCtx == nil || logKeyID != string(fp.encCtx.KeyID()) {
+			result[kdt] = append(result[kdt], logKeyID)
+		}
 	}
 
 	respMapCh <- result
@@ -5712,12 +5737,25 @@ func (s *statsManager) handleEncryptionUpdateKey(cmd Message) {
 		}
 	}
 
+	s.logStatsKeyMu.Lock()
+	keyChanged := earkey.Id != s.logStatsKeyID
+	s.logStatsKeyID = earkey.Id
+	s.logStatsKey = earkey.Key
+	s.logStatsKeyMu.Unlock()
+	if keyChanged {
+		common.ForceRotateStatsLog()
+	}
+
+	if s.encCallbacks.setInUseKeys != nil {
+		s.encCallbacks.setInUseKeys(kdt, earkey.Id)
+	}
+
 	logging.Infof("StatsManager::handleEncryptionUpdateKey key:%v encCtx_set=%v", earkey.Id, fp.encCtx != nil)
 	respCh <- nil
 }
 
 // handleEncryptionDropKey handles encrypt, decrypt, and re-encrypt scenarios
-// for the persisted stats file.
+// for the persisted stats file and the rotating stats log files.
 func (s *statsManager) handleEncryptionDropKey(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 
@@ -5739,27 +5777,62 @@ func (s *statsManager) handleEncryptionDropKey(cmd Message) {
 		respCh <- err
 		return
 	}
-	var err error
+	var persistErr error
 
 	emptyDropKeys := len(dropKeyIds) == 0 || (len(dropKeyIds) == 1 && dropKeyIds[0] == "")
+	if emptyDropKeys {
+		dropKeyIds = []string{""}
+	}
 	switch {
 	case activeEarKey.Id != "" && emptyDropKeys:
 		// Scenario 1: Encrypt currently unencrypted data with activeKey.
 		// Treat both an empty drop-key list and empty-string as
 		// "encrypt the existing plaintext file with the current active key".
-		err = s.encryptAndPersistStats(fp, activeEarKey, kdt)
+		persistErr = s.encryptAndPersistStats(fp, activeEarKey, kdt)
 	case activeEarKey.Id == "" && len(dropKeyIds) > 0:
 		// Scenario 2: Decrypt back to plaintext
-		err = s.decryptAndPersistStats(fp, kdt)
+		persistErr = s.decryptAndPersistStats(fp, kdt)
 	case activeEarKey.Id != "" && len(dropKeyIds) > 0:
 		// Scenario 3: Re-encrypt from old key(s) to new key
-		err = s.reencryptAndPersistStats(fp, activeEarKey, kdt)
+		persistErr = s.reencryptAndPersistStats(fp, activeEarKey, kdt)
 	}
 
-	if err != nil {
-		logging.Errorf("StatsManager::handleEncryptionDropKey error: %v", err)
+	if persistErr != nil {
+		logging.Errorf("StatsManager::handleEncryptionDropKey persistedStats error: %v", persistErr)
 	}
-	respCh <- err
+
+	conf := s.config.Load()
+	logDir := conf["log_dir"].String()
+	baseName := conf["statsLogFname"].String()
+	var logFileErr error
+
+	// UpdateKey already updated the key state and called ForceRotateStatsLog,
+	// so the active log file is already using the correct key. DropKey only
+	// needs to re-encrypt or decrypt the already-rotated backup files.
+	if activeEarKey.Id != "" {
+		if logDir != "" && baseName != "" {
+			if logFileErr = common.ReencryptStatsLogFiles(logDir, baseName, dropKeyIds,
+				activeEarKey.Id, activeEarKey.Key,
+				s.encCallbacks.getKeyCipherById); logFileErr != nil {
+				logging.Errorf("StatsManager::handleEncryptionDropKey reencryptStatsLogFiles: %v", logFileErr)
+			}
+		}
+		if logFileErr == nil && s.encCallbacks.setInUseKeys != nil {
+			s.encCallbacks.setInUseKeys(kdt, activeEarKey.Id)
+		}
+	} else if activeEarKey.Id == "" && len(dropKeyIds) > 0 {
+		if logDir != "" && baseName != "" {
+			if logFileErr = common.DecryptStatsLogFiles(logDir, baseName, dropKeyIds,
+				s.encCallbacks.getKeyCipherById); logFileErr != nil {
+				logging.Errorf("StatsManager::handleEncryptionDropKey decryptStatsLogFiles: %v", logFileErr)
+			}
+		}
+		if logFileErr == nil && s.encCallbacks.setInUseKeys != nil {
+			s.encCallbacks.setInUseKeys(kdt, "")
+		}
+	}
+
+	respCh <- errors.Join(persistErr, logFileErr)
 }
 
 // encryptAndPersistStats encrypts an existing plaintext stats file with the given key.

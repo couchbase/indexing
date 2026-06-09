@@ -76,6 +76,7 @@ type Projector struct {
 	statsCmdCh  chan []interface{}
 	statsStopCh chan bool
 	statsMutex  sync.RWMutex
+	encMgr      *EncryptionMgr
 
 	// Can be either of system or container's limit. When user
 	// changes projector.maxCpuPercent and it is greater than
@@ -144,8 +145,14 @@ func NewProjector(config c.Config,
 	systemStatsCollectionInterval := int64(config["projector.systemStatsCollectionInterval"].Int())
 	memmanager.Init(systemStatsCollectionInterval, sysStats) // Initialize memory manager
 
+	encMgr, err := NewEncryptionMgr(config)
+	if err != nil {
+		c.CrashOnError(fmt.Errorf("failed to initialize EncryptionMgr: %w", err))
+	}
+	p.encMgr = encMgr
+
 	p.stats = NewProjectorStats()
-	p.statsMgr = NewStatsManager(p.statsCmdCh, p.statsStopCh, config)
+	p.statsMgr = NewStatsManager(p.statsCmdCh, p.statsStopCh, config, encMgr)
 	p.UpdateStatsMgr(p.stats.Clone())
 
 	p.config = config
