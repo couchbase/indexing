@@ -28,6 +28,7 @@ func FetchSampleVectorsForIndexes(cluster string,
 	idxInsts []*c.IndexInst,
 	sampleSize int64,
 	overSamplePercent int64,
+	itemsCount int64,
 	instVecCountMap map[c.IndexInstId]int) ([][]float32, error) {
 
 	evaluators := make([]*protoProj.IndexEvaluator, len(idxInsts))
@@ -45,7 +46,7 @@ func FetchSampleVectorsForIndexes(cluster string,
 	reqSampleSize := sampleSize * (100 + overSamplePercent) / 100
 
 	donech := make(chan bool)
-	datach, errch, err := c.FetchRandomKVSample(cluster, pooln, bucketn, scope, collection, cid, reqSampleSize, donech)
+	datach, errch, err := c.FetchRandomKVSample(cluster, pooln, bucketn, scope, collection, cid, reqSampleSize, itemsCount, donech)
 	if err != nil {
 		return nil, err
 	}

@@ -14581,7 +14581,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	if len(samplingCandidates) > 0 {
 		sampledVectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL,
 			bucket, scope, collection, cid, samplingCandidates, maxSampleSize,
-			int64(overSamplePercent), instVectorsMap)
+			int64(overSamplePercent), int64(itemsCount), instVectorsMap)
 		if err != nil {
 			logging.Errorf("Indexer::initiateTraining error observed while fetching training data for bucket: %v, scope: %v, coll: %v, cid: %v, err: %v",
 				bucket, scope, collection, cid, err)

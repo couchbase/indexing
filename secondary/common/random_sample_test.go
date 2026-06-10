@@ -17,7 +17,7 @@ func SkipTestFetchRandomKVSample(t *testing.T) {
 	cid := "0"
 
 	donech := make(chan bool)
-	datach, errch, err := FetchRandomKVSample(cluster, pool, bucket, scope, collection, cid, 800, donech)
+	datach, errch, err := FetchRandomKVSample(cluster, pool, bucket, scope, collection, cid, 800, 0, donech)
 	if err != nil {
 		t.Errorf("FetchRandomKVSample error %v", err)
 	}

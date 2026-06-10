@@ -19,7 +19,7 @@ const S_RESULT_CHANNEL_SIZE = 100
 //datach. If any scan is in progress and donech is closed, the scan will be aborted.
 
 func FetchRandomKVSample(cluster, pooln, bucketn,
-	scope, collection, cid string, sampleSize int64,
+	scope, collection, cid string, sampleSize int64, itemsCount int64,
 	donech chan bool) (datach chan *memcached.DcpEvent, errch chan error, ret error) {
 
 	//panic safe
@@ -44,7 +44,7 @@ func FetchRandomKVSample(cluster, pooln, bucketn,
 		}
 	}()
 
-	rs, err := bucket.NewRandomScanner(cid, sampleSize)
+	rs, err := bucket.NewRandomScanner(cid, sampleSize, itemsCount)
 	if err != nil {
 		logging.Warnf("FetchRandomKVSample failed : %v", err)
 		return nil, nil, err

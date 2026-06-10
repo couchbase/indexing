@@ -51,12 +51,17 @@ type randomScan struct {
 	datach chan *memcached.DcpEvent //channel to return sample docs
 
 	appErr chan error //error channel for the caller
+
+	vbFilter map[int]bool //when non-nil, only scan these vbuckets
 }
 
 // NewRandomScanner create a new random scanner for the given collection Id for this bucket
 // and the requested sample size(i.e. number of documents to scan). Bucket object cannot
 // be used concurrently when using random scanner.
-func (b *Bucket) NewRandomScanner(collId string, sampleSize int64) (RandomScanner, error) {
+// itemsCount is the total number of items in the collection; when non-zero and sampleSize
+// is within 2x of it, per-vbucket item counts are fetched from KV to ensure sampleSizePerVb
+// is large enough to cover hot vbuckets that exceed the uniform average.
+func (b *Bucket) NewRandomScanner(collId string, sampleSize int64, itemsCount int64) (RandomScanner, error) {
 
 	rs := &randomScan{
 		b:      b,
@@ -72,8 +77,74 @@ func (b *Bucket) NewRandomScanner(collId string, sampleSize int64) (RandomScanne
 		rs.sampleSizePerVb = int64(math.Ceil(float64(sampleSize) / float64(rs.numVbs)))
 	}
 
+	// When sampling a significant fraction of the collection, uniform per-vbucket capping
+	// can miss items in hot vbuckets that exceed the average. Fetch actual per-vbucket counts
+	// and raise sampleSizePerVb to the observed maximum so no vbucket is under-sampled.
+	// The consumer stops reading after its own sampleSize limit regardless.
+	if itemsCount > 0 && sampleSize > itemsCount/2 {
+		if maxPerVb, err := b.maxVbItemCount(collId); err != nil {
+			logging.Warnf("NewRandomScanner: ##%x skipping sampleSizePerVb adjustment for collection %v: %v",
+				rs.id, collId, err)
+		} else if maxPerVb > rs.sampleSizePerVb {
+			logging.Infof("NewRandomScanner: ##%x adjusting sampleSizePerVb %v->%v for collection %v",
+				rs.id, rs.sampleSizePerVb, maxPerVb, collId)
+			rs.sampleSizePerVb = maxPerVb
+		}
+	}
+
 	logging.Infof("NewRandomScanner: created new scanner %v for bucket %v", rs, b.Name)
 	return rs, nil
+}
+
+// NewRandomScannerForVbs is like NewRandomScanner but restricts scanning to the given
+// vbuckets. Useful for targeted sampling or single-vbucket diagnostics.
+func (b *Bucket) NewRandomScannerForVbs(collId string, sampleSize int64, itemsCount int64, vbs []int) (RandomScanner, error) {
+	rs, err := b.NewRandomScanner(collId, sampleSize, itemsCount)
+	if err != nil {
+		return nil, err
+	}
+	filter := make(map[int]bool, len(vbs))
+	for _, vb := range vbs {
+		filter[vb] = true
+	}
+	rss := rs.(*randomScan)
+	rss.vbFilter = filter
+	// Recompute sampleSizePerVb against the actual number of vbuckets being scanned,
+	// not the total bucket vbucket count. Without this, scanning 1 vbucket with
+	// sampleSize=45 would set sampleSizePerVb=1 (45<=128 branch) and return only 1 doc.
+	n := int64(len(vbs))
+	if n < 1 {
+		n = 1
+	}
+	rss.sampleSizePerVb = int64(math.Ceil(float64(sampleSize) / float64(n)))
+	return rs, nil
+}
+
+// maxVbItemCount returns the maximum number of items in any single vbucket for the given
+// collection, by querying KV collection stats across all servers.
+func (b *Bucket) maxVbItemCount(collId string) (int64, error) {
+	statsMap, err := b.GetStats("collections-details")
+	if err != nil {
+		return 0, err
+	}
+	// KV formats collection IDs with "0x" prefix in stat keys (e.g. "vb_95:0xa:items"),
+	// but CollectionId in IndexDefn is bare hex (e.g. "a"). Normalise before matching.
+	collIdHex := collId
+	if !strings.HasPrefix(collId, "0x") && !strings.HasPrefix(collId, "0X") {
+		collIdHex = "0x" + collId
+	}
+	suffix := ":" + collIdHex + ":items"
+	var maxItems int64
+	for _, serverStats := range statsMap {
+		for k, v := range serverStats {
+			if strings.HasPrefix(k, "vb_") && strings.HasSuffix(k, suffix) {
+				if count, err := strconv.ParseInt(v, 10, 64); err == nil && count > maxItems {
+					maxItems = count
+				}
+			}
+		}
+	}
+	return maxItems, nil
 }
 
 func (rs *randomScan) StartRandomScan() (chan *memcached.DcpEvent, chan error, error) {
@@ -147,6 +218,9 @@ func (rs *randomScan) computeVbsByServer() error {
 	numServers := len(smap.ServerList)
 
 	for vb := 0; vb < len(vblist); vb++ {
+		if rs.vbFilter != nil && !rs.vbFilter[vb] {
+			continue
+		}
 		server := 0
 		if len(vblist[vb]) > 0 {
 			// first server (>=0) that's in the list
