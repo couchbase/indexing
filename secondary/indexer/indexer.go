@@ -502,6 +502,12 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	logging.Infof("Indexer::NewIndexer done initializing from config")
 
+	idx.encryptionMgr, res = NewEncryptionMgr(idx.encryptionMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	if res.GetMsgType() != MSG_SUCCESS {
+		logging.Fatalf("Indexer::NewIndexer NewEncryptionMgr Init Error %+v", res)
+		return nil, res
+	}
+
 	useCInfoLite := idx.config["use_cinfo_lite"].Bool()
 	idx.cinfoProvider, err = common.NewClusterInfoProvider(useCInfoLite, clusterAddr,
 		DEFAULT_POOL, "indexer", idx.config)
@@ -563,12 +569,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer NewCompactionManager Init Error %+v", res)
-		return nil, res
-	}
-
-	idx.encryptionMgr, res = NewEncryptionMgr(idx.encryptionMgrCmdCh, idx.wrkrRecvCh, idx.config)
-	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer NewEncryptionMgr Init Error %+v", res)
 		return nil, res
 	}
 

@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/cbauth/cbauthimpl"
 	"github.com/couchbase/indexing/secondary/audit"
 
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
@@ -843,6 +844,15 @@ func (e *EncryptionMgr) cacheKeysForBootstrap() {
 	//ENCRYPT_TODO: Remove persisted test keys when test-framework not required
 	//recoverPersistedKeys()
 
+	ctx := context.Background()
+	encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, MetadataKDT)
+	if err != nil {
+		logging.Fatalf("EncryptionMgr:caching keys for config err:%v", err)
+		panic(err)
+	}
+	e.SetClusterEncrKeysInfo(MetadataKDT, encrKeysInfo)
+	logging.Infof("EncryptionMgr:cached keys for %v", logKDT(MetadataKDT))
+
 	// Cache keys for buckets
 	var buckets []couchbase.BucketName
 	func() {
@@ -868,24 +878,6 @@ func (e *EncryptionMgr) cacheKeysForBootstrap() {
 		logging.Infof("EncryptionMgr:cached keys for bucket %v", bucket)
 	}
 
-	// ENCRYPT_TODO: Cache keys for log, config, audit
-	//kdt := KeyDataType{TypeName: "log", BucketUUID: ""}
-	//encrKeysInfo := cbmockGetEncryptionKeysBlocking(kdt)
-	//e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
-
-	ctx := context.Background()
-	encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, MetadataKDT)
-	if err != nil {
-		logging.Fatalf("EncryptionMgr:caching keys for config err:%v", err)
-		panic(err)
-	}
-	e.SetClusterEncrKeysInfo(MetadataKDT, encrKeysInfo)
-	logging.Infof("EncryptionMgr:cached keys for %v", logKDT(MetadataKDT))
-
-	//
-	//kdt = KeyDataType{TypeName: "audit", BucketUUID: ""}
-	//encrKeysInfo = cbmockGetEncryptionKeysBlocking(kdt)
-	//e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
 	logCtx := context.Background()
 	logEncrKeysInfo, logErr := cbauth.GetEncryptionKeysBlocking(logCtx, LogdataKDT)
 	if logErr != nil {
@@ -1667,8 +1659,30 @@ func (e *EncryptionMgr) getKeyCipherByIDMetadataCb(keyID common.KeyID) (*EaRKey,
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	if keyID == "" {
+		return &cbauthimpl.EaRKey{}, nil
+	}
+
 	key, err := e.getKeyCacheByKeyid(MetadataKDT, keyID)
-	return &key, err
+	if err == nil {
+		return &key, err
+	}
+
+	// do sync + blocking sync
+	info, err := cbauth.GetEncryptionKeys(MetadataKDT)
+	if err == nil {
+		e.SetClusterEncrKeysInfoNoLock(MetadataKDT, info)
+	} else {
+		info, err = cbauth.GetEncryptionKeysBlocking(context.Background(), MetadataKDT)
+		e.SetClusterEncrKeysInfoNoLock(MetadataKDT, info)
+	}
+
+	if err == nil {
+		key, err = e.getKeyCacheByKeyid(MetadataKDT, keyID)
+		return &key, err
+	}
+
+	return nil, err
 }
 
 func (e *EncryptionMgr) getEncryptionKeysMetadataCb() (*EncrKeysInfo, error) {
