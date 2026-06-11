@@ -5793,8 +5793,13 @@ func (s *statsManager) handleEncryptionDropKey(cmd Message) {
 		// Scenario 2: Decrypt back to plaintext
 		persistErr = s.decryptAndPersistStats(fp, kdt)
 	case activeEarKey.Id != "" && len(dropKeyIds) > 0:
-		// Scenario 3: Re-encrypt from old key(s) to new key
-		persistErr = s.reencryptAndPersistStats(fp, activeEarKey, kdt)
+		// Scenario 3: Re-encrypt from old key(s) to new key.
+		isEncrypted, checkErr := IsFileEncrypted(fp.filePath)
+		if checkErr == nil && !isEncrypted {
+			persistErr = s.encryptAndPersistStats(fp, activeEarKey, kdt)
+		} else {
+			persistErr = s.reencryptAndPersistStats(fp, activeEarKey, kdt)
+		}
 	}
 
 	if persistErr != nil {
