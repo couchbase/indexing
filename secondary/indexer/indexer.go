@@ -11661,14 +11661,19 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	}
 
 	partitionId := partnInst.Defn.GetPartitionId()
-	relPath := IndexPath2(indInst, partitionId, id)
-	if testcode.UseOldIndexPath(conf) {
+
+	var relPath string
+
+	if c.GetStorageMode() == c.FORESTDB || testcode.UseOldIndexPath(conf) {
 		relPath = IndexPath(indInst, partitionId, id)
-		logging.Infof("testcode: using old index path %v for index - %v", relPath, indInst.DisplayName())
+		logging.Infof("NewSlice: using old index path %v for index - %v", relPath, indInst.DisplayName())
 		// Disable all encryption callbacks: path-based key lookups do not understand
 		// old-format paths, and v1-compat nodes are never encrypted in test scenarios.
 		sliceEncryptionCallbacks = nopSliceEncryptionCallbacks()
+	} else {
+		relPath = IndexPath2(indInst, partitionId, id)
 	}
+
 	path := filepath.Join(storeEngineDir, relPath)
 	numPartitions := indInst.Pc.GetNumPartitions()
 	instId := GetRealIndexInstId(indInst)
