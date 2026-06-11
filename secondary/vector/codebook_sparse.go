@@ -502,6 +502,44 @@ func (cb *codebookSparse) Transpose(q []float32, s []float32, result []float32) 
 	return keep
 }
 
+// TransposeQuantized is Transpose for a scalar-quantized document vector. The
+// query q is float32 concise; encoded is a common.QuantizedSparseVector packed
+// buffer. Matched doc weights are dequantized (code * per-vector scale) into
+// result, aligned to query term positions. Returns true if any term matched.
+//
+// Both query dims and the quantized doc indices must be ascending, matching
+// the invariant the float32 Transpose relies on. Doc indices are uint16; query
+// dims (integer-valued float32) are narrowed to uint16 for comparison, valid
+// because the vocabulary fits uint16.
+func (cb *codebookSparse) TransposeQuantized(q []float32, encoded []byte, result []float32) bool {
+	nqdim := int(q[0])   // #dim query
+	qd := q[1 : 1+nqdim] // query dims
+
+	doc := common.QuantizedSparseVector(encoded)
+	ndim := doc.NNZ() // #dim vec
+	scale := doc.Scale()
+
+	i := 0 // query dim pos
+	j := 0 // data dim pos
+
+	keep := false
+	for ; i < nqdim; i++ {
+		qdim := uint16(qd[i])
+		for ; j < ndim && qdim > doc.IndexAt(j); j++ { // fast forward when query dim > vector dim
+		}
+
+		if j < ndim && qdim == doc.IndexAt(j) { // dimension matches
+			result[i] = scale * float32(doc.CodeAt(j))
+			j++
+			keep = true // at least 1 dim matches
+		} else {
+			result[i] = 0
+		}
+	}
+
+	return keep
+}
+
 // Not implemented for Sparse
 func (cb *codebookSparse) CodeSize() (int, error) {
 

@@ -5147,6 +5147,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.vector.sparse.quantizeStorage": ConfigValue{
+		true,
+		"Store sparse vectors scalar-quantized (uint8 weights + per-vector scale, uint16 dims) instead of float32 concise. ~62% smaller. plasma-only; must be set consistently across the index's insert and scan lifetime (no mixed-format support).",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.vector.sparse.histogramL1Retention": ConfigValue{
 		0.0,
 		"Target fraction of training-set L1 weight mass to retain when deriving the sparse prune threshold from the training histogram. Read at training time only — changing post-training has no effect until retraining. 0 disables histogram-based pruning. 0.98 is a good starting point.",

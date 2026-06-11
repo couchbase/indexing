@@ -560,6 +560,10 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 		w.sparseQueryValues = qvec.Values()
 	}
 
+	// Whether stored vectors are scalar-quantized. Must match the format the
+	// inserter wrote (no mixed-format support); operator owns consistency.
+	quantizeStorage := w.config["vector.sparse.quantizeStorage"].Bool()
+
 	// A batch may mix two kinds of rows:
 	//   - Rows carrying a valid stored (quantized) search distance produced by
 	//     the graph search (row.distValid). Their on-disk payload may have been
@@ -639,7 +643,27 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 			result[j] = 0
 		}
 
-		keep := sparseCb.Transpose([]float32(qvec), []float32(concise), result)
+		var keep bool
+		if quantizeStorage {
+			// Quantized format: validate length against the encoded NNZ, then
+			// dequantize matched terms in place (no float32 materialization).
+			qsv := common.QuantizedSparseVector(valBytes)
+			if len(valBytes) < qsv.Size() {
+				return fmt.Errorf("quantized sparse vector size %d less than expected %d for %d elements",
+					len(valBytes), qsv.Size(), qsv.NNZ())
+			}
+			keep = sparseCb.TransposeQuantized([]float32(qvec), valBytes, result)
+		} else {
+			// Zero-copy reinterpret the raw bytes as ConciseSparseVector and use NNZ() to decode N.
+			concise := common.ConciseSparseVector(ByteSliceToFloat32(valBytes))
+			nnz := concise.NNZ()
+			expectedSize := 4 * concise.Size() // Size() returns element count; bytes = 4 * elements
+			if len(valBytes) < expectedSize {
+				return fmt.Errorf("sparse vector size %d less than expected %d for %d elements",
+					len(valBytes), expectedSize, nnz)
+			}
+			keep = sparseCb.Transpose([]float32(qvec), []float32(concise), result)
+		}
 		if !keep {
 			// No matching terms between query and document vector - skip this document
 			row.free() // Return row to pool to prevent pool exhaustion

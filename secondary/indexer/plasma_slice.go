@@ -238,6 +238,9 @@ type plasmaSlice struct {
 	// For Sparse vector index, scratch buffer per writer used for
 	// threshold-pruned concise vector when indexer.vector.sparse.minAbsWeight > 0.
 	sparseThreshBuf [][]float32
+	// For Sparse vector index, scratch buffer per writer used to hold the
+	// scalar-quantized payload when indexer.vector.sparse.quantizeStorage is on.
+	sparseQuantBuf [][]byte
 	// Cached prune threshold derived from the sparse codebook's training-time
 	// weight histogram. Refreshed whenever the codebook is trained or loaded.
 	// At insert time, max(operator-set minAbsWeight, cachedSparseDerivedTau)
@@ -2376,6 +2379,7 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 			mdb.confLock.RLock()
 			maxNNZ := mdb.sysconf["vector.sparse.maxNNZ"].Int()
 			minAbsWeight := float32(mdb.sysconf["vector.sparse.minAbsWeight"].Float64())
+			quantizeStorage := mdb.sysconf["vector.sparse.quantizeStorage"].Bool()
 			mdb.confLock.RUnlock()
 			// The codebook's training-time derived τ is honored as an
 			// additional floor. Operator setting can only tighten it further.
@@ -2390,13 +2394,25 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 				mdb.sparseTruncBuf[workerId] = truncated
 				vec = truncated
 			}
-			quantizedCodeOrConciseVec = Float32ToByteSlice(vec)
-			mdb.sparseJLBuf[workerId] = resizeSparseJLBuf(
-				mdb.sparseJLBuf[workerId],
-				mdb.codebook.Dimension(),
-				true)
-			if _, err = mdb.getSparseJLVec(vec, mdb.sparseJLBuf[workerId]); err == nil {
-				centroidId, err = mdb.getNearestCentroidId(mdb.sparseJLBuf[workerId])
+			// Storage payload. Centroid assignment below always runs on the
+			// float32 `vec`; quantization affects only the stored bytes.
+			if quantizeStorage {
+				var encoded []byte
+				if encoded, err = common.EncodeQuantizedSparse(vec, mdb.sparseQuantBuf[workerId]); err == nil {
+					mdb.sparseQuantBuf[workerId] = encoded
+					quantizedCodeOrConciseVec = encoded
+				}
+			} else {
+				quantizedCodeOrConciseVec = Float32ToByteSlice(vec)
+			}
+			if err == nil {
+				mdb.sparseJLBuf[workerId] = resizeSparseJLBuf(
+					mdb.sparseJLBuf[workerId],
+					mdb.codebook.Dimension(),
+					true)
+				if _, err = mdb.getSparseJLVec(vec, mdb.sparseJLBuf[workerId]); err == nil {
+					centroidId, err = mdb.getNearestCentroidId(mdb.sparseJLBuf[workerId])
+				}
 			}
 		}
 
@@ -5606,6 +5622,7 @@ func (slice *plasmaSlice) setupWriters() {
 		slice.sparseJLBuf = make([][]float32, 0, slice.maxNumWriters)
 		slice.sparseTruncBuf = make([][]float32, 0, slice.maxNumWriters)
 		slice.sparseThreshBuf = make([][]float32, 0, slice.maxNumWriters)
+		slice.sparseQuantBuf = make([][]byte, 0, slice.maxNumWriters)
 	}
 
 	// initialize comand handler
@@ -5648,11 +5665,13 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 		slice.sparseJLBuf = slice.sparseJLBuf[:numWriters]
 		slice.sparseTruncBuf = slice.sparseTruncBuf[:numWriters]
 		slice.sparseThreshBuf = slice.sparseThreshBuf[:numWriters]
+		slice.sparseQuantBuf = slice.sparseQuantBuf[:numWriters]
 		for i := curNumWriters; i < numWriters; i++ {
 			// After training is completed, the sparse JL vector buffer will be resized
 			slice.sparseJLBuf[i] = make([]float32, 0)
 			slice.sparseTruncBuf[i] = nil
 			slice.sparseThreshBuf[i] = nil
+			slice.sparseQuantBuf[i] = nil
 		}
 	}
 
