@@ -4,6 +4,7 @@ package common
 
 import (
 	"bytes"
+	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -106,21 +107,23 @@ func (h *LogStatsFileHandler) Open(fileName string) (logstats.SyncWriteCloser, i
 	return f, int(fi.Size()), nil
 }
 
-// Rotate shifts backup files and opens a fresh active file. If getKey returns
-// a non-empty key the new file is encrypted; otherwise it is plain text.
+// Rotate shifts backup files and opens a fresh active file. The outgoing
+// active file is gzip-compressed if it is plaintext, left as-is if encrypted.
+// The new active file is encrypted when getKey returns a non-empty key.
 func (h *LogStatsFileHandler) Rotate(fileName string, numFiles int) (logstats.SyncWriteCloser, int, error) {
 	if h.getKey == nil {
 		return nil, 0, fmt.Errorf("LogStatsFileHandler.Rotate: getKey callback is nil")
 	}
 	keyID, key := h.getKey()
 
-	if len(key) == 0 {
-		return logstats.RotateLogFile(fileName, numFiles, false)
-	}
-
-	f, _, err := logstats.RotateLogFile(fileName, numFiles, false)
+	compressOutgoing := !IsStatsLogActiveFileEncrypted(fileName)
+	f, _, err := logstats.RotateLogFile(fileName, numFiles, compressOutgoing)
 	if err != nil {
 		return nil, 0, fmt.Errorf("LogStatsFileHandler.Rotate: %w", err)
+	}
+
+	if len(key) == 0 {
+		return f, 0, nil
 	}
 
 	w, err := cbcrypto.NewCBCWriter(f, cbcrypto.WriterOptions{
@@ -190,7 +193,17 @@ func ReencryptStatsLogFiles(
 
 	provider := statsLogKeyProvider(getKeyCipher)
 	for _, path := range rotated {
-		if strings.HasSuffix(path, ".tmp") || strings.HasSuffix(path, ".gz") {
+		if strings.HasSuffix(path, ".tmp") {
+			continue
+		}
+		if strings.HasSuffix(path, ".gz") {
+			if !dropSet[""] {
+				continue
+			}
+			if err := encryptCompressedStatsFile(path, newKeyID, newKey); err != nil {
+				logging.Errorf("common::ReencryptStatsLogFiles %q: %v", path, err)
+				return err
+			}
 			continue
 		}
 		if err := reencryptFileIfNeeded(path, dropSet, newKeyID, newKey, provider); err != nil {
@@ -263,7 +276,7 @@ func reencryptFileIfNeeded(
 		if !dropSet[""] {
 			return nil
 		}
-		tmp := path + ".reenc.tmp"
+		tmp := path + ".enc.tmp"
 		if err := encryptPlaintextStatsFile(path, tmp, newKeyID, newKey); err != nil {
 			os.Remove(tmp)
 			return fmt.Errorf("encrypt plaintext: %w", err)
@@ -275,7 +288,7 @@ func reencryptFileIfNeeded(
 		return nil
 	}
 
-	tmp := path + ".reenc.tmp"
+	tmp := path + ".enc.tmp"
 	if err := reencryptStatsFile(path, tmp, provider, newKeyID, newKey); err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("transcrypt: %w", err)
@@ -294,16 +307,21 @@ func decryptFileIfNeeded(path string, dropSet map[string]bool, provider cbcrypto
 	if !dropSet[keyID] {
 		return nil
 	}
-	tmp := path + ".dec.tmp"
-	if err := decryptStatsFile(path, tmp, provider); err != nil {
-		os.Remove(tmp)
+
+	gzTmp := path + ".gz.tmp"
+	gzPath := path + ".gz"
+
+	if err := decryptAndCompressTo(path, gzTmp, provider); err != nil {
+		os.Remove(gzTmp)
 		return fmt.Errorf("decrypt: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+
+	if err := os.Rename(gzTmp, gzPath); err != nil {
+		os.Remove(gzTmp)
 		return err
 	}
-	return nil
+
+	return os.Remove(path)
 }
 
 func encryptPlaintextStatsFile(src, dst, newKeyID string, newKey []byte) error {
@@ -398,27 +416,102 @@ func reencryptStatsFile(src, dst string, provider cbcrypto.KeyProvider, newKeyID
 	return dstF.Close()
 }
 
-func decryptStatsFile(src, dst string, provider cbcrypto.KeyProvider) error {
+// decryptAndCompressTo streams src through cbcrypto decrypt then gzip into dst.
+func decryptAndCompressTo(src, dst string, provider cbcrypto.KeyProvider) error {
 	srcF, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer srcF.Close()
 
-	dstF, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	r, err := cbcrypto.NewReader(srcF, provider)
+	if err != nil {
+		return fmt.Errorf("NewReader: %w", err)
+	}
+
+	dstF, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
 
-	r, err := cbcrypto.NewReader(srcF, provider)
-	if err != nil {
-		dstF.Close()
-		return fmt.Errorf("NewReader: %w", err)
-	}
-
-	if _, err := io.Copy(dstF, r); err != nil {
+	w := gzip.NewWriter(dstF)
+	if _, err := io.Copy(w, r); err != nil {
 		dstF.Close()
 		return fmt.Errorf("copy: %w", err)
 	}
+	if err := w.Close(); err != nil {
+		dstF.Close()
+		return err
+	}
 	return dstF.Close()
+}
+
+// decompressAndEncryptTo streams src through gzip decompress then cbcrypto encrypt into dst.
+// No plaintext intermediate is written to disk.
+func decompressAndEncryptTo(src, dst, keyID string, key []byte) error {
+	srcF, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcF.Close()
+
+	gr, err := gzip.NewReader(srcF)
+	if err != nil {
+		return fmt.Errorf("gzip.NewReader: %w", err)
+	}
+	defer gr.Close()
+
+	dstF, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+
+	w, err := cbcrypto.NewCBCWriter(dstF, cbcrypto.WriterOptions{
+		KeyID:         keyID,
+		Key:           key,
+		KeyDerivation: cbcrypto.KeyBasedKDF,
+		Compression:   cbcrypto.None,
+	})
+	if err != nil {
+		dstF.Close()
+		return fmt.Errorf("NewCBCWriter: %w", err)
+	}
+
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := gr.Read(buf)
+		if n > 0 {
+			if err := w.AppendChunk(bytes.NewReader(buf[:n])); err != nil {
+				dstF.Close()
+				return fmt.Errorf("AppendChunk: %w", err)
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			dstF.Close()
+			return fmt.Errorf("read: %w", readErr)
+		}
+	}
+	return dstF.Close()
+}
+
+// encryptCompressedStatsFile decompresses a .gz plaintext file, encrypts it,
+// saves the result as the plain path, and removes the original .gz.
+func encryptCompressedStatsFile(gzPath, newKeyID string, newKey []byte) error {
+	plainPath := gzPath[:len(gzPath)-3] // strip .gz
+	encTmp := plainPath + ".enc.tmp"
+
+	if err := decompressAndEncryptTo(gzPath, encTmp, newKeyID, newKey); err != nil {
+		os.Remove(encTmp)
+		return err
+	}
+
+	if err := os.Rename(encTmp, plainPath); err != nil {
+		os.Remove(encTmp)
+		return err
+	}
+
+	return os.Remove(gzPath)
 }
