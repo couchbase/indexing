@@ -4036,9 +4036,10 @@ func getProgressForToken(statusResp *IndexStatusResponse, ttid string, token *c.
 	}
 }
 
-// computeProgress calculate progress considering Dcp Rebal tokens
+// computeProgress calculates shard-local progress. getCurrentTotalProgress applies
+// shard/DCP ratios while reporting aggregate rebalance progress.
 func (sr *ShardRebalancer) computeProgress() float64 {
-	return sr.shardProgressRatio * sr.computeShardProgress()
+	return sr.computeShardProgress()
 }
 
 // computeShardProgress only computes the progress of the shard tokens
