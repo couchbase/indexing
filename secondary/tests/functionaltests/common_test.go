@@ -425,7 +425,7 @@ func verifyDeletedPath(Pth string) error {
 	var err error
 	_, errStat := os.Stat(Pth)
 	if errStat == nil {
-		err = errors.New("os.Stat was successful for deleted directory")
+		err = fmt.Errorf("os.Stat was successful for deleted directory %v", Pth)
 		return err
 	}
 
@@ -460,9 +460,9 @@ func forceKillMemcacheD() {
 
 func forceKillIndexer() {
 	// restart the indexer
-	fmt.Println("Restarting indexer process ...")
+	fmt.Println("Restarting indexer process (sleeping for 30s) ...")
 	tc.KillIndexer()
-	time.Sleep(20 * time.Second)
+	time.Sleep(30 * time.Second)
 }
 
 func restful_clonebody(src map[string]interface{}) map[string]interface{} {
@@ -1366,11 +1366,24 @@ func scanIndexReplicas2(index, bucket, scope, collection string, replicaIds []in
 
 // index name is expected to be a full name (eg "<index name> (replica <replica id>)")
 func waitForIndexActive(bucket, index string, t *testing.T) {
-	deadline := time.After(time.Duration(3) * time.Minute)
+	dur := (time.Duration(3) * time.Minute)
+	waitForIndexActiveWithTimeout(bucket, index, dur, t)
+}
+
+// when creating replicated index, if the req is only for one of the instances to go active,
+// use this func instead of waitForIndexNameActive
+func waitForIndexNameActive(bucket, index string, t *testing.T) {
+	dur := time.Duration(3) * time.Minute
+	waitForIndexNameActiveWithTimeout(bucket, index, dur, t)
+}
+
+// index name is expected to be a full name (eg "<index name> (replica <replica id>)")
+func waitForIndexActiveWithTimeout(bucket, index string, dur time.Duration, t *testing.T) {
+	deadline := time.After(dur)
 	for {
 		select {
 		case <-deadline:
-			t.Fatalf("Index did not become active after 3 minutes")
+			t.Fatalf("Index did not become active after %v", dur.String())
 		default:
 			status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
 			if status != nil && err == nil {
@@ -1397,12 +1410,12 @@ func waitForIndexActive(bucket, index string, t *testing.T) {
 
 // when creating replicated index, if the req is only for one of the instances to go active,
 // use this func instead of waitForIndexNameActive
-func waitForIndexNameActive(bucket, index string, t *testing.T) {
-	deadline := time.After(time.Duration(3) * time.Minute)
+func waitForIndexNameActiveWithTimeout(bucket, index string, dur time.Duration, t *testing.T) {
+	deadline := time.After(dur)
 	for {
 		select {
 		case <-deadline:
-			t.Fatalf("Index did not become active after 3 minutes")
+			t.Fatalf("Index did not become active after %v", dur.String())
 		default:
 			status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
 			if status != nil && err == nil {

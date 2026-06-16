@@ -10,6 +10,7 @@ package common
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/couchbase/cbauth"
 )
@@ -32,11 +33,10 @@ func (CbauthEaRKeyProvider) FetchKeys(ctx context.Context, kdt KeyDataType) (*En
 	if info, err := cbauth.GetEncryptionKeys(kdt); err == nil {
 		return info, nil
 	}
-	// ENCRYPT_TODO: enable once projector is enabled in ns_server
-	// info, err := cbauth.GetEncryptionKeysBlocking(ctx, kdt)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("EaR key fetch failed with err: %w", err)
-	// }
-	// return info, nil
-	return nil, nil
+
+	info, err := cbauth.GetEncryptionKeysBlocking(ctx, kdt)
+	if err != nil {
+		return nil, fmt.Errorf("EaR key fetch failed with err: %w", err)
+	}
+	return info, nil
 }

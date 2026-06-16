@@ -95,8 +95,12 @@ func TestIdxCorruptBasicSanityMultipleIndices(t *testing.T) {
 	instId := instIds[0]
 
 	var slicePath string
-	slicePath, err = tc.GetIndexSlicePath2(defaultBucketUUID, instId, absIndexStorageDir, 0)
-	FailTestIfError(err, "Error in GetIndexSlicePath2", t)
+	if clusterconfig.IndexUsing == "forestdb" {
+		slicePath, err = tc.GetIndexSlicePath("corrupt_idx1_age", "default", absIndexStorageDir, 0)
+	} else {
+		slicePath, err = tc.GetIndexSlicePath2(defaultBucketUUID, instId, absIndexStorageDir, 0)
+	}
+	FailTestIfError(err, "Error in GetIndexSlicePath", t)
 
 	// Step 2: Corrupt one of them (corrupt_idx1_age)
 	err = secondaryindex.CorruptIndex("corrupt_idx1_age", "default", defaultBucketUUID, absIndexStorageDir,
@@ -342,6 +346,9 @@ func TestIdxCorruptPartitionedIndex(t *testing.T) {
 	// Step 3: Restart indexer process and wait for some time.
 	forceKillIndexer()
 
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	FailTestIfError(err, "Error in WaitForIndexerActive", t)
+
 	// Step 4: Ideally, point Query on non corrupted index partitions should succeed.
 	//         But, as of now, the index is treated as unavailable if one partition is unavailable.
 	//         So, the query will fail.
@@ -357,6 +364,9 @@ func TestIdxCorruptPartitionedIndex(t *testing.T) {
 
 	// Step 5: Restart indexer process again
 	forceKillIndexer()
+
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	FailTestIfError(err, "Error in WaitForIndexerActive", t)
 
 	// Step 6: Try the query again. Expect the same result.
 	_, err = secondaryindex.Range("corrupt_idx3_age", "default", indexScanAddress,
@@ -380,6 +390,9 @@ func TestIdxCorruptPartitionedIndex(t *testing.T) {
 
 	// Step 8: Restart indexer process and wait for some time.
 	forceKillIndexer()
+
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	FailTestIfError(err, "Error in WaitForIndexerActive", t)
 
 	// Step 9: Query on the index should return error
 	_, err = secondaryindex.Range("corrupt_idx3_age", "default", indexScanAddress,
@@ -472,6 +485,9 @@ func TestIdxCorruptMOITwoSnapsOneCorrupt(t *testing.T) {
 	// Step 4: Restart indexer process and wait for some time.
 	forceKillIndexer()
 
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	FailTestIfError(err, "Error in WaitForIndexerActive", t)
+
 	// Step 5: Query on the index should not fail.
 	_, errRange := secondaryindex.Range("corrupt_idx4_age", "default", indexScanAddress, []interface{}{35},
 		[]interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
@@ -483,6 +499,9 @@ func TestIdxCorruptMOITwoSnapsOneCorrupt(t *testing.T) {
 
 	// Step 7: Kill indexer
 	forceKillIndexer()
+
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	FailTestIfError(err, "Error in WaitForIndexerActive", t)
 
 	// Step 8: Same query on the index should not fail after restart.
 	_, errRange1 := secondaryindex.Range("corrupt_idx4_age", "default", indexScanAddress, []interface{}{35},
@@ -577,6 +596,9 @@ func TestIdxCorruptMOITwoSnapsBothCorrupt(t *testing.T) {
 	// Step 4: Restart indexer process and wait for some time.
 	forceKillIndexer()
 
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	FailTestIfError(err, "Error in WaitForIndexerActive", t)
+
 	// Verify both snapshot paths are deleted
 	for i := 0; i < len(allSnapshots); i++ {
 		err = verifyDeletedPath(allSnapshots[i].DataPath)
@@ -641,9 +663,12 @@ func TestIdxCorruptBackup(t *testing.T) {
 	instId := instIds[0]
 
 	var slicePath string
-	slicePath, err = tc.GetIndexSlicePath2(defaultBucketUUID,
-		instId, absIndexStorageDir, c.PartitionId(0))
-	FailTestIfError(err, "Error in GetIndexSlicePath2", t)
+	if clusterconfig.IndexUsing == "forestdb" {
+		slicePath, err = tc.GetIndexSlicePath("corrupt_idx6_age", "default", absIndexStorageDir, c.PartitionId(0))
+	} else {
+		slicePath, err = tc.GetIndexSlicePath2(defaultBucketUUID, instId, absIndexStorageDir, c.PartitionId(0))
+	}
+	FailTestIfError(err, "Error in GetIndexSlicePath", t)
 
 	// Step 2: Corrupt the index corrupt_idx6_age partition 0
 	err = secondaryindex.CorruptIndex("corrupt_idx6_age", "default", defaultBucketUUID, absIndexStorageDir,
@@ -654,6 +679,9 @@ func TestIdxCorruptBackup(t *testing.T) {
 
 	// Step 3: Restart indexer process and wait for some time.
 	forceKillIndexer()
+
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+	FailTestIfError(err, "Error in WaitForIndexerActive", t)
 
 	// Step 4: Verify that partition is cleaned up
 	err = verifyDeletedPath(slicePath)

@@ -896,7 +896,7 @@ func MakeHTTPServer(addr string) (*http.Server, error) {
 
 func GetLocalHost() string {
 	if IsIpv6() {
-		return "[::1]"
+		return "::1"
 	} else {
 		return "127.0.0.1"
 	}
