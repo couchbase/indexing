@@ -10512,7 +10512,13 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 
 	partnDefnList := inst.Pc.GetAllPartitions()
 	for _, partnDefn := range partnDefnList {
-		path := filepath.Join(engineDir, IndexPath2(inst, partnDefn.GetPartitionId(), SliceId(0)))
+		var relPath string
+		if storageMode == common.FORESTDB {
+			relPath = IndexPath(inst, partnDefn.GetPartitionId(), SliceId(0))
+		} else {
+			relPath = IndexPath2(inst, partnDefn.GetPartitionId(), SliceId(0))
+		}
+		path := filepath.Join(engineDir, relPath)
 		if err := DestroySlice(storageMode, storage_dir, path); err != nil {
 			common.CrashOnError(err)
 		}
@@ -10821,8 +10827,15 @@ func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceI
 func (idx *indexer) forceCleanupPartitionData(inst *common.IndexInst, partitionId common.PartitionId, sliceId SliceId) error {
 
 	_, storeEngineDir := c.GetStorageDirs(idx.config, c.GetStorageEngineForIndexDefn(&inst.Defn))
-	path := filepath.Join(storeEngineDir, IndexPath2(inst, partitionId, sliceId))
-	return DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), storeEngineDir, path)
+	storageMode := common.IndexTypeToStorageMode(inst.Defn.Using)
+	var relPath string
+	if storageMode == common.FORESTDB {
+		relPath = IndexPath(inst, partitionId, sliceId)
+	} else {
+		relPath = IndexPath2(inst, partitionId, sliceId)
+	}
+	path := filepath.Join(storeEngineDir, relPath)
+	return DestroySlice(storageMode, storeEngineDir, path)
 }
 
 // On warmup, if an index is found in MAINT_STREAM and state INITIAL
@@ -11833,7 +11846,7 @@ func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId com
 
 	switch mode {
 	case common.MOI, common.FORESTDB, common.NOT_SET:
-		return moveIndexFile(indexInst, partnId, sliceId, sourceDir, targetDir)
+		return moveIndexFile(indexInst, partnId, sliceId, sourceDir, targetDir, mode)
 	case common.PLASMA:
 		indexPath := IndexPath2(indexInst, partnId, sliceId)
 		srcPath := filepath.Join(sourceDir, indexPath)
@@ -11845,8 +11858,16 @@ func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId com
 	return fmt.Errorf("unable to move instance : unrecognized storage type %v", mode)
 }
 
-func moveIndexFile(indexInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId, sourceDir string, targetDir string) error {
-	indexPath := IndexPath2(indexInst, partnId, sliceId)
+func moveIndexFile(indexInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId,
+	sourceDir, targetDir string, mode common.StorageMode,
+) error {
+
+	var indexPath string
+	if mode == common.FORESTDB {
+		indexPath = IndexPath(indexInst, partnId, sliceId)
+	} else {
+		indexPath = IndexPath2(indexInst, partnId, sliceId)
+	}
 	srcPath := filepath.Join(sourceDir, indexPath)
 
 	if err := deleteOldBackups(targetDir, sourceDir, srcPath); err != nil {
