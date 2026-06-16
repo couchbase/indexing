@@ -10,6 +10,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/couchbase/bhive"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -591,20 +592,34 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 			continue
 		}
 
-		// No stored distance: decode the sparse vector and term-match it
-		// against the query.
-		valBytes := row.value
-		if len(valBytes) < 4 {
-			return errors.New("sparse vector too short")
-		}
+		var concise common.ConciseSparseVector
+		if !w.r.IndexInst.Defn.IsBhive() {
+			// No stored distance: decode the sparse vector and term-match it
+			// against the query.
+			valBytes := row.value
+			if len(valBytes) < 4 {
+				return errors.New("sparse vector too short")
+			}
 
-		// Zero-copy reinterpret the raw bytes as ConciseSparseVector and use NNZ() to decode N.
-		concise := common.ConciseSparseVector(ByteSliceToFloat32(valBytes))
-		nnz := concise.NNZ()
-		expectedSize := 4 * concise.Size() // Size() returns element count; bytes = 4 * elements
-		if len(valBytes) < expectedSize {
-			return fmt.Errorf("sparse vector size %d less than expected %d for %d elements",
-				len(valBytes), expectedSize, nnz)
+			// Zero-copy reinterpret the raw bytes as ConciseSparseVector and use NNZ() to decode N.
+			concise = common.ConciseSparseVector(ByteSliceToFloat32(valBytes))
+			nnz := concise.NNZ()
+			expectedSize := 4 * concise.Size() // Size() returns element count; bytes = 4 * elements
+			if len(valBytes) < expectedSize {
+				return fmt.Errorf("sparse vector size %d less than expected %d for %d elements",
+					len(valBytes), expectedSize, nnz)
+			}
+		} else {
+			// No stored distance: these rows bypassed the graph search (flush
+			// buffer / disk), so term-match them against the query here. row.value
+			// holds the QUANTIZED sparse wire (the full vector is dropped);
+			// dequantize it to the concise full-wire form Transpose/ComputeDistance
+			// expect. A nil result means a malformed/truncated wire; an empty vector
+			// decodes to [count=0], which Transpose simply finds no match for.
+			concise = common.ConciseSparseVector(bhive.DequantizeSparseWire(row.value))
+			if len(concise) == 0 {
+				return fmt.Errorf("sparse vector: malformed quantized wire (len %d)", len(row.value))
+			}
 		}
 
 		result := w.fvecs[computeCount*queryDim : (computeCount+1)*queryDim]
@@ -981,7 +996,7 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 	// the quantized code.
 	var includeColumn []byte
 	if w.r.IsSparseVectorIndexScan() {
-		vecSize := sparseVectorSizeFromMeta(meta)
+		vecSize := w.sparseVectorSizeFromMeta(meta)
 		includeColumn = meta[vecSize:]
 	} else {
 		includeColumn = meta[w.codeSize:]
@@ -1028,7 +1043,7 @@ func (w *ScanWorker) inlineFilterCb2(meta []byte, docid []byte) (bool, error) {
 
 	var includeColumn []byte
 	if w.r.IsSparseVectorIndexScan() {
-		vecSize := sparseVectorSizeFromMeta(meta)
+		vecSize := w.sparseVectorSizeFromMeta(meta)
 		includeColumn = meta[vecSize:]
 	} else {
 		includeColumn = meta[w.codeSize:]
@@ -1101,7 +1116,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	if w.r.IsSparseVectorIndexScan() {
 		// For sparse vectors, codeSize is 0. The meta contains:
 		// [sparse_vector_bytes | include_column_bytes]
-		vecSize := sparseVectorSizeFromMeta(meta)
+		vecSize := w.sparseVectorSizeFromMeta(meta)
 		if vecSize == 0 && len(meta) > 0 {
 			logging.Fatalf("ScanWorker::bhiveIteratorCallback invalid sparse vector in meta."+
 				"meta len: %v, docid: %v for indexInst: %v, partnId: %v, cid: %v, storeId: %v, recordId: %v vector size: %v",
@@ -2545,6 +2560,27 @@ func (q *AtomicRowBuffer) Get() *Row {
 			atomic.AddInt64(&q.count, 1)
 		}
 	}
+}
+
+func (w *ScanWorker) sparseVectorSizeFromMeta(meta []byte) int {
+	if w.r.IndexInst.Defn.IsBhive() {
+		return sparseVectorSizeFromBhive(meta)
+	}
+
+	return sparseVectorSizeFromMeta(meta)
+}
+
+// sparseVectorSizeFromBhive returns the number of bytes occupied by the quantized
+// sparse vector at the beginning of a record's meta. The vector is stored in the
+// bhive quantized wire format (QuantizeSparseVectorTo); its self-describing
+// header gives the wire length, and the include columns follow it. Returns 0 if
+// the buffer is too small or the decoded size exceeds the meta.
+func sparseVectorSizeFromBhive(meta []byte) int {
+	size := bhive.QuantizedWireSize(meta)
+	if size == 0 || size > len(meta) {
+		return 0
+	}
+	return size
 }
 
 // sparseVectorSizeFromMeta returns the number of bytes occupied by a sparse

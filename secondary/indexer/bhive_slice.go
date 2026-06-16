@@ -1327,7 +1327,10 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 	if !isSparseVector {
 		metaVecLen = mdb.codeSize
 	} else {
-		metaVecLen = 4 * len(vec)
+		// Store the QUANTIZED sparse vector (its L2 norm is carried in the
+		// quantized header) in meta; the graph build consumes it directly.
+		// The full vector is not persisted for sparse (re-rank is not enabled).
+		metaVecLen = bhive.QuantizedSparseSize(vec)
 	}
 
 	metalen := metaVecLen + len(includeColumn)
@@ -1340,13 +1343,17 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 			metaVecLen,
 			mdb.quantizedCodeBuf[workerId])
 	} else {
-		copy(mdb.quantizedCodeBuf[workerId][:metaVecLen], ((bhive.Vector)(vec)).Bytes())
-		mdb.sparseJLBuf[workerId] = resizeSparseJLBuf(
-			mdb.sparseJLBuf[workerId],
-			mdb.codebook.Dimension(),
-			true)
-		if _, err = mdb.getSparseJLVec(vec, mdb.sparseJLBuf[workerId]); err == nil {
-			centroidId, err = mdb.getNearestCentroidId(mdb.sparseJLBuf[workerId])
+		// Quantize the sparse vector straight into meta (the quantized header
+		// carries its L2 norm); the graph build copies this wire with no full
+		// vector. On error, fall through to the shared handler below.
+		if _, err = bhive.QuantizeSparseVectorTo(vec, mdb.quantizedCodeBuf[workerId][:metaVecLen]); err == nil {
+			mdb.sparseJLBuf[workerId] = resizeSparseJLBuf(
+				mdb.sparseJLBuf[workerId],
+				mdb.codebook.Dimension(),
+				true)
+			if _, err = mdb.getSparseJLVec(vec, mdb.sparseJLBuf[workerId]); err == nil {
+				centroidId, err = mdb.getNearestCentroidId(mdb.sparseJLBuf[workerId])
+			}
 		}
 	}
 
@@ -1397,8 +1404,10 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 		binary.LittleEndian.PutUint64(cid[:], uint64(centroidId))
 
 		var v []byte
-		if mdb.persistFullVector {
-			// insert full vector into main index
+		if mdb.persistFullVector && !isSparseVector {
+			// Dense persists the full vector for re-rank. Sparse does not:
+			// re-rank is not enabled and the quantized vector already lives in
+			// meta, so the full vector is dropped (not stored in the vstore).
 			v = ((bhive.Vector)(vec)).Bytes()
 		}
 
