@@ -687,10 +687,16 @@ func addToInstRenamePath(token *common.TransferToken, index *IndexUsage, newInst
 //   - current path as old format if the ShardCompat Version is "1",
 //     else it returns the new path format;
 //   - rename path also follows the same convention as above
+//
+// Uses the type-aware shard compat version (bhive vs plasma) for both source
+// and destination so that bhive indexes are not compared against the plasma
+// version counter.
 func getRenamePath2(index *IndexUsage, newInstId common.IndexInstId) (string, string) {
+	isBhive := index.IsBhive()
+
 	var newPath string
 
-	if index.destNode.ShardCompatVersion == 1 {
+	if index.destNode.GetShardCompatVersionForIndex(isBhive) == 1 {
 		newPath = fmt.Sprintf("%v_%v_%v_%v.index",
 			index.Bucket, index.Name, newInstId, index.PartnId)
 	} else {
@@ -703,10 +709,10 @@ func getRenamePath2(index *IndexUsage, newInstId common.IndexInstId) (string, st
 	var sourceShardCompatVersion int
 	var sourceShardInstId common.IndexInstId
 	if index.initialNode != nil {
-		sourceShardCompatVersion = index.initialNode.ShardCompatVersion
+		sourceShardCompatVersion = index.initialNode.GetShardCompatVersionForIndex(isBhive)
 		sourceShardInstId = index.InstId
 	} else if index.siblingIndex.initialNode != nil {
-		sourceShardCompatVersion = index.siblingIndex.initialNode.ShardCompatVersion
+		sourceShardCompatVersion = index.siblingIndex.initialNode.GetShardCompatVersionForIndex(isBhive)
 		sourceShardInstId = index.siblingIndex.InstId
 	}
 
@@ -1271,15 +1277,21 @@ func shardMovementCompatCheck(index, realIndex *IndexUsage) bool {
 
 	// Check if destination can support the shard version of the source. If it can, then
 	// shard rebalance is possible. Otherwise, shard rebalance is not possible and DCP
-	// rebalance is used instead
+	// rebalance is used instead.
+	// Use the type-aware compat version from the source and destination nodes so that
+	// bhive and plasma shards are compared against their own independent version counters.
+	isBhive := realIndex.IsBhive()
+	destShardCompatVersion := realIndex.destNode.GetShardCompatVersionForIndex(isBhive)
 	isShardTransferCompatible := false
 	if index.initialNode != nil &&
-		realIndex.destNode.ShardCompatVersion >= index.initialNode.ShardCompatVersion &&
-		index.initialNode.ShardCompatVersion > 0 {
+		destShardCompatVersion >= index.initialNode.GetShardCompatVersionForIndex(isBhive) &&
+		index.initialNode.GetShardCompatVersionForIndex(isBhive) > 0 {
+
 		isShardTransferCompatible = true
 	} else if index.siblingIndex != nil && index.siblingIndex.initialNode != nil &&
-		realIndex.destNode.ShardCompatVersion >= index.siblingIndex.initialNode.ShardCompatVersion &&
-		index.siblingIndex.initialNode.ShardCompatVersion > 0 {
+		destShardCompatVersion >= index.siblingIndex.initialNode.GetShardCompatVersionForIndex(isBhive) &&
+		index.siblingIndex.initialNode.GetShardCompatVersionForIndex(isBhive) > 0 {
+
 		isShardTransferCompatible = true
 	}
 
@@ -1465,9 +1477,11 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 					var isReplicaRepair = (realIndex.siblingIndex != nil &&
 						token.TransferMode == common.TokenTransferModeCopy)
 
+					isBhiveProxy := index.IsProxyForBhive()
 					var isShardCompatUpgrade = token.TransferMode == common.TokenTransferModeMove &&
 						index.initialNode != nil && // upgrade rename
-						index.initialNode.ShardCompatVersion < index.destNode.ShardCompatVersion
+						index.initialNode.GetShardCompatVersionForIndex(isBhiveProxy) <
+							index.destNode.GetShardCompatVersionForIndex(isBhiveProxy)
 
 					if isReplicaRepair || isShardCompatUpgrade {
 						// set InstRenameMap in the root token itself

@@ -978,6 +978,9 @@ type IndexerStats struct {
 	// Plasma shard version
 	ShardCompatVersion stats.Int64Val
 
+	// Bhive shard version (bhive and plasma maintain independent shard compat versions)
+	BhiveShardCompatVersion stats.Int64Val
+
 	RebalanceTransferProgress *MapHolder
 
 	datapMaintBlockedDurHist stats.Histogram
@@ -1045,6 +1048,7 @@ func (s *IndexerStats) Init() {
 	s.numGoroutine.Init()
 	s.numCgoCall.Init()
 	s.ShardCompatVersion.Init()
+	s.BhiveShardCompatVersion.Init()
 
 	s.lastScanGatherTime.Init()
 	s.netAvgScanRate.Init()
@@ -1114,6 +1118,7 @@ func (s *IndexerStats) SetPlannerFilters() {
 	s.unitsUsedActual.AddFilter(stats.PlannerFilter)
 	s.numTenants.AddFilter(stats.PlannerFilter)
 	s.ShardCompatVersion.AddFilter(stats.PlannerFilter)
+	s.BhiveShardCompatVersion.AddFilter(stats.PlannerFilter)
 }
 
 func (s *IndexerStats) SetSummaryFilters() {
@@ -1476,6 +1481,9 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 
 	is.ShardCompatVersion.Set(int64(testcode.OverrideShardCompatVersion(GetShardCompatVersion_Plasma())))
 	statMap.AddStatValueFiltered("shard_compat_version", &is.ShardCompatVersion)
+
+	is.BhiveShardCompatVersion.Set(int64(testcode.OverrideShardCompatVersion(GetShardCompatVersion_Bhive())))
+	statMap.AddStatValueFiltered("bhive_shard_compat_version", &is.BhiveShardCompatVersion)
 
 	statMap.AddStatValueFiltered("maint_port_blocked_hist", &is.datapMaintBlockedDurHist)
 	statMap.AddStatValueFiltered("init_port_blocked_hist", &is.datapInitBlockedDurHist)

@@ -113,6 +113,10 @@ type IndexerNode struct {
 	// is at a lower version than source, then indexer is expected to do a DCP
 	// based rebalance instead of a shard transfer
 	ShardCompatVersion int
+
+	// Shard compatibility version for bhive (vector) shards, which are
+	// maintained separately from plasma shards and may evolve independently.
+	BhiveShardCompatVersion int
 }
 
 // This function creates a new indexer node
@@ -227,6 +231,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 
 	r.ShardStats = o.ShardStats
 	r.ShardCompatVersion = o.ShardCompatVersion
+	r.BhiveShardCompatVersion = o.BhiveShardCompatVersion
 
 	for i, _ := range o.Indexes {
 		r.Indexes[i] = o.Indexes[i]
@@ -245,12 +250,23 @@ func (o *IndexerNode) String() string {
 	return o.NodeId
 }
 
+// GetShardCompatVersionForIndex returns the shard compat version for the
+// storage type (bhive or plasma) used by the given index type. Bhive and
+// plasma maintain independent shard compat versions because they evolve
+// their on-disk formats independently.
+func (o *IndexerNode) GetShardCompatVersionForIndex(isBhive bool) int {
+	if isBhive {
+		return o.BhiveShardCompatVersion
+	}
+	return o.ShardCompatVersion
+}
+
 // Get the free memory and cpu usage of this node
 func (o *IndexerNode) freeUsage(s *Solution, constraint ConstraintMethod) (uint64, float64) {
 
 	freeMem := uint64(0)
 
-	if (o.GetMemTotal(s.UseLiveData()) < constraint.GetMemQuota()) {
+	if o.GetMemTotal(s.UseLiveData()) < constraint.GetMemQuota() {
 		freeMem = constraint.GetMemQuota() - o.GetMemTotal(s.UseLiveData())
 	}
 
