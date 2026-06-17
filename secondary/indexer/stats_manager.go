@@ -3522,7 +3522,7 @@ func (s *statsManager) getLogStatsKey() (string, []byte) {
 
 // NewStatsManager is the constructor for statsManager.
 func NewStatsManager(supvCmdch MsgChannel,
-	supvMsgch MsgChannel, config common.Config) (*statsManager, Message) {
+	supvMsgch MsgChannel, config common.Config, encCallbacks StatsEncryptionCallbacks) (*statsManager, Message) {
 	s := &statsManager{
 		supvCmdch:                supvCmdch,
 		supvMsgch:                supvMsgch,
@@ -3539,6 +3539,9 @@ func NewStatsManager(supvCmdch MsgChannel,
 	fileName := "stats"
 	newFileName := "stats_new"
 	s.statsPersister = NewFlatFilePersister(statsDir, chunkSz, fileName, newFileName)
+
+	encCallbacks.getLogStatsKey = s.getLogStatsKey
+	s.encCallbacks = encCallbacks
 
 	go s.run()
 	go s.runStatsDumpLogger()

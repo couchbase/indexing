@@ -596,17 +596,14 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 			return nil, res
 		}
 	}
-
-	idx.statsMgr, res = NewStatsManager(idx.statsMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	idx.statsMgr, res = NewStatsManager(idx.statsMgrCmdCh, idx.wrkrRecvCh, idx.config,
+		StatsEncryptionCallbacks{
+			getKeyCipherById: idx.encryptionMgr.getKeyCipherById,
+			setInUseKeys:     idx.encryptionMgr.SetInUseKeys,
+		})
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer statsMgr Init Error %+v", res)
 		return nil, res
-	}
-
-	idx.statsMgr.encCallbacks = StatsEncryptionCallbacks{
-		getKeyCipherById: idx.encryptionMgr.getKeyCipherById,
-		setInUseKeys:     idx.encryptionMgr.SetInUseKeys,
-		getLogStatsKey:   idx.statsMgr.getLogStatsKey,
 	}
 
 	idx.setIndexerState(common.INDEXER_BOOTSTRAP)
