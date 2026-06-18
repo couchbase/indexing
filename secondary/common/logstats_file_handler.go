@@ -109,6 +109,9 @@ func (h *LogStatsFileHandler) Open(fileName string) (logstats.SyncWriteCloser, i
 // Rotate shifts backup files and opens a fresh active file. If getKey returns
 // a non-empty key the new file is encrypted; otherwise it is plain text.
 func (h *LogStatsFileHandler) Rotate(fileName string, numFiles int) (logstats.SyncWriteCloser, int, error) {
+	if h.getKey == nil {
+		return nil, 0, fmt.Errorf("LogStatsFileHandler.Rotate: getKey callback is nil")
+	}
 	keyID, key := h.getKey()
 
 	if len(key) == 0 {

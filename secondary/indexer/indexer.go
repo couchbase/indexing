@@ -502,6 +502,12 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	logging.Infof("Indexer::NewIndexer done initializing from config")
 
+	idx.encryptionMgr, res = NewEncryptionMgr(idx.encryptionMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	if res.GetMsgType() != MSG_SUCCESS {
+		logging.Fatalf("Indexer::NewIndexer NewEncryptionMgr Init Error %+v", res)
+		return nil, res
+	}
+
 	useCInfoLite := idx.config["use_cinfo_lite"].Bool()
 	idx.cinfoProvider, err = common.NewClusterInfoProvider(useCInfoLite, clusterAddr,
 		DEFAULT_POOL, "indexer", idx.config)
@@ -566,12 +572,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
-	idx.encryptionMgr, res = NewEncryptionMgr(idx.encryptionMgrCmdCh, idx.wrkrRecvCh, idx.config)
-	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer NewEncryptionMgr Init Error %+v", res)
-		return nil, res
-	}
-
 	// Find out if there is a bootstrapStorageMode for this node.   Bootstrap storage mode is
 	// set during storage upgrade to instruct the indexer to use this storage for bootstraping
 	// indexer components.   During storage upgrade, indexer may need to restart so it
@@ -596,17 +596,14 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 			return nil, res
 		}
 	}
-
-	idx.statsMgr, res = NewStatsManager(idx.statsMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	idx.statsMgr, res = NewStatsManager(idx.statsMgrCmdCh, idx.wrkrRecvCh, idx.config,
+		StatsEncryptionCallbacks{
+			getKeyCipherById: idx.encryptionMgr.getKeyCipherById,
+			setInUseKeys:     idx.encryptionMgr.SetInUseKeys,
+		})
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer statsMgr Init Error %+v", res)
 		return nil, res
-	}
-
-	idx.statsMgr.encCallbacks = StatsEncryptionCallbacks{
-		getKeyCipherById: idx.encryptionMgr.getKeyCipherById,
-		setInUseKeys:     idx.encryptionMgr.SetInUseKeys,
-		getLogStatsKey:   idx.statsMgr.getLogStatsKey,
 	}
 
 	idx.setIndexerState(common.INDEXER_BOOTSTRAP)
