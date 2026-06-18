@@ -282,31 +282,17 @@ func set34CreateIndexes(t *testing.T, caller string, withReplica bool) {
 		FailTestIfError(err, fmt.Sprintf("%v Error creating vector index %v", caller, set34VecIndexName), t)
 		log.Printf("%v Vector index %v created (replica=%v) res %v", caller, set34VecIndexName, withReplica, res)
 
-		// Bhive vector index (IVF256) — trains successfully.
-		bhiveWith := `"dimension":128,"description":"IVF256,PQ32x8","similarity":"L2_SQUARED","defer_build":true`
-		if withReplica {
-			bhiveWith += `,"num_replica":1`
-		}
-		bhiveStmt := fmt.Sprintf(
-			`CREATE VECTOR INDEX %v ON `+"`%v`.`%v`.`%v`"+`(sift VECTOR) WITH {%v}`,
-			set34BhiveIndexName, set34Bucket, set34Scope, set34Coll, bhiveWith,
-		)
-
-		res, err = execN1QL(set34Bucket, bhiveStmt)
-		FailTestIfError(err, fmt.Sprintf("%v Error creating bhive index %v", caller, set34BhiveIndexName), t)
-		log.Printf("%v Bhive index %v created (replica=%v) with res %v", caller, set34BhiveIndexName, withReplica, res)
-
-		err = issueBuildStatement(set34Bucket, set34Scope, set34Coll, []string{set34BhiveIndexName, set34VecIndexName})
+		err = issueBuildStatement(set34Bucket, set34Scope, set34Coll, []string{set34VecIndexName})
 		FailTestIfError(err, "Error in building vector indexes", t)
 
 		var wg sync.WaitGroup
 
-		for _, name := range []string{
-			set34BhiveIndexName,
-			fmt.Sprintf("%v (replica 1)", set34BhiveIndexName),
-			set34VecIndexName,
-			fmt.Sprintf("%v (replica 1)", set34VecIndexName),
-		} {
+		idxes := []string{set34VecIndexName}
+		if withReplica {
+			idxes = append(idxes, fmt.Sprintf("%v (replica 1)", set34VecIndexName))
+		}
+
+		for _, name := range idxes {
 			wg.Add(1)
 			go func(name string) {
 				defer func() {
@@ -322,7 +308,47 @@ func set34CreateIndexes(t *testing.T, caller string, withReplica bool) {
 
 		wg.Wait()
 
-		log.Printf("%v Done with building valid vector indexes %v,%v", caller, set34VecIndexName, set34BhiveIndexName)
+		log.Printf("%v Done with building valid vector indexes %v", caller, set34VecIndexName)
+
+		// Bhive vector index (IVF256) — trains successfully.
+		bhiveWith := `"dimension":128,"description":"IVF256,PQ32x8","similarity":"L2_SQUARED","defer_build":true`
+		if withReplica {
+			bhiveWith += `,"num_replica":1`
+		}
+		bhiveStmt := fmt.Sprintf(
+			`CREATE VECTOR INDEX %v ON `+"`%v`.`%v`.`%v`"+`(sift VECTOR) WITH {%v}`,
+			set34BhiveIndexName, set34Bucket, set34Scope, set34Coll, bhiveWith,
+		)
+
+		res, err = execN1QL(set34Bucket, bhiveStmt)
+		FailTestIfError(err, fmt.Sprintf("%v Error creating bhive index %v", caller, set34BhiveIndexName), t)
+		log.Printf("%v Bhive index %v created (replica=%v) with res %v", caller, set34BhiveIndexName, withReplica, res)
+
+		err = issueBuildStatement(set34Bucket, set34Scope, set34Coll, []string{set34BhiveIndexName})
+		FailTestIfError(err, "Error in building vector indexes", t)
+
+		idxes = []string{set34BhiveIndexName}
+		if withReplica {
+			idxes = append(idxes, fmt.Sprintf("%v (replica 1)", set34BhiveIndexName))
+		}
+
+		for _, name := range idxes {
+			wg.Add(1)
+			go func(name string) {
+				defer func() {
+					e := recover()
+					wg.Done()
+					if e != nil {
+						t.Errorf("%v", e)
+					}
+				}()
+				waitForIndexActiveWithTimeout(set34Bucket, name, 15*time.Minute, t)
+			}(name)
+		}
+
+		wg.Wait()
+
+		log.Printf("%v Done with building valid vector indexes %v", caller, set34BhiveIndexName)
 
 		// Bhive vector index with intentionally failed training (IVF100000 > 10000 docs).
 		bhiveFailWith := `"dimension":128,"description":"IVF100000,PQ32x8","similarity":"L2_SQUARED","defer_build":true`

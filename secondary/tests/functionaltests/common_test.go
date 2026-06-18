@@ -460,9 +460,9 @@ func forceKillMemcacheD() {
 
 func forceKillIndexer() {
 	// restart the indexer
-	fmt.Println("Restarting indexer process (sleeping for 30s) ...")
+	fmt.Println("Restarting indexer process ...")
 	tc.KillIndexer()
-	time.Sleep(30 * time.Second)
+	time.Sleep(20 * time.Second)
 }
 
 func restful_clonebody(src map[string]interface{}) map[string]interface{} {

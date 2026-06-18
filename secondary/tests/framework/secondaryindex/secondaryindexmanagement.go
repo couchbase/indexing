@@ -753,16 +753,19 @@ func corruptMOIIndex(indexName, bucketUUID, dirPath string, instId c.IndexInstId
 	// Allow indexer to persist the checksums.json before overwriting it.
 	time.Sleep(5 * time.Second)
 
+	errs := make([]error, 0, len(allSnapshots))
+
 	for _, snapInfo := range allSnapshots {
 		fmt.Println("snapshot datapath = ", snapInfo.DataPath)
 		datadir := filepath.Join(snapInfo.DataPath, "data")
 
 		// corrupt checksums.json. This ensures corruption even in case of empty partition.
 		// TODO: Don't assume 8 shards.
-		ioutil.WriteFile(filepath.Join(datadir, "checksums.json"), []byte("[1,1,1,1,1,1,1,1]"), 0755)
+		err := ioutil.WriteFile(filepath.Join(datadir, "checksums.json"), []byte("[1,1,1,1,1,1,1,1]"), 0755)
+		errs = append(errs, err)
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 func corruptForestdbIndex(indexName, bucketName, dirPath string, partnId c.PartitionId) error {
