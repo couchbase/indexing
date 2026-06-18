@@ -939,15 +939,19 @@ type IndexerStats struct {
 	memoryTotal    stats.Uint64Val
 	pauseTotalNs   stats.Uint64Val
 
-	numIndexes          stats.Int64Val
-	numStorageInstances stats.Int64Val
-	avgResidentPercent  stats.Int64Val
-	avgMutationRate     stats.Int64Val
-	avgDrainRate        stats.Int64Val
-	avgDiskBps          stats.Int64Val
-	totalDataSize       stats.Int64Val
-	totalDiskSize       stats.Int64Val
-	numScanReportsGen   stats.Int64Val
+	numIndexes                stats.Int64Val
+	numBhiveDenseIndexes      stats.Int64Val
+	numCompositeDenseIndexes  stats.Int64Val
+	numBhiveSparseIndexes     stats.Int64Val
+	numCompositeSparseIndexes stats.Int64Val
+	numStorageInstances       stats.Int64Val
+	avgResidentPercent        stats.Int64Val
+	avgMutationRate           stats.Int64Val
+	avgDrainRate              stats.Int64Val
+	avgDiskBps                stats.Int64Val
+	totalDataSize             stats.Int64Val
+	totalDiskSize             stats.Int64Val
+	numScanReportsGen         stats.Int64Val
 
 	numGoroutine stats.Int64Val
 	numCgoCall   stats.Int64Val
@@ -1025,6 +1029,10 @@ func (s *IndexerStats) Init() {
 	s.pauseTotalNs.Init()
 
 	s.numIndexes.Init()
+	s.numBhiveDenseIndexes.Init()
+	s.numCompositeDenseIndexes.Init()
+	s.numBhiveSparseIndexes.Init()
+	s.numCompositeSparseIndexes.Init()
 	s.numStorageInstances.Init()
 	s.avgResidentPercent.Init()
 	s.avgMutationRate.Init()
@@ -1405,6 +1413,10 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("total_disk_size", &is.totalDiskSize)
 	statMap.AddStatValueFiltered("num_storage_instances", &is.numStorageInstances)
 	statMap.AddStatValueFiltered("num_indexes", &is.numIndexes)
+	statMap.AddStatValueFiltered("num_bhive_dense_indexes", &is.numBhiveDenseIndexes)
+	statMap.AddStatValueFiltered("num_bhive_sparse_indexes", &is.numBhiveSparseIndexes)
+	statMap.AddStatValueFiltered("num_composite_dense_indexes", &is.numCompositeDenseIndexes)
+	statMap.AddStatValueFiltered("num_composite_sparse_indexes", &is.numCompositeSparseIndexes)
 	statMap.AddStatValueFiltered("num_scan_reports_gen", &is.numScanReportsGen)
 
 	if common.IsServerlessDeployment() {
@@ -3868,6 +3880,18 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_indexes gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_indexes %v\n", METRICS_PREFIX, is.numIndexes.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_bhive_dense_indexes gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_bhive_dense_indexes %v\n", METRICS_PREFIX, is.numBhiveDenseIndexes.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_bhive_sparse_indexes gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_bhive_sparse_indexes %v\n", METRICS_PREFIX, is.numBhiveSparseIndexes.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_composite_dense_indexes gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_composite_dense_indexes %v\n", METRICS_PREFIX, is.numCompositeDenseIndexes.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_composite_sparse_indexes gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_composite_sparse_indexes %v\n", METRICS_PREFIX, is.numCompositeSparseIndexes.Value()))...)
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_storage_instances gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_storage_instances %v\n", METRICS_PREFIX, is.numStorageInstances.Value()))...)

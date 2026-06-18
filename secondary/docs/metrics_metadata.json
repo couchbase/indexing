@@ -419,6 +419,26 @@
         "help": "Total number of indexes, located on this node",
         "added": "7.2.0"
     },
+    "index_num_bhive_dense_indexes": {
+        "type": "gauge",
+        "help": "Total number of bhive indexes without sparse vector, located on this node",
+        "added": "8.1.0"
+    },
+    "index_num_composite_dense_indexes": {
+        "type": "gauge",
+        "help": "Total number of composite indexes without sparse vector, located on this node",
+        "added": "8.1.0"
+    },
+    "index_num_bhive_sparse_indexes": {
+        "type": "gauge",
+        "help": "Total number of bhive indexes with sparse vector, located on this node",
+        "added": "8.1.0"
+    },
+    "index_num_composite_sparse_indexes": {
+        "type": "gauge",
+        "help": "Total number of composite indexes with sparse vector, located on this node",
+        "added": "8.1.0"
+    },
     "index_num_storage_instances": {
         "type": "gauge",
         "help": "Total number of storage instances, located on this node",

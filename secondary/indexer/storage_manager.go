@@ -2049,6 +2049,10 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 	}
 
 	var numIndexes int64
+	var numBhiveDenseIndexes int64
+	var numCompositeDenseIndexes int64
+	var numBhiveSparseIndexes int64
+	var numCompositeSparseIndexes int64
 	gStats := s.stats.Get()
 
 	indexInstMap := s.indexInstMap.Get()
@@ -2071,6 +2075,22 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 		}
 
 		numIndexes++
+
+		if inst.Defn.IsBhive() && inst.Defn.HasSparseVector() == false {
+			numBhiveDenseIndexes++ // Increment count of bhive indexes which do not have sparse vector
+		}
+
+		if inst.Defn.IsComposite() && inst.Defn.HasSparseVector() == false {
+			numCompositeDenseIndexes++ // Increment count of composite indexes which do not have sparse vector
+		}
+
+		if inst.Defn.IsBhive() && inst.Defn.HasSparseVector() {
+			numBhiveSparseIndexes++ // Increment count of bhive indexes which have sparse vector
+		}
+
+		if inst.Defn.IsComposite() && inst.Defn.HasSparseVector() {
+			numCompositeSparseIndexes++ // Increment count of composite indexes which have sparse vector
+		}
 
 		for _, partnInst := range partnMap {
 			var internalData []string
@@ -2162,6 +2182,10 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 		}
 	}
 	gStats.numIndexes.Set(numIndexes)
+	gStats.numBhiveDenseIndexes.Set(numBhiveDenseIndexes)
+	gStats.numCompositeDenseIndexes.Set(numCompositeDenseIndexes)
+	gStats.numBhiveSparseIndexes.Set(numBhiveSparseIndexes)
+	gStats.numCompositeSparseIndexes.Set(numCompositeSparseIndexes)
 
 	return stats
 }
