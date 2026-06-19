@@ -74,8 +74,8 @@ func NewScanReportState(reqID string, defnID common.IndexDefnId) *ScanReportStat
 	}
 }
 
-// Format: <instId>[<partnId0>,<partnId1>,...]
-func GenPerClientReportId(instId uint64, partnIDs []common.PartitionId) string {
+// Format: <instId>[<partnId0>,<partnId1>,...]#<retry>
+func GenPerClientReportId(instId uint64, partnIDs []common.PartitionId, retry int) string {
 	s := fmt.Sprintf("%d[", instId)
 	for i, p := range partnIDs {
 		if i > 0 {
@@ -83,7 +83,7 @@ func GenPerClientReportId(instId uint64, partnIDs []common.PartitionId) string {
 		}
 		s += fmt.Sprintf("%d", p)
 	}
-	s += "]"
+	s += fmt.Sprintf("]#%d", retry)
 	return s
 }
 

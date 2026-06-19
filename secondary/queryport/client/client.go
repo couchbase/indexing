@@ -1835,7 +1835,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 
 			start := time.Now()
 			count, scan_errs, partial, refresh := broker.scatter(c.makeScanClient, index, queryports, targetInstIds,
-				rollbackTimes, partitions, numPartitions, partnSets, c.settings)
+				rollbackTimes, partitions, numPartitions, partnSets, c.settings, retryCount)
 
 			if !refresh {
 				foundScanport = true

@@ -32,6 +32,7 @@ import (
 	"github.com/couchbase/indexing/secondary/security"
 
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+	report "github.com/couchbase/indexing/secondary/scanreport"
 
 	mclient "github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/query/datastore"
@@ -2257,6 +2258,11 @@ func makeResponsehandler(
 
 	sender := conn.Sender()
 
+	var reportId string
+	if broker.GetScanReport() != nil {
+		reportId = report.GenPerClientReportId(instId, partitions, broker.GetCurrentRetry())
+	}
+
 	var enc *gob.Encoder
 	var dec *gob.Decoder
 	var readfd *os.File
@@ -2452,7 +2458,7 @@ func makeResponsehandler(
 		// Scan report only arrives via StreamEndResponse. A StreamEndResponse
 		// carries no entries. So it is safe to return immediately.
 		if serverScanReport := data.GetServerScanReport(); serverScanReport != nil {
-			broker.AttachIndexerScanReport(serverScanReport, int(id))
+			broker.AttachIndexerScanReport(serverScanReport, reportId)
 			return false
 		}
 

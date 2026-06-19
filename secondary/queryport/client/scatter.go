@@ -138,11 +138,10 @@ type RequestBroker struct {
 	tmpbufsPoolIdx []uint32
 
 	// scan report
-	scanReport       *report.ScanReportState
-	perHostReportIds []string
-	hostIdOffset     int // cumulative count of host IDs added before current scatter attempt
-	reportIdsMapLock sync.Mutex
-	closeStreamWG    sync.WaitGroup
+	scanReport            *report.ScanReportState
+	perHostReports        sync.Map // string -> *report.HostScanReport
+	currentRetry          int
+	closeStreamWG         sync.WaitGroup
 	scanReportWaitTimeout time.Duration
 }
 
@@ -314,55 +313,21 @@ func (b *RequestBroker) SetScanReportWaitTimeout(d time.Duration) {
 	b.scanReportWaitTimeout = d
 }
 
-func (b *RequestBroker) SetPerHostReportIds(ids []string) {
-	if b.scanReport == nil {
-		return
-	}
-
-	b.reportIdsMapLock.Lock()
-	defer b.reportIdsMapLock.Unlock()
-
-	// Record offset before appending so AttachIndexerScanReport can use
-	// hostIdOffset + responseHandlerIndex to locate the correct entry.
-	b.hostIdOffset = len(b.perHostReportIds)
-	b.perHostReportIds = append(b.perHostReportIds, ids...)
+func (b *RequestBroker) GetCurrentRetry() int {
+	return b.currentRetry
 }
 
-func (b *RequestBroker) GetPerHostReportIds() []string {
-	if b.scanReport == nil {
-		return nil
-	}
-	return b.perHostReportIds
-}
-
-func (b *RequestBroker) AttachIndexerScanReport(hostReport *report.HostScanReport, i int) {
+// AttachIndexerScanReport records the per-client scan report under its report
+// id. The report id is unique per (instId, partitions, retry), so concurrent
+// attaches from closeStream goroutines - including ones from a prior scatter
+// attempt that is still draining - never target the same key.
+func (b *RequestBroker) AttachIndexerScanReport(hostReport *report.HostScanReport, reportId string) {
 	if b.scanReport == nil {
 		logging.Errorf("scan report is not initialized but received scan report from indexer for requestId: %v", b.requestId)
 		return
 	}
 
-	b.reportIdsMapLock.Lock()
-	defer b.reportIdsMapLock.Unlock()
-
-	// Use hostIdOffset to map the response handler index (0-based per scatter
-	// attempt) to the global index in perHostReportIds which accumulates
-	// across retries.
-	globalIdx := b.hostIdOffset + i
-	if globalIdx >= len(b.perHostReportIds) {
-		logging.Errorf(
-			"AttachIndexerScanReport: globalIdx %v"+
-				" out of range (len=%v) for requestId: %v",
-			globalIdx, len(b.perHostReportIds), b.requestId,
-		)
-		return
-	}
-	hostId := b.perHostReportIds[globalIdx]
-	if b.scanReport.HostScanReport[hostId] != nil {
-		b.scanReport.HostScanReport[hostId].SrvrNs = hostReport.SrvrNs
-		b.scanReport.HostScanReport[hostId].SrvrCounts = hostReport.SrvrCounts
-	} else {
-		logging.Errorf("AttachIndexerScanReport: report per host detail not initialized for hostId: %v for requestId: %v", hostId, b.requestId)
-	}
+	b.perHostReports.Store(reportId, hostReport)
 }
 
 func (b *RequestBroker) DoRetry() bool {
@@ -391,12 +356,19 @@ func (b *RequestBroker) SendFinalReport(conn *datastore.IndexConnection) {
 	sr := b.scanReport
 	includeDetailed := conn.IsDetailedIndexScanReport()
 
-	// Hold reportIdsMapLock while reading the per-host reports: if we timed out
-	// above, closeStream goroutines may still be calling AttachIndexerScanReport
-	// (which mutates HostScanReport entries under the same lock) concurrently.
-	b.reportIdsMapLock.Lock()
+	// If we timed out above, a slow closeStream goroutine may still Store into
+	// perHostReports concurrently;
+	// sync.Map.Range is safe against that, and any report that lands after this
+	// Range is simply dropped from the (already best-effort) partial report.
+	if sr.HostScanReport == nil {
+		sr.HostScanReport = make(map[string]*report.HostScanReport)
+	}
+	b.perHostReports.Range(func(k, v interface{}) bool {
+		sr.HostScanReport[k.(string)] = v.(*report.HostScanReport)
+		return true
+	})
+
 	newReport := sr.ToMap(includeDetailed)
-	b.reportIdsMapLock.Unlock()
 
 	conn.AggregateScanReport(report.AggregateScanReportsFn, newReport)
 
@@ -658,7 +630,7 @@ func (b *RequestBroker) reset() {
 // Scatter requests over multiple connections
 func (c *RequestBroker) scatter(clientMaker scanClientMaker, index *common.IndexDefn,
 	scanports []string, targetInstId []uint64, rollback []int64, partition [][]common.PartitionId,
-	numPartition uint32, partnSets [][]interface{}, settings *ClientSettings) (count int64,
+	numPartition uint32, partnSets [][]interface{}, settings *ClientSettings, retry int) (count int64,
 	err map[common.PartitionId]map[uint64]error, partial bool, refresh bool) {
 
 	defer func() {
@@ -666,6 +638,7 @@ func (c *RequestBroker) scatter(clientMaker scanClientMaker, index *common.Index
 	}()
 
 	c.reset()
+	c.currentRetry = retry
 	c.SetNumIndexers(len(partition))
 	c.defn = index
 
@@ -882,7 +855,6 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 	c.tmpbufs = make([]*[]byte, len(client))
 	c.tmpbufsPoolIdx = make([]uint32, len(client))
 
-	perHostReportIds := make([]string, len(client))
 	if c.scanReport != nil {
 		c.scanReport.PopulatePartns(index, targetInstId, partition)
 	}
@@ -891,21 +863,7 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 		tmpbuf, tmpbufPoolIdx = GetFromPools()
 		c.tmpbufs[i] = tmpbuf
 		c.tmpbufsPoolIdx[i] = tmpbufPoolIdx
-		if c.scanReport != nil {
-			id := report.GenPerClientReportId(targetInstId[i], partition[i])
-			perHostReportIds[i] = id
-
-			// Pre-create all PerHostDetail entries so no concurrent write to the map
-			// is needed while attaching per host reports
-			if c.scanReport.HostScanReport == nil {
-				c.scanReport.HostScanReport = make(map[string]*report.HostScanReport, len(client))
-			}
-			if _, ok := c.scanReport.HostScanReport[id]; !ok {
-				c.scanReport.HostScanReport[id] = &report.HostScanReport{}
-			}
-		}
 	}
-	c.SetPerHostReportIds(perHostReportIds)
 
 	if c.useGather() {
 		c.queues = make([]*Queue, len(client))
