@@ -434,9 +434,8 @@ func newVbSeqnosReader(cluster, pooln, bucket string,
 		if errObs != nil {
 			for _, w := range r.workers {
 				if w != nil {
-					for _, kvf := range w.kvfeeds {
-						kvf.mc.Close()
-					}
+					close(w.donech)
+					close(w.reqCh)
 				}
 			}
 			return nil, errObs

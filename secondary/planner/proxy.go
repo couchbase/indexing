@@ -625,6 +625,16 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		indexer.ShardCompatVersion = int(shardCompatVersion.(float64))
 	}
 
+	if bhiveShardCompatVersionRaw, ok := statsMap["bhive_shard_compat_version"]; ok {
+		if bhiveVal, ok := bhiveShardCompatVersionRaw.(float64); ok {
+			indexer.BhiveShardCompatVersion = int(bhiveVal)
+		}
+	} else {
+		logging.Warnf("SetStatsInIndexer: bhive shard compat version not available for indexer node %v."+
+			"Defaulting to indexer shard compat version %v", indexer.String(), indexer.ShardCompatVersion)
+		indexer.BhiveShardCompatVersion = indexer.ShardCompatVersion
+	}
+
 	indexer.ComputeMinShardCapacity(config)
 
 	var totalIndexMemUsed uint64
@@ -636,7 +646,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			DiskUsage   uint64 `json:"diskUsage,omitempty"`
 		*/
 
-		isBhive := index.Instance.Defn.IsBhive()
+		isBhive := index.IsBhive()
 
 		// items_count captures number of key per index
 		if itemsCount, ok := GetIndexStat(index, "items_count", statsMap, true, clusterVersion); ok {
@@ -880,7 +890,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 	//    of the index at the time when the planner is run.
 	//
 	for _, index := range indexer.Indexes {
-		isBhive := index.Instance.Defn.IsBhive()
+		isBhive := index.IsBhive()
 		ratio := float64(0)
 		if totalIndexMemUsed != 0 {
 			ratio = float64(index.ActualMemUsage) / float64(totalIndexMemUsed)
@@ -2239,6 +2249,7 @@ func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode, skipDeferredIndex
 		proxyIndex.NumInstances = uint64(len(proxyIndex.GroupedIndexes))
 		proxyIndex.Normalize()
 		proxyIndex.SetInitialNode()
+
 		result = append(result, proxyIndex)
 	}
 

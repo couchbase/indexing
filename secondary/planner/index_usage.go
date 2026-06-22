@@ -670,6 +670,24 @@ func (o *IndexUsage) AddToGroupedIndexes(in *IndexUsage) {
 	in.ProxyIndex = o
 }
 
+// IsBhive returns true if this index (real or proxy) is a bhive vector index.
+// For shard proxies the type is determined from the first grouped real index,
+// since the proxy's own synthetic Instance does not carry the IsBhive flag.
+func (o *IndexUsage) IsBhive() bool {
+	if o.IsShardProxy {
+		if len(o.GroupedIndexes) == 0 {
+			return false
+		}
+		return o.GroupedIndexes[0].Instance != nil && o.GroupedIndexes[0].Instance.Defn.IsBhive()
+	}
+	return o.Instance != nil && o.Instance.Defn.IsBhive()
+}
+
+// IsProxyForBhive returns true if this proxy represents a bhive (vector) shard.
+func (o *IndexUsage) IsProxyForBhive() bool {
+	return o.IsShardProxy && o.IsBhive()
+}
+
 func (o *IndexUsage) Union(in *IndexUsage) {
 	o.ActualDataSize += in.ActualDataSize
 	o.ActualNumDocs += in.ActualNumDocs
