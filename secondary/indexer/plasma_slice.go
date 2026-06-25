@@ -568,6 +568,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		cfg.StatsLoggerFileSize = slice.sysconf["plasma.stats.logger.fileSize"].Uint64()
 		cfg.StatsLoggerFileCount = slice.sysconf["plasma.stats.logger.fileCount"].Uint64()
 		cfg.RecoveryCheckpointInterval = slice.sysconf["plasma.recovery.checkpointInterval"].Uint64()
+		cfg.RecoveryCheckpointReplayThresh = int64(slice.sysconf["plasma.recovery.checkpointReplayThresh"].Uint64())
 		cfg.BufMemQuotaRatio = slice.sysconf["plasma.BufMemQuotaRatio"].Float64()
 		cfg.MaxSMRWorkerPerCore = slice.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
 		cfg.MaxSMRInstPerCtx = slice.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
@@ -4222,6 +4223,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.StatsLoggerFileSize = cfg["plasma.stats.logger.fileSize"].Uint64()
 	mdb.mainstore.StatsLoggerFileCount = cfg["plasma.stats.logger.fileCount"].Uint64()
 	mdb.mainstore.RecoveryCheckpointInterval = cfg["plasma.recovery.checkpointInterval"].Uint64()
+	mdb.mainstore.RecoveryCheckpointReplayThresh = int64(cfg["plasma.recovery.checkpointReplayThresh"].Uint64())
 	mdb.mainstore.EnableFullReplayOnError = cfg["plasma.recovery.enableFullReplayOnError"].Bool()
 	mdb.mainstore.RecoveryEvictMemCheckInterval = time.Duration(cfg["plasma.recovery.evictMemCheckInterval"].Uint64()) * time.Millisecond
 
@@ -4341,6 +4343,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.StatsLoggerFileSize = cfg["plasma.stats.logger.fileSize"].Uint64()
 		mdb.backstore.StatsLoggerFileCount = cfg["plasma.stats.logger.fileCount"].Uint64()
 		mdb.backstore.RecoveryCheckpointInterval = cfg["plasma.recovery.checkpointInterval"].Uint64()
+		mdb.backstore.RecoveryCheckpointReplayThresh = int64(cfg["plasma.recovery.checkpointReplayThresh"].Uint64())
 		mdb.backstore.EnableFullReplayOnError = cfg["plasma.recovery.enableFullReplayOnError"].Bool()
 		mdb.backstore.RecoveryEvictMemCheckInterval = time.Duration(cfg["plasma.recovery.evictMemCheckInterval"].Uint64()) * time.Millisecond
 
