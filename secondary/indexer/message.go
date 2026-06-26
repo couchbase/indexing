@@ -3712,22 +3712,33 @@ type MsgEncryptionRebalDone struct{}
 
 func (m *MsgEncryptionRebalDone) GetMsgType() MsgType { return ENCRYPTION_REBAL_DONE }
 
-// EncryptionKeyPathInfo is the per-KDT response for ENCRYPTION_GET_KEY_INFO_FOR_REBAL.
-type EncryptionKeyPathInfo struct {
-	Path   string   // directory containing EaR key files; "" if bucket is unencrypted
-	KeyIDs []string // key IDs in use by local storage engine; includes "" for unencrypted data
+// EaRKeyPathInfo is the per-keyID response for ENCRYPTION_GET_KEY_INFO_FOR_REBAL.
+type EaRKeyPathInfo struct {
+	Path       string // directory containing this DEK's key file
+	BucketUUID string // owning bucket (kdt.BucketUUID) for downstream import
+}
+
+// EaRKeyInfoForRebal is the response for ENCRYPTION_GET_KEY_INFO_FOR_REBAL.
+type EaRKeyInfoForRebal struct {
+	// KeyPaths resolves each non-empty shard DEK id to its on-disk dir + owning bucket.
+	KeyPaths map[common.KeyID]*EaRKeyPathInfo
+	// UnencryptedBuckets are the candidate buckets that have unencrypted ("") data
+	// in-use; the destination must record "" for these so it is reported in GetInUseKeys.
+	UnencryptedBuckets []string
 }
 
 type MsgEncryptionGetKeyInfoForRebal struct {
-	kdts   []KeyDataType
-	respCh chan map[KeyDataType]*EncryptionKeyPathInfo
+	keyIDs      []common.KeyID // non-empty shard DEK ids to resolve
+	bucketUUIDs []string       // candidate buckets to check for unencrypted ("") data
+	respCh      chan *EaRKeyInfoForRebal
 }
 
 func (m *MsgEncryptionGetKeyInfoForRebal) GetMsgType() MsgType {
 	return ENCRYPTION_GET_KEY_INFO_FOR_REBAL
 }
-func (m *MsgEncryptionGetKeyInfoForRebal) GetKDTs() []KeyDataType { return m.kdts }
-func (m *MsgEncryptionGetKeyInfoForRebal) GetRespCh() chan map[KeyDataType]*EncryptionKeyPathInfo {
+func (m *MsgEncryptionGetKeyInfoForRebal) GetKeyIDs() []common.KeyID { return m.keyIDs }
+func (m *MsgEncryptionGetKeyInfoForRebal) GetBucketUUIDs() []string  { return m.bucketUUIDs }
+func (m *MsgEncryptionGetKeyInfoForRebal) GetRespCh() chan *EaRKeyInfoForRebal {
 	return m.respCh
 }
 
