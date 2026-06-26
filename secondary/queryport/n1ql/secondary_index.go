@@ -2318,6 +2318,7 @@ func makeResponsehandler(
 				cfr.Reset()
 			}
 			if cfw != nil {
+				l.Verbosef("%v request(%v) CryptWriter calling reset %v", lprefix, requestId, name)
 				cfw.Reset()
 			}
 
@@ -2534,6 +2535,7 @@ func makeResponsehandler(
 						return false
 					}
 
+					l.Verbosef("%v request(%v) writing header %v", lprefix, requestId, name)
 					_, err = cfw.WriteHeader()
 					if err != nil {
 						fmsg := "%v CryptFileWriter writeHeader err:%v"
@@ -2623,6 +2625,7 @@ func makeResponsehandler(
 			if shouldEncrypt {
 				// Encrypt and reset buffer
 				// Write it to the file
+				l.Tracef("%v request(%v) EncryptAndWriteBlock", lprefix, requestId)
 				_, err = cfw.EncryptAndWriteBlock(encbuf.Bytes())
 				if err != nil {
 					fmsg := "%v %q EncryptAndWriteBlock err:%v"

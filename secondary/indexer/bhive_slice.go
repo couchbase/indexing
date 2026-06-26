@@ -340,7 +340,7 @@ func NewBhiveSlice(storage_dir string, log_dir string, path string, sliceId Slic
 		codebookRecoveryStartTm := time.Now()
 		err = slice.recoverCodebook(slice.codebookPath)
 		if err != nil {
-			logging.Errorf("bhieSlice::recoverCodebook SliceId: %v IndexInstId: %v PartitionId %v Codebook "+
+			logging.Errorf("bhiveSlice::recoverCodebook SliceId: %v IndexInstId: %v PartitionId %v Codebook "+
 				"recovery finished with err %v", slice.id, slice.idxInstId, slice.idxPartnId, err)
 			return slice, err
 		} else {

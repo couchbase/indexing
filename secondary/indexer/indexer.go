@@ -7080,6 +7080,10 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 
 		if indexInst.Defn.IsVectorIndex {
 			err = idx.handleCodebookRecoveryError(indexInst, partnId, bootstrapPhase, err)
+			if err != nil && slice != nil {
+				slice.Close() // Without close, forceCleanupIndexPartition fails to destroy slice
+				slice = nil
+			}
 		}
 
 		if err != nil {
