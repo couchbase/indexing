@@ -32,6 +32,7 @@ import (
 	"github.com/couchbase/indexing/secondary/security"
 
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+	report "github.com/couchbase/indexing/secondary/scanreport"
 
 	mclient "github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/query/datastore"
@@ -2234,6 +2235,7 @@ func makeRequestBroker(
 
 	isScanReportingEnabled := si.gsi.gsiClient.Settings().EnableScanReporting()
 	broker.SetScanReport(requestId, common.IndexDefnId(si.defnID), isScanReportingEnabled)
+	broker.SetScanReportWaitTimeout(si.gsi.gsiClient.Settings().ScanReportWaitTimeout())
 	broker.SetResponseHandlerFactory(factory)
 	broker.SetResponseSender(sender)
 	broker.SetBackfillWaiter(backfillWaiter)
@@ -2255,6 +2257,11 @@ func makeResponsehandler(
 	partitions []c.PartitionId, shouldEncrypt bool, ekeyId string, ekey []byte, cipher string) qclient.ResponseHandler {
 
 	sender := conn.Sender()
+
+	var reportId string
+	if broker.GetScanReport() != nil {
+		reportId = report.GenPerClientReportId(instId, partitions, broker.GetCurrentRetry())
+	}
 
 	var enc *gob.Encoder
 	var dec *gob.Decoder
@@ -2448,25 +2455,11 @@ func makeResponsehandler(
 			conn.RecordGsiRU(tenant.Unit(readUnits))
 		}
 
-		// Scan report arrives either in StreamEndResponse (normal completion) or in a
-		// ResponseStream that also carries a server-side error.
-		//
-		// Error case (ResponseStream + error + scan report):
-		//   scan_client.go invokes the callback so the partial report is captured.
-		//
-		// Normal completion case (StreamEndResponse + scan report, no error):
-		//   Do NOT return early. The code below sends the end-of-stream signal
-		//   (empty pkeys/skeys), which is required to:
-		//     1. Exit the backfill goroutine via SendEntries returning false,
-		//        unblocking scatterScan2's c.waiter() (prevents deadlock).
-		//     2. Enqueue the r.last=true sentinel to gather queues for
-		//        multi-partition scans (prevents forward/gather from hanging).
+		// Scan report only arrives via StreamEndResponse. A StreamEndResponse
+		// carries no entries. So it is safe to return immediately.
 		if serverScanReport := data.GetServerScanReport(); serverScanReport != nil {
-			broker.AttachIndexerScanReport(serverScanReport, int(id))
-			if data.Error() != nil {
-				// Error case: error handled outside.
-				return false
-			}
+			broker.AttachIndexerScanReport(serverScanReport, reportId)
+			return false
 		}
 
 		err := data.Error()

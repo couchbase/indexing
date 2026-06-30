@@ -3324,6 +3324,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.scanReportWaitTimeout": ConfigValue{
+		15000,
+		"Max time, in milliseconds, the query client waits for indexer scan reports. Only applies when " +
+			"generateScanReport is enabled. Default is in sync with query limits on scan report wait duration.",
+		15000,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.settings.log_level": ConfigValue{
 		"info",
 		"Projector logging level",

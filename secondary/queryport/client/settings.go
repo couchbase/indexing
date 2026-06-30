@@ -77,6 +77,10 @@ type ClientSettings struct {
 	// Scan reporting flag
 	enableScanReporting uint32
 
+	// Max time (ms) the query client waits for indexer scan reports to be
+	// collected before finalizing a (possibly partial) scan report.
+	scanReportWaitTimeoutMs int32
+
 	// Encryption
 	backfillPauseDur int32
 }
@@ -416,6 +420,14 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.enableScanReporting, 0)
 	}
 
+	scanReportWaitTimeout, ok := config["indexer.settings.scanReportWaitTimeout"]
+	if ok {
+		atomic.StoreInt32(&s.scanReportWaitTimeoutMs, int32(scanReportWaitTimeout.Int()))
+	} else {
+		logging.Errorf("ClientSettings: missing indexer.settings.scanReportWaitTimeout")
+		atomic.StoreInt32(&s.scanReportWaitTimeoutMs, 15000)
+	}
+
 	allowDDLDuringScaleUp, ok := config["indexer.allow_ddl_during_scaleup"]
 	if ok {
 		if allowDDLDuringScaleUp.Bool() {
@@ -610,6 +622,10 @@ func (s *ClientSettings) MaxVectorDimension() int32 {
 
 func (s *ClientSettings) EnableScanReporting() bool {
 	return atomic.LoadUint32(&s.enableScanReporting) == 1
+}
+
+func (s *ClientSettings) ScanReportWaitTimeout() time.Duration {
+	return time.Duration(atomic.LoadInt32(&s.scanReportWaitTimeoutMs)) * time.Millisecond
 }
 
 func (s *ClientSettings) BackfillPause() int32 {

@@ -4111,13 +4111,11 @@ func (sr *ShardRebalancer) computeShardProgress() float64 {
 	}
 
 	progress := (totalProgress / float64(totTokens)) / 100.0
-	l.Infof("ShardRebalancer::computeProgress %v", progress)
-
-	if progress < 0.1 || math.IsNaN(progress) {
-		progress = 0.1
-	} else if progress == 1.0 {
-		progress = 0.99
+	if math.IsNaN(progress) {
+		progress = 0.0
 	}
+
+	l.Infof("ShardRebalancer::computeProgress %v", progress)
 
 	return progress
 }

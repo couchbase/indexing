@@ -3300,13 +3300,10 @@ func (r *Rebalancer) computeProgress(statusResp *IndexStatusResponse) (progress 
 	}
 
 	progress = (totalProgress / float64(totTokens)) / 100.0
-	l.Infof("Rebalancer::computeProgress for RebalID: %v progress %v", r.rebalToken.RebalId, progress)
-
-	if progress < 0.1 || math.IsNaN(progress) {
-		progress = 0.1
-	} else if progress == 1.0 {
-		progress = 0.99
+	if math.IsNaN(progress) {
+		progress = 0.0
 	}
+	l.Infof("Rebalancer::computeProgress for RebalID: %v progress %v", r.rebalToken.RebalId, progress)
 	return
 }
 

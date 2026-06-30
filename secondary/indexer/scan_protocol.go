@@ -23,7 +23,7 @@ import (
 )
 
 type ScanResponseWriter interface {
-	Error(err error, srvrScanReport *report.HostScanReport) error
+	Error(err error) error
 	Stats(rows, unique uint64, min, max []byte) error
 	Count(count uint64) error
 	RawBytes([]byte) error
@@ -102,7 +102,7 @@ func (w *protoResponseWriter) writeLen(l int) error {
 	return err
 }
 
-func (w *protoResponseWriter) Error(err error, srvrScanReport *report.HostScanReport) error {
+func (w *protoResponseWriter) Error(err error) error {
 	var res interface{}
 	protoErr := &protobuf.Error{Error: proto.String(err.Error())}
 
@@ -121,8 +121,7 @@ func (w *protoResponseWriter) Error(err error, srvrScanReport *report.HostScanRe
 		}
 	case ScanAllReq, ScanReq, FastCountReq, VectorScanReq:
 		res = &protobuf.ResponseStream{
-			Err:            protoErr,
-			SrvrScanReport: packageReport(srvrScanReport),
+			Err: protoErr,
 		}
 	}
 

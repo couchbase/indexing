@@ -72,8 +72,9 @@ type ResponseSender func(pkey []byte, mskey []value.Value, uskey common.ScanResu
 // ResponseHandlerFactory returns an instance of ResponseHandler
 type ResponseHandlerFactory func(id ResponseHandlerId, instId uint64, partitions []common.PartitionId) ResponseHandler
 
-// ScanRequestHandler initiates a request to a single server connection
-type ScanRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common.PartitionId, ResponseHandler) (error, bool)
+// ScanRequestHandler initiates a request to a single server connection.
+type ScanRequestHandler func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64,
+	partitions []common.PartitionId, callb ResponseHandler, wg *sync.WaitGroup) (error, bool)
 
 // CountRequestHandler initiates a request to a single server connection
 type CountRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common.PartitionId) (int64, error, bool)
@@ -731,7 +732,7 @@ func (c *GsiClient) LookupInternal(
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
-		callb ResponseHandler) (error, bool) {
+		callb ResponseHandler, wg *sync.WaitGroup) (error, bool) {
 		var err error
 
 		dataEncFmt := broker.GetDataEncodingFormat()
@@ -743,7 +744,7 @@ func (c *GsiClient) LookupInternal(
 		return qc.Lookup(
 			uint64(index.DefnId), requestId, values, distinct, broker.GetLimit(), cons,
 			tsvector, callb, rollbackTime, partitions, dataEncFmt, broker.DoRetry(),
-			scanParams, reqDeadline, reqDeadlineSlack)
+			scanParams, reqDeadline, reqDeadlineSlack, wg)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -791,7 +792,7 @@ func (c *GsiClient) RangeInternal(
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
-		handler ResponseHandler) (error, bool) {
+		handler ResponseHandler, wg *sync.WaitGroup) (error, bool) {
 		var err error
 
 		dataEncFmt := broker.GetDataEncodingFormat()
@@ -818,13 +819,14 @@ func (c *GsiClient) RangeInternal(
 				uint64(index.DefnId), requestId, l, h, inclusion, distinct,
 				broker.GetLimit(), cons, tsvector, handler, rollbackTime,
 				partitions, dataEncFmt, broker.DoRetry(), scanParams, reqDeadline,
-				reqDeadlineSlack)
+				reqDeadlineSlack, wg)
 		}
 		// dealing with secondary index.
 		return qc.Range(
 			uint64(index.DefnId), requestId, low, high, inclusion, distinct,
 			broker.GetLimit(), cons, tsvector, handler, rollbackTime, partitions,
-			dataEncFmt, broker.DoRetry(), scanParams, reqDeadline, reqDeadlineSlack)
+			dataEncFmt, broker.DoRetry(), scanParams, reqDeadline, reqDeadlineSlack,
+			wg)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -875,7 +877,7 @@ func (c *GsiClient) ScanAllInternal(
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
-		handler ResponseHandler) (error, bool) {
+		handler ResponseHandler, wg *sync.WaitGroup) (error, bool) {
 		var err error
 
 		dataEncFmt := broker.GetDataEncodingFormat()
@@ -886,7 +888,7 @@ func (c *GsiClient) ScanAllInternal(
 		}
 		return qc.ScanAll(uint64(index.DefnId), requestId, broker.GetLimit(),
 			cons, tsvector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(),
-			scanParams, reqDeadline, reqDeadlineSlack, generateScanReport)
+			scanParams, reqDeadline, reqDeadlineSlack, generateScanReport, wg)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -932,7 +934,7 @@ func (c *GsiClient) MultiScanInternal(
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
-		handler ResponseHandler) (error, bool) {
+		handler ResponseHandler, wg *sync.WaitGroup) (error, bool) {
 		var err error
 
 		dataEncFmt := broker.GetDataEncodingFormat()
@@ -947,14 +949,14 @@ func (c *GsiClient) MultiScanInternal(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
 				projection, broker.GetOffset(), broker.GetLimit(), cons,
 				tsvector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(),
-				scanParams, reqDeadline, reqDeadlineSlack)
+				scanParams, reqDeadline, reqDeadlineSlack, wg)
 		}
 
 		return qc.MultiScan(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
 			projection, broker.GetOffset(), broker.GetLimit(), cons, tsvector,
 			handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), scanParams,
-			reqDeadline, reqDeadlineSlack)
+			reqDeadline, reqDeadlineSlack, wg)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -1233,7 +1235,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 	}
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
-		handler ResponseHandler) (error, bool) {
+		handler ResponseHandler, wg *sync.WaitGroup) (error, bool) {
 		var err error
 
 		dataEncFmt := broker.GetDataEncodingFormat()
@@ -1249,7 +1251,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 				projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 				broker.GetSorted(), cons, tsvector, handler, rollbackTime,
 				partitions, dataEncFmt, broker.DoRetry(), scanParams, reqDeadline,
-				reqDeadlineSlack, generateScanReport)
+				reqDeadlineSlack, generateScanReport, wg)
 		}
 
 		return qc.Scan(
@@ -1258,7 +1260,7 @@ func (c *GsiClient) ScanInternal(logPrefix string,
 			broker.GetSorted(), cons, tsvector, handler, rollbackTime,
 			partitions, dataEncFmt, broker.DoRetry(), scanParams, indexVector,
 			reqDeadline, reqDeadlineSlack, indexOrder, indexKeyNames, inlineFilter,
-			includeColumnScans, generateScanReport)
+			includeColumnScans, generateScanReport, wg)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -1833,7 +1835,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 
 			start := time.Now()
 			count, scan_errs, partial, refresh := broker.scatter(c.makeScanClient, index, queryports, targetInstIds,
-				rollbackTimes, partitions, numPartitions, partnSets, c.settings)
+				rollbackTimes, partitions, numPartitions, partnSets, c.settings, retryCount)
 
 			if !refresh {
 				foundScanport = true

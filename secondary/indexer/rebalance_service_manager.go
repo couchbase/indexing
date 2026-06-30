@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -82,9 +83,12 @@ type RebalanceServiceManager struct {
 }
 
 type rebalanceContext struct {
-	change service.TopologyChange
-	rev    uint64
+	change             service.TopologyChange
+	rev                uint64
+	usePlannerProgress bool
 }
+
+const plannerProgressBaseline = 0.1
 
 // incRev increments the rebalanceContext revision number and returns the OLD value.
 func (ctx *rebalanceContext) incRev() uint64 {
@@ -92,6 +96,21 @@ func (ctx *rebalanceContext) incRev() uint64 {
 	ctx.rev++
 
 	return curr
+}
+
+func (ctx *rebalanceContext) getTaskProgress(progress float64) float64 {
+	if math.IsNaN(progress) {
+		progress = 0.0
+	}
+
+	if ctx.usePlannerProgress {
+		progress = plannerProgressBaseline + (1-plannerProgressBaseline)*progress
+	}
+	if progress >= 1.0 {
+		progress = 0.99
+	}
+
+	return progress
 }
 
 type waiter chan state
@@ -777,8 +796,9 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 	}
 
 	ctx := &rebalanceContext{
-		rev:    0,
-		change: change,
+		rev:                0,
+		change:             change,
+		usePlannerProgress: runPlanner,
 	}
 
 	m.rebalanceCtx = ctx
@@ -2690,7 +2710,7 @@ func (m *RebalanceServiceManager) runRebalanceCallback(cancel <-chan struct{}, b
 // rebalanceProgressCallback is the Rebalancer.cb.progress callback function for a Rebalance.
 func (m *RebalanceServiceManager) rebalanceProgressCallback(progress float64, cancel <-chan struct{}) {
 	m.runRebalanceCallback(cancel, func() {
-		m.updateRebalanceProgressLOCKED(progress)
+		m.updateRebalanceProgressLOCKED(m.rebalanceCtx.getTaskProgress(progress))
 	})
 }
 
