@@ -10,6 +10,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/couchbase/bhive"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -548,8 +549,25 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 		w.sparseQueryValues = qvec.Values()
 	}
 
-	t0 := time.Now()
-	// Pre-allocate fvecs for the whole batch upfront to avoid per-vector allocations.
+	// A batch may mix two kinds of rows:
+	//   - Rows carrying a valid stored (quantized) search distance produced by
+	//     the graph search (row.distValid). Their on-disk payload may have been
+	//     dropped, so they must NOT be decoded/recomputed - we reuse the stored
+	//     distance directly (which may legitimately be 0, e.g. -IP == 0).
+	//   - Rows without a stored distance (served from the flush buffer / disk).
+	//     These must be term-matched and have their distance computed here.
+	// We make a single pass: stored rows keep their distance; compute rows are
+	// term-matched and staged contiguously into fvecs. Surviving rows are
+	// compacted in place (order preserved). The staged distances are written
+	// back afterwards.
+	if cap(w.dists) < vecCount {
+		w.dists = make([]float32, vecCount)
+	} else {
+		w.dists = w.dists[:vecCount]
+	}
+
+	// Pre-allocate fvecs for the worst case (every row needs a computed
+	// distance) to avoid per-vector allocations.
 	needed := vecCount * queryDim
 	if cap(w.fvecs) < needed {
 		w.fvecs = make([]float32, needed)
@@ -557,25 +575,54 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 		w.fvecs = w.fvecs[:needed]
 	}
 
-	// Track valid vectors (those with matching query terms)
-	validCount := 0
+	t0 := time.Now()
+
+	validCount := 0   // surviving rows (write cursor for in-place compaction)
+	computeCount := 0 // rows staged into fvecs needing ComputeDistance
 	for i := 0; i < vecCount; i++ {
-		valBytes := w.currBatchRows[i].value
+		row := w.currBatchRows[i]
 
-		if len(valBytes) < 4 {
-			return errors.New("sparse vector too short")
+		if row.distValid {
+			// Reuse the stored search distance; keep the row as-is.
+			if validCount != i {
+				w.currBatchRows[validCount] = row
+			}
+			w.dists[validCount] = row.dist
+			validCount++
+			continue
 		}
 
-		// Zero-copy reinterpret the raw bytes as ConciseSparseVector and use NNZ() to decode N.
-		concise := common.ConciseSparseVector(ByteSliceToFloat32(valBytes))
-		nnz := concise.NNZ()
-		expectedSize := 4 * concise.Size() // Size() returns element count; bytes = 4 * elements
-		if len(valBytes) < expectedSize {
-			return fmt.Errorf("sparse vector size %d less than expected %d for %d elements",
-				len(valBytes), expectedSize, nnz)
+		var concise common.ConciseSparseVector
+		if !w.r.IndexInst.Defn.IsBhive() {
+			// No stored distance: decode the sparse vector and term-match it
+			// against the query.
+			valBytes := row.value
+			if len(valBytes) < 4 {
+				return errors.New("sparse vector too short")
+			}
+
+			// Zero-copy reinterpret the raw bytes as ConciseSparseVector and use NNZ() to decode N.
+			concise = common.ConciseSparseVector(ByteSliceToFloat32(valBytes))
+			nnz := concise.NNZ()
+			expectedSize := 4 * concise.Size() // Size() returns element count; bytes = 4 * elements
+			if len(valBytes) < expectedSize {
+				return fmt.Errorf("sparse vector size %d less than expected %d for %d elements",
+					len(valBytes), expectedSize, nnz)
+			}
+		} else {
+			// No stored distance: these rows bypassed the graph search (flush
+			// buffer / disk), so term-match them against the query here. row.value
+			// holds the QUANTIZED sparse wire (the full vector is dropped);
+			// dequantize it to the concise full-wire form Transpose/ComputeDistance
+			// expect. A nil result means a malformed/truncated wire; an empty vector
+			// decodes to [count=0], which Transpose simply finds no match for.
+			concise = common.ConciseSparseVector(bhive.DequantizeSparseWire(row.value))
+			if len(concise) == 0 {
+				return fmt.Errorf("sparse vector: malformed quantized wire (len %d)", len(row.value))
+			}
 		}
 
-		result := w.fvecs[validCount*queryDim : (validCount+1)*queryDim]
+		result := w.fvecs[computeCount*queryDim : (computeCount+1)*queryDim]
 		// Zero the slot - Transpose only writes matching terms; unmatched positions must be 0.
 		for j := range result {
 			result[j] = 0
@@ -584,53 +631,70 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 		keep := sparseCb.Transpose([]float32(qvec), []float32(concise), result)
 		if !keep {
 			// No matching terms between query and document vector - skip this document
-			w.currBatchRows[i].free() // Return row to pool to prevent pool exhaustion
+			row.free() // Return row to pool to prevent pool exhaustion
 			w.currBatchRows[i] = nil
 			continue
 		}
 
-		// Keep this row - move it to the validCount position if needed
+		// Keep this row - move it to the validCount position if needed.
 		if validCount != i {
-			w.currBatchRows[validCount] = w.currBatchRows[i]
+			w.currBatchRows[validCount] = row
 		}
 		validCount++
+		computeCount++
 	}
 
-	// Update currBatchRows and fvecs to only contain valid rows
+	// Restrict to surviving rows.
 	w.currBatchRows = w.currBatchRows[:validCount]
-	w.fvecs = w.fvecs[:validCount*queryDim]
+	w.dists = w.dists[:validCount]
 
 	atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
 	atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
 
-	// No valid vectors after term-matching; nothing to compute.
-	if validCount == 0 {
+	// Every surviving row already had a valid stored distance; nothing to compute.
+	if computeCount == 0 {
 		return nil
 	}
 
-	// Compute distance using the transposed vectors (all queryDim size)
+	// Compute distances for the staged (term-matched) rows. They sit
+	// contiguously at the front of fvecs in surviving order.
+	//
+	// For ComputeDistance, pass only the values portion of the concise query
+	// vector. concise format: [nnz, idx1, ..., idxN, val1, ..., valN]. After
+	// Transpose, each fvec block is queryDim values aligned to query term
+	// positions. Using the full concise qvec (length 1+2*queryDim) would make
+	// MockCodebook use the wrong stride, causing out-of-bounds panics. Pass
+	// qvecValues (length queryDim) so ComputeDistance correctly strides fvecs
+	// in queryDim-sized blocks.
 	t0 = time.Now()
-
-	// Ensure w.dists has sufficient capacity for validCount distances
-	if cap(w.dists) < validCount {
-		w.dists = make([]float32, validCount)
+	if computeCount == validCount {
+		// Fast path: no stored-distance rows, so the surviving rows align 1:1
+		// with the staged compute rows - write straight into w.dists.
+		err := sparseCb.ComputeDistance(w.sparseQueryValues, w.fvecs[:computeCount*queryDim], w.dists)
+		if err != nil {
+			logging.Verbosef("%v processSparseVectorBatch ComputeDistance error: %v", w.logPrefix, err)
+			return err
+		}
 	} else {
-		w.dists = w.dists[:validCount]
-	}
-
-	// For ComputeDistance, pass only the values portion of the concise query vector.
-	// concise format: [nnz, idx1, ..., idxN, val1, ..., valN]
-	// After Transpose, each fvec block is queryDim values aligned to query term positions.
-	// Using the full concise qvec (length 1+2*queryDim) would make MockCodebook use the
-	// wrong stride, causing out-of-bounds panics. Pass qvecValues (length queryDim) so
-	// ComputeDistance correctly strides fvecs in queryDim-sized blocks.
-	err := sparseCb.ComputeDistance(w.sparseQueryValues, w.fvecs[:validCount*queryDim], w.dists)
-	if err != nil {
-		logging.Verbosef("%v processSparseVectorBatch ComputeDistance error: %v", w.logPrefix, err)
-		return err
+		// Mixed batch: compute into a temporary buffer, then scatter the
+		// results back to the surviving rows that lacked a stored distance,
+		// in the same order they were staged.
+		computed := make([]float32, computeCount)
+		err := sparseCb.ComputeDistance(w.sparseQueryValues, w.fvecs[:computeCount*queryDim], computed)
+		if err != nil {
+			logging.Verbosef("%v processSparseVectorBatch ComputeDistance error: %v", w.logPrefix, err)
+			return err
+		}
+		k := 0
+		for s := 0; s < validCount; s++ {
+			if !w.currBatchRows[s].distValid {
+				w.dists[s] = computed[k]
+				k++
+			}
+		}
 	}
 	atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
-	atomic.AddInt64(&w.currJob.distCmpCnt, int64(validCount))
+	atomic.AddInt64(&w.currJob.distCmpCnt, int64(computeCount))
 
 	return nil
 }
@@ -932,7 +996,7 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 	// the quantized code.
 	var includeColumn []byte
 	if w.r.IsSparseVectorIndexScan() {
-		vecSize := sparseVectorSizeFromMeta(meta)
+		vecSize := w.sparseVectorSizeFromMeta(meta)
 		includeColumn = meta[vecSize:]
 	} else {
 		includeColumn = meta[w.codeSize:]
@@ -979,7 +1043,7 @@ func (w *ScanWorker) inlineFilterCb2(meta []byte, docid []byte) (bool, error) {
 
 	var includeColumn []byte
 	if w.r.IsSparseVectorIndexScan() {
-		vecSize := sparseVectorSizeFromMeta(meta)
+		vecSize := w.sparseVectorSizeFromMeta(meta)
 		includeColumn = meta[vecSize:]
 	} else {
 		includeColumn = meta[w.codeSize:]
@@ -1052,7 +1116,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	if w.r.IsSparseVectorIndexScan() {
 		// For sparse vectors, codeSize is 0. The meta contains:
 		// [sparse_vector_bytes | include_column_bytes]
-		vecSize := sparseVectorSizeFromMeta(meta)
+		vecSize := w.sparseVectorSizeFromMeta(meta)
 		if vecSize == 0 && len(meta) > 0 {
 			logging.Fatalf("ScanWorker::bhiveIteratorCallback invalid sparse vector in meta."+
 				"meta len: %v, docid: %v for indexInst: %v, partnId: %v, cid: %v, storeId: %v, recordId: %v vector size: %v",
@@ -1125,6 +1189,19 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 		newRow.copyForBhive(&w.itrRow)
 	}
 
+	// Carry the (quantized) search distance from the iterator side channel.
+	// Establish a clean default first: a pooled Row (heap path) is not reset
+	// for scalar fields by AtomicRowBuffer.Put, so it could otherwise retain a
+	// stale distValid=true from a previous use and be wrongly treated as having
+	// a valid stored distance. Only a BHIVE reader context supplies a real
+	// stored distance; everything else must be computed downstream.
+	newRow.dist = 0
+	newRow.distValid = false
+	if rctx, ok := w.currJob.ctx.(*bhiveReaderCtx); ok {
+		newRow.dist = rctx.dist
+		newRow.distValid = rctx.distValid
+	}
+
 	select {
 	case <-w.stopCh:
 		return ErrScanWorkerStopped
@@ -1145,6 +1222,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 	if !w.r.useHeapForVectorIndex() {
 		w.itrRow.len = 0
 		w.itrRow.dist = 0
+		w.itrRow.distValid = false
 		w.itrRow.last = false
 		w.itrRow.key = nil
 		w.itrRow.value = nil
@@ -1503,11 +1581,23 @@ type WriteItem func(...[]byte) error
 
 // MergeOperator will read from recvQ, based on distances and either stores
 // in heap or forwards row to down stream
+// rowDedupKey uniquely identifies a doc across scan sources. (storeId,
+// recordId) is identical for the per-cell and sentinel copies of the
+// same doc (both read the same stored entry) and globally unique
+// (storeId disambiguates per-kvstore recordId numbering).
+type rowDedupKey struct {
+	storeId  uint64
+	recordId uint64
+}
+
 type MergeOperator struct {
 	req *ScanRequest
 
 	recvCh <-chan *Row
 	heap   *TopKRowHeap
+
+	// track candidates seen so far for dedup
+	seen map[rowDedupKey]struct{}
 
 	errCh    chan error
 	mergerWg sync.WaitGroup
@@ -1554,6 +1644,12 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 		fio.heap, err = NewTopKRowHeap(int(heapSize), false, r.getRowCompare())
 		if err != nil {
 			return nil, err
+		}
+
+		if r.useHeapForVectorIndex() &&
+			r.IndexInst.Defn.IsBhive() &&
+			r.IsSparseVectorIndexScan() {
+			fio.seen = make(map[rowDedupKey]struct{}, int(heapSize)*4)
 		}
 	}
 
@@ -1680,6 +1776,19 @@ func (fio *MergeOperator) Collector() {
 		}
 
 		fio.rowsReceived++
+
+		// Dedup rows already seen from prior centriod scan
+		if fio.req.useHeapForVectorIndex() &&
+			fio.req.IndexInst.Defn.IsBhive() &&
+			fio.req.IsSparseVectorIndexScan() &&
+			fio.req.dedup {
+			k := rowDedupKey{storeId: row.storeId, recordId: row.recordId}
+			if _, dup := fio.seen[k]; dup {
+				row.free()
+				continue
+			}
+			fio.seen[k] = struct{}{}
+		}
 
 		if fio.req.useHeapForVectorIndex() {
 			fio.heap.Push(row)
@@ -2126,26 +2235,31 @@ func (s *IndexScanSource2) Routine() error {
 
 	// Note: Current batchId generation logic can have holes in the batchId ranges but it meets
 	// all the requirements mentioned above
+
+	// vectorScans is an ordered slice of centroids per partition, so the
+	// common-inverted-index sentinel — appended last in fillVectorScans —
+	// gets the highest index c, hence the highest batchId, and runs in the
+	// last batch. That places it after the per-cell centroids that feed the
+	// running top-K threshold it prunes against (it may share the last batch
+	// with a few of them, which is fine — the majority have already fed it).
 	jobMap := make(map[int][]*ScanJob, 0)
 	maxBatchId := 0
 	for _, pid := range s.p.req.PartitionIds {
 		cidScans := scans[pid]
-		c := 0
-		for cid, scanList := range cidScans {
-			for sid, scan := range scanList {
+		for c, g := range cidScans {
+			for sid, scan := range g.scans {
 				batchId := sid*numBatchesPerScan + (c / readersPerPartition)
 				if batchId > maxBatchId {
 					maxBatchId = batchId
 				}
 				ctx := ctxs[pid][c%readersPerPartition]
-				job := NewScanJob(s.p.req, batchId, pid, cid, scan, snaps[pid], ctx, codebooks[pid])
+				job := NewScanJob(s.p.req, batchId, pid, g.cid, scan, snaps[pid], ctx, codebooks[pid])
 				_, ok := jobMap[batchId]
 				if !ok {
 					jobMap[batchId] = make([]*ScanJob, 0)
 				}
 				jobMap[batchId] = append(jobMap[batchId], job)
 			}
-			c++
 		}
 	}
 
@@ -2446,6 +2560,27 @@ func (q *AtomicRowBuffer) Get() *Row {
 			atomic.AddInt64(&q.count, 1)
 		}
 	}
+}
+
+func (w *ScanWorker) sparseVectorSizeFromMeta(meta []byte) int {
+	if w.r.IndexInst.Defn.IsBhive() {
+		return sparseVectorSizeFromBhive(meta)
+	}
+
+	return sparseVectorSizeFromMeta(meta)
+}
+
+// sparseVectorSizeFromBhive returns the number of bytes occupied by the quantized
+// sparse vector at the beginning of a record's meta. The vector is stored in the
+// bhive quantized wire format (QuantizeSparseVectorTo); its self-describing
+// header gives the wire length, and the include columns follow it. Returns 0 if
+// the buffer is too small or the decoded size exceeds the meta.
+func sparseVectorSizeFromBhive(meta []byte) int {
+	size := bhive.QuantizedWireSize(meta)
+	if size == 0 || size > len(meta) {
+		return 0
+	}
+	return size
 }
 
 // sparseVectorSizeFromMeta returns the number of bytes occupied by a sparse

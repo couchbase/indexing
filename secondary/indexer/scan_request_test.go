@@ -288,9 +288,9 @@ func TestScanRequest_fillVectorScans(t *testing.T) {
 			}
 
 			// TODO: Add code for result verification
-			for cid, s := range r.vectorScans {
-				for pid, p := range s {
-					t.Logf("centroidId: %v PartnID: %v Scan: %+v\n", cid, pid, p)
+			for pid, groups := range r.vectorScans {
+				for _, g := range groups {
+					t.Logf("centroidId: %v PartnID: %v Scan: %+v\n", g.cid, pid, g.scans)
 				}
 			}
 		})

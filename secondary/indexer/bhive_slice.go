@@ -489,6 +489,20 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 
 	cfg.EfNumNeighbors = slice.sysconf["bhive.vanama.efNumNeighbors"].Int()
 	cfg.EfConstruction = slice.sysconf["bhive.vanama.efConstruction"].Int()
+	cfg.EfSearch = slice.sysconf["bhive.vanama.efSearch"].Int()
+	cfg.EfPruneThreshold = float32(slice.sysconf["bhive.vanama.efPruneThreshold"].Float64())
+	cfg.DualExpansionRFraction = float32(slice.sysconf["bhive.vanama.dualExpansionRatio"].Float64())
+	cfg.DualBatchFlushSize = slice.sysconf["bhive.vanama.dualBatchFlushSize"].Int()
+	cfg.MaxSeeds = slice.sysconf["bhive.vanama.maxSeeds"].Int()
+	cfg.SparseExpansionSeeds = slice.sysconf["bhive.vanama.sparse.expansionSeeds"].Int()
+	cfg.SparseSeedTrimMassFraction = float32(slice.sysconf["bhive.vanama.sparse.seedTrimMassFraction"].Float64())
+	cfg.QueryPruneMaxDims = slice.sysconf["bhive.query.pruneMaxDims"].Int()
+	cfg.VectorPruneMaxDims = slice.sysconf["bhive.vector.pruneMaxDims"].Int()
+	cfg.EnableInvertedIndex = slice.sysconf["bhive.invertedIndex.enable"].Bool()
+	cfg.InvertedIndexMaxPerDim = slice.sysconf["bhive.invertedIndex.maxPerDim"].Int()
+	cfg.InvertedIndexBlockSize = slice.sysconf["bhive.invertedIndex.blockSize"].Int()
+	cfg.InvertedIndexTopN = slice.sysconf["bhive.invertedIndex.topN"].Int()
+	cfg.InvertedIndexCandidateMultiplier = slice.sysconf["bhive.invertedIndex.candidateMultiplier"].Int()
 	cfg.VanamaBuildQuota = slice.sysconf["bhive.vanama.buildQuota"].Int()
 	cfg.FilterThreshold = float32(slice.sysconf["bhive.vanama.filterThreshold"].Float64())
 	cfg.NumCompactor = slice.sysconf["bhive.numCompactor"].Int()
@@ -1313,7 +1327,10 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 	if !isSparseVector {
 		metaVecLen = mdb.codeSize
 	} else {
-		metaVecLen = 4 * len(vec)
+		// Store the QUANTIZED sparse vector (its L2 norm is carried in the
+		// quantized header) in meta; the graph build consumes it directly.
+		// The full vector is not persisted for sparse (re-rank is not enabled).
+		metaVecLen = bhive.QuantizedSparseSize(vec)
 	}
 
 	metalen := metaVecLen + len(includeColumn)
@@ -1326,13 +1343,17 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 			metaVecLen,
 			mdb.quantizedCodeBuf[workerId])
 	} else {
-		copy(mdb.quantizedCodeBuf[workerId][:metaVecLen], ((bhive.Vector)(vec)).Bytes())
-		mdb.sparseJLBuf[workerId] = resizeSparseJLBuf(
-			mdb.sparseJLBuf[workerId],
-			mdb.codebook.Dimension(),
-			true)
-		if _, err = mdb.getSparseJLVec(vec, mdb.sparseJLBuf[workerId]); err == nil {
-			centroidId, err = mdb.getNearestCentroidId(mdb.sparseJLBuf[workerId])
+		// Quantize the sparse vector straight into meta (the quantized header
+		// carries its L2 norm); the graph build copies this wire with no full
+		// vector. On error, fall through to the shared handler below.
+		if _, err = bhive.QuantizeSparseVectorTo(vec, mdb.quantizedCodeBuf[workerId][:metaVecLen]); err == nil {
+			mdb.sparseJLBuf[workerId] = resizeSparseJLBuf(
+				mdb.sparseJLBuf[workerId],
+				mdb.codebook.Dimension(),
+				true)
+			if _, err = mdb.getSparseJLVec(vec, mdb.sparseJLBuf[workerId]); err == nil {
+				centroidId, err = mdb.getNearestCentroidId(mdb.sparseJLBuf[workerId])
+			}
 		}
 	}
 
@@ -1383,8 +1404,10 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 		binary.LittleEndian.PutUint64(cid[:], uint64(centroidId))
 
 		var v []byte
-		if mdb.persistFullVector {
-			// insert full vector into main index
+		if mdb.persistFullVector && !isSparseVector {
+			// Dense persists the full vector for re-rank. Sparse does not:
+			// re-rank is not enabled and the quantized vector already lives in
+			// meta, so the full vector is dropped (not stored in the vstore).
 			v = ((bhive.Vector)(vec)).Bytes()
 		}
 
@@ -1976,6 +1999,16 @@ func (mdb *bhiveSlice) buildGraph(idxInstId common.IndexInstId, callb BuildDoneC
 
 			// TBD: error check
 			mdb.mainstore.BuildGraph()
+
+			// Build the slice-wide inverted index — see
+			// bhive/common_inverted_index.go for the design.
+			if mdb.idxDefn.HasSparseVector() {
+				if err := mdb.mainstore.BuildInvertedIndex(); err != nil {
+					logging.Warnf("bhiveSlice::buildGraph BuildInvertedIndex failed for instId %v partnId %v: %v",
+						mdb.IndexInstId(), mdb.IndexPartnId(), err)
+				}
+			}
+
 			close(donech)
 		} else { // Slice is closed
 			logging.Infof("bhiveSlice::buildGraph Returning as slice is closed for instId: %v, partnId: %v",
@@ -2012,6 +2045,16 @@ type bhiveReaderCtx struct {
 	readUnits        uint64
 	user             string
 	skipReadMetering bool
+
+	// dist is a per-iteration side channel carrying the (quantized) search
+	// distance of the record currently being handed to the EntryCallback.
+	// It is meaningful only when distValid is true; a valid distance may be
+	// 0 (e.g. -IP == 0), so the zero value must not be read as "no distance".
+	dist      float32
+	distValid bool
+
+	req   *ScanRequest //back-pointer to the owning scan request, set once in setReaderCtxMap.
+	slice *bhiveSlice  // back-pointer to teh owning slice, set once in GetReaderContext
 }
 
 func (ctx *bhiveReaderCtx) Init(donech chan bool) bool {
@@ -2062,6 +2105,7 @@ func (mdb *bhiveSlice) GetReaderContext(user string, skipReadMetering bool) Inde
 		ch:               mdb.readers,
 		user:             user,
 		skipReadMetering: skipReadMetering,
+		slice:            mdb,
 	}
 }
 
@@ -3719,18 +3763,82 @@ func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, que
 
 	// [VECTOR_TODO]: Add more timing stats
 
-	if queryKey != nil {
-		q := ([]float32)(bhive.BytesToVec(queryKey.Bytes()))
-		err = iter.FindNearest2(s.MainSnap, bhive.CentroidID(centroidId.Bytes()), q, topNScan, int(limit))
+	// Detect the common-inverted-index sentinel centroid. When the
+	// scan pipeline appends the sentinel (see scan_request.go
+	// fillVectorScans), this branch routes the call into the
+	// iterator's BMW traversal over the slice-wide common inverted
+	// index. The iterator builds a proper digest from the BMW
+	// results — each entry's rawKey + rawMeta is read out of the
+	// originating cell's codesSlice — so the standard
+	// Valid/Next/GetRawKeyAndMeta loop below works uniformly for
+	// per-cell and sentinel iterations.
+	cellIDBytes := centroidId.Bytes()
+	isSentinel := len(cellIDBytes) == 8 && binary.LittleEndian.Uint64(cellIDBytes) == bhive.SentinelCellID
+
+	// Determine if dedup is needed.  If so, mark it before the centroid being scanned to ensure
+	// its returned rows are probably tracked for dedup later.
+	enableII := s.slice.sysconf["bhive.invertedIndex.enable"].Bool()
+	doSkip := s.slice.sysconf["bhive.invertedIndex.skipRoutedCells"].Bool()
+	topN := s.slice.sysconf["bhive.invertedIndex.topN"].Int()
+	if enableII && s.slice.idxDefn.HasSparseVector() && !doSkip && topN > 0 && reader.req != nil {
+		// if we are not skipping over vectors from visited centroids during inverted index scan,
+		// then we have to dedup the vectors returned from inverted index since they can overlap.
+		reader.req.dedup = true
+	}
+
+	if isSentinel {
+		// Inverted index disabled (master switch off, or topN == 0): no budget
+		// allocated for the sentinel scan, simply return.
+		if !enableII || topN == 0 {
+			return nil
+		}
+
+		var q []float32
+		if queryKey != nil {
+			q = ([]float32)(bhive.BytesToVec(queryKey.Bytes()))
+		}
+
+		// need to skip over vectors which have already scanned from centroids?
+		var skip map[uint64]struct{}
+		if doSkip && reader.req != nil {
+			skip = reader.req.centroids[s.idxPartnId]
+		}
+
+		// Each centroid published the largest distance it returned into req.topKThreshold as it finished;
+		// the sentinel runs in the last batch, so by now the most centroids have published.
+		// Per-centroid distance metric (dist = -IP, smaller is better), but QueryInvertedIndex wants a minimum
+		// IP score, so negate it here. If nothing was published, value() reports unset and we pass -Inf (no pruning),
+		// which is always safe.
+		minScore := float32(math.Inf(-1))
+		if reader.req != nil && reader.req.topKThreshold != nil {
+			if d, ok := reader.req.topKThreshold.value(); ok {
+				minScore = -d
+			}
+		}
+
+		err = iter.FindNearestFromInvertedIndex(s.MainSnap, cellIDBytes, q, topNScan, int(limit), skip, minScore)
 		if err != nil {
 			return err
 		}
+
+	} else if queryKey != nil {
+		q := ([]float32)(bhive.BytesToVec(queryKey.Bytes()))
+		err = iter.FindNearest2(s.MainSnap, bhive.CentroidID(cellIDBytes), q, topNScan, int(limit))
+		if err != nil {
+			return err
+		}
+
 	} else {
-		err = iter.Execute(s.MainSnap, bhive.CentroidID(centroidId.Bytes()))
+		err = iter.Execute(s.MainSnap, bhive.CentroidID(cellIDBytes))
 		if err != nil {
 			return err
 		}
 	}
+
+	// For a per-cell centroid scan, track the largest search distance this centroid
+	// returns and publish it to the shared top-K floor once the scan finishes (below).
+	var maxDist float32
+	haveMaxDist := false
 
 	for iter.Valid() {
 		// rawKey would be only "docid"
@@ -3743,11 +3851,29 @@ func (s *bhiveSnapshot) Iterate(ctx IndexReaderContext, centroidId IndexKey, que
 			return err
 		}
 
+		// Stash the search distance for this record so the scan callback can
+		// reuse it instead of recomputing. distValid is false when no search
+		// distance is available and the scan layer must compute it.
+		reader.dist, reader.distValid = iter.GetDist()
+
+		// Track the largest returned distance (same metric the merge orders
+		// by). Only when a real search distance is available.
+		if !haveMaxDist || reader.dist > maxDist {
+			maxDist = reader.dist
+			haveMaxDist = true
+		}
+
 		if err := callb(rawKey, rawMeta); err != nil {
 			return err
 		}
 
 		iter.Next()
+	}
+
+	// Publish this centroid's largest returned distance to the shared top-K
+	// floor (one short critical section). The tracker keeps the maximum.
+	if haveMaxDist && reader.req != nil && reader.req.topKThreshold != nil {
+		reader.req.topKThreshold.publish(maxDist)
 	}
 
 	return nil

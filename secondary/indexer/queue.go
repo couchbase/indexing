@@ -31,13 +31,18 @@ type allocator struct {
 }
 
 type Row struct {
-	key      []byte
-	value    []byte
-	len      int
-	last     bool
-	dist     float32
-	storeId  uint64 // used in BHIVE scans for re-ranking
-	recordId uint64 // used in BHIVE scans for re-ranking
+	key   []byte
+	value []byte
+	len   int
+	last  bool
+	dist  float32
+	// distValid is true when dist carries a real (BHIVE) search distance and
+	// false when the distance must be computed during batch processing. A
+	// valid distance may be 0 (e.g. -IP == 0), so this flag must be consulted
+	// instead of testing dist for zero.
+	distValid bool
+	storeId   uint64 // used in BHIVE scans for re-ranking
+	recordId  uint64 // used in BHIVE scans for re-ranking
 
 	partnId int    // Used to identify snapshot and reader context for partitioned indexes
 	cid     []byte // CentroidID used for the scan
@@ -329,6 +334,7 @@ func (r *Row) copy(source *Row) {
 	r.len = source.len
 	r.last = source.last
 	r.dist = source.dist
+	r.distValid = source.distValid
 	r.copyKey(source.key)
 	if source.value != nil {
 		r.copyValue(source.value)
@@ -345,6 +351,7 @@ func (r *Row) copyForBhive(source *Row) {
 	r.len = source.len
 	r.last = source.last
 	r.dist = source.dist
+	r.distValid = source.distValid
 	r.copyKey(source.key)
 
 	if source.value != nil {

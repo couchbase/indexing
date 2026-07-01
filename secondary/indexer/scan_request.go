@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/bhive"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
@@ -131,18 +132,38 @@ type ScanRequest struct {
 	User             string // For read metering
 	SkipReadMetering bool
 
-	nprobes           int
-	topNScan          int
-	vectorPos         int
-	isVectorScan      bool
-	isBhiveScan       bool
+	nprobes      int
+	topNScan     int
+	vectorPos    int
+	isVectorScan bool
+	isBhiveScan  bool
+
+	// Generic per-query state shared between the partition scans and the
+	// merge for sparse vector scans. ScanRequest stays storage-agnostic.
+	//   centroids     — per-partition set of centroids routed for this query
+	//                   (the set form of centroidMap). A scan may use it as a
+	//                   skip set, e.g. to avoid rescanning centroids the
+	//                   per-centroid scans already covered.
+	//   topKThreshold — the single shared top-K admission floor (a heuristic
+	//                   pruning hint), in the SAME metric the per-centroid
+	//                   scans return (distance, smaller is better). Each
+	//                   centroid publishes the largest distance it returned as
+	//                   it completes; the tracker keeps the maximum. A scan
+	//                   scheduled to run afterwards reads it to prune. nil
+	//                   unless a scan needs it.
+	//   dedup         — when true the merge drops duplicate docs
+	//                   (by storeId, recordId) across scan sources.
+	centroids     map[common.PartitionId]map[uint64]struct{}
+	topKThreshold *topKThreshold
+	dedup         bool
+
 	queryVector       []float32
 	sparseQueryVector common.ConciseSparseVector // Concise format: [N, idx1, ..., idxN, val1, ..., valN]
 
 	codebookMap              map[common.PartitionId]codebook.Codebook
 	centroidMap              map[common.PartitionId][]int64
 	protoScans               []*protobuf.Scan
-	vectorScans              map[common.PartitionId]map[int64][]Scan
+	vectorScans              map[common.PartitionId][]centroidScans
 	indexOrder               *IndexKeyOrder
 	projectVectorDist        bool // set to true if vector distance has to be projected. false otherwise
 	perPartnScanParallelism  int  // Parallelism inherent in scan after generating ranges
@@ -844,6 +865,17 @@ func (r *ScanRequest) setReaderCtxMap() {
 	}
 	r.perPartnReaderCtx = ctxs
 
+	// Give each bhive reader context a back-pointer to the request for context.
+	if r.isBhiveScan && r.IsSparseVectorIndexScan() {
+		for _, ctxList := range ctxs {
+			for _, ctx := range ctxList {
+				if bctx, ok := ctx.(*bhiveReaderCtx); ok {
+					bctx.req = r
+				}
+			}
+		}
+	}
+
 	// As more than needed readers are released reset this value
 	// and also release the excess readers from semaphore
 	if r.readersPerPartition > r.perPartnScanParallelism {
@@ -864,11 +896,20 @@ func (r *ScanRequest) setReaderCtxMap() {
 	}
 }
 
+// centroidScans holds the scan ranges for one centroid (or the sentinel),
+// kept as an ordered slice (rather than a map keyed by centroid id) so the
+// worker scatter iterates centroids deterministically. In particular the
+// sentinel, appended last, lands in the last batch without special-casing.
+type centroidScans struct {
+	cid   int64
+	scans []Scan
+}
+
 // fillVectorScans must be called after getNearestCentroids as this function uses centroidIDs
 func (r *ScanRequest) fillVectorScans() (localErr error) {
 
 	if r.isBhiveScan {
-		scansForPartns := make(map[common.PartitionId]map[int64][]Scan)
+		scansForPartns := make(map[common.PartitionId][]centroidScans)
 
 		// For sparse vectors, use the SparseJL query vector for scan.High
 		var qvBytes []byte
@@ -878,23 +919,61 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 			qvBytes = Float32ToByteSlice(r.queryVector)
 		}
 
+		// Track the centroid list and topK threshold
+		if r.IsSparseVectorIndexScan() {
+			r.centroids = make(map[common.PartitionId]map[uint64]struct{}, len(r.centroidMap))
+			r.topKThreshold = newTopKThreshold()
+		}
+
+		// Reinterpret the sentinel's bits as int64 for use as a scan-
+		// list map key. A direct constant cast int64(bhive.SentinelCellID)
+		// is rejected at compile time (^uint64(0) = 18446744073709551615
+		// overflows int64), so go through a uint64 variable to force a
+		// runtime conversion — the bit pattern wraps to -1, which cannot
+		// collide with a real centroid ID (always >= 0). The actual 8-byte
+		// centroid key still carries the full ^uint64(0) via
+		// NewBhiveCentroidId below.
+		sentinelU64 := bhive.SentinelCellID
+		sentinelCid := int64(sentinelU64)
+
 		for partnId, centroidIdList := range r.centroidMap {
-			scansForCentroids := make(map[int64][]Scan)
+			scansForCentroids := make([]centroidScans, 0, len(centroidIdList)+1)
+
+			var routed map[uint64]struct{}
+			if r.IsSparseVectorIndexScan() {
+				routed = make(map[uint64]struct{}, len(centroidIdList))
+			}
+
 			for _, cid := range centroidIdList {
 				bcid := NewBhiveCentroidId(uint64(cid))
 
 				qv := bhiveCentroidId(qvBytes)
 				scan := Scan{Low: bcid, High: qv, Incl: Both, ScanType: LookupReq}
-				scansForCentroids[cid] = append(scansForCentroids[cid], scan)
+				scansForCentroids = append(scansForCentroids, centroidScans{cid: cid, scans: []Scan{scan}})
+
+				if r.IsSparseVectorIndexScan() {
+					routed[uint64(cid)] = struct{}{}
+				}
 			}
+
+			if r.IsSparseVectorIndexScan() {
+				bcid := NewBhiveCentroidId(bhive.SentinelCellID)
+				qv := bhiveCentroidId(qvBytes)
+				scan := Scan{Low: bcid, High: qv, Incl: Both, ScanType: LookupReq}
+				// Appended last ⇒ the scatter places the sentinel in the last
+				// batch, after the per-cell centroids that feed the top-K floor.
+				scansForCentroids = append(scansForCentroids, centroidScans{cid: sentinelCid, scans: []Scan{scan}})
+				r.centroids[partnId] = routed
+			}
+
 			scansForPartns[partnId] = scansForCentroids
-			r.perPartnScanParallelism = len(centroidIdList)
+			r.perPartnScanParallelism = len(scansForCentroids)
 		}
 		r.vectorScans = scansForPartns
 		return nil
 	}
 
-	scansForPartns := make(map[common.PartitionId]map[int64][]Scan)
+	scansForPartns := make(map[common.PartitionId][]centroidScans)
 	for partnId, centroidIdList := range r.centroidMap {
 		cidStrList := make([]string, len(centroidIdList))
 		for i, cid := range centroidIdList {
@@ -922,9 +1001,13 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 		if localErr != nil {
 			return localErr
 		}
-		scansForPartns[partnId] = make(map[int64][]Scan)
 		r.perPartnScanParallelism = len(scansGenerated)
 
+		// Group scans by centroid id, preserving first-seen order so the
+		// scatter iterates centroids deterministically. cidIndex maps a cid to
+		// its slot in the ordered slice.
+		var groups []centroidScans
+		cidIndex := make(map[int64]int)
 		for id, scan := range scansGenerated {
 			// If its not Multicentroid scan cid is used in distance calculations when using SIMD
 			// so get the correct value from the scan low and high key
@@ -934,13 +1017,14 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 			if !scan.MultiCentroid {
 				cid = scan.cid
 			}
-			_, ok := scansForPartns[partnId][cid]
-			if !ok {
-				scansForPartns[partnId][cid] = []Scan{scan}
+			if idx, ok := cidIndex[cid]; ok {
+				groups[idx].scans = append(groups[idx].scans, scan)
 			} else {
-				scansForPartns[partnId][cid] = append(scansForPartns[partnId][cid], scan)
+				cidIndex[cid] = len(groups)
+				groups = append(groups, centroidScans{cid: cid, scans: []Scan{scan}})
 			}
 		}
+		scansForPartns[partnId] = groups
 	}
 	r.vectorScans = scansForPartns
 	return nil
@@ -993,6 +1077,9 @@ func (r *ScanRequest) cleanup() {
 	r.codebookMap = nil
 	r.centroidMap = nil
 	r.vectorScans = nil
+	r.centroids = nil
+	r.topKThreshold = nil
+	r.dedup = false
 }
 
 func (r *ScanRequest) isNil(k []byte, emptyArrAsNil bool) bool {
@@ -3074,4 +3161,64 @@ func cloneProtoScans(protoScans []*protobuf.Scan) (newProtoScans []*protobuf.Sca
 		}
 	}
 	return
+}
+
+// topKThreshold is the single shared distance a scan publishes as a heuristic
+// top-K admission floor, in the per-centroid distance metric (smaller distance
+// = better). It is a warm-start hint for a later scan's pruning, not an exact
+// bound — so it is deliberately cheap to maintain.
+//
+// Each per-centroid scan publishes the LARGEST distance it returned (the worst
+// of its results). That value is always >= the true k-th best distance,
+// because the k-th best is itself one of the returned results — so using it as
+// a floor never over-prunes (it can only be loose), as long as the result set
+// has at least `limit` items. For sparse-vector search nprobe*topN >> limit,
+// so that holds; if a query returned fewer than `limit` candidates in total
+// there is no real admission bar and the floor could slightly over-prune, but
+// that regime does not arise here.
+//
+// The tracker keeps the MAXIMUM published value (the global largest returned).
+// Keeping the minimum would be unsafe: a centroid that returned only excellent
+// results has a small max that can sit above the global k-th best.
+//
+// It is generic: it holds one distance, not rows, and carries no
+// storage-engine semantics. The bhive inverted-index sentinel reads it
+// (negating distance back to an inner-product score), but nothing here knows
+// that. A single mutex guards the value; contention is low because publish()
+// is called once per centroid, not per row.
+type topKThreshold struct {
+	mu   sync.Mutex
+	dist float32
+	set  bool
+}
+
+func newTopKThreshold() *topKThreshold {
+	return &topKThreshold{}
+}
+
+// publish folds a centroid's largest returned distance into the shared value,
+// keeping the maximum seen. One short critical section per centroid. Safe on a
+// nil receiver (no-op).
+func (t *topKThreshold) publish(d float32) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if !t.set || d > t.dist {
+		t.dist = d
+		t.set = true
+	}
+	t.mu.Unlock()
+}
+
+// value returns the current threshold distance and true once any centroid has
+// published; otherwise (0, false), meaning no floor yet ⇒ no pruning. Safe on
+// a nil receiver.
+func (t *topKThreshold) value() (float32, bool) {
+	if t == nil {
+		return 0, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.dist, t.set
 }
