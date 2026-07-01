@@ -2034,6 +2034,8 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 	}
 
 	var numIndexes int64
+	var numBhiveIndexes int64
+	var numCompositeIndexes int64
 	gStats := s.stats.Get()
 
 	indexInstMap := s.indexInstMap.Get()
@@ -2056,6 +2058,14 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 		}
 
 		numIndexes++
+
+		if inst.Defn.IsBhive() {
+			numBhiveIndexes++ // Increment number of bhive indexes for node level stats
+		}
+
+		if inst.Defn.IsComposite() {
+			numCompositeIndexes++ // Increment number of composite indexes for node level stats
+		}
 
 		for _, partnInst := range partnMap {
 			var internalData []string
@@ -2147,6 +2157,8 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 		}
 	}
 	gStats.numIndexes.Set(numIndexes)
+	gStats.numBhiveIndexes.Set(numBhiveIndexes)
+	gStats.numCompositeIndexes.Set(numCompositeIndexes)
 
 	return stats
 }

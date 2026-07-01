@@ -554,6 +554,13 @@ func (defn *IndexDefn) IsBhive() bool {
 	return false
 }
 
+func (defn *IndexDefn) IsComposite() bool {
+	if defn.IsVectorIndex && defn.VectorMeta != nil && defn.VectorMeta.IsCompositeIndex == true {
+		return true
+	}
+	return false
+}
+
 func (defn *IndexDefn) NonBhiveVectorIndex() bool {
 	if defn.IsVectorIndex && defn.VectorMeta != nil && defn.VectorMeta.IsBhive == false {
 		return true

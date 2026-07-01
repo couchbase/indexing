@@ -922,6 +922,8 @@ type IndexerStats struct {
 	pauseTotalNs   stats.Uint64Val
 
 	numIndexes          stats.Int64Val
+	numBhiveIndexes     stats.Int64Val
+	numCompositeIndexes stats.Int64Val
 	numStorageInstances stats.Int64Val
 	avgResidentPercent  stats.Int64Val
 	avgMutationRate     stats.Int64Val
@@ -1002,6 +1004,8 @@ func (s *IndexerStats) Init() {
 	s.pauseTotalNs.Init()
 
 	s.numIndexes.Init()
+	s.numBhiveIndexes.Init()
+	s.numCompositeIndexes.Init()
 	s.numStorageInstances.Init()
 	s.avgResidentPercent.Init()
 	s.avgMutationRate.Init()
@@ -1373,6 +1377,8 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("total_disk_size", &is.totalDiskSize)
 	statMap.AddStatValueFiltered("num_storage_instances", &is.numStorageInstances)
 	statMap.AddStatValueFiltered("num_indexes", &is.numIndexes)
+	statMap.AddStatValueFiltered("num_bhive_indexes", &is.numBhiveIndexes)
+	statMap.AddStatValueFiltered("num_composite_indexes", &is.numCompositeIndexes)
 
 	if common.IsServerlessDeployment() {
 		statMap.AddStatValueFiltered("memory_used_actual", &is.memoryUsedActual)
@@ -3620,6 +3626,12 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_indexes gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_indexes %v\n", METRICS_PREFIX, is.numIndexes.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_bhive_indexes gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_bhive_indexes %v\n", METRICS_PREFIX, is.numBhiveIndexes.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_composite_indexes gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_composite_indexes %v\n", METRICS_PREFIX, is.numCompositeIndexes.Value()))...)
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_storage_instances gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_storage_instances %v\n", METRICS_PREFIX, is.numStorageInstances.Value()))...)
