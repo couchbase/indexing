@@ -4016,3 +4016,21 @@ func (info *bhiveSnapshotInfo) Stats() map[string]interface{} {
 func (mdb *bhiveSlice) logErrorsToConsole(msg string) {
 	common.Console(mdb.clusterAddr, msg)
 }
+
+// //////////////////////////////////////////////////////////
+// sparse vector helpers
+// //////////////////////////////////////////////////////////
+
+// Thin EE aliases for bhive sparse-vector helpers so untagged indexer files
+// never import bhive directly. bhive drags in cgo packages (bhive/lz4 and,
+// via plasma, plasma/zstd) and must stay out of any package reachable from
+// the GSI client, else the query (cbq-engine) build breaks.
+const bhiveSentinelCellID = bhive.SentinelCellID
+
+func bhiveDequantizeSparseWire(buf []byte) []float32 {
+	return bhive.DequantizeSparseWire(buf)
+}
+
+func bhiveQuantizedWireSize(buf []byte) int {
+	return bhive.QuantizedWireSize(buf)
+}

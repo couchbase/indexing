@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/couchbase/bhive"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
@@ -933,7 +932,7 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 		// collide with a real centroid ID (always >= 0). The actual 8-byte
 		// centroid key still carries the full ^uint64(0) via
 		// NewBhiveCentroidId below.
-		sentinelU64 := bhive.SentinelCellID
+		sentinelU64 := bhiveSentinelCellID
 		sentinelCid := int64(sentinelU64)
 
 		for partnId, centroidIdList := range r.centroidMap {
@@ -957,7 +956,7 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 			}
 
 			if r.IsSparseVectorIndexScan() {
-				bcid := NewBhiveCentroidId(bhive.SentinelCellID)
+				bcid := NewBhiveCentroidId(bhiveSentinelCellID)
 				qv := bhiveCentroidId(qvBytes)
 				scan := Scan{Low: bcid, High: qv, Incl: Both, ScanType: LookupReq}
 				// Appended last ⇒ the scatter places the sentinel in the last

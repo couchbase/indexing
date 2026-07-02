@@ -86,11 +86,13 @@ type EncryptionMgr struct {
 	inFlight     *workItem  // non-nil while a drop is being processed
 	pendingDrops []workItem // drops waiting behind an in-flight drop
 
-	isReady  atomic.Bool
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	seedCh   chan struct{}
-	seedOnce sync.Once
+	isReady   atomic.Bool
+	stopCh    chan struct{}
+	stopOnce  sync.Once
+	seedCh    chan struct{}
+	seedOnce  sync.Once
+	hooksCh   chan struct{}
+	hooksOnce sync.Once
 }
 
 func (e *EncryptionMgr) initialSeed() {
@@ -113,6 +115,7 @@ func NewEncryptionMgr(config c.Config) (*EncryptionMgr, error) {
 		workCh:    make(chan workItem, workChCapacity),
 		stopCh:    make(chan struct{}),
 		seedCh:    make(chan struct{}),
+		hooksCh:   make(chan struct{}),
 	}
 
 	go e.initialSeed()
@@ -138,6 +141,7 @@ func (e *EncryptionMgr) SetStatsHooks(h StatsHooks) {
 	e.hooksMu.Lock()
 	e.hooks = h
 	e.hooksMu.Unlock()
+	e.hooksOnce.Do(func() { close(e.hooksCh) })
 }
 
 // MarkReady allows getInUseKeysCallback to start returning real data.
@@ -283,6 +287,12 @@ func (e *EncryptionMgr) enqueueDrop(w workItem) {
 
 func (e *EncryptionMgr) run() {
 	<-e.seedCh
+	select {
+	case <-e.hooksCh:
+	case <-e.stopCh:
+		logging.Infof("EncryptionMgr:run exiting")
+		return
+	}
 	logging.Infof("EncryptionMgr:run started")
 	for {
 		select {

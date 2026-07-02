@@ -62,3 +62,39 @@ func GetShardCompatVersion_Bhive() int {
 func createBhiveSliceDir(storageDir string, path string, isNew bool) error {
 	return nil
 }
+
+type bhiveReaderCtx struct {
+	readUnits        uint64
+	user             string
+	skipReadMetering bool
+
+	// dist is a per-iteration side channel carrying the (quantized) search
+	// distance of the record currently being handed to the EntryCallback.
+	// It is meaningful only when distValid is true; a valid distance may be
+	// 0 (e.g. -IP == 0), so the zero value must not be read as "no distance".
+	dist      float32
+	distValid bool
+
+	req *ScanRequest //back-pointer to the owning scan request, set once in setReaderCtxMap.
+}
+
+func (ctx *bhiveReaderCtx) Done()                      {}
+func (ctx *bhiveReaderCtx) GetCursorKey() *[]byte      { return nil }
+func (ctx *bhiveReaderCtx) Init(donech chan bool) bool { return false }
+func (ctx *bhiveReaderCtx) ReadUnits() uint64          { return 0 }
+func (ctx *bhiveReaderCtx) RecordReadUnits(ru uint64)  {}
+func (ctx *bhiveReaderCtx) SetCursorKey(key *[]byte)   {}
+func (ctx *bhiveReaderCtx) SkipReadMetering() bool     { return false }
+func (ctx *bhiveReaderCtx) User() string               { return "" }
+
+// CE stubs for the EE bhive sparse-vector helpers in bhive_slice.go.
+// Sparse vector indexes are EE-only; these paths are never exercised in CE.
+const bhiveSentinelCellID = 0
+
+func bhiveDequantizeSparseWire(_ []byte) []float32 {
+	return nil
+}
+
+func bhiveQuantizedWireSize(_ []byte) int {
+	return 0
+}
