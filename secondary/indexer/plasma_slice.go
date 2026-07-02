@@ -588,6 +588,9 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		cfg.AutoTuneFlushBufferRebalInterval =
 			time.Duration(slice.sysconf["plasma.fbtuner.rebalInterval"].Int()) * time.Second
 		cfg.AutoTuneFlushBufferDebug = slice.sysconf["plasma.fbtuner.debug"].Bool()
+
+		cfg.LSSCleanerDropKeyInterval = time.Duration(slice.sysconf["plasma.encryption.LSSCleanerDropKeyInterval"].Int()) * time.Minute
+
 		//turn off iterator refresh for vector index
 		if slice.idxDefn.IsVectorIndex {
 			cfg.IteratorRefreshRate = -1
@@ -4259,6 +4262,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		time.Duration(mdb.sysconf["plasma.fbtuner.rebalInterval"].Int()) * time.Second
 	mdb.mainstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
+	mdb.mainstore.LSSCleanerDropKeyInterval = time.Duration(mdb.sysconf["plasma.encryption.LSSCleanerDropKeyInterval"].Int()) * time.Minute
+
 	loadClientCopyConfig(&mdb.mainstore.Config.CopyConfig, mdb.sysconf, true)
 
 	if common.IsServerlessDeployment() {
@@ -4378,6 +4383,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.mainstore.AutoTuneFlushBufferRebalInterval =
 			time.Duration(mdb.sysconf["plasma.fbtuner.rebalInterval"].Int()) * time.Second
 		mdb.backstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
+
+		mdb.backstore.LSSCleanerDropKeyInterval = time.Duration(mdb.sysconf["plasma.encryption.LSSCleanerDropKeyInterval"].Int()) * time.Minute
 
 		loadClientCopyConfig(&mdb.mainstore.Config.CopyConfig, mdb.sysconf, true)
 

@@ -2527,6 +2527,14 @@ var SystemConfig = Config{
 		false,
 	},
 
+	"indexer.plasma.encryption.LSSCleanerDropKeyInterval": ConfigValue{
+		30,
+		"time interval at which cleaner daemon gracefully purges unused keys (minutes)",
+		30,
+		false, // mutable,
+		false, // case-insensitive
+	},
+
 	"indexer.bhive.numReaders": ConfigValue{
 		runtime.GOMAXPROCS(0) * 3,
 		"Numbers of readers for bhive",
