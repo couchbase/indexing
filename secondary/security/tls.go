@@ -93,6 +93,19 @@ func getCertPoolForClient(setting *SecuritySetting) (*x509.CertPool, error) {
 	return caCertPool, nil
 }
 
+// crlVerifyPeerCertificate returns a tls.Config.VerifyPeerCertificate callback
+// that rejects peer certificates revoked under ns_server's CRL policy for the
+// given scope: CRLScopeNodeToNode for outbound/client connections (verifying the
+// peer's server cert) and CRLScopeClientAuth for inbound connections (verifying a
+// presented client cert). All three TLS builders use this so the cbauth call
+// lives in one place. cbauth.CRLsValidate returns nil immediately when CRL
+// checking is not configured, so this is a cheap no-op unless a policy is set.
+func crlVerifyPeerCertificate(scope cbauth.CRLScope) func([][]byte, [][]*x509.Certificate) error {
+	return func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+		return cbauth.CRLsValidate(rawCerts, verifiedChains, scope)
+	}
+}
+
 // Setup client TLSConfig
 func setupClientTLSConfig(host string) (*tls.Config, error) {
 
@@ -133,6 +146,9 @@ func setupClientTLSConfig(host string) (*tls.Config, error) {
 	} else {
 		// setup server host name
 		tlsConfig.ServerName = host
+
+		// Reject server certs revoked per ns_server's nodeToNode CRL policy.
+		tlsConfig.VerifyPeerCertificate = crlVerifyPeerCertificate(cbauth.CRLScopeNodeToNode)
 	}
 
 	// setup prefer ciphers
@@ -467,6 +483,9 @@ func SetupCertificateForClient(host string, tlsConfig *tls.Config) error {
 		tlsConfig.InsecureSkipVerify = true
 	} else {
 		tlsConfig.ServerName = host
+
+		// Reject server certs revoked per ns_server's nodeToNode CRL policy.
+		tlsConfig.VerifyPeerCertificate = crlVerifyPeerCertificate(cbauth.CRLScopeNodeToNode)
 
 		// Get certificate and cbauth TLS setting
 		pref := settings.tlsPreference
@@ -952,6 +971,15 @@ func getCurrentTLSConfigFromSettingForServer(setting *SecuritySetting) (*tls.Con
 			}
 
 			config.ClientCAs = caCertPool
+
+			// Reject peer certs revoked per ns_server's nodeToNode CRL policy.
+			// Every GSI listener (indexer + projector) is node-to-node: its
+			// non-local peers are cluster nodes (peer indexers, the rebalance
+			// orchestrator, the query service's embedded clients), so a presented
+			// client cert is a node cert governed by the nodeToNode policy. The
+			// clientAuth scope is reserved for external client-facing listener
+			// client facing API in indexer https port have ns_server proxy
+			config.VerifyPeerCertificate = crlVerifyPeerCertificate(cbauth.CRLScopeNodeToNode)
 		}
 	}
 
