@@ -615,7 +615,7 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 			// dequantize it to the concise full-wire form Transpose/ComputeDistance
 			// expect. A nil result means a malformed/truncated wire; an empty vector
 			// decodes to [count=0], which Transpose simply finds no match for.
-			concise = common.ConciseSparseVector(c.DequantizeSparseWire(row.value))
+			concise = common.ConciseSparseVector(bhiveDequantizeSparseWire(row.value))
 			if len(concise) == 0 {
 				return fmt.Errorf("sparse vector: malformed quantized wire (len %d)", len(row.value))
 			}
@@ -2575,7 +2575,7 @@ func (w *ScanWorker) sparseVectorSizeFromMeta(meta []byte) int {
 // header gives the wire length, and the include columns follow it. Returns 0 if
 // the buffer is too small or the decoded size exceeds the meta.
 func sparseVectorSizeFromBhive(meta []byte) int {
-	size := c.QuantizedWireSize(meta)
+	size := bhiveQuantizedWireSize(meta)
 	if size == 0 || size > len(meta) {
 		return 0
 	}

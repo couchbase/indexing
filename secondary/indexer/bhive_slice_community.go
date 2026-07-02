@@ -86,3 +86,15 @@ func (ctx *bhiveReaderCtx) RecordReadUnits(ru uint64)  {}
 func (ctx *bhiveReaderCtx) SetCursorKey(key *[]byte)   {}
 func (ctx *bhiveReaderCtx) SkipReadMetering() bool     { return false }
 func (ctx *bhiveReaderCtx) User() string               { return "" }
+
+// CE stubs for the EE bhive sparse-vector helpers in bhive_slice.go.
+// Sparse vector indexes are EE-only; these paths are never exercised in CE.
+const bhiveSentinelCellID = 0
+
+func bhiveDequantizeSparseWire(_ []byte) []float32 {
+	return nil
+}
+
+func bhiveQuantizedWireSize(_ []byte) int {
+	return 0
+}

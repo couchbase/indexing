@@ -932,7 +932,7 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 		// collide with a real centroid ID (always >= 0). The actual 8-byte
 		// centroid key still carries the full ^uint64(0) via
 		// NewBhiveCentroidId below.
-		sentinelU64 := common.BhiveSentinalCellID
+		sentinelU64 := bhiveSentinelCellID
 		sentinelCid := int64(sentinelU64)
 
 		for partnId, centroidIdList := range r.centroidMap {
@@ -956,7 +956,7 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 			}
 
 			if r.IsSparseVectorIndexScan() {
-				bcid := NewBhiveCentroidId(common.BhiveSentinalCellID)
+				bcid := NewBhiveCentroidId(bhiveSentinelCellID)
 				qv := bhiveCentroidId(qvBytes)
 				scan := Scan{Low: bcid, High: qv, Incl: Both, ScanType: LookupReq}
 				// Appended last ⇒ the scatter places the sentinel in the last
