@@ -4040,10 +4040,20 @@ func (mdb *bhiveSlice) logErrorsToConsole(msg string) {
 // the GSI client, else the query (cbq-engine) build breaks.
 const bhiveSentinelCellID = bhive.SentinelCellID
 
-func bhiveDequantizeSparseWire(buf []byte) []float32 {
-	return bhive.DequantizeSparseWire(buf)
-}
-
 func bhiveQuantizedWireSize(buf []byte) int {
 	return bhive.QuantizedWireSize(buf)
+}
+
+// bhiveQuantizeSparseQuery quantizes a concise float32 sparse query into the
+// bhive quantized wire format (same encoding rule as the stored vectors).
+// Allocates; called once per scan request.
+func bhiveQuantizeSparseQuery(q []float32) ([]byte, error) {
+	return bhive.QuantizeQueryVector(q)
+}
+
+// bhiveSparseDotBatchNQuantized computes inner products between a quantized
+// query wire and n stored quantized wires, writing float32 IPs to
+// out[0..n-1]. nil/empty entries in s produce out[i]=0.
+func bhiveSparseDotBatchNQuantized(q []byte, s [][]byte, out []float32) {
+	bhive.SparseDotBatchNQuantized(q, s, out)
 }

@@ -154,13 +154,6 @@ type SparseCodebook interface {
 	// Input for q and s must be in the concise format.
 	Transpose(q []float32, s []float32, result []float32) bool
 
-	// TransposeQuantized is Transpose against a scalar-quantized document
-	// vector (common.QuantizedSparseVector packed bytes) instead of a float32
-	// concise vector. The query q stays in float32 concise format. Matched
-	// doc weights are dequantized into result. Returns true if any term
-	// matched.
-	TransposeQuantized(q []float32, encoded []byte, result []float32) bool
-
 	// SetWeightHistogram attaches a training-time weight histogram plus the
 	// derived prune threshold and the L1 mass fraction retained at that
 	// threshold. Persisted with the codebook on Marshal so insert-time

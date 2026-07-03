@@ -91,10 +91,16 @@ func (ctx *bhiveReaderCtx) User() string               { return "" }
 // Sparse vector indexes are EE-only; these paths are never exercised in CE.
 const bhiveSentinelCellID = 0
 
-func bhiveDequantizeSparseWire(_ []byte) []float32 {
-	return nil
-}
-
 func bhiveQuantizedWireSize(_ []byte) int {
 	return 0
+}
+
+func bhiveQuantizeSparseQuery(_ []float32) ([]byte, error) {
+	return nil, nil
+}
+
+func bhiveSparseDotBatchNQuantized(_ []byte, _ [][]byte, out []float32) {
+	for i := range out {
+		out[i] = 0
+	}
 }

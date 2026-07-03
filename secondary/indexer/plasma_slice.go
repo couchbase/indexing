@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/bhive"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/iowrap"
@@ -2397,10 +2398,15 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 			// Storage payload. Centroid assignment below always runs on the
 			// float32 `vec`; quantization affects only the stored bytes.
 			if quantizeStorage {
-				var encoded []byte
-				if encoded, err = common.EncodeQuantizedSparse(vec, mdb.sparseQuantBuf[workerId]); err == nil {
-					mdb.sparseQuantBuf[workerId] = encoded
-					quantizedCodeOrConciseVec = encoded
+				// Store the bhive quantized sparse wire (same format the bhive
+				// slice persists; the header carries the per-vector L2 norm) so
+				// the scan pipeline can run the bhive sparse dot-product kernel
+				// directly on the stored bytes.
+				mdb.sparseQuantBuf[workerId] = resizeSparseQuantBuf(
+					mdb.sparseQuantBuf[workerId], bhive.QuantizedSparseSize(vec))
+				var n int
+				if n, err = bhive.QuantizeSparseVectorTo(vec, mdb.sparseQuantBuf[workerId]); err == nil {
+					quantizedCodeOrConciseVec = mdb.sparseQuantBuf[workerId][:n]
 				}
 			} else {
 				quantizedCodeOrConciseVec = Float32ToByteSlice(vec)
@@ -6598,6 +6604,16 @@ func resizeQuantizedCodeBuf(quantizedCodeBuf []byte, numVecs, codeSize int, doRe
 		quantizedCodeBuf = make([]byte, 0, newSize)
 	}
 	return quantizedCodeBuf
+}
+
+// resizeSparseQuantBuf grows the per-writer scratch holding the bhive
+// quantized sparse wire and sets its length to size, as required by
+// bhive.QuantizeSparseVectorTo (which validates len(dst), not cap).
+func resizeSparseQuantBuf(sparseQuantBuf []byte, size int) []byte {
+	if cap(sparseQuantBuf) < size {
+		return make([]byte, size)
+	}
+	return sparseQuantBuf[:size]
 }
 
 func resizeSparseJLBuf(sparseJLBuf []float32, dimension int, doResize bool) []float32 {

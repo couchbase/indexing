@@ -158,6 +158,13 @@ type ScanRequest struct {
 
 	queryVector       []float32
 	sparseQueryVector common.ConciseSparseVector // Concise format: [N, idx1, ..., idxN, val1, ..., valN]
+	// sparseQueryQuantized is the (pruned) sparse query in the bhive quantized
+	// wire format, built once per request. Scan workers score rows lacking a
+	// stored graph-search distance by running the bhive sparse dot-product
+	// kernel over this wire and the stored quantized vectors. Set for bhive
+	// sparse scans and for plasma sparse scans with quantizeStorage on;
+	// read-only after setup (workers share it).
+	sparseQueryQuantized []byte
 
 	codebookMap              map[common.PartitionId]codebook.Codebook
 	centroidMap              map[common.PartitionId][]int64
@@ -842,6 +849,19 @@ func (r *ScanRequest) getNearestCentroids() error {
 					r.Stats.sparseQueryTermsPruned.Add(int64(origNNZ - r.sparseQueryVector.NNZ()))
 				}
 			}
+		}
+
+		// Quantize the (pruned) query once per request when the stored vectors
+		// are in the bhive quantized wire format: always for bhive slices, and
+		// for plasma slices when quantizeStorage is on. Scan workers run the
+		// bhive sparse dot-product kernel over this wire; quantizing after
+		// top-N pruning keeps the wire aligned with the query terms scored.
+		if r.isBhiveScan || cfg["vector.sparse.quantizeStorage"].Bool() {
+			quantized, err := bhiveQuantizeSparseQuery([]float32(r.sparseQueryVector))
+			if err != nil {
+				return fmt.Errorf("error quantizing sparse query vector: %v", err)
+			}
+			r.sparseQueryQuantized = quantized
 		}
 		return nil
 	}

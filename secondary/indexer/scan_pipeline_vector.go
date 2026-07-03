@@ -177,6 +177,17 @@ type ScanWorker struct {
 	// Cached sparse query vector values once per worker.
 	sparseQueryValues []float32
 
+	// sparseQuantizedScan is true when the stored sparse payload is the bhive
+	// quantized wire: always for bhive slices, and for plasma slices when
+	// vector.sparse.quantizeStorage is on. Resolved once at worker setup - it
+	// is fixed for the life of the request, so the per-batch scan path must
+	// not pay a config map lookup for it.
+	sparseQuantizedScan bool
+
+	// Scratch holding the stored quantized wires of one batch, passed to the
+	// bhive sparse dot-product kernel.
+	sparseWires [][]byte
+
 	cktmp [][]byte
 
 	dtable []float32
@@ -246,10 +257,26 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	w.codes = make([]byte, 0, bufferInitBatchSize*r.getVectorCodeSize())
 	w.dists = make([]float32, bufferInitBatchSize)
 
+	// Stored sparse payload format. Must match what the inserter wrote (no
+	// mixed-format support; operator owns consistency) - see
+	// processSparseVectorBatch.
+	if r.IsSparseVectorIndexScan() {
+		w.sparseQuantizedScan = r.isBhiveScan ||
+			config["vector.sparse.quantizeStorage"].Bool()
+	}
+
 	fvecsDim := bufferInitBatchSize * r.getVectorDim()
 	if r.IsSparseVectorIndexScan() && len(r.sparseQueryVector) > 0 {
 		w.sparseQueryDim = r.sparseQueryVector.NNZ()
-		fvecsDim = bufferInitBatchSize * w.sparseQueryDim
+		if w.sparseQuantizedScan {
+			// The quantized path scores straight out of the stored wires: it
+			// uses fvecs only to stage one inner product per compute row of a
+			// mixed batch, never the queryDim-wide Transpose blocks the float
+			// path needs.
+			fvecsDim = bufferInitBatchSize
+		} else {
+			fvecsDim = bufferInitBatchSize * w.sparseQueryDim
+		}
 	}
 	w.fvecs = make([]float32, 0, fvecsDim)
 
@@ -344,6 +371,7 @@ func (w *ScanWorker) Close() {
 	w.codes = nil
 	w.fvecs = nil
 	w.dists = nil
+	w.sparseWires = nil
 	w.cktmp = nil
 	w.dtable = nil
 	w.queryBP = nil
@@ -549,9 +577,167 @@ func (w *ScanWorker) finishCallback() {
 
 }
 
-// processSparseVectorBatch decodes sparse vectors, performs query term matching
-// using Transpose, and computes distances.
+// processSparseVectorBatch computes distances for a batch of sparse-vector
+// rows, dispatching on the stored payload format. bhive slices always store
+// the bhive quantized sparse wire; plasma slices store it when
+// vector.sparse.quantizeStorage is on (the setting must match the format the
+// inserter wrote - no mixed-format support; operator owns consistency) and
+// the float32 concise wire otherwise.
 func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
+	if w.sparseQuantizedScan {
+		return w.processSparseVectorBatchQuantized(vecCount)
+	}
+	return w.processSparseVectorBatchFloat(vecCount)
+}
+
+// processSparseVectorBatchQuantized scores rows whose stored payload is the
+// bhive quantized sparse wire. A batch may mix two kinds of rows:
+//   - Rows carrying a valid stored (quantized) search distance produced by
+//     the graph search (row.distValid). Their on-disk payload may have been
+//     dropped, so they must NOT be rescored - we reuse the stored distance
+//     directly (which may legitimately be 0, e.g. -IP == 0).
+//   - Rows without a stored distance (bhive flush buffer / disk, or plasma
+//     storage). These are scored with a single bhive sparse dot-product
+//     kernel call over the quantized query wire and the stored wires - no
+//     per-row term matching and no float32 materialization.
+//
+// Distance is the negated inner product. An IP of 0 means the row shares no
+// terms with the query (the quantizer clamps stored weights to >= 1, so any
+// real overlap yields a strictly positive IP); such rows are dropped,
+// mirroring Transpose's keep == false on the float path.
+func (w *ScanWorker) processSparseVectorBatchQuantized(vecCount int) error {
+
+	if cap(w.dists) < vecCount {
+		w.dists = make([]float32, vecCount)
+	} else {
+		w.dists = w.dists[:vecCount]
+	}
+
+	// Gather pass: stage the stored wire of every row lacking a stored
+	// distance. row.value is exactly the quantized wire on both engines -
+	// the bhive iterator callback frames it out of the record meta
+	// (value = meta[:wireSz], include columns follow), and plasma stores the
+	// bare wire as the whole value (plasma vector indexes carry no include
+	// columns). Each wire is still validated against its self-describing
+	// header count: the kernel scores a malformed wire as IP 0, which the
+	// compaction below cannot tell apart from a genuine no-term-overlap, so
+	// a truncated payload - an index whose stored format does not match
+	// vector.sparse.quantizeStorage, say - would silently return an empty
+	// result set instead of an error. The staged entries are slice headers
+	// written into the per-worker scratch - no per-row heap allocation once
+	// the scratch has grown to the batch size.
+	t0 := time.Now()
+	if cap(w.sparseWires) < vecCount {
+		w.sparseWires = make([][]byte, 0, vecCount)
+	}
+	wires := w.sparseWires[:0]
+	storedCnt := 0
+	for i := 0; i < vecCount; i++ {
+		row := w.currBatchRows[i]
+		if row.distValid {
+			storedCnt++
+			continue
+		}
+		if sz := bhiveQuantizedWireSize(row.value); sz == 0 || sz > len(row.value) {
+			return fmt.Errorf("sparse vector: malformed quantized wire (len %v)", len(row.value))
+		}
+		wires = append(wires, row.value)
+	}
+	w.sparseWires = wires
+	atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
+	atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
+
+	// One kernel call for the whole batch. When no row carries a stored
+	// distance - always the case for plasma, whose reader never sets
+	// distValid - wires[i] pairs 1:1 with currBatchRows[i], so the kernel
+	// writes IPs straight into w.dists and the compaction below negates in
+	// place; fvecs is not touched. Mixed bhive batches stage IPs in fvecs
+	// and scatter them to the compute rows.
+	computeCount := len(wires)
+	ips := w.dists[:computeCount]
+	if storedCnt > 0 {
+		if cap(w.fvecs) < computeCount {
+			w.fvecs = make([]float32, computeCount)
+		}
+		ips = w.fvecs[:computeCount]
+	}
+	if computeCount > 0 {
+		t0 = time.Now()
+		bhiveSparseDotBatchNQuantized(w.r.sparseQueryQuantized, wires, ips)
+		atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
+		atomic.AddInt64(&w.currJob.distCmpCnt, int64(computeCount))
+	}
+
+	// Compaction pass: negate computed IPs, reuse stored distances, and
+	// drop no-overlap rows in place (order preserved).
+	validCount := 0
+	if storedCnt == 0 {
+		// All-compute batch: ips aliases w.dists, row i pairs with ips[i].
+		// The write cursor trails the read cursor, so negating in place is
+		// safe.
+		for i := 0; i < vecCount; i++ {
+			ip := ips[i]
+			if ip == 0 {
+				// No matching terms between query and document vector - skip
+				// this document.
+				row := w.currBatchRows[i]
+				row.free() // Return row to pool to prevent pool exhaustion
+				w.currBatchRows[i] = nil
+				continue
+			}
+			if validCount != i {
+				w.currBatchRows[validCount] = w.currBatchRows[i]
+			}
+			w.dists[validCount] = -ip
+			validCount++
+		}
+	} else {
+		k := 0
+		for i := 0; i < vecCount; i++ {
+			row := w.currBatchRows[i]
+
+			var dist float32
+			if row.distValid {
+				dist = row.dist
+			} else {
+				ip := ips[k]
+				k++
+				if ip == 0 {
+					// No matching terms between query and document vector -
+					// skip this document.
+					row.free() // Return row to pool to prevent pool exhaustion
+					w.currBatchRows[i] = nil
+					continue
+				}
+				dist = -ip
+			}
+
+			if validCount != i {
+				w.currBatchRows[validCount] = row
+			}
+			w.dists[validCount] = dist
+			validCount++
+		}
+	}
+
+	// Restrict to surviving rows.
+	w.currBatchRows = w.currBatchRows[:validCount]
+	w.dists = w.dists[:validCount]
+
+	// Track candidate rows that produced no query-term match. Their volume
+	// is a useful signal for tuning IVF probe count and the input quality.
+	if skipped := vecCount - validCount; skipped > 0 {
+		w.currJob.sparseScanNoMatchSkips += uint64(skipped)
+	}
+
+	return nil
+}
+
+// processSparseVectorBatchFloat scores rows whose stored payload is the
+// float32 concise wire (plasma with quantizeStorage off): decode each
+// vector, term-match it against the query with Transpose, then compute
+// inner products via the codebook.
+func (w *ScanWorker) processSparseVectorBatchFloat(vecCount int) error {
 	sparseCb := w.currJob.codebook.(codebook.SparseCodebook)
 
 	qvec := w.r.sparseQueryVector
@@ -560,21 +746,12 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 		w.sparseQueryValues = qvec.Values()
 	}
 
-	// Whether stored vectors are scalar-quantized. Must match the format the
-	// inserter wrote (no mixed-format support); operator owns consistency.
-	quantizeStorage := w.config["vector.sparse.quantizeStorage"].Bool()
-
-	// A batch may mix two kinds of rows:
-	//   - Rows carrying a valid stored (quantized) search distance produced by
-	//     the graph search (row.distValid). Their on-disk payload may have been
-	//     dropped, so they must NOT be decoded/recomputed - we reuse the stored
-	//     distance directly (which may legitimately be 0, e.g. -IP == 0).
-	//   - Rows without a stored distance (served from the flush buffer / disk).
-	//     These must be term-matched and have their distance computed here.
-	// We make a single pass: stored rows keep their distance; compute rows are
-	// term-matched and staged contiguously into fvecs. Surviving rows are
-	// compacted in place (order preserved). The staged distances are written
-	// back afterwards.
+	// A batch may mix rows carrying a valid stored search distance
+	// (row.distValid - reused directly) with rows that must be term-matched
+	// and have their distance computed here. We make a single pass: stored
+	// rows keep their distance; compute rows are term-matched and staged
+	// contiguously into fvecs. Surviving rows are compacted in place (order
+	// preserved). The staged distances are written back afterwards.
 	if cap(w.dists) < vecCount {
 		w.dists = make([]float32, vecCount)
 	} else {
@@ -607,34 +784,20 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 			continue
 		}
 
-		var concise common.ConciseSparseVector
-		if !w.r.IndexInst.Defn.IsBhive() {
-			// No stored distance: decode the sparse vector and term-match it
-			// against the query.
-			valBytes := row.value
-			if len(valBytes) < 4 {
-				return errors.New("sparse vector too short")
-			}
+		// No stored distance: decode the sparse vector and term-match it
+		// against the query.
+		valBytes := row.value
+		if len(valBytes) < 4 {
+			return errors.New("sparse vector too short")
+		}
 
-			// Zero-copy reinterpret the raw bytes as ConciseSparseVector and use NNZ() to decode N.
-			concise = common.ConciseSparseVector(ByteSliceToFloat32(valBytes))
-			nnz := concise.NNZ()
-			expectedSize := 4 * concise.Size() // Size() returns element count; bytes = 4 * elements
-			if len(valBytes) < expectedSize {
-				return fmt.Errorf("sparse vector size %d less than expected %d for %d elements",
-					len(valBytes), expectedSize, nnz)
-			}
-		} else {
-			// No stored distance: these rows bypassed the graph search (flush
-			// buffer / disk), so term-match them against the query here. row.value
-			// holds the QUANTIZED sparse wire (the full vector is dropped);
-			// dequantize it to the concise full-wire form Transpose/ComputeDistance
-			// expect. A nil result means a malformed/truncated wire; an empty vector
-			// decodes to [count=0], which Transpose simply finds no match for.
-			concise = common.ConciseSparseVector(bhiveDequantizeSparseWire(row.value))
-			if len(concise) == 0 {
-				return fmt.Errorf("sparse vector: malformed quantized wire (len %d)", len(row.value))
-			}
+		// Zero-copy reinterpret the raw bytes as ConciseSparseVector and use NNZ() to decode N.
+		concise := common.ConciseSparseVector(ByteSliceToFloat32(valBytes))
+		nnz := concise.NNZ()
+		expectedSize := 4 * concise.Size() // Size() returns element count; bytes = 4 * elements
+		if len(valBytes) < expectedSize {
+			return fmt.Errorf("sparse vector size %d less than expected %d for %d elements",
+				len(valBytes), expectedSize, nnz)
 		}
 
 		result := w.fvecs[computeCount*queryDim : (computeCount+1)*queryDim]
@@ -643,27 +806,7 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 			result[j] = 0
 		}
 
-		var keep bool
-		if quantizeStorage {
-			// Quantized format: validate length against the encoded NNZ, then
-			// dequantize matched terms in place (no float32 materialization).
-			qsv := common.QuantizedSparseVector(valBytes)
-			if len(valBytes) < qsv.Size() {
-				return fmt.Errorf("quantized sparse vector size %d less than expected %d for %d elements",
-					len(valBytes), qsv.Size(), qsv.NNZ())
-			}
-			keep = sparseCb.TransposeQuantized([]float32(qvec), valBytes, result)
-		} else {
-			// Zero-copy reinterpret the raw bytes as ConciseSparseVector and use NNZ() to decode N.
-			concise := common.ConciseSparseVector(ByteSliceToFloat32(valBytes))
-			nnz := concise.NNZ()
-			expectedSize := 4 * concise.Size() // Size() returns element count; bytes = 4 * elements
-			if len(valBytes) < expectedSize {
-				return fmt.Errorf("sparse vector size %d less than expected %d for %d elements",
-					len(valBytes), expectedSize, nnz)
-			}
-			keep = sparseCb.Transpose([]float32(qvec), []float32(concise), result)
-		}
+		keep := sparseCb.Transpose([]float32(qvec), []float32(concise), result)
 		if !keep {
 			// No matching terms between query and document vector - skip this document
 			row.free() // Return row to pool to prevent pool exhaustion

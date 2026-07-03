@@ -5149,7 +5149,7 @@ var SystemConfig = Config{
 	},
 	"indexer.vector.sparse.quantizeStorage": ConfigValue{
 		true,
-		"Store sparse vectors scalar-quantized (uint8 weights + per-vector scale, uint16 dims) instead of float32 concise. ~62% smaller. plasma-only; must be set consistently across the index's insert and scan lifetime (no mixed-format support).",
+		"Store sparse vectors scalar-quantized in the bhive quantized wire format (uint8 weights + per-vector scale and L2 norm, uint16 dims) instead of float32 concise. ~62% smaller; scans compute distances with the bhive sparse dot-product kernel directly on the stored bytes. plasma-only; must be set consistently across the index's insert and scan lifetime. ",
 		true,
 		false, // mutable
 		false, // case-insensitive
