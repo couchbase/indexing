@@ -2324,10 +2324,6 @@ func makeResponsehandler(
 			if cfr != nil {
 				cfr.Reset()
 			}
-			if cfw != nil {
-				l.Verbosef("%v request(%v) CryptWriter calling reset %v", lprefix, requestId, name)
-				cfw.Reset()
-			}
 
 			if r := recover(); r != nil {
 				l.Errorf("%v %q Error %v during temp file read", lprefix, requestId, r)
