@@ -46,6 +46,40 @@ fi
 
 echo "Using build tool \"$BUILD_TOOL\""
 
+# run_gotest runs a "go test" invocation (optionally prefixed with `env VAR=val`
+# assignments). It always prints a line announcing which command/package is
+# starting.
+#
+# When not running as the CI bot (CIBOT != "true") it treats the run as verbose:
+# output streams directly to the console and is tee'd into test.log so failure
+# analysis still works.
+#
+# As the CI bot it keeps the console concise: output is buffered and only echoed
+# to stdout and appended to test.log when the test fails; on success only a
+# short "PASSED" line is printed and nothing is written to test.log.
+run_gotest() {
+  echo "===== STARTED in $PWD: $* ====="
+
+  if [ "$CIBOT" != "true" ]; then
+    "$@" 2>&1 | tee -a "$WORKSPACE/test.log"
+    return ${PIPESTATUS[0]}
+  fi
+
+  local tmp
+  tmp=$(mktemp)
+  "$@" >"$tmp" 2>&1
+  local rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "===== FAILED (rc=$rc) in $PWD ====="
+    cat "$tmp"
+    cat "$tmp" >> "$WORKSPACE/test.log"
+  else
+    echo "PASSED in $PWD"
+  fi
+  rm -f "$tmp"
+  return $rc
+}
+
 start_cluster() {
   for a in {1..3}; do
     echo "Starting server: attempt $a"
@@ -245,39 +279,39 @@ if [[ "$MODE" == *"$phase"* ]]; then
 
   if [ "$STORAGE" = "memdb" ]; then
       cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb/skiplist
-      GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      run_gotest env GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v
 
       cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb
-      GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      run_gotest env GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v
 
   elif [ "$STORAGE" = "plasma" ]; then
       cd $WORKSPACE/goproj/src/github.com/couchbase/nitro/skiplist
-      GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      run_gotest env GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v
 
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma/zstd
-      GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      run_gotest env GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v
 
       # unit test logs will be in the Server Log logs-<timestamp>.tar.gz at logs-unit-test.log
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
-      GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log | grep 'RUN\|PASS\|FAIL\|github'
+      run_gotest env GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v
   fi
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/collatejson
-  GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  run_gotest env GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
-  GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v ./... 2>&1 | tee -a $WORKSPACE/test.log
+  run_gotest env GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v ./...
 
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
-  GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -exec "env LD_LIBRARY_PATH=$WORKSPACE/install/lib" -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  run_gotest env GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -exec "env LD_LIBRARY_PATH=$WORKSPACE/install/lib" -timeout 4h -v
 
   # Run shard dealer tests
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/planner
-  GOTRACEBACK=crash go test -vet=off -timeout 10m -v -skip "^TestSimulation$" 2>&1 | tee -a $WORKSPACE/test.log
+  run_gotest env GOTRACEBACK=crash go test -vet=off -timeout 10m -v -skip "^TestSimulation$"
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
-  GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
+  run_gotest env GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 15m -v
 
   collect_logs
 fi

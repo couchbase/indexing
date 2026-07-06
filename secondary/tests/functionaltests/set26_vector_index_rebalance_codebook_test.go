@@ -781,8 +781,13 @@ func performCodebookTransferValidation(subt *testing.T, idxNames []string) *tc.I
 				if exist, err1 := verifyPathExists(codebookPath); err1 != nil {
 					FailTestIfError(err1, "Error while verifying codebook path", subt)
 				} else if !exist {
-					FailTestIfError(fmt.Errorf("Expected codebook to exist for idx:%v, inst:%v, partnId:%v",
-						status.Name, status.InstId, c.PartitionId(partnId)), "Error while verifying codebook path", subt)
+					FailTestIfError(
+						fmt.Errorf("Expected codebook to exist for idx:%v, inst:%v, partnId:%v host:%v",
+							status.Name, status.InstId, c.PartitionId(partnId), host,
+						),
+						"Error while verifying codebook path",
+						subt,
+					)
 				}
 			}
 		}

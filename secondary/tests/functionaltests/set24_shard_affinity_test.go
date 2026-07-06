@@ -1299,6 +1299,11 @@ func clearCreateComandTokens() {
 	tc.HandleError(err, "failed to delete all create command token")
 }
 
+func clearBuildTokens() {
+	err := c.MetakvRecurciveDel(mc.BuildDDLCommandTokenPath)
+	tc.HandleError(err, "failed to delete all build command token")
+}
+
 // TestShardRebalance_DropDuplicateIndexes - create duplicate indexes on node 1 and node 2.
 // swap rebalance node 2 with node 3. rebalance should drop the duplicate indexes on node 2.
 func TestShardRebalance_DropDuplicateIndexes(t *testing.T) {
