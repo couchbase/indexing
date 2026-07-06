@@ -563,6 +563,98 @@ func TestWithShardAffinity(t *testing.T) {
 		performClusterStateValidation(subt, false)
 	})
 
+	// This test cancels a rebalance during transfer and asserts no indexer node restarted.
+	// To raise the odds of any panic per run, the cancel is repeated a few times.
+	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index]
+	t.Run("TestShardRebalanceCancelDuringTransfer", func(subt *testing.T) {
+		log.Print("In TestShardRebalanceCancelDuringTransfer")
+		status := getClusterStatus()
+		if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+			!isNodeIndex(status, clusterconfig.Nodes[2]) {
+			subt.Fatalf("%v Unexpected cluster configuration: %v", subt.Name(), status)
+		}
+
+		printClusterConfig(subt.Name(), "entry")
+
+		// Baseline uptimes for every indexer node; a panic + babysitter restart
+		// resets the crashed node's uptime.
+		uptimesBefore := getIndexerUptimesByNode(subt)
+		log.Printf("** Indexer uptimes before rebalance cancels: %v", uptimesBefore)
+
+		err := secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", true,
+			clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Failed to activate testactions")
+
+		defer func() {
+			err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
+				clusterconfig.Username, clusterconfig.Password, kvaddress)
+			tc.HandleError(err, "Failed to deactivate testactions")
+
+			// n3 may be left added-but-inactive after a cancelled swap; ensure it is gone.
+			if isNodePartOfCluster(clusterconfig.Nodes[3]) {
+				removeNode(clusterconfig.Nodes[3], subt)
+			}
+
+			printClusterConfig(subt.Name(), "exit")
+		}()
+
+		const iterations = 3
+		for i := 0; i < iterations; i++ {
+			log.Printf("** Cancel-during-transfer iteration %d/%d", i+1, iterations)
+
+			// Cancel from the source node (n2, swapped out) during shard transfer.
+			tag := testcode.SOURCE_SHARDTOKEN_AFTER_TRANSFER
+			err = testcode.PostOptionsRequestToMetaKV(clusterconfig.Nodes[2], clusterconfig.Username,
+				clusterconfig.Password, tag, testcode.REBALANCE_CANCEL, "", 0)
+			FailTestIfError(err, "Error while posting request to metaKV", subt)
+
+			log.Print("** Starting Shard Rebalance (node n3 <=> n2)")
+			swapRebalance(subt, 3, 2)
+
+			report, err := getLastRebalanceReport(kvaddress, clusterconfig.Username,
+				clusterconfig.Password)
+			tc.HandleError(err, "Failed to get last rebalance report")
+			if completionMsg, exists := report["completionMessage"]; exists &&
+				!strings.Contains(completionMsg.(string), "stopped by user") {
+				subt.Fatalf("Expected rebalance to be cancelled but it did not cancel. Report - %v",
+					report)
+			} else if !exists {
+				subt.Fatalf("Rebalance report does not have any completion message - %v", report)
+			}
+
+			waitForRebalanceCleanup()
+
+			assertNoIndexerRestart(subt, uptimesBefore)
+
+			// Reset to [0,1,2] for the next iteration (swap added n3). The cancel
+			// test-action is still armed on n2, so leaving it enabled would also
+			// cancel this cleanup rebalance and leave n3 added-but-inactive - the
+			// next iteration's addNode(n3) would then fail with "Node is already
+			// part of cluster". Disable the action for the reset, then re-arm it.
+			err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
+				clusterconfig.Username, clusterconfig.Password, kvaddress)
+			tc.HandleError(err, "Failed to deactivate testactions before reset")
+
+			if isNodePartOfCluster(clusterconfig.Nodes[3]) {
+				removeNode(clusterconfig.Nodes[3], subt)
+			}
+			// removeNode reports a "stopped by user" rebalance as success, so verify
+			// n3 actually left the cluster rather than trusting the return value.
+			if isNodePartOfCluster(clusterconfig.Nodes[3]) {
+				subt.Fatalf("n3 (%v) still part of cluster after reset; cluster: %v",
+					clusterconfig.Nodes[3], getClusterStatus())
+			}
+
+			if i < iterations-1 {
+				err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", true,
+					clusterconfig.Username, clusterconfig.Password, kvaddress)
+				tc.HandleError(err, "Failed to re-activate testactions")
+			}
+		}
+
+		performClusterStateValidation(subt, false)
+	})
+
 	// entry config - [0: kv n1ql] [1: index] [2: index]
 	// exit config - [0: kv n1ql] [1: index]            [3: index]
 	t.Run("TestShardRebalanceWithCreateCommandToken", func(subt *testing.T) {
@@ -1645,6 +1737,58 @@ func Test_SaveMProf3(t *testing.T) {
 func swapRebalance(t *testing.T, nidIn, nidOut int) {
 	addNode(clusterconfig.Nodes[nidIn], "index", t)
 	removeNode(clusterconfig.Nodes[nidOut], t)
+}
+
+// getIndexerUptimesByNode returns the "uptime" indexer stat (in seconds) keyed by
+// indexer HTTP address, for every indexer node in the cluster. Used to detect an
+// indexer restart: a panic + babysitter restart resets that node's uptime to a
+// small value. See MB-72656.
+func getIndexerUptimesByNode(t *testing.T) map[string]float64 {
+	res := make(map[string]float64)
+	nodes, err := secondaryindex.GetIndexerNodesHttpAddresses(kvaddress)
+	if err != nil {
+		t.Fatalf("getIndexerUptimesByNode: failed to get indexer nodes: %v", err)
+	}
+	for _, node := range nodes {
+		stats := secondaryindex.GetStatsForIndexerHttpAddress(node, clusterconfig.Username, clusterconfig.Password)
+		raw, ok := stats["uptime"]
+		if !ok {
+			continue
+		}
+		s, ok := raw.(string)
+		if !ok {
+			continue
+		}
+		if d, err := time.ParseDuration(s); err == nil {
+			res[node] = d.Seconds()
+		}
+	}
+	return res
+}
+
+// assertNoIndexerRestart fails the test if any indexer node present in the
+// baseline now reports a smaller uptime, i.e. its process restarted (e.g. after a
+// panic during rebalance cleanup - MB-72656). Nodes missing from the current
+// snapshot are skipped to avoid flakiness from transient unreachability.
+func assertNoIndexerRestart(t *testing.T, uptimesBefore map[string]float64) {
+	uptimesAfter := getIndexerUptimesByNode(t)
+	for node, before := range uptimesBefore {
+		after, ok := uptimesAfter[node]
+		if !ok {
+			continue
+		}
+		if after < before {
+			t.Fatalf("MB-72656 regression: indexer node %v restarted (uptime %.0fs -> %.0fs), "+
+				"likely panicked during rebalance cleanup", node, before, after)
+		}
+	}
+}
+
+// isNodePartOfCluster reports whether the given node address is currently a member
+// of the cluster.
+func isNodePartOfCluster(node string) bool {
+	_, ok := getClusterStatus()[node]
+	return ok
 }
 
 func getLocalMetaWithRetry(nodeAddress string) (*manager.LocalIndexMetadata, error) {

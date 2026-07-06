@@ -1838,6 +1838,12 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.handleBulkUpdateIndexError(msg)
 
 	case UPDATE_REBALANCE_PHASE:
+		// Stale message drained after teardown: rebalance is already done. Ignore it.
+		if !idx.rebalanceRunning {
+        logging.Warnf("Indexer::handleWorkerMsgs dropping stale UPDATE_REBALANCE_PHASE; rebalance not running. msg: %v", msg)
+        	break
+    	}
+
 		bucketTransferPhase := idx.updateRebalancePhase(msg)
 		msg.(*MsgUpdateRebalancePhase).BucketTransferPhase = bucketTransferPhase
 		idx.sendMsgToClustMgr(msg)
