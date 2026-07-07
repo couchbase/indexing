@@ -1553,6 +1553,8 @@ loop:
 	}
 }
 
+// getTokenBucketUUIDs returns the distinct bucket UUIDs (falling back to bucket
+// name) of the indexes carried by the transfer token.
 func getTokenBucketUUIDs(tt *c.TransferToken) []string {
 	if tt == nil {
 		return nil
@@ -1563,9 +1565,7 @@ func getTokenBucketUUIDs(tt *c.TransferToken) []string {
 		if b == "" {
 			b = inst.Defn.Bucket
 		}
-		if _, ok := seen[b]; !ok {
-			seen[b] = struct{}{}
-		}
+		seen[b] = struct{}{}
 	}
 	res := make([]string, 0, len(seen))
 	for b := range seen {
@@ -1587,6 +1587,7 @@ func (sr *ShardRebalancer) getDirToEaRKey(
 		dirToShardKeysMap    = make(map[string][]c.KeyID)
 		bucketToShardKeysMap = make(map[string][]c.KeyID) // bucketUUID -> key IDs
 		keyCount             = 0
+		unencryptedPresent   = false
 	)
 
 	for _, bundle := range bundles {
@@ -1594,39 +1595,53 @@ func (sr *ShardRebalancer) getDirToEaRKey(
 			shardKeysMap[key] = key != "" // mark as not done (aka false) for empty key
 			if key == "" {
 				keyCount = 1
+				unencryptedPresent = true
 			}
 		}
 	}
 
-	////////// find the parent dir for the EaR keys via encryption manager
-	bucketUUIDs := getTokenBucketUUIDs(tt)
-	kdts := make([]KeyDataType, 0, len(bucketUUIDs))
-	for _, bucketUUID := range bucketUUIDs {
-		kdts = append(kdts, GetBucketKDT(bucketUUID))
+	////////// resolve the on-disk dir for each EaR key directly via encryption manager
+	keyIDs := make([]c.KeyID, 0, len(shardKeysMap))
+	for keyID := range shardKeysMap {
+		if keyID != "" {
+			keyIDs = append(keyIDs, keyID)
+		}
 	}
 
-	respCh := make(chan map[KeyDataType]*EncryptionKeyPathInfo, 1)
-	msg := &MsgEncryptionGetKeyInfoForRebal{kdts: kdts, respCh: respCh}
-	keyInfoMap, err := sendMsgAndWaitForResp(sr.supvMsgch, msg, sr.cancel, respCh)
+	// Candidate buckets are needed only when the shards carry unencrypted ("") data,
+	// to find which buckets that data belongs to so the destination reports "" in
+	// GetInUseKeys for them.
+	var bucketUUIDs []string
+	if unencryptedPresent {
+		bucketUUIDs = getTokenBucketUUIDs(tt)
+	}
+
+	respCh := make(chan *EaRKeyInfoForRebal, 1)
+	msg := &MsgEncryptionGetKeyInfoForRebal{keyIDs: keyIDs, bucketUUIDs: bucketUUIDs, respCh: respCh}
+	keyInfo, err := sendMsgAndWaitForResp(sr.supvMsgch, msg, sr.cancel, respCh)
 	if err != nil {
 		return nil, nil, 0, err
 	}
 
-	for _, bucketUUID := range bucketUUIDs {
-		keyInfo := keyInfoMap[GetBucketKDT(bucketUUID)]
-		if keyInfo == nil {
+	for keyID := range shardKeysMap {
+		if keyID == "" {
 			continue
 		}
-		for _, keyID := range keyInfo.KeyIDs {
-			if notDone, ok := shardKeysMap[keyID]; notDone {
-				dirToShardKeysMap[keyInfo.Path] = append(dirToShardKeysMap[keyInfo.Path], keyID)
-				bucketToShardKeysMap[bucketUUID] = append(bucketToShardKeysMap[bucketUUID], keyID)
-				keyCount++
-				shardKeysMap[keyID] = false // <DEK --1:n-- buckets> possible
-			} else if ok {
-				// same keyID is used in other bucket too which is on the same shard
-				bucketToShardKeysMap[bucketUUID] = append(bucketToShardKeysMap[bucketUUID], keyID)
-			}
+		info := keyInfo.KeyPaths[keyID]
+		if info == nil {
+			continue // unresolved; reported as missing below
+		}
+		dirToShardKeysMap[info.Path] = append(dirToShardKeysMap[info.Path], keyID)
+		bucketToShardKeysMap[info.BucketUUID] = append(bucketToShardKeysMap[info.BucketUUID], keyID)
+		keyCount++
+		shardKeysMap[keyID] = false
+	}
+
+	// Associate the empty ("") keyID with each bucket that has unencrypted data, so
+	// the destination records it and reports it in GetInUseKeys (no key file to copy).
+	if unencryptedPresent {
+		for _, bucketUUID := range keyInfo.UnencryptedBuckets {
+			bucketToShardKeysMap[bucketUUID] = append(bucketToShardKeysMap[bucketUUID], "")
 		}
 	}
 

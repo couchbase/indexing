@@ -816,27 +816,120 @@ func (e *EncryptionMgr) handleRebalDone() {
 }
 
 func (e *EncryptionMgr) handleGetKeyInfoForRebal(msg *MsgEncryptionGetKeyInfoForRebal) {
-	result := make(map[KeyDataType]*EncryptionKeyPathInfo, len(msg.GetKDTs()))
+	result := &EaRKeyInfoForRebal{
+		KeyPaths:           e.getKeyPathsByKeyIDs(msg.GetKeyIDs()),
+		UnencryptedBuckets: e.getUnencryptedBuckets(msg.GetBucketUUIDs()),
+	}
+	msg.GetRespCh() <- result
+}
 
-	for _, kdt := range msg.GetKDTs() {
-		info := &EncryptionKeyPathInfo{}
-
-		func() {
-			e.mu.Lock()
-			defer e.mu.Unlock()
-			if dekInfo, ok := e.dataTypeKeyInfoMap[kdt]; ok && dekInfo != nil {
-				info.Path = dekInfo.Path
-			}
-		}()
-
-		e.muid.Lock()
-		info.KeyIDs = append(info.KeyIDs, e.indexerUsedKeyIds[kdt]...)
-		e.muid.Unlock()
-
-		result[kdt] = info
+// getUnencryptedBuckets returns the subset of bucketUUIDs whose local storage
+// engine reports unencrypted ("") data as in-use. The empty keyID has no key
+// file to transfer, but the destination must still record it so the bucket is
+// reported as having unencrypted data in GetInUseKeys.
+func (e *EncryptionMgr) getUnencryptedBuckets(bucketUUIDs []string) []string {
+	if len(bucketUUIDs) == 0 {
+		return nil
 	}
 
-	msg.GetRespCh() <- result
+	e.muid.Lock()
+	defer e.muid.Unlock()
+
+	var unencrypted []string
+	for _, bucketUUID := range bucketUUIDs {
+		kdt := GetBucketKDT(bucketUUID)
+		for _, kid := range e.indexerUsedKeyIds[kdt] {
+			if kid == "" {
+				unencrypted = append(unencrypted, bucketUUID)
+				break
+			}
+		}
+	}
+	return unencrypted
+}
+
+// getKeyPathsByKeyIDs maps each non-empty keyID to the on-disk directory holding
+// its DEK file and the bucket that owns it, by reverse-mapping
+// keyID -> KDT (keyidKdtMap) -> Path (dataTypeKeyInfoMap). On a cache miss for
+// any key, it refreshes all bucket KDTs from cbauth (refreshAllBucketKeys) once
+// and retries. Keys that still cannot be resolved are absent from the result;
+// the caller treats those as missing.
+func (e *EncryptionMgr) getKeyPathsByKeyIDs(keyIDs []common.KeyID) map[common.KeyID]*EaRKeyPathInfo {
+	result := make(map[common.KeyID]*EaRKeyPathInfo, len(keyIDs))
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// resolve attempts to populate result[keyID] from the current cache and
+	// returns true if every non-empty keyID is now resolved.
+	resolve := func() bool {
+		allFound := true
+		for _, keyID := range keyIDs {
+			if keyID == "" {
+				// unencrypted data; path resolution is not required
+				continue
+			}
+			if _, done := result[keyID]; done {
+				continue
+			}
+			kdt, ok := e.keyidKdtMap[keyID]
+			if !ok {
+				allFound = false
+				continue
+			}
+			info, ok := e.dataTypeKeyInfoMap[kdt]
+			if !ok || info == nil {
+				allFound = false
+				continue
+			}
+			result[keyID] = &EaRKeyPathInfo{Path: info.Path, BucketUUID: kdt.BucketUUID}
+		}
+		return allFound
+	}
+
+	if resolve() {
+		return result
+	}
+
+	// Some keys were not in cache; refresh all bucket KDTs from cbauth and retry.
+	e.refreshAllBucketKeys(true /*noLock*/)
+	resolve()
+
+	return result
+}
+
+// refreshAllBucketKeys fetches and caches encryption key info for every bucket
+// KDT known to cinfoProvider. This repopulates dataTypeKeyInfoMap, kdtKeyidKeyMap
+// and keyidKdtMap for all buckets. When noLock is true the caller must already
+// hold e.mu (the NoLock cache setter is used); otherwise locking is internal.
+func (e *EncryptionMgr) refreshAllBucketKeys(noLock bool) {
+	var buckets []couchbase.BucketName
+	func() {
+		e.cinfoProviderLock.RLock()
+		defer e.cinfoProviderLock.RUnlock()
+
+		buckets = e.cinfoProvider.GetBucketNames()
+	}()
+	logging.Infof("EncryptionMgr:refreshAllBucketKeys caching keys for buckets %v", buckets)
+
+	for _, bucket := range buckets {
+		if bucket.UUID == common.BUCKET_UUID_NIL {
+			continue
+		}
+		kdt := GetBucketKDT(bucket.UUID)
+		ctx := context.Background()
+		encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, kdt)
+		if err != nil {
+			logging.Fatalf("EncryptionMgr:refreshAllBucketKeys for bucket:%v err:%v", bucket.Name, err)
+			panic(err)
+		}
+		if noLock {
+			e.SetClusterEncrKeysInfoNoLock(kdt, encrKeysInfo)
+		} else {
+			e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
+		}
+		logging.Infof("EncryptionMgr:refreshAllBucketKeys cached keys for bucket %v", bucket)
+	}
 }
 
 func (e *EncryptionMgr) cacheKeysForBootstrap() {
@@ -854,29 +947,7 @@ func (e *EncryptionMgr) cacheKeysForBootstrap() {
 	logging.Infof("EncryptionMgr:cached keys for %v", logKDT(MetadataKDT))
 
 	// Cache keys for buckets
-	var buckets []couchbase.BucketName
-	func() {
-		e.cinfoProviderLock.RLock()
-		defer e.cinfoProviderLock.RUnlock()
-
-		buckets = e.cinfoProvider.GetBucketNames()
-	}()
-	logging.Infof("EncryptionMgr:caching keys for buckets %v", buckets)
-
-	for _, bucket := range buckets {
-		if bucket.UUID == common.BUCKET_UUID_NIL {
-			continue
-		}
-		kdt := GetBucketKDT(bucket.UUID)
-		ctx := context.Background()
-		encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, kdt)
-		if err != nil {
-			logging.Fatalf("EncryptionMgr:caching keys for bucket:%v err:%v", bucket.Name, err)
-			panic(err)
-		}
-		e.SetClusterEncrKeysInfo(kdt, encrKeysInfo)
-		logging.Infof("EncryptionMgr:cached keys for bucket %v", bucket)
-	}
+	e.refreshAllBucketKeys(false /*noLock*/)
 
 	logCtx := context.Background()
 	logEncrKeysInfo, logErr := cbauth.GetEncryptionKeysBlocking(logCtx, LogdataKDT)
@@ -1232,56 +1303,25 @@ func (e *EncryptionMgr) getKeyCipherById(keyId string) ([]byte, string) {
 
 	kdt, ok := e.keyidKdtMap[keyId]
 	if !ok {
-		// kdt for the keyid is not cached thus try getting kdt for all the possible types.
-
-		// KeyDatatype: service_bucket, try for all bucket_UUIDs
-		var buckets []couchbase.BucketName
-		func() {
-			e.cinfoProviderLock.RLock()
-			defer e.cinfoProviderLock.RUnlock()
-
-			buckets = e.cinfoProvider.GetBucketNames()
-		}()
-		kdtFound := false
-		for _, bucket := range buckets {
-			if bucket.UUID == common.BUCKET_UUID_NIL {
-				continue
-			}
-			currKdt := GetBucketKDT(bucket.UUID)
-			ctx := context.Background()
-			encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, currKdt)
-			if err != nil {
-				logging.Fatalf(
-					"EncryptionMgr:getKeyCipherById GetEncryptionKeysBlocking for keyid:%v bucket:%v err:%v",
-					logKeyIDs(keyId), bucket.Name, err,
-				)
-				panic(err)
-			}
-			for _, earkey := range encrKeysInfo.Keys {
-				if earkey.Id == keyId {
-					kdtFound = true
-					// Update encryptionMgr cache as keyids are unique and currKdt has key with keyId
-					e.SetClusterEncrKeysInfoNoLock(currKdt, encrKeysInfo)
-					return earkey.Key, earkey.Cipher
-				}
-			}
-		}
+		// kdt for the keyid is not cached thus refresh keys for all bucket KDTs
+		// from cbauth and retry. Keyids are unique across buckets.
+		e.refreshAllBucketKeys(true /*noLock*/)
 
 		// ENCRYPT_TODO: Try getting keys for keydatatypes log, config, audit when being used to match with keyId.
 
-		// No keydata is available for keyId for all possible keydatatypes
-		if !kdtFound {
+		kdt, ok = e.keyidKdtMap[keyId]
+		if !ok {
+			// No keydata is available for keyId for all possible keydatatypes
 			return []byte{}, CipherNameNone
 		}
+	}
 
+	earkey, err := e.getKeyCacheByKeyid(kdt, keyId)
+	if err != nil {
+		logging.Warnf("EncryptionMgr:getKeyCipherById for key:%v err:%v",
+			logKeyIDs(keyId), err.Error())
 	} else {
-		earkey, err := e.getKeyCacheByKeyid(kdt, keyId)
-		if err != nil {
-			logging.Warnf("EncryptionMgr:getKeyCipherById for key:%v err:%v",
-				logKeyIDs(keyId), err.Error())
-		} else {
-			return earkey.Key, earkey.Cipher
-		}
+		return earkey.Key, earkey.Cipher
 	}
 
 	ctx := context.Background()

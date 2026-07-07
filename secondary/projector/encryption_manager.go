@@ -131,7 +131,11 @@ func NewEncryptionMgr(config c.Config) (*EncryptionMgr, error) {
 		close(e.stopCh)
 		return nil, fmt.Errorf("EncryptionMgr: RegisterEncryptionKeysCallbacks: %w", err)
 	}
-	<-e.seedCh
+
+	if c.GetBuildMode() == c.ENTERPRISE {
+		<-e.seedCh
+	}
+
 	logging.Infof("EncryptionMgr: initialized for kdt=%v", LogdataKDT)
 	return e, nil
 }
