@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/logstats/logstats"
@@ -50,6 +51,7 @@ func (e *encryptedStatsWriter) Sync() error  { return e.f.Sync() }
 // Rotate returns an encryptedStatsWriter when getKey returns a non-empty key,
 // or a plain *os.File otherwise.
 type LogStatsFileHandler struct {
+	mu         sync.Mutex
 	getKey     func() (keyID string, key []byte)
 	getKeyByID func(keyID string) ([]byte, string)
 }
@@ -111,6 +113,10 @@ func (h *LogStatsFileHandler) Open(fileName string) (logstats.SyncWriteCloser, i
 // active file is gzip-compressed if it is plaintext, left as-is if encrypted.
 // The new active file is encrypted when getKey returns a non-empty key.
 func (h *LogStatsFileHandler) Rotate(fileName string, numFiles int) (logstats.SyncWriteCloser, int, error) {
+	if !h.mu.TryLock() {
+		return h.skipRotate(fileName)
+	}
+	defer h.mu.Unlock()
 	if h.getKey == nil {
 		return nil, 0, fmt.Errorf("LogStatsFileHandler.Rotate: getKey callback is nil")
 	}
@@ -137,6 +143,23 @@ func (h *LogStatsFileHandler) Rotate(fileName string, numFiles int) (logstats.Sy
 		return nil, 0, fmt.Errorf("LogStatsFileHandler.Rotate: NewCBCWriter: %w", err)
 	}
 	return &encryptedStatsWriter{f: f, w: w}, 0, nil
+}
+
+func (h *LogStatsFileHandler) skipRotate(fileName string) (logstats.SyncWriteCloser, int, error) {
+	logging.Verbosef("LogStatsFileHandler: rotation skipped (key op in progress)")
+	w, _, err := h.Open(fileName)
+	if err != nil {
+		return nil, 0, fmt.Errorf("LogStatsFileHandler.skipRotate: %w", err)
+	}
+	//returning file size as 0 to avoid logstats from rotating the file again
+	return w, 0, nil
+}
+
+func (h *LogStatsFileHandler) PauseRotation() {
+	h.mu.Lock()
+}
+func (h *LogStatsFileHandler) ResumeRotation() {
+	h.mu.Unlock()
 }
 
 func GetStatsLogFileKeyID(path string) (string, error) {
