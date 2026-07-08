@@ -1781,8 +1781,8 @@ func (stm *ShardTransferManager) initPeerRPCServerNoLock(rebalId string) error {
 
 	// secure RPC server. it could return err as we enforce TLS even if security is disabled
 	// hence we ignore the error here
-	security.SecureHTTPServer(httpSrv)
-	lst, err := security.MakeAndSecureTCPListener(nodeAddr)
+	security.SecureHTTPServer(httpSrv, security.CRLScopeNodeToNode)
+	lst, err := security.MakeAndSecureTCPListener(nodeAddr, security.CRLScopeNodeToNode)
 	lstClose := func() {
 		if lst != nil {
 			if errLstClose := lst.Close(); errLstClose != nil {

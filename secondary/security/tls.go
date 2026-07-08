@@ -93,13 +93,21 @@ func getCertPoolForClient(setting *SecuritySetting) (*x509.CertPool, error) {
 	return caCertPool, nil
 }
 
+// CRL scopes, re-exported so listener owners can pick their endpoint's CRL
+// policy scope without importing cbauth. Use CRLScopeNodeToNode for ports whose
+// peers are only cluster nodes; use CRLScopeClientAuth for listeners that also
+// receive external client traffic (the indexer HTTPS endpoint), matching
+// ns_server's own HTTPS listener.
+const (
+	CRLScopeClientAuth = cbauth.CRLScopeClientAuth
+	CRLScopeNodeToNode = cbauth.CRLScopeNodeToNode
+)
+
 // crlVerifyPeerCertificate returns a tls.Config.VerifyPeerCertificate callback
 // that rejects peer certificates revoked under ns_server's CRL policy for the
-// given scope: CRLScopeNodeToNode for outbound/client connections (verifying the
-// peer's server cert) and CRLScopeClientAuth for inbound connections (verifying a
-// presented client cert). All three TLS builders use this so the cbauth call
-// lives in one place. cbauth.CRLsValidate returns nil immediately when CRL
-// checking is not configured, so this is a cheap no-op unless a policy is set.
+// given scope. All TLS builders use this so the cbauth call lives in one place.
+// cbauth.CRLsValidate returns nil immediately when CRL checking is not
+// configured, so this is a cheap no-op unless a policy is set.
 func crlVerifyPeerCertificate(scope cbauth.CRLScope) func([][]byte, [][]*x509.Certificate) error {
 	return func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 		return cbauth.CRLsValidate(rawCerts, verifiedChains, scope)
@@ -275,7 +283,7 @@ func MakeTCPConn(addr string) (*net.TCPConn, error) {
 /////////////////////////////////////////////
 
 // Setup server TLSConfig
-func setupServerTLSConfig() (*tls.Config, error) {
+func setupServerTLSConfig(scope cbauth.CRLScope) (*tls.Config, error) {
 
 	setting := GetSecuritySetting()
 	if setting == nil {
@@ -286,19 +294,19 @@ func setupServerTLSConfig() (*tls.Config, error) {
 		return nil, nil
 	}
 
-	return getTLSConfigFromSettingForServer(setting)
+	return getTLSConfigFromSettingForServer(setting, scope)
 }
 
-func getTLSConfigFromSettingForServer(_ *SecuritySetting) (*tls.Config, error) {
+func getTLSConfigFromSettingForServer(_ *SecuritySetting, scope cbauth.CRLScope) (*tls.Config, error) {
 	cfg := &tls.Config{}
-	cfg.GetConfigForClient = getLatestServerTLSConfig
+	cfg.GetConfigForClient = getLatestServerTLSConfig(scope)
 	return cfg, nil
 }
 
 // Set up a TLS listener
 func MakeTLSListener(tcpListener net.Listener) (net.Listener, error) {
 
-	config, err := setupServerTLSConfig()
+	config, err := setupServerTLSConfig(cbauth.CRLScopeNodeToNode)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +322,10 @@ func MakeTLSListener(tcpListener net.Listener) (net.Listener, error) {
 
 // Make a new tcp listener for given address.
 // Always make it secure, even if the security is not enabled.
-func MakeAndSecureTCPListener(addr string) (net.Listener, error) {
+// scope selects the CRL policy applied to presented client certs:
+// CRLScopeNodeToNode for node-only ports, CRLScopeClientAuth for
+// listeners that also receive external client traffic.
+func MakeAndSecureTCPListener(addr string, scope cbauth.CRLScope) (net.Listener, error) {
 
 	addr, _, _, err := EncryptPortFromAddr(addr)
 	if err != nil {
@@ -331,7 +342,7 @@ func MakeAndSecureTCPListener(addr string) (net.Listener, error) {
 		return nil, fmt.Errorf("Security setting required for TLS listener")
 	}
 
-	config, err := getTLSConfigFromSettingForServer(setting)
+	config, err := getTLSConfigFromSettingForServer(setting, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -831,7 +842,7 @@ func Post(u string, bodyType string, body io.Reader, params *RequestParams) (*ht
 func MakeHTTPSServer(server *http.Server) error {
 
 	// get server TLSConfig
-	config, err := setupServerTLSConfig()
+	config, err := setupServerTLSConfig(cbauth.CRLScopeNodeToNode)
 	if err != nil {
 		return err
 	}
@@ -848,14 +859,17 @@ func MakeHTTPSServer(server *http.Server) error {
 
 // Secure the HTTP Server by setting TLS config
 // Always secure the given HTTP server (even if the security is not enabled).
-func SecureHTTPServer(server *http.Server) error {
+// scope selects the CRL policy applied to presented client certs:
+// CRLScopeNodeToNode for node-only ports, CRLScopeClientAuth for
+// listeners that also receive external client traffic.
+func SecureHTTPServer(server *http.Server, scope cbauth.CRLScope) error {
 
 	setting := GetSecuritySetting()
 	if setting == nil {
 		return fmt.Errorf("Security setting required for https server")
 	}
 
-	config, err := getTLSConfigFromSettingForServer(setting)
+	config, err := getTLSConfigFromSettingForServer(setting, scope)
 	if err != nil {
 		return err
 	}
@@ -937,7 +951,7 @@ func IsIpv6() bool {
 
 // getCurrentTLSConfigFromSettingForServer is an internal only call and meant to be used to read
 // latest server TLS config. this is useful when we aim to have zero downtime server TLS updates
-func getCurrentTLSConfigFromSettingForServer(setting *SecuritySetting) (*tls.Config, error) {
+func getCurrentTLSConfigFromSettingForServer(setting *SecuritySetting, scope cbauth.CRLScope) (*tls.Config, error) {
 	// Get certifiicate and cbauth config
 	cert := setting.srvrCert
 	if cert == nil {
@@ -972,14 +986,14 @@ func getCurrentTLSConfigFromSettingForServer(setting *SecuritySetting) (*tls.Con
 
 			config.ClientCAs = caCertPool
 
-			// Reject peer certs revoked per ns_server's nodeToNode CRL policy.
-			// Every GSI listener (indexer + projector) is node-to-node: its
-			// non-local peers are cluster nodes (peer indexers, the rebalance
-			// orchestrator, the query service's embedded clients), so a presented
-			// client cert is a node cert governed by the nodeToNode policy. The
-			// clientAuth scope is reserved for external client-facing listener
-			// client facing API in indexer https port have ns_server proxy
-			config.VerifyPeerCertificate = crlVerifyPeerCertificate(cbauth.CRLScopeNodeToNode)
+			// Reject peer certs revoked per ns_server's CRL policy for this
+			// listener's scope. Scan/stream/dataport/admin listeners are
+			// node-to-node (their non-local peers are cluster nodes: peer
+			// indexers, the rebalance orchestrator, the query service's
+			// embedded clients) and use the nodeToNode scope. The indexer
+			// HTTPS endpoint also receives external client requests, so it
+			// uses the clientAuth scope, matching ns_server's HTTPS listener.
+			config.VerifyPeerCertificate = crlVerifyPeerCertificate(scope)
 		}
 	}
 
@@ -988,11 +1002,13 @@ func getCurrentTLSConfigFromSettingForServer(setting *SecuritySetting) (*tls.Con
 
 // getLatestServerTLSConfig - by doing this, we can avoid tearing down server
 // everytime there is a certificate refresh
-func getLatestServerTLSConfig(_ *tls.ClientHelloInfo) (*tls.Config, error) {
-	setting := GetSecuritySetting()
-	if setting == nil {
-		return nil, fmt.Errorf("Security setting is nil")
-	}
+func getLatestServerTLSConfig(scope cbauth.CRLScope) func(*tls.ClientHelloInfo) (*tls.Config, error) {
+	return func(_ *tls.ClientHelloInfo) (*tls.Config, error) {
+		setting := GetSecuritySetting()
+		if setting == nil {
+			return nil, fmt.Errorf("Security setting is nil")
+		}
 
-	return getCurrentTLSConfigFromSettingForServer(setting)
+		return getCurrentTLSConfigFromSettingForServer(setting, scope)
+	}
 }
