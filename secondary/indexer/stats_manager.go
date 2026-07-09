@@ -952,6 +952,7 @@ type IndexerStats struct {
 	totalDataSize             stats.Int64Val
 	totalDiskSize             stats.Int64Val
 	numScanReportsGen         stats.Int64Val
+	numScanReportsUndeliv     stats.Int64Val
 
 	numGoroutine stats.Int64Val
 	numCgoCall   stats.Int64Val
@@ -1042,6 +1043,7 @@ func (s *IndexerStats) Init() {
 	s.avgDrainRate.Init()
 	s.avgDiskBps.Init()
 	s.numScanReportsGen.Init()
+	s.numScanReportsUndeliv.Init()
 	s.totalDataSize.Init()
 	s.totalDiskSize.Init()
 
@@ -1148,6 +1150,7 @@ func (s *IndexerStats) SetSummaryFilters() {
 	s.numStorageInstances.AddFilter(stats.SummaryFilter)
 	s.numIndexes.AddFilter(stats.SummaryFilter)
 	s.numScanReportsGen.AddFilter(stats.SummaryFilter)
+	s.numScanReportsUndeliv.AddFilter(stats.SummaryFilter)
 
 	s.storageMode.AddFilter(stats.SummaryFilter)
 	s.indexerStateHolder.AddFilter(stats.SummaryFilter)
@@ -1423,6 +1426,7 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("num_composite_dense_indexes", &is.numCompositeDenseIndexes)
 	statMap.AddStatValueFiltered("num_composite_sparse_indexes", &is.numCompositeSparseIndexes)
 	statMap.AddStatValueFiltered("num_scan_reports_gen", &is.numScanReportsGen)
+	statMap.AddStatValueFiltered("num_scan_reports_undelivered", &is.numScanReportsUndeliv)
 
 	if common.IsServerlessDeployment() {
 		statMap.AddStatValueFiltered("memory_used_actual", &is.memoryUsedActual)
@@ -3923,6 +3927,9 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_scan_reports_gen gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_scan_reports_gen %v\n", METRICS_PREFIX, is.numScanReportsGen.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_scan_reports_undelivered gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_scan_reports_undelivered %v\n", METRICS_PREFIX, is.numScanReportsUndeliv.Value()))...)
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_disk_bps gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vavg_disk_bps %v\n", METRICS_PREFIX, is.avgDiskBps.Value()))...)

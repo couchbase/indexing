@@ -145,6 +145,11 @@ type gsiKeyspace struct {
 	backfillSize   int64
 	totalbackfills int64
 
+	scanreportdur          stats.Histogram
+	totalScanReports       int64
+	partialScanReports     int64
+	lateIndexerScanReports int64
+
 	rw         sync.RWMutex
 	clusterURL string
 	namespace  string // pool
@@ -210,6 +215,7 @@ func NewGSIIndexer2(clusterURL, namespace, bucket, scope, keyspace string,
 	gsi.blockeddur.InitLatency(scanReqLatencyDist, prettyTimeToString)
 	gsi.throttledur.InitLatency(scanReqLatencyDist, prettyTimeToString)
 	gsi.primedur.InitLatency(scanReqLatencyDist, prettyTimeToString)
+	gsi.scanreportdur.InitLatency(scanReqLatencyDist, prettyTimeToString)
 
 	tm := time.Now().UnixNano()
 	gsi.logPrefix = fmt.Sprintf("GSIC[%s/%s-%s-%s-%v]", namespace, bucket, scope, keyspace, tm)
@@ -1848,6 +1854,7 @@ func (si *secondaryIndex3) Scan3(
 	}
 
 	broker.SendFinalReport(conn)
+	updateScanReportStats(si.gsi, broker)
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	si.gsi.scandur.Add(int64(time.Since(starttm)))
@@ -2147,6 +2154,7 @@ func (si *secondaryIndex6) Scan6(
 	}
 
 	broker.SendFinalReport(conn)
+	updateScanReportStats(si.gsi, broker)
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	si.gsi.scandur.Add(int64(time.Since(starttm)))
@@ -2241,6 +2249,21 @@ func makeRequestBroker(
 	broker.SetBackfillWaiter(backfillWaiter)
 
 	return broker
+}
+
+func updateScanReportStats(gsi *gsiKeyspace, broker *qclient.RequestBroker) {
+	enabled, _, waitDur, partial, lateReports := broker.ScanReportStats()
+	if !enabled {
+		return
+	}
+	atomic.AddInt64(&gsi.totalScanReports, 1)
+	gsi.scanreportdur.Add(int64(waitDur))
+	if partial {
+		atomic.AddInt64(&gsi.partialScanReports, 1)
+	}
+	if lateReports > 0 {
+		atomic.AddInt64(&gsi.lateIndexerScanReports, lateReports)
+	}
 }
 
 func makeResponsehandler(

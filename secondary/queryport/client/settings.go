@@ -427,6 +427,8 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: missing indexer.settings.scanReportWaitTimeout")
 		atomic.StoreInt32(&s.scanReportWaitTimeoutMs, 15000)
 	}
+	// keep the slow closeStream warning threshold in sync
+	atomic.StoreInt64(&slowCloseStreamThresholdNs, int64(s.ScanReportWaitTimeout()))
 
 	allowDDLDuringScaleUp, ok := config["indexer.allow_ddl_during_scaleup"]
 	if ok {

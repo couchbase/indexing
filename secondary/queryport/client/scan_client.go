@@ -29,6 +29,8 @@ import (
 	"github.com/golang/protobuf/proto"
 )
 
+var slowCloseStreamThresholdNs = int64(defaultScanReportWaitTimeout)
+
 // GsiScanClient for scan operations.
 type GsiScanClient struct {
 	queryport string
@@ -278,7 +280,7 @@ func (c *GsiScanClient) doStreamingWithRetry(
 						c.logPrefix, requestId, closeErr,
 					)
 				}
-				
+
 				if wg != nil {
 					wg.Done()
 				}
