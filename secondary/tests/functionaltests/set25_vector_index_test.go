@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/queryport/client"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	br "github.com/couchbase/indexing/secondary/tests/framework/backuprestore"
+	clusterutility "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
@@ -2450,6 +2451,23 @@ func testSparseSmallBase64VectorIndex(t *testing.T, isBhive bool) {
 
 	checkSparseBase64IndexInPlan(t, idxName, isBhive)
 	runSparseBase64QueryAndCheckRecall(t, idxName, isBhive)
+}
+
+// TestSparseAAA_ResetQuota resets indexer memory quota to 1500 MB before sparse tests run.
+// This ensures sparse tests have sufficient memory regardless of what previous tests set.
+func TestSparseAAA_ResetQuota(t *testing.T) {
+	log.Printf("Resetting indexer memory quota to 1500 MB before sparse tests")
+
+	err := clusterutility.SetDataAndIndexQuota(clusterconfig.Nodes[0],
+		clusterconfig.Username, clusterconfig.Password, "1500", "1500")
+	tc.HandleError(err, "Failed to reset memory quota in cluster")
+
+	// wait for indexer to come up as the above step will cause a restart
+	log.Printf("Waiting for indexer nodes to become active after quota change")
+	err = secondaryindex.WaitTillAllIndexNodesActive(kvaddress, defaultIndexActiveTimeout)
+	tc.HandleError(err, fmt.Sprintf("The indexer nodes didnt become active, err:%v", err))
+
+	log.Printf("Indexer memory quota reset complete, sparse tests can proceed")
 }
 
 // TestSparseBhiveBase64VectorIndex tests a bhive sparse vector index (CREATE VECTOR INDEX)

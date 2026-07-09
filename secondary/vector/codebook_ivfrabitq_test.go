@@ -366,6 +366,98 @@ func TestComputeDistanceEncodedRaBitQ(t *testing.T) {
 	}
 }
 
+func TestComputeDistanceEncodedWithPrecomputedRaBitQ(t *testing.T) {
+	seed := time.Now().UnixNano()
+
+	for _, tc := range computeDistanceEncodedRaBitQTests {
+		t.Run(tc.name, func(t *testing.T) {
+			cb, err := NewCodebookIVFRaBitQ(tc.dim, tc.nlist, tc.nbits, tc.metric, tc.useCosine)
+			if err != nil || cb == nil {
+				t.Fatalf("Unable to create index. Err %v", err)
+			}
+			defer cb.Close()
+
+			// Verify it implements PrecomputedDistanceEncoder
+			pde, ok := cb.(cbpkg.PrecomputedDistanceEncoder)
+			if !ok {
+				t.Fatalf("codebookIVFRaBitQ does not implement PrecomputedDistanceEncoder")
+			}
+
+			vecs := genRandomVecs(tc.dim, tc.numVecs, seed)
+			trainVecs := convertTo1D(vecs[:tc.trainVec])
+			err = cb.Train(trainVecs)
+			if err != nil || !cb.IsTrained() {
+				t.Fatalf("Unable to train index. Err %v", err)
+			}
+
+			codeSize, _ := cb.CodeSize()
+			coarseSize, _ := cb.CoarseSize()
+
+			n := 10
+			queryVecs := convertTo1D(vecs[:n])
+			codes := make([]byte, n*codeSize)
+			err = cb.EncodeVectors(queryVecs, codes)
+			if err != nil {
+				t.Fatalf("Error encoding vectors %v", err)
+			}
+
+			// Extract codes for a single list
+			var listNo int64
+			encodedOnly := make([]byte, 0, n*(codeSize-coarseSize))
+			for i := 0; i < n; i++ {
+				codeStart := i*codeSize + coarseSize
+				listNo = decodeListNo(codes[i*codeSize : codeStart])
+				encodedOnly = append(encodedOnly, codes[codeStart:(i+1)*codeSize]...)
+			}
+
+			qvec := vecs[n-1]
+
+			// Reference distances via non-precomputed path
+			distRef := make([]float32, n)
+			err = cb.ComputeDistanceEncoded(qvec, n, encodedOnly, distRef, nil, listNo)
+			if err != nil {
+				t.Fatalf("Error computing reference distance %v", err)
+			}
+
+			// First precomputed call (allocates buffer)
+			dist1 := make([]float32, n)
+			queryBP, err := pde.ComputeDistanceEncodedWithPrecomputed(
+				qvec, n, encodedOnly, dist1, listNo, nil)
+			if err != nil {
+				t.Fatalf("Error on first precomputed call: %v", err)
+			}
+			if queryBP == nil || len(queryBP) == 0 {
+				t.Fatalf("Expected non-empty queryBP buffer")
+			}
+
+			// Verify first call matches reference
+			for i := 0; i < n; i++ {
+				if math.Abs(float64(dist1[i]-distRef[i])) > 1e-5 {
+					t.Fatalf("First call mismatch at %d: got %v want %v", i, dist1[i], distRef[i])
+				}
+			}
+
+			// Second precomputed call (reuses buffer)
+			dist2 := make([]float32, n)
+			queryBP2, err := pde.ComputeDistanceEncodedWithPrecomputed(
+				qvec, n, encodedOnly, dist2, listNo, queryBP)
+			if err != nil {
+				t.Fatalf("Error on reuse precomputed call: %v", err)
+			}
+			if queryBP2 == nil {
+				t.Fatalf("Expected non-nil queryBP on reuse")
+			}
+
+			// Verify reuse call matches reference
+			for i := 0; i < n; i++ {
+				if math.Abs(float64(dist2[i]-distRef[i])) > 1e-5 {
+					t.Fatalf("Reuse call mismatch at %d: got %v want %v", i, dist2[i], distRef[i])
+				}
+			}
+		})
+	}
+}
+
 func TestIVFRaBitQTiming(t *testing.T) {
 	seed := time.Now().UnixNano()
 

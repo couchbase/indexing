@@ -128,6 +128,17 @@ type Codebook interface {
 	Dimension() int
 }
 
+// PrecomputedDistanceEncoder is an optional interface for codebooks that
+// support precomputed-query distance computation. The precomputed buffer
+// caches expensive per-query state (e.g., RaBitQ set_query output) so that
+// repeated distance calls within the same graph traversal skip redundant work.
+type PrecomputedDistanceEncoder interface {
+	ComputeDistanceEncodedWithPrecomputed(
+		qvec []float32, n int, codes []byte, dists []float32,
+		listno int64, queryBP []byte,
+	) ([]byte, error)
+}
+
 // SparseCodebook provides sparse-specific methods for codebook operations.
 type SparseCodebook interface {
 	Codebook

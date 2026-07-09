@@ -176,6 +176,11 @@ type ScanWorker struct {
 
 	dtable []float32
 
+	// queryBP caches the RaBitQ precomputed-query buffer for the composite
+	// (non-BHIVE) scan path. It is reused across the batches of a centroid
+	// and reset per job (see Scanner), since the buffer is centroid-specific.
+	queryBP []byte
+
 	rowBuf *AtomicRowBuffer
 
 	// temporary buffer to process each include column
@@ -336,6 +341,7 @@ func (w *ScanWorker) Close() {
 	w.dists = nil
 	w.cktmp = nil
 	w.dtable = nil
+	w.queryBP = nil
 
 	w.includeColumnBuf = nil
 	w.includeColumnExplode = nil
@@ -399,6 +405,7 @@ func (w *ScanWorker) Scanner() {
 				return
 			}
 			w.currJob = job
+			w.queryBP = w.queryBP[:0]
 			w.currJob.SetStartTime()
 			logging.Tracef("%v received job: %v", w.logPrefix, job.debugString)
 			defer logging.Tracef("%v done with job: %v", w.logPrefix, job.debugString)
@@ -747,8 +754,27 @@ func (w *ScanWorker) processDenseVectorBatch(vecCount int) (err error) {
 		}
 
 		w.dists = w.dists[:vecCount]
-		err = w.currJob.codebook.ComputeDistanceEncoded(qvec, vecCount, w.codes,
-			w.dists, w.dtable, w.currJob.cid)
+		// For RaBitQ on the composite (non-BHIVE) scan path, use the
+		// precomputed-query route so the expensive per-query set_query is
+		// computed once per centroid and reused across that centroid's
+		// batches (w.queryBP is reset per job in Scanner). Falls back to the
+		// regular encoded path if precomputed support is unavailable.
+		if qtype == c.RaBitQ && !w.r.isBhiveScan {
+			if pde, ok := w.currJob.codebook.(codebook.PrecomputedDistanceEncoder); ok {
+				var bp []byte
+				bp, err = pde.ComputeDistanceEncodedWithPrecomputed(qvec, vecCount,
+					w.codes, w.dists, w.currJob.cid, w.queryBP)
+				if err == nil {
+					w.queryBP = bp
+				}
+			} else {
+				err = w.currJob.codebook.ComputeDistanceEncoded(qvec, vecCount,
+					w.codes, w.dists, w.dtable, w.currJob.cid)
+			}
+		} else {
+			err = w.currJob.codebook.ComputeDistanceEncoded(qvec, vecCount, w.codes,
+				w.dists, w.dtable, w.currJob.cid)
+		}
 		if err != nil {
 			logging.Verbosef("%v processDenseVectorBatch got error: %v from ComputeDistance", w.logPrefix, err)
 			return
