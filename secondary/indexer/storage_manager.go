@@ -3834,30 +3834,13 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 			logging.Infof("StorageMgr::handleEncryptionUpdateKey done for storage slices %v", kdt)
 		}
 
-		// Codebook encryption
-		for instId, inst := range indexInstMap {
-			if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex || inst.State == common.INDEX_STATE_DELETED {
-				continue
-			}
-
-			partnMap, ok := indexPartnMap[instId]
-			if !ok {
-				logging.Infof("StorageMgr::handleEncryptionUpdateKey No partitions found for instId %v", instId)
-				continue
-			}
-			for _, partnInst := range partnMap {
-				sc := partnInst.Sc
-				for _, slice := range sc.GetAllSlices() {
-					err := slice.SetCodebookEncryptionKey(earkey.Key, earkey.Id, earkey.Cipher, kdt)
-					if err != nil {
-						respCh <- err
-						return
-					}
-				}
-			}
-		}
+		// Codebook re-encryption is intentionally NOT performed on key update.
+		// The codebook is re-encrypted only when its current key is dropped (see
+		// handleEncryptionDropKey -> DropCodebookEncryptionKey). Re-encrypting the
+		// codebook on every active-key rotation rewrites it in the background,
+		// which can race with an in-progress shard rebalance and leave the codebook
+		// out of sync with the keys transferred to the destination.
 		respCh <- nil
-		logging.Infof("StorageMgr::handleEncryptionUpdateKey done for codebooks %v", kdt)
 	}()
 }
 
