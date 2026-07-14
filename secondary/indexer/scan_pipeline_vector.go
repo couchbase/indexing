@@ -3,6 +3,7 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -173,6 +174,21 @@ type ScanWorker struct {
 	// limit-pushdown scans.
 	usePersistentHeap bool
 
+	// globalTopKDist, when non-nil, holds the scan-wide smallest published
+	// top-K root distance (as float32 bits). A worker whose persistent heap
+	// is full publishes its root (its k-th best distance) via CAS-min and
+	// all workers prune candidate rows that cannot beat the published
+	// value: some worker already holds heapSize rows which are all better
+	// and will all be sent downstream. Only set for dist-only ordering
+	// where a scalar threshold is valid.
+	globalTopKDist *atomic.Uint32
+
+	// lastPublishedDist is the last root distance this worker published
+	lastPublishedDist float32
+
+	// rowsPruned counts rows dropped using globalTopKDist
+	rowsPruned uint64
+
 	//reference to the current batch rows
 	currBatchRows []*Row
 
@@ -227,7 +243,7 @@ type ScanWorker struct {
 
 func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- *Row,
 	stopCh chan struct{}, errCh chan error, wg *sync.WaitGroup, config c.Config,
-	sendLastRowPerJob bool) *ScanWorker {
+	sendLastRowPerJob bool, globalTopKDist *atomic.Uint32) *ScanWorker {
 
 	senderChSize := config["scan.vector.scanworker_senderch_size"].Int()
 
@@ -311,6 +327,10 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		// heap can only be carried across jobs when it is off. It is always
 		// off for limit-pushdown scans as ScanRangeSequencing is disabled.
 		w.usePersistentHeap = !r.isBhiveScan && !sendLastRowPerJob
+		if w.usePersistentHeap {
+			w.globalTopKDist = globalTopKDist
+			w.lastPublishedDist = float32(math.Inf(1))
+		}
 		w.heap, _ = NewTopKRowHeap(w.heapSize, false, r.getRowCompare())
 
 		//pre-allocate rows twice the size of buffer+heapSize
@@ -415,8 +435,8 @@ func (w *ScanWorker) SetStartTime() {
 
 func (w *ScanWorker) PrintStats() {
 	getDebugStr := func() string {
-		s := fmt.Sprintf("%v Stats rowsScanned: %v rowsReturned: %v",
-			w.logPrefix, w.rowsScanned, w.rowsReturned)
+		s := fmt.Sprintf("%v Stats rowsScanned: %v rowsReturned: %v rowsPruned: %v",
+			w.logPrefix, w.rowsScanned, w.rowsReturned, w.rowsPruned)
 		if logging.IsEnabled(logging.Timing) {
 			s += fmt.Sprintf(" timeTaken: %v", time.Since(w.startTime))
 		}
@@ -645,10 +665,26 @@ func (w *ScanWorker) flushPersistentHeap() {
 	logging.Verbosef("%v flushPersistentHeap rows %v", w.logPrefix, w.heap.Len())
 	rowList := w.heap.List()
 
+	pruneDist, pruneActive := w.getGlobalPruneDist()
+	var pruned int
+
 	for i, row := range rowList {
+
+		// Rows strictly worse than the final published threshold cannot
+		// enter the final top-K - the publisher flushes heapSize rows which
+		// are all better. Strict compare: rows tying the threshold may be
+		// the publisher's own kept rows and must be sent.
+		if pruneActive && row.dist > pruneDist {
+			row.free()
+			pruned++
+			continue
+		}
+
 		select {
 		case <-w.stopCh:
-			//scan is stopping; free the rows not yet handed downstream
+			//scan is stopping; free the rows not yet handed downstream.
+			//Rows before i were either sent or pruned and freed, so this
+			//range holds only rows this worker still owns.
 			for _, r := range rowList[i:] {
 				r.free()
 			}
@@ -657,7 +693,72 @@ func (w *ScanWorker) flushPersistentHeap() {
 		case w.outCh <- row:
 		}
 	}
+	if pruned > 0 {
+		logging.Verbosef("%v flushPersistentHeap pruned %v rows", w.logPrefix, pruned)
+	}
 	w.heap = nil //ownership of rows transferred downstream
+}
+
+// getGlobalPruneDist returns the scan-wide prune threshold, if one has been
+// published. Only rows strictly worse than the threshold are unconditionally
+// droppable: the threshold is the publisher's k-th best distance, so a row
+// tying it may be that kept row itself, and freeing every tying row would
+// leave the merge with fewer than heapSize candidates. A worker still
+// scanning may drop ties as well (see processCurrentBatch) - it is dropping
+// its own candidates against a floor heapSize rows already meet - but the
+// final flush of the heaps must not.
+func (w *ScanWorker) getGlobalPruneDist() (float32, bool) {
+	if w.globalTopKDist == nil {
+		return 0, false
+	}
+	d := math.Float32frombits(w.globalTopKDist.Load())
+	if math.IsInf(float64(d), 1) {
+		return 0, false
+	}
+	return d, true
+}
+
+// publishTopKDist publishes this worker's heap root distance (its current
+// k-th best) to the shared scan-wide threshold. Valid only once the heap is
+// full: at that point the heap holds heapSize rows which are all at least as
+// good as the root and are guaranteed to be sent downstream.
+func (w *ScanWorker) publishTopKDist() {
+	if w.globalTopKDist == nil || w.heap.Len() < w.heapSize {
+		return
+	}
+
+	root := w.heap.List()[0].dist
+	if math.IsNaN(float64(root)) || root >= w.lastPublishedDist {
+		return
+	}
+	w.lastPublishedDist = root
+	casMinFloat32(w.globalTopKDist, root)
+}
+
+// casMinFloat32 atomically lowers the float32 stored in a (as bits) to v if
+// v is smaller. Comparison is done in float space as the uint32 bit pattern
+// ordering does not hold for negative floats (e.g. negated inner products).
+//
+// A NaN v is dropped rather than stored. NaN compares false against every
+// value, so a stored NaN would both stop all pruning and let the following
+// call install whatever it is given - even a value larger than the one it
+// replaces, turning this into a CAS-max. Keeping the guard here, not just in
+// the caller, is what makes "the stored value is never NaN" an invariant of
+// the only code that writes it.
+func casMinFloat32(a *atomic.Uint32, v float32) {
+	if v != v { // NaN
+		return
+	}
+
+	for {
+		old := a.Load()
+		if v >= math.Float32frombits(old) {
+			return
+		}
+		if a.CompareAndSwap(old, math.Float32bits(v)) {
+			return
+		}
+	}
 }
 
 // processSparseVectorBatch computes distances for a batch of sparse-vector
@@ -1075,6 +1176,48 @@ func (w *ScanWorker) processDenseVectorBatch(vecCount int) (err error) {
 	return nil
 }
 
+// pruneBatch frees the rows of the scored batch that cannot enter the final
+// top-K and compacts the survivors to the front of currBatchRows/dists (order
+// preserved, as processSparseVectorBatchQuantized does), returning how many
+// survived. Some worker already holds heapSize rows at least as good as the
+// published threshold and will send all of them downstream, so a row that
+// cannot beat it - ties included - can only displace an equally good row.
+//
+// This is a pass of its own rather than a test inside the per-row loop below:
+// that loop runs for every row of every batch, and most scans never see a
+// published threshold at all. Hoisting the decision here costs one branch per
+// batch instead of one per row, and leaves the per-row loop with no pruning
+// concern in it.
+func (w *ScanWorker) pruneBatch(vecCount int) int {
+
+	pruneDist, pruneActive := w.getGlobalPruneDist()
+	if !pruneActive {
+		return vecCount
+	}
+
+	validCount := 0
+	for i := 0; i < vecCount; i++ {
+		if w.dists[i] >= pruneDist {
+			w.currBatchRows[i].free()
+			w.currBatchRows[i] = nil
+			w.rowsPruned++
+			continue
+		}
+		if validCount != i {
+			w.currBatchRows[validCount] = w.currBatchRows[i]
+			w.dists[validCount] = w.dists[i]
+		}
+		validCount++
+	}
+
+	// Restrict to surviving rows. The caller re-inits both slices for the
+	// next batch, so the stale entries past validCount are never read.
+	w.currBatchRows = w.currBatchRows[:validCount]
+	w.dists = w.dists[:validCount]
+
+	return validCount
+}
+
 // processCurrentBatch decodes current batch of rows, computes
 // the distance from query vector and either stores in local heap(limit pushdown)
 // or sends it to the next stage of scan pipeline.
@@ -1110,8 +1253,13 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		}
 	}
 
+	// Drop the rows that cannot enter the final top-K before doing any
+	// per-row work on them
+	vecCount = w.pruneBatch(vecCount)
+
 	// Substitue distance in place centroidId and send to outCh or store in local heap
 	for i := 0; i < vecCount; i++ {
+
 		w.currBatchRows[i].dist = w.dists[i] // Add distance for sorting in heap
 
 		var sortKey []byte
@@ -1140,6 +1288,8 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		}
 		w.currBatchRows[i] = nil
 	}
+
+	w.publishTopKDist()
 
 	//re-init for the next batch
 	w.currBatchRows = w.currBatchRows[:0]
@@ -1642,6 +1792,11 @@ type WorkerPool struct {
 	mergeHeap  *TopKRowHeap
 	r          *ScanRequest
 
+	// topKDist is the scan-wide smallest published top-K root distance
+	// shared by all workers for candidate pruning. See
+	// ScanWorker.globalTopKDist.
+	topKDist *atomic.Uint32
+
 	config c.Config
 }
 
@@ -1667,6 +1822,13 @@ func NewWorkerPool(r *ScanRequest, numWorkers int, mergeSort bool, config c.Conf
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	// A scalar distance threshold shared across workers is only valid when
+	// rows are ordered by distance alone
+	if !r.isBhiveScan && r.useHeapForVectorIndex() && r.getRowCompare() == nil {
+		wp.topKDist = &atomic.Uint32{}
+		wp.topKDist.Store(math.Float32bits(float32(math.Inf(1))))
 	}
 	wp.logPrefix = fmt.Sprintf("%v[%v]WorkerPool", wp.r.LogPrefix, wp.r.RequestId)
 	return wp, nil
@@ -1697,7 +1859,7 @@ func (wp *WorkerPool) Init() {
 		}
 
 		wp.workers[i] = NewScanWorker(i, wp.r, wp.jobs, outCh, wp.stopCh, wp.errCh,
-			&wp.jobsWg, wp.config, wp.mergeSort)
+			&wp.jobsWg, wp.config, wp.mergeSort, wp.topKDist)
 	}
 }
 
