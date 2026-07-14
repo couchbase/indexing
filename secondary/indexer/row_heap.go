@@ -167,6 +167,14 @@ func (h *TopKRowHeap) Push(row *Row) {
 	}
 }
 
+// ReplaceRowAt replaces the row stored at the given index without
+// re-establishing heap order. Caller must ensure the new row compares
+// identically to the one being replaced (e.g. an owned copy carrying the
+// same dist/sortKey).
+func (h *TopKRowHeap) ReplaceRowAt(index int, row *Row) {
+	h.heap.SetRow(index, row)
+}
+
 // Pop removes and returns the top element (min or max) from the heap
 func (h *TopKRowHeap) Pop() (row *Row) {
 	if h.heap.Len() == 0 {

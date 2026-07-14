@@ -242,6 +242,55 @@ var testPatterns2 = []struct {
 	},
 }
 
+// TestTopKRowHeapReplaceRowAt simulates the persistent-heap materialization
+// done at job end: every row in the heap is replaced in place with a copy
+// carrying the same dist. The heap must keep its order and honor further
+// pushes after the replacement.
+func TestTopKRowHeapReplaceRowAt(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	heap, err := NewTopKRowHeap(5, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input := []float32{6.0, 7.0, 8.0, 1.0, 2.0, 3.0}
+	for i, dist := range input {
+		heap.Push(&Row{key: []byte(strconv.Itoa(i)), dist: dist})
+	}
+
+	// replace every row with a copy holding the same dist
+	replacements := make(map[*Row]bool)
+	for i, row := range heap.List() {
+		newRow := &Row{key: append([]byte(nil), row.key...), dist: row.dist}
+		heap.ReplaceRowAt(i, newRow)
+		replacements[newRow] = true
+	}
+
+	// push more rows after replacement; heap invariant must hold
+	heap.Push(&Row{key: []byte("x"), dist: 4.0})
+	heap.Push(&Row{key: []byte("y"), dist: 9.0})
+
+	expected := []float32{6.0, 4.0, 3.0, 2.0, 1.0}
+	i := 0
+	for row := heap.Pop(); row != nil; row = heap.Pop() {
+		if i >= len(expected) {
+			t.Fatal("More values in heap than expected")
+		}
+		if row.dist != expected[i] {
+			t.Fatalf("Wrong value from heap at %v: got dist %v expected %v",
+				i, row.dist, expected[i])
+		}
+		if row.dist != 4.0 && !replacements[row] {
+			t.Fatalf("Row with dist %v was not the replaced copy", row.dist)
+		}
+		i++
+	}
+	if i != len(expected) {
+		t.Fatalf("Heap returned %v rows, expected %v", i, len(expected))
+	}
+}
+
 func TestRowHeap(t *testing.T) {
 	logging.SetLogLevel(logging.Info)
 	testPatterns = append(testPatterns, testPatterns1...)

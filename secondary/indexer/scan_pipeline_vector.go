@@ -166,6 +166,13 @@ type ScanWorker struct {
 	//local heap for each worker
 	heap *TopKRowHeap
 
+	// usePersistentHeap keeps the local heap alive across jobs. At each job
+	// end the storage-backed rows surviving in the heap are copied in place
+	// (materialized) instead of being flushed downstream, and the heap is
+	// flushed only once after the last job. Enabled for non-bhive
+	// limit-pushdown scans.
+	usePersistentHeap bool
+
 	//reference to the current batch rows
 	currBatchRows []*Row
 
@@ -300,6 +307,10 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		if r.Offset != 0 {
 			w.heapSize += int(r.Offset)
 		}
+		// sendLastRowPerJob (merge-sort) needs rows flushed per job, so the
+		// heap can only be carried across jobs when it is off. It is always
+		// off for limit-pushdown scans as ScanRangeSequencing is disabled.
+		w.usePersistentHeap = !r.isBhiveScan && !sendLastRowPerJob
 		w.heap, _ = NewTopKRowHeap(w.heapSize, false, r.getRowCompare())
 
 		//pre-allocate rows twice the size of buffer+heapSize
@@ -362,6 +373,12 @@ func (w *ScanWorker) setSenderBatchSize() {
 }
 
 func (w *ScanWorker) Close() {
+	// free rows still held by the persistent heap (error/early-stop path;
+	// on successful scans flushPersistentHeap has already detached them)
+	if w.usePersistentHeap && w.heap != nil {
+		w.heap.Destroy()
+	}
+
 	w.r.connCtx.Put(fmt.Sprintf("%v%v", VectorScanWorker, w.id), w.mem)
 	w.mem = nil
 
@@ -446,7 +463,9 @@ func (w *ScanWorker) Scanner() {
 
 		w.senderCh = make(chan *Row, w.senderChSize)
 		w.senderErrCh = make(chan error)
-		w.heap, _ = NewTopKRowHeap(w.heapSize, false, w.r.getRowCompare())
+		if !w.usePersistentHeap {
+			w.heap, _ = NewTopKRowHeap(w.heapSize, false, w.r.getRowCompare())
+		}
 
 		scan := job.scan
 		snap := job.snap.Snapshot()
@@ -571,10 +590,74 @@ func (w *ScanWorker) finishCallback() {
 	}
 	//flush the local heap once done
 	if w.r.useHeapForVectorIndex() {
-		w.flushLocalHeap()
-		w.heap.Destroy()
+		if w.usePersistentHeap {
+			//rows surviving in the heap are copied in place and the heap
+			//is carried over to the next job; flushed after the last job
+			w.materializeHeapRows()
+		} else {
+			w.flushLocalHeap()
+			w.heap.Destroy()
+		}
 	}
 
+}
+
+// materializeHeapRows is called at job end, before the storage iterator
+// closes. Rows pushed into the heap during the current job hold references
+// to storage-owned memory, so any such row surviving in the heap is replaced
+// in place with an allocator-owned copy. Rows materialized at earlier job
+// boundaries (rowBuf == nil) are left untouched. The replacement carries the
+// same dist/sortKey, so heap order is unaffected.
+func (w *ScanWorker) materializeHeapRows() {
+
+	logging.Verbosef("%v materializeHeapRows %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid)
+	rowList := w.heap.List()
+
+	for i, row := range rowList {
+		if row.rowBuf == nil {
+			continue
+		}
+
+		newRow := &Row{}
+		newRow.init(w.mem)
+		newRow.copy(row)
+
+		entry1 := secondaryIndexEntry(row.key)
+		newRow.len = entry1.lenKey()
+		newRow.workerId = w.id
+
+		w.heap.ReplaceRowAt(i, newRow)
+		row.free() //return the storage-backed row to rowBuf
+	}
+}
+
+// flushPersistentHeap sends the rows accumulated in the worker's persistent
+// heap to the next stage of the scan pipeline. The rows are already
+// allocator-owned copies (materialized at job boundaries), so ownership is
+// transferred downstream without another copy. Must only be called after all
+// submitted jobs have finished, when the scanner goroutine is idle.
+func (w *ScanWorker) flushPersistentHeap() {
+
+	if !w.usePersistentHeap || w.heap == nil {
+		return
+	}
+
+	logging.Verbosef("%v flushPersistentHeap rows %v", w.logPrefix, w.heap.Len())
+	rowList := w.heap.List()
+
+	for i, row := range rowList {
+		select {
+		case <-w.stopCh:
+			//scan is stopping; free the rows not yet handed downstream
+			for _, r := range rowList[i:] {
+				r.free()
+			}
+			w.heap = nil
+			return
+		case w.outCh <- row:
+		}
+	}
+	w.heap = nil //ownership of rows transferred downstream
 }
 
 // processSparseVectorBatch computes distances for a batch of sparse-vector
@@ -1751,6 +1834,16 @@ func (wp *WorkerPool) Wait() error {
 	return nil
 }
 
+// FlushPersistentHeaps drains the per-worker persistent heaps into the
+// downstream channel. Must be called after Wait has returned for all
+// submitted jobs (workers are idle) and before StopOutCh. No-op for
+// workers not using a persistent heap.
+func (wp *WorkerPool) FlushPersistentHeaps() {
+	for _, w := range wp.workers {
+		w.flushPersistentHeap()
+	}
+}
+
 func (wp *WorkerPool) GetOutCh() <-chan *Row {
 	return wp.sendCh
 }
@@ -2549,6 +2642,9 @@ func (s *IndexScanSource2) Routine() error {
 				return
 			}
 		}
+		// all jobs finished cleanly and workers are idle; send the rows
+		// held in the per-worker persistent heaps downstream
+		wp.FlushPersistentHeaps()
 	}()
 
 	// Wait for Merge Operator to terminate it will happen either when we stopped worker pool
