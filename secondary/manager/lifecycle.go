@@ -1044,6 +1044,10 @@ func (m *LifecycleMgr) handleUpdateRebalancePhase(context []byte) error {
 	m.rebalMutex.Lock()
 	defer m.rebalMutex.Unlock()
 
+	if m.bucketTransferPhase == nil {   // rebalance already done; ignore stale update
+	    return nil
+	}
+
 	m.rebalancePhase = req.GlobalRebalPhase
 	for bucket, bucketTransferPhase := range req.BucketTransferPhase {
 		m.bucketTransferPhase[bucket] = bucketTransferPhase
