@@ -694,34 +694,43 @@ func addToInstRenamePath(token *common.TransferToken, index *IndexUsage, newInst
 func getRenamePath2(index *IndexUsage, newInstId common.IndexInstId) (string, string) {
 	isBhive := index.IsBhive()
 
-	var newPath string
-
-	if index.destNode.GetShardCompatVersionForIndex(isBhive) == 1 {
-		newPath = fmt.Sprintf("%v_%v_%v_%v.index",
-			index.Bucket, index.Name, newInstId, index.PartnId)
-	} else {
-		newPath = fmt.Sprintf("%v_%v_%v.index",
-			index.Instance.Defn.BucketUUID, newInstId, index.PartnId)
-	}
-
-	var sourcePath string
-
+	// Determine the source (or sibling, for replica repair) shard-compat version first.
 	var sourceShardCompatVersion int
 	var sourceShardInstId common.IndexInstId
+	isReplicaRepair := false
 	if index.initialNode != nil {
 		sourceShardCompatVersion = index.initialNode.GetShardCompatVersionForIndex(isBhive)
 		sourceShardInstId = index.InstId
-	} else if index.siblingIndex.initialNode != nil {
+	} else if index.siblingIndex != nil && index.siblingIndex.initialNode != nil {
+		// replica repair: the sibling node is the transfer source
 		sourceShardCompatVersion = index.siblingIndex.initialNode.GetShardCompatVersionForIndex(isBhive)
 		sourceShardInstId = index.siblingIndex.InstId
+		isReplicaRepair = true
 	}
 
+	var sourcePath string
 	if sourceShardCompatVersion == 1 {
 		sourcePath = fmt.Sprintf("%v_%v_%v_%v.index",
 			index.Bucket, index.Name, sourceShardInstId, index.PartnId)
 	} else {
 		sourcePath = fmt.Sprintf("%v_%v_%v.index",
 			index.Instance.Defn.BucketUUID, sourceShardInstId, index.PartnId)
+	}
+
+	// In replica repair the source (sibling) node executes the transfer and parses
+	// InstRenameMap to locate the sibling's codebook. A v1 source can only parse the
+	// v1 path format, so when the replica-repair source is v1 emit the new path in v1
+	// form too; the v2 destination converts these back to v2 during restore (see
+	// reconstructRenameMapForV2Dest). Normal moves do not parse the map on the source,
+	// so their new-path format is left dest-driven and unchanged.
+	destShardCompatVersion := index.destNode.GetShardCompatVersionForIndex(isBhive)
+	var newPath string
+	if (isReplicaRepair && sourceShardCompatVersion == 1) || destShardCompatVersion == 1 {
+		newPath = fmt.Sprintf("%v_%v_%v_%v.index",
+			index.Bucket, index.Name, newInstId, index.PartnId)
+	} else {
+		newPath = fmt.Sprintf("%v_%v_%v.index",
+			index.Instance.Defn.BucketUUID, newInstId, index.PartnId)
 	}
 
 	return sourcePath, newPath
