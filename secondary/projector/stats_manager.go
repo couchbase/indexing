@@ -666,6 +666,7 @@ func (sm *statsManager) setupLogStatsLogger() error {
 	sm.logStatsHandler = common.NewLogStatsFileHandler(sm.getLogStatsKey, sm.getKeyCipherByID)
 
 	filename := config["projector.statsLogFname"].String()
+	common.CleanupStaleStatsLogTempFiles(logDir, filename)
 
 	filefullpath := filepath.Join(logDir, filename)
 

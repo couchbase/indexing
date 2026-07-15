@@ -5006,6 +5006,7 @@ func (s *statsManager) tryEnableStatsLog() (bool, logstats.LogStats) {
 
 	if ok1 && ok2 && ok3 {
 		fpath := filepath.Join(logdir, fname.String())
+		common.CleanupStaleStatsLogTempFiles(logdir, fname.String())
 		sLogger, err := logstats.NewDedupeLogStatsWithFileHandler(fpath, fsize.Int(), fcount.Int(), common.STAT_LOG_TS_FORMAT, s.logStatsHandler)
 		if err != nil {
 			logging.Infof("Error in NewDedupeLogStatsWithFileHandler %v. Disabling stats logging.", err)
