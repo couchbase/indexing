@@ -1126,12 +1126,15 @@ func (idx *indexer) initHttpsServer() error {
 			Addr:    sslAddr,
 			Handler: muxWithReqLogger(muxWithPanicRecover(httpMux)),
 		}
-		if err := security.SecureHTTPServer(sslsrv); err != nil {
+		// clientAuth CRL scope: this endpoint receives external client
+		// requests in addition to node-to-node traffic, matching the scope
+		// ns_server applies on its own HTTPS listener.
+		if err := security.SecureHTTPServer(sslsrv, security.CRLScopeClientAuth); err != nil {
 			return fmt.Errorf("Error in securing HTTPS server: %v", err)
 		}
 
 		// replace below with ListenAndServeTLS on moving to go1.8
-		lsnr, err := security.MakeAndSecureTCPListener(sslAddr)
+		lsnr, err := security.MakeAndSecureTCPListener(sslAddr, security.CRLScopeClientAuth)
 		if err != nil {
 			return fmt.Errorf("Error in creating SSL Listener: %v", err)
 		}
