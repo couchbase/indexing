@@ -360,10 +360,16 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case START_SHARD_TRANSFER:
 		s.handleShardTransfer(cmd)
 
+	case FETCH_SHARD_KEYS:
+		// Handled in the storage manager (not forwarded to STM to respond): it
+		// owns the index instance / slice bookkeeping needed to resolve codebook
+		// keys and calls the STM's fetchShardKeys API for the shard (LSS) keys.
+		s.handleFetchShardKeys(cmd)
+		s.supvCmdch <- &MsgSuccess{}
+
 	case SHARD_TRANSFER_CLEANUP,
 		SHARD_TRANSFER_STAGING_CLEANUP,
 		START_SHARD_RESTORE,
-		FETCH_SHARD_KEYS,
 		DESTROY_LOCAL_SHARD,
 		MONITOR_SLICE_STATUS,
 		RESTORE_SHARD_DONE,
@@ -3150,6 +3156,112 @@ func (s *storageMgr) SetRebalanceRunning(cmd Message) {
 	}
 }
 
+// handleFetchShardKeys resolves the full set of encryption keys that must be
+// transferred for a shard: the shard (LSS) keys reported by the storage engine
+// via the ShardTransferManager, plus the codebook keys of the vector indexes
+// living on those shards. Codebook keys are appended as an additional bundle so
+// getDirToEaRKey (which flattens all bundles) copies them like any shard key.
+func (s *storageMgr) handleFetchShardKeys(cmd Message) {
+	msg, ok := cmd.(*MsgFetchShardKeys)
+	if !ok {
+		logging.Warnf("StorageMgr::handleFetchShardKeys unexpected msg type: %T", cmd)
+		return
+	}
+
+	if s.stm == nil {
+		msg.GetRespCh() <- ShardKeysResp{
+			err: fmt.Errorf("StorageMgr::handleFetchShardKeys ShardTransferManager not initialized"),
+		}
+		return
+	}
+
+	resp := ShardKeysResp{}
+
+	bundles, err := s.stm.fetchShardKeys(msg.GetShardIds(), msg.GetShardType())
+	resp.err = err
+
+	// Codebook keys are collected here (storage manager owns the index
+	// instance / slice bookkeeping) and appended as their own bundle.
+	codebookKeys, err := s.collectCodebookKeys(msg.GetShardIds())
+	if err != nil {
+		resp.err = errors.Join(resp.err, err)
+	}
+	if len(codebookKeys) > 0 {
+		logging.Infof("StorageMgr::handleFetchShardKeys appending codebook keys %v for shardIDs %v",
+			logKeyIDs(codebookKeys...), msg.GetShardIds())
+		bundles = append(bundles, codebookKeys)
+	}
+	resp.keys = bundles
+
+	logging.Infof("StorageMgr::handleFetchShardKeys response %v for shardIDs %v",
+		resp, msg.GetShardIds())
+
+	msg.GetRespCh() <- resp
+}
+
+// collectCodebookKeys returns the distinct codebook encryption key IDs of the
+// vector indexes whose slices live on the given shards. Matching is done by
+// shard ID (not transfer-token instance IDs) so it is correct even for replica
+// repair, where the source instance IDs differ from those the destination sees.
+// The empty ("") key ID is included when a codebook is unencrypted.
+func (s *storageMgr) collectCodebookKeys(shardIds []common.ShardId) (
+	[]common.KeyID, error,
+) {
+	if len(shardIds) == 0 {
+		return nil, nil
+	}
+
+	shardIdMap := make(map[common.ShardId]bool, len(shardIds))
+	for _, shardId := range shardIds {
+		shardIdMap[shardId] = true
+	}
+
+	indexInstMap := s.indexInstMap.Get()
+	indexPartnMap := s.indexPartnMap.Get()
+
+	seen := make(map[common.KeyID]bool)
+	keys := make([]common.KeyID, 0)
+	errs := make([]error, 0, len(shardIds))
+
+	for instId, inst := range indexInstMap {
+		if !inst.Defn.IsVectorIndex || inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+		partnMap, ok := indexPartnMap[instId]
+		if !ok {
+			continue
+		}
+		for _, partnInst := range partnMap {
+			for _, slice := range partnInst.Sc.GetAllSlices() {
+				// Only consider slices that reside on the shards being transferred.
+				onShard := false
+				for _, sliceShard := range slice.GetShardIds() {
+					if shardIdMap[sliceShard] {
+						onShard = true
+						break
+					}
+				}
+				if !onShard {
+					continue
+				}
+
+				key, err := slice.GetCodebookEncryptionKeyId()
+				if err != nil {
+					logging.Errorf("StorageMgr::collectCodebookKeys GetCodebookEncryptionKeyId err:%v "+
+						"for instId:%v partnId:%v", err, instId, slice.IndexPartnId())
+					errs = append(errs, err)
+				}
+				if !seen[key] {
+					seen[key] = true
+					keys = append(keys, key)
+				}
+			}
+		}
+	}
+
+	return keys, errors.Join(errs...)
+}
+
 // If rebalance transfer is in progress, then this method
 // will cancel rebalance transfer and waits for plasma to finish
 // processing. Also, the shard transefer book-keeping is updated
@@ -3722,30 +3834,13 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 			logging.Infof("StorageMgr::handleEncryptionUpdateKey done for storage slices %v", kdt)
 		}
 
-		// Codebook encryption
-		for instId, inst := range indexInstMap {
-			if inst.Defn.BucketUUID != kdt.BucketUUID || !inst.Defn.IsVectorIndex || inst.State == common.INDEX_STATE_DELETED {
-				continue
-			}
-
-			partnMap, ok := indexPartnMap[instId]
-			if !ok {
-				logging.Infof("StorageMgr::handleEncryptionUpdateKey No partitions found for instId %v", instId)
-				continue
-			}
-			for _, partnInst := range partnMap {
-				sc := partnInst.Sc
-				for _, slice := range sc.GetAllSlices() {
-					err := slice.SetCodebookEncryptionKey(earkey.Key, earkey.Id, earkey.Cipher, kdt)
-					if err != nil {
-						respCh <- err
-						return
-					}
-				}
-			}
-		}
+		// Codebook re-encryption is intentionally NOT performed on key update.
+		// The codebook is re-encrypted only when its current key is dropped (see
+		// handleEncryptionDropKey -> DropCodebookEncryptionKey). Re-encrypting the
+		// codebook on every active-key rotation rewrites it in the background,
+		// which can race with an in-progress shard rebalance and leave the codebook
+		// out of sync with the keys transferred to the destination.
 		respCh <- nil
-		logging.Infof("StorageMgr::handleEncryptionUpdateKey done for codebooks %v", kdt)
 	}()
 }
 

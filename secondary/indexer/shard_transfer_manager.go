@@ -149,9 +149,6 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 		executionStr = "async-run"
 		go stm.processShardTransferMessage(cmd)
 
-	case FETCH_SHARD_KEYS:
-		stm.processFetchShardKeysMessage(cmd)
-
 	case SHARD_TRANSFER_CLEANUP:
 		executionStr = "async-run"
 		go stm.processTransferCleanupMessage(cmd)
@@ -365,24 +362,10 @@ func (stm *ShardTransferManager) processCodebookTransfer(msg *MsgStartShardTrans
 	}
 }
 
-func (stm *ShardTransferManager) processFetchShardKeysMessage(cmd Message) {
-	msg, ok := cmd.(*MsgFetchShardKeys)
-	if !ok {
-		logging.Warnf("ShardTransferManager::processFetchShardKeys unexpected msg type: %T", cmd)
-		return
-	}
-	resp := ShardKeysResp{}
-
-	bundles, err := stm.fetchShardKeys(msg.GetShardIds(), msg.GetShardType())
-	resp.keys = bundles
-	resp.err = err
-
-	logging.Infof("ShardTransferManager::processFetchShardKeys get response %v for shardIDs %v",
-		resp, msg.GetShardIds())
-
-	msg.GetRespCh() <- resp
-}
-
+// fetchShardKeys returns the storage-engine (LSS) encryption key IDs in use on
+// each of the given shards, one bundle per shard. It is invoked directly by the
+// storage manager (see storageMgr.handleFetchShardKeys), which augments the
+// result with codebook keys before replying to the shard rebalancer.
 func (stm *ShardTransferManager) fetchShardKeys(
 	shardIDs []c.ShardId,
 	shardType c.ShardType,

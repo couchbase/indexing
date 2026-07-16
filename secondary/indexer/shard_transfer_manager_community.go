@@ -17,3 +17,11 @@ func NewShardTransferManager(config common.Config, supvWrkrCh chan Message) *Sha
 func (stm *ShardTransferManager) ProcessCommand(cmd Message) {
 	// no-op
 }
+
+func (stm *ShardTransferManager) fetchShardKeys(
+	shardIDs []common.ShardId,
+	shardType common.ShardType,
+) ([]common.ShardKeyBundle, error) {
+
+	return nil, nil
+}

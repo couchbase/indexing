@@ -1843,9 +1843,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case UPDATE_REBALANCE_PHASE:
 		// Stale message drained after teardown: rebalance is already done. Ignore it.
 		if !idx.rebalanceRunning {
-        logging.Warnf("Indexer::handleWorkerMsgs dropping stale UPDATE_REBALANCE_PHASE; rebalance not running. msg: %v", msg)
-        	break
-    	}
+			logging.Warnf("Indexer::handleWorkerMsgs dropping stale UPDATE_REBALANCE_PHASE; rebalance not running. msg: %v", msg)
+			break
+		}
 
 		bucketTransferPhase := idx.updateRebalancePhase(msg)
 		msg.(*MsgUpdateRebalancePhase).BucketTransferPhase = bucketTransferPhase
@@ -11705,11 +11705,21 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
-		slice, err = NewMemDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
+		mSlice, memdbErr := NewMemDBSlice(path, id, indInst.Defn, instId,
+			partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
 			partnStats[partitionId], numVBuckets, sliceEncryptionCallbacks)
+		err = memdbErr
+		if mSlice != nil {
+			slice = mSlice
+		}
 	case common.ForestDB:
-		slice, err = NewForestDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
+		fSlice, forestErr := NewForestDBSlice(path, id, indInst.Defn, instId,
+			partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			partnStats[partitionId])
+		err = forestErr
+		if fSlice != nil {
+			slice = fSlice
+		}
 	case common.PlasmaDB:
 		cbPath := CodebookPath2(indInst, partitionId, id)
 		if testcode.UseOldIndexPath(conf) {
@@ -11718,15 +11728,24 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 		}
 		if indInst.Defn.IsVectorIndex && indInst.Defn.VectorMeta.IsBhive {
 			// safety call to make sure base dir exists before bhive directory is created
-			slice, err = NewBhiveSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, numPartitions, conf,
+			bSlice, bhiveErr := NewBhiveSlice(storeEngineDir, log_dir, path, id,
+				indInst.Defn, instId, partitionId, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
 				cbPath, indInst.BhiveGraphStatus[partitionId], sliceEncryptionCallbacks)
+			err = bhiveErr
+			if bSlice != nil {
+				slice = bSlice
+			}
 		} else {
-			slice, err = NewPlasmaSlice(storeEngineDir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
+			pSlice, plasmaErr := NewPlasmaSlice(storeEngineDir, log_dir, path, id,
+				indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 				partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
 				cbPath, sliceEncryptionCallbacks)
+			err = plasmaErr
+			if pSlice != nil {
+				slice = pSlice
+			}
 		}
-
 	}
 
 	return
