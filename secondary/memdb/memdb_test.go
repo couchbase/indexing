@@ -968,8 +968,6 @@ func testDiskCorruption(t *testing.T, testConf Config) {
 	os.RemoveAll("db.dump")
 	var wg sync.WaitGroup
 
-	// TBD: enable after MB-70620 is fixed
-	testConf.useMemoryMgmt = false
 	db := NewWithConfig(testConf)
 	defer db.Close()
 	n := 100000

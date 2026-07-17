@@ -41,6 +41,27 @@ func (s *Segment) Add(itm unsafe.Pointer) {
 	}
 }
 
+func (s *Segment) FreeSegment() {
+	if s.head == nil {
+		return
+	}
+	store := s.builder.store
+	for node := s.head[0]; node != nil; {
+		next, _ := node.getNext(0)
+		last := node == s.tail[0]
+		if store.UseMemoryMgmt {
+			store.Free(node.Item())
+		}
+		store.FreeNode(node, &s.sts)
+		if last {
+			break
+		}
+		node = next
+	}
+	s.head = nil
+	s.tail = nil
+}
+
 // Concurrent bottom-up skiplist builder
 type Builder struct {
 	store *Skiplist
@@ -97,6 +118,11 @@ func (b *Builder) Assemble(segments ...*Segment) *Skiplist {
 
 	return b.store
 
+}
+
+func (b *Builder) Close() {
+	b.store.FreeNode(b.store.head, &b.store.Stats)
+	b.store.FreeNode(b.store.tail, &b.store.Stats)
 }
 
 func NewBuilder() *Builder {
