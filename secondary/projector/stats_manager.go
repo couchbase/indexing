@@ -193,6 +193,8 @@ type statsManager struct {
 	statLogger               logstats.LogStats
 	encMgr                   *EncryptionMgr
 
+	logStatsHandler *common.LogStatsFileHandler
+
 	logStatsKeyMu sync.RWMutex
 	logStatsKeyID string
 	logStatsKey   []byte
@@ -603,6 +605,11 @@ func (sm *statsManager) handleEncryptionDropKey(activeEarKey common.EaRKey, drop
 		dropKeyIDs = []string{""}
 	}
 
+	if sm.logStatsHandler != nil && logDir != "" && baseName != "" {
+		sm.logStatsHandler.PauseRotation()
+		defer sm.logStatsHandler.ResumeRotation()
+	}
+
 	var err error
 	if activeEarKey.Id != "" {
 		if logDir != "" && baseName != "" {
@@ -656,7 +663,10 @@ func (sm *statsManager) setupLogStatsLogger() error {
 		return nil
 	}
 
+	sm.logStatsHandler = common.NewLogStatsFileHandler(sm.getLogStatsKey, sm.getKeyCipherByID)
+
 	filename := config["projector.statsLogFname"].String()
+	common.CleanupStaleStatsLogTempFiles(logDir, filename)
 
 	filefullpath := filepath.Join(logDir, filename)
 
@@ -665,13 +675,12 @@ func (sm *statsManager) setupLogStatsLogger() error {
 
 	var err error
 
-	handler := common.NewLogStatsFileHandler(sm.getLogStatsKey, sm.getKeyCipherByID)
 	sm.statLogger, err = logstats.NewDedupeLogStatsWithFileHandler(
 		filefullpath,              // fileName
 		sizelimit,                 // sizeLimit
 		numfiles,                  // numFiles
 		common.STAT_LOG_TS_FORMAT, // tsFormat
-		handler,                   // fileHandler
+		sm.logStatsHandler,        // fileHandler
 	)
 
 	return err

@@ -3515,7 +3515,8 @@ type statsManager struct {
 	stReqRecCount uint64
 	meteringMgr   *MeteringThrottlingMgr
 
-	encCallbacks StatsEncryptionCallbacks
+	encCallbacks    StatsEncryptionCallbacks
+	logStatsHandler *common.LogStatsFileHandler
 
 	logStatsKeyMu sync.RWMutex
 	logStatsKeyID string
@@ -3550,6 +3551,10 @@ func NewStatsManager(supvCmdch MsgChannel,
 
 	encCallbacks.getLogStatsKey = s.getLogStatsKey
 	s.encCallbacks = encCallbacks
+	s.logStatsHandler = common.NewLogStatsFileHandler(
+		s.encCallbacks.getLogStatsKey,
+		s.encCallbacks.getKeyCipherById,
+	)
 
 	go s.run()
 	go s.runStatsDumpLogger()
@@ -5001,11 +5006,8 @@ func (s *statsManager) tryEnableStatsLog() (bool, logstats.LogStats) {
 
 	if ok1 && ok2 && ok3 {
 		fpath := filepath.Join(logdir, fname.String())
-		handler := common.NewLogStatsFileHandler(
-			s.encCallbacks.getLogStatsKey,
-			s.encCallbacks.getKeyCipherById,
-		)
-		sLogger, err := logstats.NewDedupeLogStatsWithFileHandler(fpath, fsize.Int(), fcount.Int(), common.STAT_LOG_TS_FORMAT, handler)
+		common.CleanupStaleStatsLogTempFiles(logdir, fname.String())
+		sLogger, err := logstats.NewDedupeLogStatsWithFileHandler(fpath, fsize.Int(), fcount.Int(), common.STAT_LOG_TS_FORMAT, s.logStatsHandler)
 		if err != nil {
 			logging.Infof("Error in NewDedupeLogStatsWithFileHandler %v. Disabling stats logging.", err)
 			return false, nil
@@ -5849,6 +5851,10 @@ func (s *statsManager) handleEncryptionDropKey(cmd Message) {
 	// UpdateKey already updated the key state and called ForceRotateStatsLog,
 	// so the active log file is already using the correct key. DropKey only
 	// needs to re-encrypt or decrypt the already-rotated backup files.
+	if s.logStatsHandler != nil && logDir != "" && baseName != "" {
+		s.logStatsHandler.PauseRotation()
+		defer s.logStatsHandler.ResumeRotation()
+	}
 	if activeEarKey.Id != "" {
 		if logDir != "" && baseName != "" {
 			if logFileErr = common.ReencryptStatsLogFiles(logDir, baseName, dropKeyIds,
