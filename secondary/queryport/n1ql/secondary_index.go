@@ -2474,11 +2474,14 @@ func makeResponsehandler(
 			conn.RecordGsiRU(tenant.Unit(readUnits))
 		}
 
-		// Scan report only arrives via StreamEndResponse. A StreamEndResponse
-		// carries no entries. So it is safe to return immediately.
+		// StreamEndResponse carries the scan report and no entries. On normal
+		// completion fall through to emit the end-of-stream signal; on report-only
+		// (teardown) delivery attach the report and return without cleanup.
 		if serverScanReport := data.GetServerScanReport(); serverScanReport != nil {
 			broker.AttachIndexerScanReport(serverScanReport, reportId)
-			return false
+			if data.ReportOnly() {
+				return false
+			}
 		}
 
 		err := data.Error()

@@ -1566,6 +1566,8 @@ func (d *bypassResponseReader) GetServerScanReport() *report.HostScanReport {
 	return nil
 }
 
+func (d *bypassResponseReader) ReportOnly() bool { return false }
+
 func makeDefaultRequestBroker(cb ResponseHandler,
 	dataEncFmt common.DataEncodingFormat) *RequestBroker {
 
