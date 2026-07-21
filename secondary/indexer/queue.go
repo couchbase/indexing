@@ -52,7 +52,7 @@ type Row struct {
 
 	mem *allocator
 
-	rowBuf *AtomicRowBuffer //cache for Row objects, only used for vector index
+	rowBuf *RowPool //cache for Row objects, only used for vector index
 
 	includeColumn []byte // Unexploded version of include columns
 }

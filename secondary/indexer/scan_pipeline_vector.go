@@ -220,7 +220,7 @@ type ScanWorker struct {
 	// and reset per job (see Scanner), since the buffer is centroid-specific.
 	queryBP []byte
 
-	rowBuf *AtomicRowBuffer
+	rowBuf *RowPool
 
 	// temporary buffer to process each include column
 	includeColumnBuf     []byte
@@ -334,7 +334,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		w.heap, _ = NewTopKRowHeap(w.heapSize, false, r.getRowCompare())
 
 		//pre-allocate rows twice the size of buffer+heapSize
-		w.rowBuf = NewAtomicRowBuffer((bufferInitBatchSize + w.heapSize) * 2)
+		w.rowBuf = NewRowPool((bufferInitBatchSize + w.heapSize) * 2)
 	}
 
 	w.logPrefix = fmt.Sprintf("%v[%v]ScanWorker[%v]", r.LogPrefix, r.RequestId, id)
@@ -1628,7 +1628,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 
 	// Carry the (quantized) search distance from the iterator side channel.
 	// Establish a clean default first: a pooled Row (heap path) is not reset
-	// for scalar fields by AtomicRowBuffer.Put, so it could otherwise retain a
+	// for scalar fields by RowPool.Put, so it could otherwise retain a
 	// stale distValid=true from a previous use and be wrongly treated as having
 	// a valid stored distance. Only a BHIVE reader context supplies a real
 	// stored distance; everything else must be computed downstream.
@@ -2946,83 +2946,52 @@ func (w *ScanWorker) makeSortKeyForOrderBy(compositeKeys, explodedIncludekeys []
 	return buf, err
 }
 
-// AtomicRowBuffer is a thread-safe queue for Row pointers
-type AtomicRowBuffer struct {
-	queue []*Row
-	head  int64
-	tail  int64
-	size  int64
-	count int64
+// RowPool is a per-worker free list of reusable *Row objects for vector
+// index scans. Get and Put run only on the owning worker's scanner
+// goroutine - Get from the storage iterator callback, Put via Row.free
+// during batch processing, heap eviction and heap materialization - so it
+// needs no synchronization. Rows that cross the worker output channel are
+// allocator-owned copies with rowBuf == nil and never return here, so the
+// pool is never touched by the downstream merge goroutine. It replaces an
+// earlier lock-free ring whose atomics were pure overhead on this
+// single-producer/single-consumer path.
+type RowPool struct {
+	free []*Row
 }
 
-// NewRowBuffer initializes a new queue with a given size and pre-allocated Rows
-func NewAtomicRowBuffer(size int) *AtomicRowBuffer {
-	q := &AtomicRowBuffer{
-		queue: make([]*Row, size),
-		size:  int64(size),
-		count: int64(size),
-	}
-	// Pre-allocate Row objects in the queue
+// NewRowPool creates a pool pre-populated with size reusable Rows.
+func NewRowPool(size int) *RowPool {
+	p := &RowPool{free: make([]*Row, size)}
+	// Pre-allocate Row objects in the pool
 	for i := 0; i < size; i++ {
-		q.queue[i] = &Row{rowBuf: q}
+		p.free[i] = &Row{rowBuf: p}
 	}
-	q.tail = int64(size - 1)
-	return q
+	return p
 }
 
-// Put adds a new Row pointer to the queue and blocks if the queue is full
-func (q *AtomicRowBuffer) Put(row *Row) {
-
-	//set row references to nil
+// Put returns a Row to the pool. It clears only the reference fields; the
+// scan resets scalar fields such as dist/distValid explicitly on reuse. The
+// row holds storage-owned or freshly made slices that must not be retained.
+func (p *RowPool) Put(row *Row) {
 	row.key = nil
 	row.value = nil
 	row.includeColumn = nil
 	row.cid = nil
 	row.sortKey = nil
-
-	for {
-		// Check if the queue is full
-		if atomic.LoadInt64(&q.count) == q.size {
-			continue // Spin-wait if full
-		}
-
-		// Atomically increment count before proceeding
-		if atomic.AddInt64(&q.count, 1) <= q.size {
-			// Enqueue the row atomically
-			tail := atomic.LoadInt64(&q.tail)
-			tail = (tail + 1) % q.size
-			q.queue[tail] = row
-			// Move tail pointer in a circular fashion
-			atomic.StoreInt64(&q.tail, tail)
-			return
-		} else {
-			// Decrement count if the enqueue fails due to race
-			atomic.AddInt64(&q.count, -1)
-		}
-	}
+	p.free = append(p.free, row)
 }
 
-// Get removes a Row pointer from the queue and blocks if the queue is empty
-func (q *AtomicRowBuffer) Get() *Row {
-	for {
-		// Check if the queue is empty
-		if atomic.LoadInt64(&q.count) == 0 {
-			continue // Spin-wait if empty
-		}
-
-		// Atomically decrement count before proceeding
-		if atomic.AddInt64(&q.count, -1) >= 0 {
-			// Dequeue the row atomically
-			head := atomic.LoadInt64(&q.head)
-			row := q.queue[head]
-			// Move head pointer
-			atomic.StoreInt64(&q.head, (head+1)%q.size)
-			return row
-		} else {
-			// Increment count if the dequeue fails due to race
-			atomic.AddInt64(&q.count, 1)
-		}
+// Get returns a reusable Row, allocating a fresh pool-bound one if the pool
+// is momentarily exhausted (more rows outstanding than the pre-sized pool).
+func (p *RowPool) Get() *Row {
+	n := len(p.free)
+	if n == 0 {
+		return &Row{rowBuf: p}
 	}
+	row := p.free[n-1]
+	p.free[n-1] = nil
+	p.free = p.free[:n-1]
+	return row
 }
 
 func (w *ScanWorker) sparseVectorSizeFromMeta(meta []byte) int {

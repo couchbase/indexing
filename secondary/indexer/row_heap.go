@@ -3,7 +3,6 @@ package indexer
 import (
 	"container/heap"
 	"errors"
-	"math"
 	"sort"
 
 	"github.com/couchbase/indexing/secondary/logging"
@@ -12,6 +11,30 @@ import (
 var ErrorZeroCapactiy = errors.New("Empty heap is not allowed")
 
 type RowsCompareLessFn func(i, j *Row) bool
+
+// lessDist reports whether distance di sorts before dj in a heap of the given
+// orientation. Two NaNs are equal; a lone NaN sinks to the bottom of a
+// min-heap and rises to the top of a max-heap. Comparison stays in float32
+// and detects NaN with self-comparison (x != x), which the compiler lowers to
+// a single FP compare - avoiding the math.IsNaN call and float64 conversion
+// that dominated the comparator in profiles. The NaN branch is entered only
+// when a NaN is actually present, so the common path is just the guard plus
+// the comparison.
+func lessDist(di, dj float32, isMin bool) bool {
+	if di != di || dj != dj { // at least one NaN (rare)
+		if di != di && dj != dj {
+			return false // consider NaNs equal to each other
+		}
+		if di != di {
+			return isMin
+		}
+		return !isMin
+	}
+	if isMin {
+		return di < dj
+	}
+	return di > dj
+}
 
 // RowHeap is a heap of *Row based on the dist field.
 type RowHeap struct {
@@ -28,27 +51,7 @@ func (h RowHeap) Less(i, j int) bool {
 		}
 		return h.less(h.rows[j], h.rows[i])
 	}
-
-	di := float64(h.rows[i].dist)
-	dj := float64(h.rows[j].dist)
-
-	// Handle NaN comparisons
-	if math.IsNaN(di) && math.IsNaN(dj) {
-		return false // consider NaNs equal to each other
-	}
-	if math.IsNaN(di) {
-		// if di is NaN, in a min-heap it should be considered greater, in a max-heap it should be considered lesser
-		return h.isMin
-	}
-	if math.IsNaN(dj) {
-		// if dj is NaN, in a min-heap it should be considered lesser, in a max-heap it should be considered greater
-		return !h.isMin
-	}
-
-	if h.isMin {
-		return di < dj
-	}
-	return di > dj
+	return lessDist(h.rows[i].dist, h.rows[j].dist, h.isMin)
 }
 func (h RowHeap) Swap(i, j int) { h.rows[i], h.rows[j] = h.rows[j], h.rows[i] }
 
@@ -99,27 +102,7 @@ func (h *RowHeap) LessRows(rowi, rowj *Row) bool {
 		}
 		return h.less(rowj, rowi)
 	}
-
-	di := float64(rowi.dist)
-	dj := float64(rowj.dist)
-
-	// Handle NaN comparisons
-	if math.IsNaN(di) && math.IsNaN(dj) {
-		return false // consider NaNs equal to each other
-	}
-	if math.IsNaN(di) {
-		// if di is NaN, in a min-heap it should be considered greater, in a max-heap it should be considered lesser
-		return h.isMin
-	}
-	if math.IsNaN(dj) {
-		// if dj is NaN, in a min-heap it should be considered lesser, in a max-heap it should be considered greater
-		return !h.isMin
-	}
-
-	if h.isMin {
-		return di < dj
-	}
-	return di > dj
+	return lessDist(rowi.dist, rowj.dist, h.isMin)
 }
 
 // TopKRowHeap is a heap that maintains a fixed size.
