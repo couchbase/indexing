@@ -66,6 +66,10 @@ if [ "$WORKSPACE_READY" = "true" ]; then
   rm -rf analytics/CMakeLists.txt
   # Undo any gerrit cherry-picks from the previous run so git pull can fast-forward.
   # ~/indexing.pre-patch-head etc. are saved just before the gerrit section below.
+  # On the FIRST run these snapshots don't exist yet, but the image can still be
+  # dirty (setup-workspace does a tracked-file sed on indexing/CMakeLists.txt and
+  # runs builder before baking). Fall back to HEAD so that dirtiness is discarded
+  # too, otherwise the git pull below fails with "local changes would be overwritten".
   for repo_spec in \
       "indexing:goproj/src/github.com/couchbase/indexing" \
       "plasma:goproj/src/github.com/couchbase/plasma" \
@@ -74,8 +78,10 @@ if [ "$WORKSPACE_READY" = "true" ]; then
       "gometa:goproj/src/github.com/couchbase/gometa"; do
     repo_name="${repo_spec%%:*}"
     repo_path="$WORKSPACE/${repo_spec##*:}"
-    if [ -d "$repo_path" ] && [ -f ~/${repo_name}.pre-patch-head ]; then
-      git -C "$repo_path" reset --hard "$(cat ~/${repo_name}.pre-patch-head)" \
+    if [ -d "$repo_path" ]; then
+      reset_target="HEAD"
+      [ -f ~/${repo_name}.pre-patch-head ] && reset_target="$(cat ~/${repo_name}.pre-patch-head)"
+      git -C "$repo_path" reset --hard "$reset_target" \
         1>>$WORKSPACE/make.log 2>&1 || true
       git -C "$repo_path" clean -fd 1>>$WORKSPACE/make.log 2>&1 || true
     fi

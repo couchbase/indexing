@@ -174,6 +174,18 @@ def restore_state(path: Path, state: Tuple[str, str]) -> None:
     run(["git", "clean", "-fdx"], cwd=path, check=False)
 
 
+def force_clean(path: Path) -> None:
+    """Discard any working-tree changes and untracked files.
+
+    The container runs `builder` (and other tooling) before this script, which
+    can leave the repo dirty. Rather than fail, reset back to HEAD so each chain
+    starts from a clean base. The pristine state is captured before this runs and
+    restored in process_chain's finally block.
+    """
+    run(["git", "reset", "--hard"], cwd=path, check=False)
+    run(["git", "clean", "-fdx"], cwd=path, check=False)
+
+
 def apply_patch(change: Change, workspace: str) -> None:
     repo_path = project_path(change.project, workspace)
     if not repo_path:
@@ -220,8 +232,8 @@ def process_chain(chain: List[int], changes: Dict[int, Change], workspace: str, 
                 print(f"Skipping {number}: no path for project {change.project}")
                 continue
             if repo_path not in states:
-                ensure_clean(repo_path)
                 states[repo_path] = capture_state(repo_path)
+                force_clean(repo_path)
             apply_patch(change, workspace)
             touched.append(repo_path)
         if touched:

@@ -3,6 +3,7 @@ package mockcbauth
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"net/http"
 
 	"github.com/couchbase/cbauth"
@@ -93,6 +94,14 @@ func (a *AuthImpl) GetEncryptionKeysBlocking(_ context.Context, _ cbauth.KeyData
 ) {
 
 	return nil, nil
+}
+
+func (a *AuthImpl) CRLsValidate(
+	rawCerts [][]byte,
+	verifiedChains [][]*x509.Certificate,
+	scope cbauth.CRLScope,
+) error {
+	return nil
 }
 
 func (a *AuthImpl) RegisterEncryptionKeysCallbacks(
