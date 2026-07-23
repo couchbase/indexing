@@ -83,7 +83,32 @@ type Slice interface {
 	SetCodebookEncryptionKey([]byte, string, string, KeyDataType) error
 	DropCodebookEncryptionKey([]string, EaRKey, KeyDataType) error
 	GetCodebookEncryptionKeyId() (string, error)
+
+	// SubscribeNextPersistDone returns a channel that is closed when the
+	// current or next CreateRecoveryPoint completes for this slice.
+	// If a persist is already in progress the caller is attached to it;
+	// otherwise the caller is queued for the next one.
+	// For non-bhive slices a pre-closed channel is returned (no-wait).
+	SubscribeNextPersistDone() <-chan struct{}
+
+	// GetRollbackNotifyCh returns a channel that is closed when Rollback or
+	// RollbackToZero is called on this slice. Callers waiting on
+	// SubscribeNextPersistDone should also select on this channel and treat
+	// its closure as ErrIndexRollback. For non-bhive slices nil is returned;
+	// a nil case in a select is never selected and is therefore a safe no-op.
+	// Do NOT receive from this channel outside of a select statement.
+	GetRollbackNotifyCh() <-chan struct{}
+
+	// SliceType returns a string identifying the underlying storage implementation.
+	SliceType() string
 }
+
+const (
+	SliceTypeBhive    = "bhive"
+	SliceTypePlasma   = "plasma"
+	SliceTypeMemdb    = "memdb"
+	SliceTypeForestdb = "forestdb"
+)
 
 type SliceEncryptionCallbacks struct {
 	getActiveKeyIdCipher func(typename, bucketUUID string) ([]byte, string, string)

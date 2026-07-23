@@ -1695,6 +1695,21 @@ func (mdb *fdbSlice) GetCodebookEncryptionKeyId() (string, error) {
 	return "", fmt.Errorf("Not supported")
 }
 
+func (mdb *fdbSlice) SubscribeNextPersistDone() <-chan struct{} {
+	// no-op
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (mdb *fdbSlice) GetRollbackNotifyCh() <-chan struct{} {
+	return nil
+}
+
+func (mdb *fdbSlice) SliceType() string {
+	return string(mdb.idxDefn.Using)
+}
+
 func (fdb *fdbSlice) updateSnapshotsMeta(infos []SnapshotInfo) error {
 	fdb.metaLock.Lock()
 	defer fdb.metaLock.Unlock()

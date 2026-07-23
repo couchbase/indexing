@@ -1378,6 +1378,23 @@ func (mdb *plasmaSlice) GetCodebookEncryptionKeyId() (string, error) {
 	return string(inUseKeyId), nil
 }
 
+// SubscribeNextPersistDone returns a pre-closed channel for plasma slices.
+// Plasma's CreateRecoveryPoint is not in the bhive persistor pipeline so
+// no waiting is needed here.
+func (mdb *plasmaSlice) SubscribeNextPersistDone() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (mdb *plasmaSlice) GetRollbackNotifyCh() <-chan struct{} {
+	return nil
+}
+
+func (mdb *plasmaSlice) SliceType() string {
+	return string(mdb.idxDefn.Using)
+}
+
 // used to skip drop if key used for encryption is not dropped
 func isEncryptedUsing(key string, dropKeys []string) bool {
 	for _, v := range dropKeys {
