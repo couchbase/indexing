@@ -60,7 +60,7 @@ def run(cmd: List[str], cwd: Optional[Path] = None, env: Optional[Dict[str, str]
 
 
 def fetch_changes() -> Dict[int, Change]:
-    query_terms = [f"user:{GERRIT_USER}", "status:open"]
+    query_terms = [f"(reviewer:{GERRIT_USER} OR cc:{GERRIT_USER})", "status:open"]
     if GERRIT_PROJECT:
         query_terms.append(f"project:{GERRIT_PROJECT}")
     cmd = [
@@ -240,7 +240,7 @@ def main() -> int:
 
     changes = fetch_changes()
     if not changes:
-        print("No matching gerrit changes found for user", GERRIT_USER)
+        print("No matching gerrit changes found with reviewer/cc", GERRIT_USER)
         return 0
 
     chains = build_chains(changes)
