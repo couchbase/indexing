@@ -10,6 +10,7 @@ package indexer
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -27,7 +28,6 @@ import (
 	"time"
 	"unsafe"
 
-
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/iowrap"
@@ -38,6 +38,7 @@ import (
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
+	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -341,7 +342,8 @@ func remapSlice_MOI(storageDir string, idxInst *common.IndexInst, partnId common
 }
 
 var (
-	moiWriterSemaphoreCh chan bool
+	moiWriterSemaphore   *semaphore.Weighted
+	moiMaxWritersAllowed int
 	moiWritersAllowed    int
 	moiWriterSemaphoreLk sync.RWMutex // used to protect change in capacity of the semaphore
 )
@@ -350,8 +352,8 @@ func updateMOIWriters(to int) {
 	moiWriterSemaphoreLk.Lock()
 	defer moiWriterSemaphoreLk.Unlock()
 
-	if to > cap(moiWriterSemaphoreCh) {
-		to = cap(moiWriterSemaphoreCh)
+	if to > moiMaxWritersAllowed {
+		to = moiMaxWritersAllowed
 	}
 
 	if to == moiWritersAllowed {
@@ -359,13 +361,9 @@ func updateMOIWriters(to int) {
 	}
 
 	if to < moiWritersAllowed {
-		for i := to; i < moiWritersAllowed; i++ {
-			moiWriterSemaphoreCh <- true
-		}
+		moiWriterSemaphore.Acquire(context.Background(), int64(moiWritersAllowed-to))
 	} else {
-		for i := moiWritersAllowed; i < to; i++ {
-			<-moiWriterSemaphoreCh
-		}
+		moiWriterSemaphore.Release(int64(to - moiWritersAllowed))
 	}
 
 	moiWritersAllowed = to
@@ -373,7 +371,8 @@ func updateMOIWriters(to int) {
 
 func init() {
 	moiWritersAllowed = runtime.GOMAXPROCS(0) * 4
-	moiWriterSemaphoreCh = make(chan bool, moiWritersAllowed)
+	moiMaxWritersAllowed = moiWritersAllowed
+	moiWriterSemaphore = semaphore.NewWeighted(int64(moiMaxWritersAllowed))
 }
 
 func (mdb *memdbSlice) initStores() error {
@@ -1191,7 +1190,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 			// and will wait for this group to complete.
 			// To ensure that CPU isn't overwhelmed, we limit how many such groups
 			// can run in parallel.
-			// To make the persistence_threads a hard limit, use moiWriterSemaphoreCh
+			// To make the persistence_threads a hard limit, use moiWriterSemaphore
 			// to control how many goroutines are running at any given time
 
 		retry:
@@ -1223,14 +1222,10 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 				goto retry
 			}
 
-			for i := 0; i < concurrency; i++ {
-				moiWriterSemaphoreCh <- true
-			}
+			moiWriterSemaphore.Acquire(context.Background(), int64(concurrency))
 
 			defer func() {
-				for i := 0; i < concurrency; i++ {
-					<-moiWriterSemaphoreCh
-				}
+				moiWriterSemaphore.Release(int64(concurrency))
 				moiWriterSemaphoreLk.RUnlock()
 			}()
 
