@@ -1,18 +1,33 @@
 name: ci_runner
 
+# Shared runtime config. Both the test and lint services run the SAME image
+# (built once, below, by the test service). All per-role differences — MODE,
+# CINAME, TEST_NAME, entrypoint, cpuset, mem_limit, ports — are supplied at
+# runtime, so a single image artifact serves both roles (no second build, no
+# tag collision).
+x-ci-runtime: &ci-runtime
+  image: ci_machine:latest
+  init: true
+  restart: unless-stopped
+  memswap_limit: "0"
+  security_opt:
+    - apparmor:unconfined # Required on some systems like Ubuntu
+
 services:
-  ci:
+  test:
+    <<: *ci-runtime
+    # Sole owner of the build. Produces ci_machine:latest (from the `image:` in
+    # the anchor) plus the pegged tag below. The lint service reuses this image.
     build:
       dockerfile: ci_machine.dockerfile
       args:
         PEGGED: $PEGGED
         RELEASE: ${RELEASE:-8.1.0}
         MANIFEST: ${MANIFEST:-couchbase-server/totoro/8.1.0.xml}
-        CIBOT: true
-        MODE: ${MODE:-"lint,unit,functional"}
         USERNAME: cbci # gerrit username
+        # MODE / CINAME / CIBOT / TEST_NAME are NOT build args anymore — they are
+        # injected at container start from `environment:` below.
       tags:
-        - ci_machine:latest
         - ci_machine:$PEGGED
       secrets:
         - github_key
@@ -24,31 +39,53 @@ services:
     secrets:
       - github_key
       - gerrit_key
+    environment:
+      MODE: ${MODE:-unit,functional} # lint is owned by the lint service
+      CIBOT: "true"
+      TEST_NAME: ${TEST_NAME:-}
     ports:
       - "8091-8095:8091-8095"
       - "11200-11220:11200-11220"
       - "9000-9120:9000-9120"
       - 2222:22
     volumes:
-      - build:/home/bot/build:rw
+      # No build volume — workspace is baked into the image by setup-workspace.
+      # dobuild does a fast incremental git pull + rebuild instead of a full sync.
       - var-www:/var/www:rw
-      - depscache:/home/bot/.cbdepscache:rw
-      - depscache:/home/bot/.cbdepcache:rw
+      # No dep-cache volume: cbdeps are baked into the image by setup-workspace,
+      # so the image is the source of truth. A named volume over ~/.cbdepscache
+      # only seeds once (first empty mount) and thereafter SHADOWS the image's
+      # baked deps — which caused stale/missing deps — so it is intentionally gone.
       - $HOME/testdata:/home/bot/testdata
-    init: true
-    # comment both of the below to run standalone tests
-    restart: unless-stopped
+    # comment restart above (in the anchor) to run standalone tests
     entrypoint: /home/bot/.ciscripts/secondary/tests/ci/scripts/setup/container-runner.sh
     # cpus: 6.0
     cpuset: "0-5"
     mem_limit: 12G
-    memswap_limit: "0"
-    security_opt:
-      - apparmor:unconfined # Required on some systems like Ubuntu
     devices:
       - /dev/fuse:/dev/fuse
     cap_add:
       - SYS_ADMIN
+
+  lint:
+    <<: *ci-runtime
+    # No build block: reuses the image built by the test service. pull_policy
+    # never => fail fast if the image is absent rather than attempting a
+    # registry pull. Build (or `up test`) first on a fresh host.
+    pull_policy: never
+    environment:
+      MODE: lint
+      CIBOT: "true"
+      CINAME: ${LINTER_CINAME:-ci2i-lint}
+    # No server ports — linter never starts Couchbase Server.
+    volumes:
+      # No build volume — workspace is baked into the image; lint-loop pulls
+      # repos and runs golangci-lint directly without any rebuild.
+      - var-www:/var/www:rw # shared; HTML filenames namespaced by $CINAME
+    entrypoint: /home/bot/.ciscripts/secondary/tests/ci/scripts/setup/linter-runner.sh
+    cpuset: "6-7" # disjoint from test's 0-5; adjust to host topology
+    mem_limit: 4G # linter doesn't run Couchbase Server; fits within 16G alongside test's 12G
+
   apache:
     build:
       dockerfile: apache_server.dockerfile
@@ -59,17 +96,12 @@ services:
       - 80:80
     cpus: 0.5
     mem_limit: 1G
+
 secrets:
   github_key:
     file: $HOME/.ssh/id_rsa_server_buildnode_to_github
   gerrit_key:
     file: $HOME/.ssh/cbci
+
 volumes:
   var-www:
-  build:
-    driver: local
-    driver_opts:
-      type: none
-      device: /opt/ci
-      o: bind
-  depscache:
