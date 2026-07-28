@@ -2356,12 +2356,15 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard restore to indexer
 
 	msg := &MsgStartShardRestore{
-		shardPaths:    tt.ShardPaths,
-		taskId:        sr.rebalToken.RebalId,
-		transferId:    ttid,
-		destination:   tt.Destination,
-		region:        tt.Region,
-		instRenameMap: tt.InstRenameMap,
+		shardPaths:  tt.ShardPaths,
+		taskId:      sr.rebalToken.RebalId,
+		transferId:  ttid,
+		destination: tt.Destination,
+		region:      tt.Region,
+		// Destination side: for replica repair from a v1 source the InstRenameMap is
+		// published v1->v1 (so the v1 source can parse it); convert any v1 new-path
+		// values to the v2 layout here. Move / v2->v2 entries pass through unchanged.
+		instRenameMap: reconstructRenameMapForV2Dest(tt),
 
 		cancelCh:   sr.cancel,
 		doneCh:     sr.done,
@@ -5693,6 +5696,59 @@ func getVectorIndexInsts(tt *c.TransferToken) (vectorInsts []c.IndexInst) {
 		}
 	}
 	return vectorInsts
+}
+
+// reconstructRenameMapForV2Dest returns a copy of tt.InstRenameMap with any v1-format
+// new-path VALUES rewritten into the v2 (<bucketUUID>_<instId>_<partn>.index) layout for
+// a v2 destination. The KEYS (the source paths) are left unchanged so the source-staged
+// codebook name and the copied shard.json instance paths still match.
+//
+// For replica repair from a v1 source, the token's InstRenameMap is published v1->v1 so
+// the v1 source can parse it; converting the new-path back to v2 here lets the existing
+// consumers work unchanged (generateCodebookRenamePaths2's v1->v2 branch resolves the
+// staging name and v2 placement, and plasma's GSIReplicaRepair renames the index dir to
+// v2). Entries already in v2 are rewritten to the identical string (idempotent). This runs
+// only on a v2 destination.
+func reconstructRenameMapForV2Dest(tt *c.TransferToken) map[c.ShardId]map[string]string {
+	if tt == nil || len(tt.InstRenameMap) == 0 {
+		return tt.InstRenameMap
+	}
+
+	// instId (and realInstId, for partitioned) -> IndexInst, from the token's instances.
+	instByInstId := make(map[c.IndexInstId]*c.IndexInst)
+	for i := range tt.IndexInsts {
+		inst := &tt.IndexInsts[i]
+		instByInstId[inst.InstId] = inst
+		if inst.RealInstId != 0 {
+			instByInstId[inst.RealInstId] = inst
+		}
+	}
+
+	// toV2 rewrites "<dir>.index/<mainIndex|docIndex>" into the v2 dir form (<bucketUUID>_<instId>_<partn>.index) dir returns
+	// an error from the parser and is left unchanged, since it is already in v2 layout.
+	toV2 := func(path string) string {
+		dir, leaf := filepath.Split(path)
+		dir = strings.TrimSuffix(dir, string(filepath.Separator))
+		instId, partnId, err := GetInstIdPartnIdFromPath(dir)
+		if err != nil {
+			return path
+		}
+		inst, ok := instByInstId[instId]
+		if !ok {
+			return path // unknown instance; leave unchanged
+		}
+		return filepath.Join(IndexPath2(inst, partnId, SliceId(0)), leaf)
+	}
+
+	out := make(map[c.ShardId]map[string]string, len(tt.InstRenameMap))
+	for shardId, m := range tt.InstRenameMap {
+		nm := make(map[string]string, len(m))
+		for oldPath, newPath := range m {
+			nm[oldPath] = toV2(newPath)
+		}
+		out[shardId] = nm
+	}
+	return out
 }
 
 func (sr *ShardRebalancer) addTokenToActiveTransfersLOCKED(ttid string, nodeId string) {

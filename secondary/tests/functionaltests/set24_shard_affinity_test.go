@@ -226,6 +226,11 @@ retry:
 
 	for _, status := range statuses.Status {
 		if status.Status == "Active" {
+			// Vector (bhive) indexes cannot be range-scanned; they are validated
+			// separately with ANN scans by the caller.
+			if status.IsVectorIndex {
+				continue
+			}
 			replicaIds := make([]int, 1, status.NumReplica+1)
 			for i := 1; i < status.NumReplica+1; i++ {
 				replicaIds = append(replicaIds, i)
@@ -1294,6 +1299,11 @@ func clearCreateComandTokens() {
 	tc.HandleError(err, "failed to delete all create command token")
 }
 
+func clearBuildTokens() {
+	err := c.MetakvRecurciveDel(mc.BuildDDLCommandTokenPath)
+	tc.HandleError(err, "failed to delete all build command token")
+}
+
 // TestShardRebalance_DropDuplicateIndexes - create duplicate indexes on node 1 and node 2.
 // swap rebalance node 2 with node 3. rebalance should drop the duplicate indexes on node 2.
 func TestShardRebalance_DropDuplicateIndexes(t *testing.T) {
@@ -1831,4 +1841,327 @@ func getLastRebalanceReport(kvaddress, username, password string) (map[string]in
 	}).Run()
 
 	return res, err
+}
+
+// ============================================================================
+// Multi-bucket (varying encryption config) file-based rebalance test.
+//
+// Regression coverage for MB-72480: file-based shard rebalance of encrypted
+// buckets, including a bucket whose DEK was rotated so an older (non-active) key
+// still lives on the moving shard. The cluster is forced into a minimal shard
+// layout (shardLimitPerNode=2) so DEKs from different buckets share shards.
+// ============================================================================
+
+// getLatestEncrKeyIdForBucket returns the highest key id (as a string) usable to
+// encrypt bucketName, read from the cluster's encryption keys via nodeIndex.
+func getLatestEncrKeyIdForBucket(bucketName string, nodeIndex int) string {
+	resp, err := getAllEncryptionKeys(nodeIndex)
+	if err != nil {
+		log.Printf("getLatestEncrKeyIdForBucket: getAllEncryptionKeys err: %v", err)
+		return "0"
+	}
+	kId := 0
+	for _, keymap := range resp {
+		usageIfc, ok := keymap["usage"].([]interface{})
+		if !ok {
+			continue
+		}
+		var usage []string
+		for _, u := range usageIfc {
+			if s, ok := u.(string); ok {
+				usage = append(usage, s)
+			}
+		}
+		if !hasBucketEncryptionUsage(bucketName, usage) {
+			continue
+		}
+		if idf, ok := keymap["id"].(float64); ok && int(idf) > kId {
+			kId = int(idf)
+		}
+	}
+	return strconv.Itoa(kId)
+}
+
+// enableBucketEncryption registers a server-managed key for bucketName and makes
+// the bucket use it. Returns the applied key id string.
+func enableBucketEncryption(t *testing.T, bucketName, keyName string, rotationDays int) string {
+	if err := addBucketEncryptionKey(0, bucketName, keyName, rotationDays); err != nil {
+		t.Fatalf("enableBucketEncryption: addBucketEncryptionKey(%v) failed: %v", bucketName, err)
+	}
+	keyId := getLatestEncrKeyIdForBucket(bucketName, 1)
+	if err := updateBucketEncryptionKey(bucketName, 1, keyId); err != nil {
+		t.Fatalf("enableBucketEncryption: updateBucketEncryptionKey(%v, %v) failed: %v", bucketName, keyId, err)
+	}
+	log.Printf("enableBucketEncryption: bucket %v now using key id %v", bucketName, keyId)
+	return keyId
+}
+
+// verifyEncryptedBucketDEKs asserts that, on every index node currently hosting
+// the given encrypted bucket, its index files are encrypted with the bucket's
+// active in-use key. Nodes that do not host the bucket are skipped. Intended for
+// buckets with a single stable active key (not freshly rotated ones).
+func verifyEncryptedBucketDEKs(t *testing.T, bucketName string) {
+	uuid, err := c.GetBucketUUID(kvaddress, bucketName)
+	if err != nil {
+		t.Logf("verifyEncryptedBucketDEKs: skip bucket %v, GetBucketUUID err: %v", bucketName, err)
+		return
+	}
+
+	status := getClusterStatus()
+	checkedSomewhere := false
+	for i := 1; i < len(clusterconfig.Nodes); i++ {
+		nodeAddr := clusterconfig.Nodes[i]
+		if !isNodeIndex(status, nodeAddr) {
+			continue
+		}
+
+		storageDir := getIndexStorageDirOnNode(nodeAddr, t)
+		indexDir, err := getDirWithPrefix(filepath.Join(storageDir, uuid+"_"))
+		if err != nil {
+			continue // bucket has no index dir on this node
+		}
+
+		keyIds, err := getInUseKeyIds(i, "service_bucket", uuid)
+		if err != nil {
+			t.Logf("verifyEncryptedBucketDEKs: getInUseKeyIds bucket %v node %v err: %v", bucketName, nodeAddr, err)
+			continue
+		}
+		keyId, err := filterNonEmptyKeyId(keyIds)
+		if err != nil {
+			t.Logf("verifyEncryptedBucketDEKs: filterNonEmptyKeyId bucket %v node %v err: %v", bucketName, nodeAddr, err)
+			continue
+		}
+
+		if !verifyPlasmaEncryption(indexDir, keyId, t) {
+			t.Errorf("verifyEncryptedBucketDEKs: bucket %v index dir %v on node %v not encrypted with active key %v",
+				bucketName, indexDir, nodeAddr, keyId)
+		} else {
+			checkedSomewhere = true
+			log.Printf("verifyEncryptedBucketDEKs: bucket %v on node %v verified with key %v", bucketName, nodeAddr, keyId)
+		}
+	}
+
+	if !checkedSomewhere {
+		t.Logf("verifyEncryptedBucketDEKs: WARN no index dir found for encrypted bucket %v on any index node", bucketName)
+	}
+}
+
+// TestFileBasedRebalanceMultiBucketEncryption creates scalar and bhive (vector)
+// indexes across three buckets (two encrypted, one plain) with a forced minimal
+// shard layout, then runs the full sequence of file-based rebalance operations,
+// validating cluster state, scalar + ANN scans and DEK integrity after each step.
+// One encrypted bucket has its DEK rotated so a non-active key remains on the
+// moving shard (the MB-72480 scenario). bhive supports encryption-at-rest, so its
+// encrypted files/codebook must also transfer correctly during shard rebalance.
+func TestFileBasedRebalanceMultiBucketEncryption(t *testing.T) {
+	skipShardAffinityTests(t) // plasma-only; EaR is plasma-only
+
+	if !clusterconfig.MultipleIndexerTests || len(clusterconfig.Nodes) < 4 {
+		t.Skipf("%v needs MultipleIndexerTests and at least 4 nodes", t.Name())
+		return
+	}
+
+	const (
+		bucketEnc1  = "febr_enc1"  // encrypted, DEK rotated (leaves non-active key on shard)
+		bucketEnc2  = "febr_enc2"  // encrypted, single stable key
+		bucketPlain = "febr_plain" // unencrypted
+	)
+	allBuckets := []string{bucketEnc1, bucketEnc2, bucketPlain}
+	encBuckets := []string{bucketEnc1, bucketEnc2}
+
+	shardConfig := map[string]interface{}{
+		"indexer.settings.enable_shard_affinity":       true,
+		"indexer.plasma.minShardsPerNode":              2,
+		"indexer.plasma.shardLimitPerNode":             2,
+		"indexer.planner.internal.min_shards_per_node": 2,
+		"indexer.planner.honourNodesInDefn":            true,
+	}
+	if !shouldTestWithShardDealer {
+		shardConfig["indexer.planner.use_shard_dealer"] = false
+	}
+
+	t.Run("Setup", func(subt *testing.T) {
+		log.Printf("******** %v: reset cluster and force minimal shard layout ********", subt.Name())
+		resetCluster(subt)
+
+		// bhive/vector index training needs a larger indexer quota than scalar-only.
+		err := clusterutility.SetDataAndIndexQuota(clusterconfig.Nodes[0], clusterconfig.Username,
+			clusterconfig.Password, "1500", BHIVE_INDEX_INDEXER_QUOTA)
+		tc.HandleError(err, "Failed to set memory quota in cluster")
+		secondaryindex.WaitTillAllIndexNodesActive(kvaddress, defaultIndexActiveTimeout)
+
+		err = secondaryindex.ChangeMultipleIndexerSettings(shardConfig, clusterconfig.Username,
+			clusterconfig.Password, clusterconfig.Nodes[1])
+		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", shardConfig))
+
+		// The pre-existing "default" bucket consumes the entire data RAM quota, so
+		// our buckets would fail to create. Drop it to free RAM (recreated in Cleanup).
+		kvutility.DeleteBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		time.Sleep(2 * time.Second)
+
+		// Load SIFT vector data (feeds the bhive index on "sift" and scalar indexes
+		// on the accompanying scalar fields e.g. "gender", "docnum").
+		log.Printf("******** %v: creating %d buckets and loading vector data ********", subt.Name(), len(allBuckets))
+		for _, b := range allBuckets {
+			kvutility.DeleteBucket(b, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+			kvutility.CreateBucket(b, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+			time.Sleep(2 * time.Second)
+			err := loadVectorData(subt, b, "", "", numDocs)
+			FailTestIfError(err, "Failed to load vector data into "+b, subt)
+		}
+
+		log.Printf("******** %v: enabling encryption on %v ********", subt.Name(), encBuckets)
+		enableBucketEncryption(subt, bucketEnc1, "febr_key_enc1", 30)
+		enableBucketEncryption(subt, bucketEnc2, "febr_key_enc2", 90)
+
+		// Rotate bucketEnc1's DEK so an older non-active key remains on disk for
+		// already-written data - this is the MB-72480 trigger during shard transfer.
+		log.Printf("******** %v: rotating DEK on %v to leave a non-active key ********", subt.Name(), bucketEnc1)
+		if err := setBypassEncrCfgRestrictions(0); err != nil {
+			subt.Logf("setBypassEncrCfgRestrictions err: %v", err)
+		}
+		if err := setDekLifetime(bucketEnc1, 0, 40); err != nil {
+			subt.Logf("setDekLifetime err: %v", err)
+		}
+		if err := setDekRotationInterval(bucketEnc1, 0, 10); err != nil { // rotate quickly
+			subt.Logf("setDekRotationInterval err: %v", err)
+		}
+		time.Sleep(30 * time.Second)                                           // allow a new active DEK to be generated
+		if err := setDekRotationInterval(bucketEnc1, 0, 2592000); err != nil { // stop further churn (~30d)
+			subt.Logf("setDekRotationInterval restore err: %v", err)
+		}
+
+		// Scalar + bhive indexes on the _default collection of each bucket, pinned to
+		// n1 (the only index node right now). shardLimitPerNode=2 packs them into <=2
+		// shards so DEKs of different buckets share shards. Indexes must be created via
+		// N1QL so they route through the planner/shard-dealer and get alternate shard
+		// IDs (the GSI-client CreateSecondaryIndex path does not assign them).
+		for _, b := range allBuckets {
+			n1qlStmt := fmt.Sprintf("create index idx_%v_gender on `%v`(gender) with {\"nodes\": [\"%v\"]}",
+				b, b, clusterconfig.Nodes[1])
+			executeN1qlStmt(n1qlStmt, b, subt.Name(), subt)
+
+			// bhive (vector) index. bhive supports encryption-at-rest, so on the
+			// encrypted buckets its files/codebook are DEK-encrypted and must
+			// transfer correctly during file-based rebalance (MB-72480).
+			stmt := fmt.Sprintf("CREATE VECTOR INDEX idx_%v_bhive ON `%v`(sift VECTOR) "+
+				"WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", "+
+				"\"defer_build\":true};", b, b)
+			err := createWithDeferAndBuild("idx_"+b+"_bhive", b, "", "", stmt, bhiveIndexActiveTimeout)
+			FailTestIfError(err, "Failed to create bhive index on "+b, subt)
+		}
+
+		performClusterStateValidation(subt, false)
+		validateBhiveScans(subt, allBuckets)
+		verifyEncryptedBucketDEKs(subt, bucketEnc2)
+	})
+
+	// Cleanup runs after all sub-tests below (deferred t.Run executes on return).
+	defer t.Run("Cleanup", func(subt *testing.T) {
+		secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+		for _, b := range encBuckets {
+			if err := updateBucketEncryptionKey(b, 1, "-1"); err != nil {
+				subt.Logf("Cleanup: disable encryption on %v err: %v", b, err)
+			}
+		}
+		for _, b := range allBuckets {
+			kvutility.DeleteBucket(b, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		}
+
+		resetConfig := map[string]interface{}{
+			"indexer.settings.enable_shard_affinity":       false,
+			"indexer.plasma.minShardsPerNode":              10,
+			"indexer.plasma.shardLimitPerNode":             200,
+			"indexer.planner.internal.min_shards_per_node": 6,
+			"indexer.planner.honourNodesInDefn":            false,
+		}
+		err := secondaryindex.ChangeMultipleIndexerSettings(resetConfig, clusterconfig.Username,
+			clusterconfig.Password, clusterconfig.Nodes[1])
+		tc.HandleError(err, fmt.Sprintf("Failed to reset config %v", resetConfig))
+
+		resetCluster(subt)
+	})
+
+	// ---- File-based rebalance operations. Each moves all buckets' shards. ----
+
+	t.Run("RebalanceIn", func(subt *testing.T) {
+		// [0: kv n1ql] [1: index] -> [1] [2] [3]
+		addTwoNodesAndRebalance(subt.Name(), subt)
+		performClusterStateValidation(subt, false)
+		validateBhiveScans(subt, allBuckets)
+		verifyEncryptedBucketDEKs(subt, bucketEnc2)
+	})
+
+	t.Run("CreateReplicatedIndexes", func(subt *testing.T) {
+		// Now that there are 3 index nodes, add replicated scalar indexes so later
+		// failover produces a missing-replica state and replica-repair is meaningful.
+		// Created via N1QL so the planner assigns alternate shard IDs.
+		for _, b := range []string{bucketEnc1, bucketEnc2, bucketPlain} {
+			n1qlStmt := fmt.Sprintf("create index idx_%v_docnum_repl on `%v`(docnum) with {\"num_replica\": 1}", b, b)
+			executeN1qlStmt(n1qlStmt, b, subt.Name(), subt)
+		}
+		performClusterStateValidation(subt, false)
+		validateBhiveScans(subt, allBuckets)
+		verifyEncryptedBucketDEKs(subt, bucketEnc2)
+	})
+
+	t.Run("RebalanceOut", func(subt *testing.T) {
+		// [1] [2] [3] -> [2] [3]
+		removeNode(clusterconfig.Nodes[1], subt)
+		performClusterStateValidation(subt, false)
+		validateBhiveScans(subt, allBuckets)
+		verifyEncryptedBucketDEKs(subt, bucketEnc2)
+	})
+
+	t.Run("SwapRebalance", func(subt *testing.T) {
+		// add n1, remove n2: [2] [3] -> [1] [3]
+		swapRebalance(subt, 1, 2)
+		performClusterStateValidation(subt, false)
+		validateBhiveScans(subt, allBuckets)
+		verifyEncryptedBucketDEKs(subt, bucketEnc2)
+	})
+
+	t.Run("FailoverAndRebalance", func(subt *testing.T) {
+		// [1] [3] -> [1]; single node cannot hold the 1-replica indexes.
+		failoverNode(clusterconfig.Nodes[3], subt)
+		rebalance(subt)
+		performClusterStateValidation(subt, true, tc.MISSING_REPLICA_INVALID_CLUSTER_STATE)
+		validateBhiveScans(subt, allBuckets)
+		verifyEncryptedBucketDEKs(subt, bucketEnc2)
+	})
+
+	t.Run("ReplicaRepair", func(subt *testing.T) {
+		// [1] -> [1] [2] [3]; rebalance repairs the missing replicas via shards.
+		addTwoNodesAndRebalance(subt.Name(), subt)
+		performClusterStateValidation(subt, false)
+		validateBhiveScans(subt, allBuckets)
+		verifyEncryptedBucketDEKs(subt, bucketEnc2)
+	})
+}
+
+// validateBhiveScans runs an ANN (APPROX_VECTOR_DISTANCE) scan against each
+// bucket's bhive index and asserts it returns rows without error. On the
+// encrypted buckets this confirms the DEK-encrypted bhive files/codebook
+// transferred correctly during the preceding file-based rebalance.
+func validateBhiveScans(t *testing.T, buckets []string) {
+	queryVectorStr := "["
+	for _, val := range indexVector.QueryVector {
+		queryVectorStr += fmt.Sprintf("%v,", val)
+	}
+	queryVectorStr = queryVectorStr[:len(queryVectorStr)-1] + "]"
+
+	const limit = int64(5)
+	for _, b := range buckets {
+		annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, "+
+			"APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v, true) as distance "+
+			"from `%v` ORDER BY distance limit %v", queryVectorStr, indexVector.Probes, b, limit)
+
+		results, err := execN1QL(b, annScanStmt)
+		FailTestIfError(err, "Error during bhive ANN scan on "+b, t)
+		if len(results) == 0 {
+			t.Errorf("validateBhiveScans: bucket %v ANN scan returned no rows", b)
+		} else {
+			log.Printf("validateBhiveScans: bucket %v ANN scan returned %d rows", b, len(results))
+		}
+	}
 }

@@ -15955,16 +15955,6 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 			actualInstPartnMap[defnId][replicaId] = make(map[int]bool)
 		}
 
-		if _, ok := actualInstPartnMap[defnId][replicaId][partnId]; ok {
-			// Ideally, it is expected to have only one instance for the partition
-			// of a replica in the cluster.
-			// However, during rebalance, if the source node is serving scans for
-			// an index, there is a narrow window of time where the partition can
-			// exist on both source and destination nodes. Hence, no-op in this case
-		}
-
-		actualInstPartnMap[defnId][replicaId][partnId] = true
-
 		if val, ok := expectedInstPartnMap[defnId]; !ok {
 			expectedInstPartnMap[defnId] = numPartns
 			expectedPartnNodeId[defnId] = indexInfo.nodeId
@@ -15980,7 +15970,10 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 			if _, ok := indexDefnToPartns[defnId]; !ok {
 				indexDefnToPartns[defnId] = make(map[int][]*IndexInfo)
 			}
-			indexDefnToPartns[defnId][partnId] = append(indexDefnToPartns[defnId][partnId], indexInfo)
+
+			if _, ok := actualInstPartnMap[defnId][replicaId][partnId]; !ok {
+				indexDefnToPartns[defnId][partnId] = append(indexDefnToPartns[defnId][partnId], indexInfo)
+			}
 
 			if val, ok := expectedInstReplicaMap[defnId]; !ok {
 				expectedInstReplicaMap[defnId] = numReplicas
@@ -15991,6 +15984,16 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 					indexName, defnId, val, expectedReplicaNodeId[defnId], numReplicas, indexInfo.nodeId)
 			}
 		}
+
+		if _, ok := actualInstPartnMap[defnId][replicaId][partnId]; ok {
+			// Ideally, it is expected to have only one instance for the partition
+			// of a replica in the cluster.
+			// However, during rebalance, if the source node is serving scans for
+			// an index, there is a narrow window of time where the partition can
+			// exist on both source and destination nodes. Hence, no-op in this case
+		}
+
+		actualInstPartnMap[defnId][replicaId][partnId] = true
 	}
 
 	for defnId, replicaIdMap := range actualInstPartnMap {

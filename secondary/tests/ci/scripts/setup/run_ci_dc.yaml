@@ -61,7 +61,7 @@ services:
     entrypoint: /home/bot/.ciscripts/secondary/tests/ci/scripts/setup/container-runner.sh
     # cpus: 6.0
     cpuset: "0-5"
-    mem_limit: 12G
+    mem_limit: 14G
     devices:
       - /dev/fuse:/dev/fuse
     cap_add:
@@ -84,7 +84,7 @@ services:
       - var-www:/var/www:rw # shared; HTML filenames namespaced by $CINAME
     entrypoint: /home/bot/.ciscripts/secondary/tests/ci/scripts/setup/linter-runner.sh
     cpuset: "6-7" # disjoint from test's 0-5; adjust to host topology
-    mem_limit: 4G # linter doesn't run Couchbase Server; fits within 16G alongside test's 12G
+    mem_limit: 1G # linter doesn't run Couchbase Server; fits within 16G alongside test's 12G
 
   apache:
     build:
