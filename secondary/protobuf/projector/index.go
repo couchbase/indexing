@@ -731,8 +731,15 @@ func (ie *IndexEvaluator) includeColumns(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
+		// Include columns are never a leading index key, so a MISSING
+		// value must be encoded as MISSING instead of dropping the whole
+		// include-column array. Passing indexMissingLeadingKey=true clears
+		// N1QLTransform's isLeadingKey, which otherwise makes a MISSING first
+		// include field return a nil include column. That nil made the indexer
+		// persist the BHIVE row with no include bytes, and the scan-time
+		// include filter then panicked slicing meta[codeSize:].
 		out, newBuf, err := N1QLTransform(docid, docval, context, ie.includeExprs,
-			0, encodeBuf, ie.stats, false)
+			0, encodeBuf, ie.stats, true)
 		return out, newBuf, err
 	}
 	return nil, nil, nil
