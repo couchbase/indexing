@@ -46,37 +46,122 @@ fi
 
 echo "Using build tool \"$BUILD_TOOL\""
 
+GOTEST_LOGDIR="$WORKSPACE/gotest-logs"
+
+# tstamp prefixes every line it reads with a wall clock timestamp. go test only
+# forwards whatever the test writes, and loggers like plasma's default one emit
+# bare lines, so without this a failing run cannot be lined up against the
+# indexer/ns_server logs. perl is used because moreutils `ts` is not installed
+# in the CI image.
+tstamp() {
+  perl -MPOSIX -MTime::HiRes=time -pe \
+    'BEGIN{$|=1} $t=time;
+     print strftime("%Y-%m-%dT%H:%M:", localtime $t), sprintf("%06.3f ", $t-int($t/60)*60)'
+}
+
+# htmlesc makes a captured test log safe to embed in an HTML <pre> block:
+#   - ANSI escape sequences are dropped
+#   - control bytes become a visible \xNN
+#   - & < > are entity escaped, so the <ud> tags tests wrap user data in and
+#     Go types like <nil> survive instead of being eaten as unknown markup
+#   - malformed UTF-8 (tests dump arbitrary encoded keys) becomes U+FFFD
+#   - everything non-ASCII is emitted as a numeric character reference, since
+#     the CI page declares no charset and would otherwise render mojibake
+htmlesc() {
+  perl -MEncode -pe '
+    BEGIN{ $| = 1 }
+    $_ = Encode::decode("UTF-8", $_, Encode::FB_DEFAULT);
+    s/\e\[[0-9;?]*[\x20-\x2f]*[\x40-\x7e]//g;
+    s/\e[\x40-\x5f]//g;
+    s/([\x00-\x08\x0b-\x1f\x7f-\x9f])/sprintf "\\x%02X", ord $1/ge;
+    s/&/&amp;/g; s/</&lt;/g; s/>/&gt;/g;
+    s/([^\x09\x0a\x20-\x7e])/sprintf "&#%d;", ord $1/ge;
+  '
+}
+
+# to_console copies a captured log to dotest's stdout, which the CI bot (see the
+# `domain` script) and the standalone runner both append into an HTML page. Only
+# a real terminal gets the raw bytes.
+to_console() {
+  if [ -t 1 ]; then cat; else htmlesc; fi
+}
+
 # run_gotest runs a "go test" invocation (optionally prefixed with `env VAR=val`
 # assignments). It always prints a line announcing which command/package is
 # starting.
 #
+# Each run gets its own pair of files under $GOTEST_LOGDIR: <run>.stdout.log for
+# the (very verbose) test output and <run>.stderr.log for whatever the toolchain
+# writes to stderr - build/vet errors, runtime crash dumps. Both are timestamped
+# line by line off the same clock, so they can be merged with `sort`. The stderr
+# file is dropped when empty, so its presence alone is a signal. Only stdout is
+# ever echoed to the console; stderr is left in its file and its path printed.
+# The files keep the raw bytes - they are what gets grepped - while anything
+# echoed to a non terminal stdout goes through htmlesc first.
+#
 # When not running as the CI bot (CIBOT != "true") it treats the run as verbose:
-# output streams directly to the console and is tee'd into test.log so failure
+# stdout streams directly to the console and is appended to test.log so failure
 # analysis still works.
 #
-# As the CI bot it keeps the console concise: output is buffered and only echoed
-# to stdout and appended to test.log when the test fails; on success only a
+# As the CI bot it keeps the console concise: output is buffered and only stdout
+# is echoed and appended to test.log when the test fails; on success only a
 # short "PASSED" line is printed and nothing is written to test.log.
+gotest_seq=0
+
 run_gotest() {
   echo "===== STARTED in $PWD: $* ====="
 
-  if [ "$CIBOT" != "true" ]; then
-    "$@" 2>&1 | tee -a "$WORKSPACE/test.log"
-    return ${PIPESTATUS[0]}
+  gotest_seq=$((gotest_seq + 1))
+  local rel tag base out err fifo errdst errpid rc
+  rel="${PWD#$WORKSPACE/}"
+  rel="${rel#goproj/src/github.com/couchbase/}"
+  tag=$(printf '%02d-%s' $gotest_seq "$(printf '%s' "$rel" | tr -c 'A-Za-z0-9._-' '_')")
+  base="$GOTEST_LOGDIR/$tag"
+  out="$base.stdout.log"
+  err="$base.stderr.log"
+
+  # stderr goes through its own timestamper, hence the fifo: a plain redirect
+  # cannot be piped. The reader is started first so the writer does not block.
+  # Should the fifo be unsupported, keep stderr, just without timestamps.
+  fifo="$base.stderr.fifo"
+  errdst="$err"
+  rm -f "$fifo"
+  if mkfifo "$fifo" 2>/dev/null; then
+    tstamp <"$fifo" >"$err" &
+    errpid=$!
+    errdst="$fifo"
   fi
 
-  local tmp
-  tmp=$(mktemp)
-  "$@" >"$tmp" 2>&1
-  local rc=$?
+  if [ "$CIBOT" != "true" ]; then
+    "$@" 2>"$errdst" | tstamp | tee "$out" | to_console
+  else
+    "$@" 2>"$errdst" | tstamp >"$out"
+  fi
+  rc=${PIPESTATUS[0]}
+
+  [ -n "$errpid" ] && wait $errpid
+  rm -f "$fifo"
+
   if [ $rc -ne 0 ]; then
     echo "===== FAILED (rc=$rc) in $PWD ====="
-    cat "$tmp"
-    cat "$tmp" >> "$WORKSPACE/test.log"
+    [ "$CIBOT" = "true" ] && to_console <"$out"
   else
     echo "PASSED in $PWD"
   fi
-  rm -f "$tmp"
+
+  # test.log drives the failure analysis at the end of this script, so keep
+  # feeding it as before: always when verbose, only on failure for the CI bot.
+  if [ "$CIBOT" != "true" ] || [ $rc -ne 0 ]; then
+    cat "$out" >> "$WORKSPACE/test.log"
+    [ -s "$err" ] && cat "$err" >> "$WORKSPACE/test.log"
+  fi
+
+  echo "stdout in $out"
+  if [ -s "$err" ]; then
+    echo "stderr in $err ($(wc -l <"$err") lines)"
+  else
+    rm -f "$err"
+  fi
   return $rc
 }
 
@@ -237,6 +322,8 @@ fi
 
 stop_cluster
 rm -f $WORKSPACE/logs.tar* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-*
+rm -rf $GOTEST_LOGDIR
+mkdir -p $GOTEST_LOGDIR
 
 export phase=sanity
 if [[ "$MODE" == *"$phase"* ]]; then
@@ -421,7 +508,8 @@ grep -a '\sfail\s*$' $WORKSPACE/test.log >> /tmp/fail.log
 grep -a 'FAIL\s*github.com/couchbase' $WORKSPACE/test.log >> /tmp/fail.log
 grep -a -- '--- FAIL:' $WORKSPACE/test.log >> /tmp/fail.log
 grep -a '^\s*2i' $WORKSPACE/test.log | grep 'fail\s*$' >> /tmp/fail.log
-grep -a '^panic: ' $WORKSPACE/test.log >> /tmp/fail.log
+# run_gotest output carries a leading timestamp, so allow one before "panic: "
+grep -aE '^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+ )?panic: ' $WORKSPACE/test.log >> /tmp/fail.log
 skiplist="`cat skip.txt`"
 for tst in $skiplist; do
   echo "$tst" | grep -qs '^\s*#' && continue

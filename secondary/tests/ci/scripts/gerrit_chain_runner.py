@@ -179,7 +179,11 @@ def restore_state(path: Path, state: Tuple[str, str]) -> None:
     if branch not in ("HEAD", "(detached)"):
         run(["git", "checkout", branch], cwd=path, check=False)
     run(["git", "reset", "--hard", head], cwd=path, check=False)
-    run(["git", "clean", "-fdx"], cwd=path, check=False)
+    # No -x: ignored paths hold generated build artifacts baked into the image
+    # (notably secondary/protobuf/*/*.pb.go, produced by protoc at build time).
+    # Removing them makes every later lint fail with undefined protobuf types,
+    # since the lint service never rebuilds.
+    run(["git", "clean", "-fd"], cwd=path, check=False)
 
 
 def force_clean(path: Path) -> None:
@@ -189,9 +193,11 @@ def force_clean(path: Path) -> None:
     can leave the repo dirty. Rather than fail, reset back to HEAD so each chain
     starts from a clean base. The pristine state is captured before this runs and
     restored in process_chain's finally block.
+
+    Ignored paths are left alone (no -x) — see restore_state.
     """
     run(["git", "reset", "--hard"], cwd=path, check=False)
-    run(["git", "clean", "-fdx"], cwd=path, check=False)
+    run(["git", "clean", "-fd"], cwd=path, check=False)
 
 
 def apply_patch(change: Change, workspace: str) -> None:
