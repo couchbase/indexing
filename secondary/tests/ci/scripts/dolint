@@ -312,7 +312,7 @@ for line in `cat ~/gerrit.list`; do
 
     # Escape double quotes within the message to prevent breaking the SSH command
     comment_msg=$(printf "Go linting issues found. See http://%s.northscale.in/%s-lint-%s.fail.html for full details" \
-      "$CINAME" \
+      "ci2i-unstable" \
       "$project_name" \
       "$TS")
 
