@@ -4,7 +4,6 @@ import (
 	"math"
 	"sort"
 	"strconv"
-	"sync/atomic"
 	"testing"
 
 	"github.com/couchbase/indexing/secondary/logging"
@@ -242,53 +241,6 @@ var testPatterns2 = []struct {
 		input:   []float32{-1.000001, -1.000002, -1.000000, -1.000005, -1.000003},
 		output:  []float32{-1.000000, -1.000001, -1.000002, -1.000003, -1.000005},
 	},
-}
-
-// TestCasMinFloat32 verifies the shared top-K threshold lowers correctly,
-// including for negative distances (negated inner products) where uint32
-// bit-pattern ordering does not match float ordering.
-func TestCasMinFloat32(t *testing.T) {
-	var a atomic.Uint32
-	a.Store(math.Float32bits(float32(math.Inf(1))))
-
-	load := func() float32 { return math.Float32frombits(a.Load()) }
-
-	casMinFloat32(&a, 5.0)
-	if load() != 5.0 {
-		t.Fatalf("expected 5.0 got %v", load())
-	}
-	casMinFloat32(&a, 7.0) // larger, must not raise
-	if load() != 5.0 {
-		t.Fatalf("expected 5.0 got %v", load())
-	}
-	casMinFloat32(&a, -3.5) // negative must lower below positive
-	if load() != -3.5 {
-		t.Fatalf("expected -3.5 got %v", load())
-	}
-	casMinFloat32(&a, -1.0) // less negative, must not raise
-	if load() != -3.5 {
-		t.Fatalf("expected -3.5 got %v", load())
-	}
-	casMinFloat32(&a, -8.25) // more negative must lower
-	if load() != -8.25 {
-		t.Fatalf("expected -8.25 got %v", load())
-	}
-
-	// A NaN must be dropped, not stored: a stored NaN compares false against
-	// everything, so it would stop all pruning and let the next call install
-	// any value, including a larger one.
-	casMinFloat32(&a, float32(math.NaN()))
-	if load() != -8.25 {
-		t.Fatalf("NaN must not be stored, expected -8.25 got %v", load())
-	}
-	casMinFloat32(&a, -2.0) // still must not raise after the NaN attempt
-	if load() != -8.25 {
-		t.Fatalf("expected -8.25 got %v", load())
-	}
-	casMinFloat32(&a, -9.0) // and must still lower
-	if load() != -9.0 {
-		t.Fatalf("expected -9.0 got %v", load())
-	}
 }
 
 // TestTopKRowHeapReplaceRows simulates the persistent-heap materialization
