@@ -2699,3 +2699,271 @@ func TestBackfillEncryption(t *testing.T) {
 	time.Sleep(4 * time.Second)
 	vectorsLoaded = false
 }
+
+// Every rotated indexer_stats.log slot stays encrypted with whatever log DEK was
+// active when it was written. Those DEKs must stay reported as in-use, since
+// ns_server deletes any key no service claims and the slot then cannot be read.
+
+const logDekKeyType = "log"
+
+const indexerStatsLogName = "indexer_stats.log"
+
+func getLogDirOnNode(nodeIndex int, t *testing.T) string {
+	if nodeIndex < 0 || nodeIndex >= len(clusterconfig.Nodes) {
+		t.Fatalf("invalid node index %d", nodeIndex)
+	}
+
+	workspace := os.Getenv("WORKSPACE")
+	if workspace == "" {
+		workspace = "../../../../../../../../"
+	}
+	if !strings.HasSuffix(workspace, "/") {
+		workspace += "/"
+	}
+
+	dir, err := filepath.Abs(fmt.Sprintf("%sns_server/logs/n_%d", workspace, nodeIndex))
+	FailTestIfError(err, "Error resolving log dir", t)
+	return dir
+}
+
+// statsLogKeyIdsOnDisk returns the keys the stats log files need: the active
+// file plus every rotated slot. An unencrypted slot contributes "" (NULL_DEK).
+func statsLogKeyIdsOnDisk(logDir, baseName string, t *testing.T) map[string]bool {
+	slots, err := filepath.Glob(filepath.Join(logDir, baseName+"*"))
+	FailTestIfError(err, "Error listing stats log slots", t)
+
+	ids := make(map[string]bool)
+	for _, path := range slots {
+		if strings.HasSuffix(path, ".tmp") {
+			continue
+		}
+		// Anything shorter than a full header carries no key id. Skipping keeps
+		// the scan off the short read window just after a file is created.
+		info, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			t.Fatalf("cannot stat stats log slot %s: %v", path, err)
+		}
+		if info.Size() < int64(FILEHDR_SZ) {
+			continue
+		}
+		encrypted, err := IsFileEncrypted(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			t.Fatalf("cannot read stats log slot %s: %v", path, err)
+		}
+		if !encrypted {
+			ids[""] = true
+			continue
+		}
+		keyId, err := GetFileEncryptionKeyId(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			t.Fatalf("cannot read key id from stats log slot %s: %v", path, err)
+		}
+		ids[keyId] = true
+	}
+	return ids
+}
+
+func postEncrAtRestSettings(nodeIndex int, data url.Values) error {
+	if nodeIndex < 0 || nodeIndex >= len(clusterconfig.Nodes) {
+		return fmt.Errorf("invalid node index %d", nodeIndex)
+	}
+
+	hostaddress := clusterconfig.Nodes[nodeIndex]
+	client := &http.Client{}
+	address := "http://" + hostaddress + "/settings/security/encryptionAtRest"
+
+	req, err := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("request to %s failed with status code %d, body:%s",
+			address, resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+func enableLogEncryption(nodeIndex int) error {
+	data := url.Values{}
+	data.Set("log.encryptionMethod", "nodeSecretManager")
+	return postEncrAtRestSettings(nodeIndex, data)
+}
+
+func disableLogEncryption(nodeIndex int) error {
+	data := url.Values{}
+	data.Set("log.encryptionMethod", "disabled")
+	return postEncrAtRestSettings(nodeIndex, data)
+}
+
+// setLogDekRotation needs setBypassEncrCfgRestrictions, as these intervals are
+// well below the minimums ns_server enforces.
+func setLogDekRotation(nodeIndex int, intervalSec, lifetimeSec int) error {
+	data := url.Values{}
+	data.Set("log.dekLifetime", fmt.Sprintf("%d", lifetimeSec))
+	data.Set("log.dekRotationInterval", fmt.Sprintf("%d", intervalSec))
+	return postEncrAtRestSettings(nodeIndex, data)
+}
+
+func waitForDistinctStatsLogKeys(logDir string, want int, timeout time.Duration, t *testing.T) map[string]bool {
+	deadline := time.Now().Add(timeout)
+	var onDisk map[string]bool
+	for time.Now().Before(deadline) {
+		onDisk = statsLogKeyIdsOnDisk(logDir, indexerStatsLogName, t)
+		if len(onDisk) >= want {
+			return onDisk
+		}
+		time.Sleep(5 * time.Second)
+	}
+	t.Fatalf("timed out waiting for %d distinct stats log keys in %s; got %v",
+		want, logDir, keySetToSlice(onDisk))
+	return nil
+}
+
+func keySetToSlice(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// assertInUseCoversDisk checks the reported set is a superset of what is on
+// disk. Extra keys only delay reclaiming them; a missing one gets collected and
+// takes the slot with it.
+func assertInUseCoversDisk(nodeIndex int, logDir, stage string, t *testing.T) {
+	onDisk := statsLogKeyIdsOnDisk(logDir, indexerStatsLogName, t)
+	if len(onDisk) == 0 {
+		t.Fatalf("[%s] no stats log files found under %s", stage, logDir)
+	}
+
+	reported, err := getInUseKeyIds(nodeIndex, logDekKeyType, "")
+	FailTestIfError(err, fmt.Sprintf("[%s] Error in getInUseKeyIds for log DEKs", stage), t)
+
+	reportedSet := make(map[string]bool, len(reported))
+	for _, k := range reported {
+		reportedSet[k] = true
+	}
+
+	var missing []string
+	for k := range onDisk {
+		if !reportedSet[k] {
+			missing = append(missing, k)
+		}
+	}
+	sort.Strings(missing)
+
+	log.Printf("[%s] stats log keys on disk: %v", stage, keySetToSlice(onDisk))
+	log.Printf("[%s] keys reported in use  : %v", stage, reported)
+
+	if len(missing) > 0 {
+		t.Fatalf("[%s] %d key(s) held by stats log files are not reported in use: %v. "+
+			"ns_server will garbage collect these and the files become undecryptable. "+
+			"on disk=%v reported=%v",
+			stage, len(missing), missing, keySetToSlice(onDisk), reported)
+	}
+}
+
+// setupStatsLogKeyRotation enables log encryption with a short DEK rotation
+// interval and restores both on cleanup.
+func setupStatsLogKeyRotation(nodeIndex int, t *testing.T) string {
+	err := setBypassEncrCfgRestrictions(nodeIndex)
+	FailTestIfError(err, "Error in setBypassEncrCfgRestrictions", t)
+
+	err = enableLogEncryption(nodeIndex)
+	FailTestIfError(err, "Error enabling log encryption", t)
+
+	err = setLogDekRotation(nodeIndex, 30, 3600)
+	FailTestIfError(err, "Error in setLogDekRotation", t)
+
+	t.Cleanup(func() {
+		if err := setLogDekRotation(nodeIndex, 0, 0); err != nil {
+			log.Printf("Warning: could not reset log dek rotation: %v", err)
+		}
+		if err := disableLogEncryption(nodeIndex); err != nil {
+			log.Printf("Warning: could not disable log encryption: %v", err)
+		}
+	})
+
+	return getLogDirOnNode(nodeIndex, t)
+}
+
+// Keys held by rotated slots must be reported, not just the key backing the
+// file currently being written.
+func TestStatsLogInUseKeysRotatedSlots(t *testing.T) {
+	nodeIndex := 1
+
+	logDir := setupStatsLogKeyRotation(nodeIndex, t)
+
+	// Three keys means at least two rotated slots hold something other than the
+	// active key.
+	onDisk := waitForDistinctStatsLogKeys(logDir, 3, 5*time.Minute, t)
+	log.Printf("Stats log files are spread across %d keys: %v", len(onDisk), keySetToSlice(onDisk))
+
+	assertInUseCoversDisk(nodeIndex, logDir, "after rotation", t)
+}
+
+// recoverInUseKeys asks for the in-use set once at startup and treats the answer
+// as final, and the restart itself triggers a GC, so a short answer here is when
+// the keys actually get deleted.
+func TestStatsLogInUseKeysAfterIndexerRestart(t *testing.T) {
+	nodeIndex := 1
+
+	logDir := setupStatsLogKeyRotation(nodeIndex, t)
+	waitForDistinctStatsLogKeys(logDir, 3, 5*time.Minute, t)
+	assertInUseCoversDisk(nodeIndex, logDir, "before restart", t)
+
+	beforeRestart := statsLogKeyIdsOnDisk(logDir, indexerStatsLogName, t)
+
+	log.Printf("Restarting indexer on node %s", clusterconfig.Nodes[nodeIndex])
+	// forceKillIndexer settles for 20s; WaitForIndexerActive panics instead of
+	// retrying if the indexer is not listening yet.
+	forceKillIndexer()
+
+	err := secondaryindex.WaitForIndexerActive(clusterconfig.Username,
+		clusterconfig.Password, clusterconfig.Nodes[nodeIndex])
+	FailTestIfError(err, "Indexer did not come back up after restart", t)
+
+	assertInUseCoversDisk(nodeIndex, logDir, "after restart", t)
+
+	stillOnDisk := statsLogKeyIdsOnDisk(logDir, indexerStatsLogName, t)
+	reported, err := getInUseKeyIds(nodeIndex, logDekKeyType, "")
+	FailTestIfError(err, "Error in getInUseKeyIds after restart", t)
+
+	reportedSet := make(map[string]bool, len(reported))
+	for _, k := range reported {
+		reportedSet[k] = true
+	}
+	for k := range beforeRestart {
+		if !stillOnDisk[k] {
+			continue // slot aged out, key is releasable
+		}
+		if !reportedSet[k] {
+			t.Fatalf("key %q survived the restart on disk but was dropped from the "+
+				"in-use set; recovery forgot it. on disk=%v reported=%v",
+				k, keySetToSlice(stillOnDisk), reported)
+		}
+	}
+}

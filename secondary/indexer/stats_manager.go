@@ -5808,19 +5808,43 @@ func (s *statsManager) handleGetInUseKeys(cmd Message) {
 	}
 
 	kdt := msg.GetKeyDataType()
-	if fp.encCtx != nil {
-		result[kdt] = append(result[kdt], string(fp.encCtx.KeyID()))
-	}
-	s.logStatsKeyMu.RLock()
-	logKeyID := s.logStatsKeyID
-	s.logStatsKeyMu.RUnlock()
-	if logKeyID != "" {
-		if fp.encCtx == nil || logKeyID != string(fp.encCtx.KeyID()) {
-			result[kdt] = append(result[kdt], logKeyID)
+
+	seen := make(map[string]bool)
+	add := func(k string) {
+		if !seen[k] {
+			seen[k] = true
+			result[kdt] = append(result[kdt], k)
 		}
+	}
+	if fp.encCtx != nil {
+		add(string(fp.encCtx.KeyID()))
+	}
+
+	for _, id := range s.inUseLogStatsKeys() {
+		add(id)
 	}
 
 	respMapCh <- result
+}
+
+// inUseLogStatsKeys returns the key IDs of the stats log files on disk. An
+// empty string means a plaintext file is present, reported as NULL_DEK.
+func (s *statsManager) inUseLogStatsKeys() []string {
+	if s.logStatsHandler == nil {
+		return nil
+	}
+	if ids := s.logStatsHandler.GetKeyIdList(); len(ids) > 0 {
+		return ids
+	}
+
+	conf := s.config.Load()
+	ldir, ok1 := conf["log_dir"]
+	fname, ok2 := conf["statsLogFname"]
+	if !ok1 || !ok2 {
+		return nil
+	}
+	s.logStatsHandler.RefreshKeyIdList(filepath.Join(ldir.String(), fname.String()))
+	return s.logStatsHandler.GetKeyIdList()
 }
 
 // handleEncryptionUpdateKey sets the encryption context for future writes.
@@ -5877,12 +5901,12 @@ func (s *statsManager) handleEncryptionUpdateKey(cmd Message) {
 	s.logStatsKeyID = earkey.Id
 	s.logStatsKey = earkey.Key
 	s.logStatsKeyMu.Unlock()
-	if keyChanged {
-		common.ForceRotateStatsLog()
-	}
-
 	if s.encCallbacks.setInUseKeys != nil {
 		s.encCallbacks.setInUseKeys(kdt, earkey.Id)
+	}
+
+	if keyChanged {
+		common.ForceRotateStatsLog()
 	}
 
 	logging.Infof("StatsManager::handleEncryptionUpdateKey key:%v encCtx_set=%v", earkey.Id, fp.encCtx != nil)
@@ -5973,6 +5997,17 @@ func (s *statsManager) handleEncryptionDropKey(cmd Message) {
 		}
 		if logFileErr == nil && s.encCallbacks.setInUseKeys != nil {
 			s.encCallbacks.setInUseKeys(kdt, "")
+		}
+	}
+
+	// Reencryption/decryption rewrote the rotated slots' headers, so refresh
+	// the cached key list and re-register what the files actually need now.
+	if s.logStatsHandler != nil && logDir != "" && baseName != "" {
+		s.logStatsHandler.RefreshKeyIdList(filepath.Join(logDir, baseName))
+		if s.encCallbacks.setInUseKeys != nil {
+			for _, id := range s.logStatsHandler.GetKeyIdList() {
+				s.encCallbacks.setInUseKeys(kdt, id)
+			}
 		}
 	}
 

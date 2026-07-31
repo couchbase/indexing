@@ -47,6 +47,11 @@ type StatsHooks struct {
 
 	// DropKey is invoked when cbauth requests that keys be retired.
 	DropKey func(activeEarKey c.EaRKey, dropKeyIDs []string) error
+
+	// InUseKeys returns the key IDs of the stats log files on disk: the active
+	// file plus every rotated slot. An empty string means a plaintext file is
+	// present, reported to cbauth as NULL_DEK.
+	InUseKeys func() []string
 }
 
 type workItemType int
@@ -216,12 +221,36 @@ func (e *EncryptionMgr) getInUseKeysCallback(kdt c.KeyDataType) ([]string, error
 	if !e.isReady.Load() {
 		return nil, ErrEncrMgrNotReady
 	}
-	e.muid.Lock()
-	defer e.muid.Unlock()
-	out := make([]string, 0, len(e.inUseKeys))
-	for k := range e.inUseKeys {
-		out = append(out, k)
+	var seen map[string]bool
+	var out []string
+	add := func(k string) {
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
 	}
+
+	e.muid.Lock()
+	seen = make(map[string]bool, len(e.inUseKeys))
+	out = make([]string, 0, len(e.inUseKeys))
+	for k := range e.inUseKeys {
+		add(k)
+	}
+	e.muid.Unlock()
+
+	// The in-memory set above only ever gains the active key and is lost on
+	// restart. The rotated stats log slots hold older keys, so report what is
+	// actually on disk: anything omitted here is deleted by ns_server's GC.
+	e.hooksMu.RLock()
+	inUse := e.hooks.InUseKeys
+	e.hooksMu.RUnlock()
+	if inUse != nil {
+		for _, k := range inUse() {
+			add(k)
+		}
+	}
+
+	logging.Infof("EncryptionMgr:getInUseKeysCallback kdt=%v reporting=%v", kdt.TypeName, out)
 	return out, nil
 }
 

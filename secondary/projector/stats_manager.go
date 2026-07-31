@@ -261,6 +261,7 @@ func NewStatsManager(
 		encMgr.SetStatsHooks(StatsHooks{
 			UpdateActiveKey: sm.handleEncryptionUpdateKey,
 			DropKey:         sm.handleEncryptionDropKey,
+			InUseKeys:       sm.inUseLogStatsKeys,
 		})
 		encMgr.MarkReady()
 	}
@@ -584,12 +585,12 @@ func (sm *statsManager) handleEncryptionUpdateKey(earkey common.EaRKey) error {
 	sm.logStatsKey = earkey.Key
 	sm.logStatsKeyMu.Unlock()
 
-	if keyChanged {
-		common.ForceRotateStatsLog()
-	}
-
 	if sm.encMgr != nil {
 		sm.encMgr.SetInUseKeys(earkey.Id)
+	}
+
+	if keyChanged {
+		common.ForceRotateStatsLog()
 	}
 
 	logging.Infof("statsManager:handleEncryptionUpdateKey keyId=%v keyChanged=%v", earkey.Id, keyChanged)
@@ -640,6 +641,12 @@ func (sm *statsManager) handleEncryptionDropKey(activeEarKey common.EaRKey, drop
 		}
 	}
 
+	// Reencryption/decryption rewrote the rotated slots' headers, so the cached
+	// key list is stale. Refresh before ResumeRotation releases the lock.
+	if sm.logStatsHandler != nil && logDir != "" && baseName != "" {
+		sm.logStatsHandler.RefreshKeyIdList(filepath.Join(logDir, baseName))
+	}
+
 	logging.Infof("statsManager:handleEncryptionDropKey active=%v drop=%v err=%v",
 		activeEarKey.Id, dropKeyIDs, err)
 	return err
@@ -649,6 +656,16 @@ func (sm *statsManager) getLogStatsKey() (string, []byte) {
 	sm.logStatsKeyMu.RLock()
 	defer sm.logStatsKeyMu.RUnlock()
 	return sm.logStatsKeyID, sm.logStatsKey
+}
+
+// inUseLogStatsKeys reports the keys the stats log files on disk actually need:
+// the active file plus every rotated slot. ns_server's GC deletes any key no
+// component reports, so omitting the rotated slots makes them undecryptable.
+func (sm *statsManager) inUseLogStatsKeys() []string {
+	if sm.logStatsHandler == nil {
+		return nil
+	}
+	return sm.logStatsHandler.GetKeyIdList()
 }
 
 func (sm *statsManager) getKeyCipherByID(keyID string) ([]byte, string) {
