@@ -1277,7 +1277,7 @@ func (v *VectorMetadata) GetTrainListSize(itemsCount uint64) uint64 {
 	if v.TrainList != 0 {
 		return uint64(v.TrainList)
 	}
-	minCentroids := v.Quantizer.ComputeNlist(itemsCount)
+	minCentroids := v.Quantizer.ComputeNlist(itemsCount, v.IsBhive)
 	if v.Quantizer != nil && v.Quantizer.Type == PQ {
 		minCentroids = max(1<<v.Quantizer.Nbits, minCentroids)
 	}
