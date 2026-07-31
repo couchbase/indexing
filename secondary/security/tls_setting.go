@@ -382,11 +382,17 @@ func hasCipherSuitesChanged(oldTLSPref *cbauth.TLSConfig, newTLSPref *cbauth.TLS
 func (p *SecurityContext) update(newSetting *SecuritySetting, refreshCert bool) error {
 
 	hasEnabled := false
+	hadNonSSLPortDisabled := false
 	oldSetting := GetSecuritySetting()
 	if oldSetting != nil {
 		hasEnabled = oldSetting.encryptionEnabled
+		hadNonSSLPortDisabled = oldSetting.disableNonSSLPort
 	}
-	refreshEncrypt := hasEnabled != newSetting.encryptionEnabled
+
+	// DisableNonSSLPorts changes the non-TLS bind address and whether loopback
+	// traffic is encrypted, so it needs a listener and client refresh too.
+	refreshEncrypt := hasEnabled != newSetting.encryptionEnabled ||
+		hadNonSSLPortDisabled != newSetting.disableNonSSLPort
 
 	if oldSetting != nil {
 		// if Cipher suites have changed, then we should consider that as refreshEncrypt
@@ -398,7 +404,9 @@ func (p *SecurityContext) update(newSetting *SecuritySetting, refreshCert bool) 
 	UpdateSecuritySetting(newSetting)
 
 	if !refreshEncrypt && !refreshCert {
-		logging.Infof("encryption is not enabled or no certificate refresh.   Do not notify security change")
+		logging.Infof("tls_setting: no change in encryption (enabled=%v, disableNonSSLPort=%v) "+
+			"or cipher suites, and no certificate refresh. Do not notify security change",
+			newSetting.encryptionEnabled, newSetting.disableNonSSLPort)
 		return nil
 	}
 
@@ -513,7 +521,8 @@ func (p *SecurityContext) refreshEncryption(setting *SecuritySetting) error {
 	setting.encryptionEnabled = cfg.EncryptData
 	setting.disableNonSSLPort = cfg.DisableNonSSLPorts
 
-	logging.Infof("Encryption config refresh successfully.   Encryption enabled=%v", setting.encryptionEnabled)
+	logging.Infof("tls_setting: encryption config refresh successfully. encryption enabled=%v, disableNonSSLPort=%v",
+		setting.encryptionEnabled, setting.disableNonSSLPort)
 
 	return nil
 }
