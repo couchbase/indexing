@@ -3773,6 +3773,18 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.scan.vector.enable_persistent_heap": ConfigValue{
+		true,
+		"For a limit-pushdown sparse vector scan, carry each scan worker's " +
+			"top-K heap across the jobs it runs instead of flushing it at every " +
+			"job end, and share the resulting k-th best distance across workers " +
+			"so they can drop candidate rows that cannot reach the final top-K. " +
+			"Turning this off restores the per-job flush and disables the shared " +
+			"threshold with it. Takes effect on the next scan",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.scan.vector.throttle.minRRThreshold": ConfigValue{
 		5,
 		"Minimum node level resident percent below which vector scan will be throttled. Set 0 to disable.",

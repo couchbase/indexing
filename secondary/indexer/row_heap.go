@@ -150,12 +150,32 @@ func (h *TopKRowHeap) Push(row *Row) {
 	}
 }
 
-// ReplaceRowAt replaces the row stored at the given index without
-// re-establishing heap order. Caller must ensure the new row compares
-// identically to the one being replaced (e.g. an owned copy carrying the
-// same dist/sortKey).
-func (h *TopKRowHeap) ReplaceRowAt(index int, row *Row) {
-	h.heap.SetRow(index, row)
+// ReplaceRows rewrites the rows held by the heap in place. substitute is
+// called for every row and, when it returns a non-nil row, that row takes the
+// place of the one it was given. Heap order is re-established afterwards, so
+// a replacement need not compare equal to the row it displaces.
+//
+// Order is restored once at the end rather than per replacement on purpose:
+// re-heaping while walking the rows moves them between slots, which would let
+// the walk visit a row twice or miss one entirely - and a missed row is one
+// substitute never got the chance to replace.
+func (h *TopKRowHeap) ReplaceRows(substitute func(row *Row) *Row) {
+	replaced := false
+
+	// safe to index while assigning: slot i is written only on its own
+	// iteration and no row moves until the walk is done
+	for i, row := range h.heap.rows {
+		newRow := substitute(row)
+		if newRow == nil {
+			continue
+		}
+		h.heap.SetRow(i, newRow)
+		replaced = true
+	}
+
+	if replaced {
+		heap.Init(&h.heap)
+	}
 }
 
 // Pop removes and returns the top element (min or max) from the heap

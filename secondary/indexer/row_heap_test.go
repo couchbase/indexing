@@ -291,11 +291,11 @@ func TestCasMinFloat32(t *testing.T) {
 	}
 }
 
-// TestTopKRowHeapReplaceRowAt simulates the persistent-heap materialization
+// TestTopKRowHeapReplaceRows simulates the persistent-heap materialization
 // done at job end: every row in the heap is replaced in place with a copy
 // carrying the same dist. The heap must keep its order and honor further
 // pushes after the replacement.
-func TestTopKRowHeapReplaceRowAt(t *testing.T) {
+func TestTopKRowHeapReplaceRows(t *testing.T) {
 	logging.SetLogLevel(logging.Info)
 
 	heap, err := NewTopKRowHeap(5, false, nil)
@@ -310,11 +310,11 @@ func TestTopKRowHeapReplaceRowAt(t *testing.T) {
 
 	// replace every row with a copy holding the same dist
 	replacements := make(map[*Row]bool)
-	for i, row := range heap.List() {
+	heap.ReplaceRows(func(row *Row) *Row {
 		newRow := &Row{key: append([]byte(nil), row.key...), dist: row.dist}
-		heap.ReplaceRowAt(i, newRow)
 		replacements[newRow] = true
-	}
+		return newRow
+	})
 
 	// push more rows after replacement; heap invariant must hold
 	heap.Push(&Row{key: []byte("x"), dist: 4.0})
@@ -332,6 +332,61 @@ func TestTopKRowHeapReplaceRowAt(t *testing.T) {
 		}
 		if row.dist != 4.0 && !replacements[row] {
 			t.Fatalf("Row with dist %v was not the replaced copy", row.dist)
+		}
+		i++
+	}
+	if i != len(expected) {
+		t.Fatalf("Heap returned %v rows, expected %v", i, len(expected))
+	}
+}
+
+// TestTopKRowHeapReplaceRowsReorders covers what ReplaceRows guarantees over a
+// bare slot write: replacements whose dist differs from the row they displace
+// still leave a valid heap, and rows the callback declines (nil) stay put.
+// Without the re-heap the root would be stale, so the next Push would evict
+// the wrong row and silently drop a genuine top-K member.
+func TestTopKRowHeapReplaceRowsReorders(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	heap, err := NewTopKRowHeap(5, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, dist := range []float32{10.0, 20.0, 30.0, 40.0, 50.0} {
+		heap.Push(&Row{key: []byte("orig"), dist: dist})
+	}
+
+	// Replace two of the five, moving them far from the slot they sit in so
+	// that slot is no longer a valid heap position for them.
+	replaced := 0
+	heap.ReplaceRows(func(row *Row) *Row {
+		if row.dist != 20.0 && row.dist != 40.0 {
+			return nil
+		}
+		replaced++
+		return &Row{key: []byte("copy"), dist: row.dist * 100}
+	})
+	if replaced != 2 {
+		t.Fatalf("substitute called on wrong rows: %v replacements, expected 2", replaced)
+	}
+	if heap.Len() != 5 {
+		t.Fatalf("Heap holds %v rows after replacement, expected 5", heap.Len())
+	}
+
+	// Heap now holds {10, 30, 50, 2000, 4000} and is full, so this push must
+	// evict the largest - 4000 - and not whatever happens to sit at slot 0.
+	heap.Push(&Row{key: []byte("new"), dist: 1.0})
+
+	expected := []float32{2000.0, 50.0, 30.0, 10.0, 1.0}
+	i := 0
+	for row := heap.Pop(); row != nil; row = heap.Pop() {
+		if i >= len(expected) {
+			t.Fatal("More values in heap than expected")
+		}
+		if row.dist != expected[i] {
+			t.Fatalf("Wrong value from heap at %v: got dist %v expected %v",
+				i, row.dist, expected[i])
 		}
 		i++
 	}

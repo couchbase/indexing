@@ -347,6 +347,33 @@ func (r *Row) copy(source *Row) {
 	r.sortKey = source.sortKey
 }
 
+// copyForVectorHeap copies the fields a row needs to outlive the storage
+// iterator and reach the merge stage of a non-BHIVE sparse vector scan.
+//
+// It differs from copy in two ways, both because these rows are long lived - a
+// worker's persistent top-K heap holds up to limit+offset of them for the
+// whole scan (see ScanWorker.materializeHeapRows):
+//   - value is not copied. On a vector scan it holds the vector payload, which
+//     is consumed to compute dist before the row ever enters the heap and is
+//     not read again by any later stage.
+//   - buffers are sized to the data, as the caller leaves mem nil. Taking them
+//     from the row allocator instead would pin a full ScanBufPoolSize buffer
+//     per row - far more than a secondary key needs - and the allocator cannot
+//     recycle them anyway while every row is held to the end of the scan.
+func (r *Row) copyForVectorHeap(source *Row) {
+	r.len = source.len
+	r.last = source.last
+	r.dist = source.dist
+	r.distValid = source.distValid
+	r.copyKey(source.key)
+
+	if source.includeColumn != nil {
+		r.copyInclude(source.includeColumn)
+	}
+
+	r.sortKey = source.sortKey
+}
+
 func (r *Row) copyForBhive(source *Row) {
 	r.len = source.len
 	r.last = source.last

@@ -450,3 +450,59 @@ func TestScanRequest_setIndexParams(t *testing.T) {
 		})
 	}
 }
+
+// TestScanRequestUsePersistentVectorHeap covers the setting that gates the
+// persistent scan-worker heap - and with it the shared top-K threshold, which
+// the WorkerPool only builds when the workers will maintain that heap. The
+// setting defaults to on; turning it off must take the scan back to the per-job
+// flush even when every other condition is met, and it must never turn the heap
+// on for a scan it is not valid for.
+func TestScanRequestUsePersistentVectorHeap(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	const setting = "scan.vector.enable_persistent_heap"
+
+	cfg := common.SystemConfig.SectionConfig("indexer.", true)
+	if !cfg[setting].Bool() {
+		t.Fatalf("%v must default to true", setting)
+	}
+
+	newSparseRequest := func() *ScanRequest {
+		return &ScanRequest{
+			Limit:        10,
+			isVectorScan: true,
+			IndexInst: c.IndexInst{
+				Defn: c.IndexDefn{
+					SecExprs:      []string{"name", "colorvec"},
+					SecExprsAttrs: c.SecExprAttrsArray{0, c.SEC_EXPR_ATTR_SPARSE_VECTOR},
+				},
+			},
+		}
+	}
+
+	r := newSparseRequest()
+	if !r.IsSparseVectorIndexScan() {
+		t.Fatal("fixture is not a sparse vector scan")
+	}
+	if !r.usePersistentVectorHeap(cfg) {
+		t.Fatal("a non-bhive sparse limit-pushdown scan must use the persistent heap by default")
+	}
+
+	off := common.SystemConfig.SectionConfig("indexer.", true)
+	off.SetValue(setting, false)
+	if r.usePersistentVectorHeap(off) {
+		t.Fatalf("%v must be able to turn the persistent heap off", setting)
+	}
+
+	// the setting cannot turn it on where it is unsafe
+	bhive := newSparseRequest()
+	bhive.isBhiveScan = true
+	if bhive.usePersistentVectorHeap(cfg) {
+		t.Fatal("a bhive scan must not use the persistent heap")
+	}
+	noLimit := newSparseRequest()
+	noLimit.Limit = 0
+	if noLimit.usePersistentVectorHeap(cfg) {
+		t.Fatal("a scan without limit pushdown must not use the persistent heap")
+	}
+}
