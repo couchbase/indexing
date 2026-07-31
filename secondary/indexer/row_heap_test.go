@@ -395,6 +395,82 @@ func TestTopKRowHeapReplaceRowsReorders(t *testing.T) {
 	}
 }
 
+func heapDists(h *TopKRowHeap) []float32 {
+	out := make([]float32, 0, h.Len())
+	for _, row := range h.List() {
+		out = append(out, row.dist)
+	}
+	return out
+}
+
+func hasNaNDist(h *TopKRowHeap) bool {
+	for _, row := range h.List() {
+		if row.dist != row.dist {
+			return true
+		}
+	}
+	return false
+}
+
+// TestTopKRowHeapNaNDist pins NaN ordering in the heaps a vector scan keeps. A
+// NaN distance is the worst row there is, so in the top-K max-heap it must
+// never displace a real row and must be the first evicted once a real one
+// arrives, and in the min-heap the merge pops from it must not come out first.
+// Ordering a NaN as the best row instead lets a handful of them take over a
+// worker's top-K for the rest of the scan, after which no real row can get in
+// and the scan returns NaN rows in place of the nearest ones.
+func TestTopKRowHeapNaNDist(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	nan := float32(math.NaN())
+
+	newHeap := func(capacity int, isMin bool) *TopKRowHeap {
+		h, err := NewTopKRowHeap(capacity, isMin, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	push := func(h *TopKRowHeap, dists ...float32) {
+		for _, d := range dists {
+			h.Push(&Row{dist: d})
+		}
+	}
+
+	// an arriving NaN must not displace a real row
+	h := newHeap(3, false)
+	push(h, 1.0, 2.0, 3.0, nan)
+	if hasNaNDist(h) {
+		t.Fatalf("NaN entered a full heap of real rows: %v", heapDists(h))
+	}
+
+	// a NaN that got in while the heap was filling must be the root, and so
+	// the first row evicted when a real one arrives
+	h = newHeap(3, false)
+	push(h, nan, 5.0, 6.0)
+	if root := h.List()[0].dist; root == root {
+		t.Fatalf("NaN must be the root of a max-heap, got %v", heapDists(h))
+	}
+	push(h, 4.0)
+	if hasNaNDist(h) {
+		t.Fatalf("NaN survived eviction by a real row: %v", heapDists(h))
+	}
+
+	// an all-NaN heap must still admit real rows
+	h = newHeap(2, false)
+	push(h, nan, nan, 7.0, 8.0)
+	if hasNaNDist(h) {
+		t.Fatalf("all-NaN heap did not admit real rows: %v", heapDists(h))
+	}
+
+	// in the min-heap the merge pops from, a NaN must not come out first
+	h = newHeap(3, true)
+	push(h, nan, 1.0, 2.0)
+	if root := h.List()[0].dist; root != root {
+		t.Fatalf("NaN must not be the root of a min-heap: %v", heapDists(h))
+	}
+}
+
 func TestRowHeap(t *testing.T) {
 	logging.SetLogLevel(logging.Info)
 	testPatterns = append(testPatterns, testPatterns1...)

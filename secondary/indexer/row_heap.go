@@ -13,22 +13,25 @@ var ErrorZeroCapactiy = errors.New("Empty heap is not allowed")
 type RowsCompareLessFn func(i, j *Row) bool
 
 // lessDist reports whether distance di sorts before dj in a heap of the given
-// orientation. Two NaNs are equal; a lone NaN sinks to the bottom of a
-// min-heap and rises to the top of a max-heap. Comparison stays in float32
-// and detects NaN with self-comparison (x != x), which the compiler lowers to
-// a single FP compare - avoiding the math.IsNaN call and float64 conversion
-// that dominated the comparator in profiles. The NaN branch is entered only
-// when a NaN is actually present, so the common path is just the guard plus
-// the comparison.
+// orientation. A NaN is the worst distance there is: two NaNs are equal, and a
+// lone NaN sinks to the bottom of a min-heap and rises to the top of a
+// max-heap - so it never displaces a real row in a top-K heap, and one that is
+// already there is the first evicted when a real row arrives.
+//
+// Comparison stays in float32 and detects NaN with self-comparison (x != x),
+// which the compiler lowers to a single FP compare - avoiding the math.IsNaN
+// call and float64 conversion that dominated the comparator in profiles. The
+// NaN branch is entered only when a NaN is actually present, so the common
+// path is just the guard plus the comparison.
 func lessDist(di, dj float32, isMin bool) bool {
 	if di != di || dj != dj { // at least one NaN (rare)
 		if di != di && dj != dj {
 			return false // consider NaNs equal to each other
 		}
 		if di != di {
-			return isMin
+			return !isMin // NaN is worst: last in a min-heap, root of a max-heap
 		}
-		return !isMin
+		return isMin
 	}
 	if isMin {
 		return di < dj
