@@ -1514,6 +1514,21 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 	segments := make([]*skiplist.Segment, len(files))
 	readers := make([]FileReader, len(files))
 	errors := make([]error, len(files))
+	isStoreAssembled := false
+
+	defer func() {
+		if isStoreAssembled {
+			return
+		}
+
+		for _, s := range segments {
+			if s != nil {
+				s.FreeSegment()
+			}
+		}
+
+		b.Close()
+	}()
 
 	if callb != nil {
 		nodeCallb = func(n *skiplist.Node) {
@@ -1562,6 +1577,9 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 					itm, err := r.ReadItem()
 					if err != nil {
 						errors[shard] = err
+						if itm != nil {
+							m.freeItem(itm)
+						}
 						return
 					}
 
@@ -1601,6 +1619,8 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 	m.store.FreeNode(m.store.HeadNode(), &m.store.Stats)
 	m.store.FreeNode(m.store.TailNode(), &m.store.Stats)
 
+	// Set true before the handoff to prevent double free
+	isStoreAssembled = true
 	m.store = assembledStore
 
 	// Delta processing
@@ -1657,6 +1677,9 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 						itm, err := r.ReadItem()
 						if err != nil {
 							errors[shard] = err
+							if itm != nil {
+								m.freeItem(itm)
+							}
 							return
 						}
 

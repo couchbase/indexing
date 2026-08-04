@@ -1224,7 +1224,7 @@ func FetchSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool,
 func PollForDeletedBucketsV2(clusterUrl string, pool string, config Config) {
 
 	// If using cinfo lite is disabled, use old way of polling ns_server
-	if val, ok := config["indexer.use_cinfo_lite"]; !ok || val.Bool() == false {
+	if val, ok := config["use_cinfo_lite"]; !ok || !val.Bool() {
 		logging.Warnf("PollForDeletedBucketsV2: Falling back to pollForDeletedBuckets() as use_cinfo_lite is false or not present")
 		go pollForDeletedBuckets()
 		return
@@ -1233,7 +1233,7 @@ func PollForDeletedBucketsV2(clusterUrl string, pool string, config Config) {
 	retryCount := 0
 loop:
 	cicl, err := NewClusterInfoCacheLiteClient(clusterUrl, pool, "DeletedBucketsPoll",
-		config.SectionConfig("indexer.cinfo_lite.", true))
+		config.SectionConfig("cinfo_lite.", true))
 	if err != nil {
 		retryCount++
 		logging.Errorf("pollForDeletedBucktesV2: Error while initiliasing cinfo client, err: %v", err)

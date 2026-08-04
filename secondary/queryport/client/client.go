@@ -61,7 +61,19 @@ type ResponseReader interface {
 	GetReadUnits() uint64
 
 	GetServerScanReport() *report.HostScanReport
+
+	// ReportOnly is true when the response only hands off a scan report, so the
+	// handler skips end-of-stream cleanup. This is the case when close stream
+	// is happening.
+	ReportOnly() bool
 }
+
+// reportOnlyReader tags a response as a report-only handoff.
+type reportOnlyReader struct {
+	ResponseReader
+}
+
+func (reportOnlyReader) ReportOnly() bool { return true }
 
 // ResponseSender is responsible for forwarding result to the client
 // after streams from multiple servers/ResponseHandler have been merged.

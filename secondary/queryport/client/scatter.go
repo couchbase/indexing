@@ -143,6 +143,11 @@ type RequestBroker struct {
 	currentRetry          int
 	closeStreamWG         sync.WaitGroup
 	scanReportWaitTimeout time.Duration
+	numReportsAttached    int64  // atomic: indexer scan reports attached so far
+	reportFinalized       uint32 // atomic: set once SendFinalReport snapshots perHostReports
+	reportPartial         uint32 // atomic: set if final report was assembled after wait timeout
+	reportWaitDur         int64  // atomic: time (ns) SendFinalReport waited for indexer reports
+	lateReports           int64  // atomic: indexer reports that arrived after finalize (dropped)
 }
 
 const defaultScanReportWaitTimeout = 15 * time.Second
@@ -327,6 +332,19 @@ func (b *RequestBroker) AttachIndexerScanReport(hostReport *report.HostScanRepor
 		return
 	}
 
+	if atomic.LoadUint32(&b.reportFinalized) == 1 {
+		// The final report has already been assembled (SendFinalReport timed
+		// out waiting for this closeStream); this report will not be part of
+		// the report returned to the client.
+		atomic.AddInt64(&b.lateReports, 1)
+	} else if logging.IsEnabled(logging.Debug) {
+		if reportJson, err := json.Marshal(hostReport); err == nil {
+			logging.Debugf("AttachIndexerScanReport: received indexer scan report %v for requestId %v: %v",
+				reportId, b.requestId, string(reportJson))
+		}
+	}
+
+	atomic.AddInt64(&b.numReportsAttached, 1)
 	b.perHostReports.Store(reportId, hostReport)
 }
 
@@ -347,11 +365,13 @@ func (b *RequestBroker) SendFinalReport(conn *datastore.IndexConnection) {
 	if timeout <= 0 {
 		timeout = defaultScanReportWaitTimeout
 	}
-	if !b.waitCloseStreamWithTimeout(timeout) {
-		logging.Warnf("SendFinalReport: timed out after %v waiting for indexer "+
-			"scan reports; finalizing partial report for requestId: %v",
-			timeout, b.requestId)
+	start := time.Now()
+	complete := b.waitCloseStreamWithTimeout(timeout)
+	atomic.StoreInt64(&b.reportWaitDur, int64(time.Since(start)))
+	if !complete {
+		atomic.StoreUint32(&b.reportPartial, 1)
 	}
+	atomic.StoreUint32(&b.reportFinalized, 1)
 
 	sr := b.scanReport
 	includeDetailed := conn.IsDetailedIndexScanReport()
@@ -360,17 +380,24 @@ func (b *RequestBroker) SendFinalReport(conn *datastore.IndexConnection) {
 	// perHostReports concurrently;
 	// sync.Map.Range is safe against that, and any report that lands after this
 	// Range is simply dropped from the (already best-effort) partial report.
+	// The drop is logged in AttachIndexerScanReport via the reportFinalized flag.
 	if sr.HostScanReport == nil {
 		sr.HostScanReport = make(map[string]*report.HostScanReport)
 	}
+	numReports := 0
 	b.perHostReports.Range(func(k, v interface{}) bool {
 		sr.HostScanReport[k.(string)] = v.(*report.HostScanReport)
+		numReports++
 		return true
 	})
 
 	newReport := sr.ToMap(includeDetailed)
 
 	conn.AggregateScanReport(report.AggregateScanReportsFn, newReport)
+
+	logging.Debugf("SendFinalReport: finalized scan report for requestId %v: indexer reports %v,"+
+		" complete %v, retries %v, wait %v", b.requestId, numReports, complete,
+		b.currentRetry, time.Since(start))
 
 	if logging.IsEnabled(logging.Debug) {
 		reportJson, err := json.Marshal(newReport)
@@ -380,6 +407,17 @@ func (b *RequestBroker) SendFinalReport(conn *datastore.IndexConnection) {
 			logging.Debugf("Final scan report sent: %v", string(reportJson))
 		}
 	}
+}
+
+func (b *RequestBroker) ScanReportStats() (enabled bool, numReports int64,
+	waitDur time.Duration, partial bool, lateReports int64) {
+
+	enabled = b.scanReport != nil
+	numReports = atomic.LoadInt64(&b.numReportsAttached)
+	waitDur = time.Duration(atomic.LoadInt64(&b.reportWaitDur))
+	partial = atomic.LoadUint32(&b.reportPartial) == 1
+	lateReports = atomic.LoadInt64(&b.lateReports)
+	return
 }
 
 // waitCloseStreamWithTimeout waits for all closeStream goroutines to finish,
@@ -1527,6 +1565,8 @@ func (d *bypassResponseReader) GetReadUnits() uint64 {
 func (d *bypassResponseReader) GetServerScanReport() *report.HostScanReport {
 	return nil
 }
+
+func (d *bypassResponseReader) ReportOnly() bool { return false }
 
 func makeDefaultRequestBroker(cb ResponseHandler,
 	dataEncFmt common.DataEncodingFormat) *RequestBroker {

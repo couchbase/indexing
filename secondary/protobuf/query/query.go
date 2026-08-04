@@ -65,6 +65,8 @@ func (r *ResponseStream) GetServerScanReport() *report.HostScanReport {
 	return nil
 }
 
+func (r *ResponseStream) ReportOnly() bool { return false }
+
 // GetEntries implements queryport.client.ResponseReader{} method.
 func (r *StreamEndResponse) GetEntries(dataEncFmt c.DataEncodingFormat) (*c.ScanResultEntries, [][]byte, error) {
 	var results c.ScanResultEntries
@@ -80,6 +82,8 @@ func (r *StreamEndResponse) Error() error {
 	}
 	return nil
 }
+
+func (r *StreamEndResponse) ReportOnly() bool { return false }
 
 func (r *StreamEndResponse) GetServerScanReport() *report.HostScanReport {
 	if sr := r.GetSrvrScanReport(); sr != nil {

@@ -2126,13 +2126,13 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 
 	if common.GetStorageMode() == common.MOI {
 		if moiPersisters := newConfig["settings.moi.persistence_threads"].Int(); moiPersisters != oldConfig["settings.moi.persistence_threads"].Int() {
-			if moiPersisters <= cap(moiWriterSemaphoreCh) {
+			if moiPersisters <= moiMaxWritersAllowed {
 				logging.Infof("Indexer: Setting MOI persisters to %v",
 					moiPersisters)
 			} else {
 				logging.Infof(
 					"Indexer: Limiting MOI persisters to %v instead of %v",
-					cap(moiWriterSemaphoreCh), moiPersisters)
+					moiMaxWritersAllowed, moiPersisters)
 			}
 			go updateMOIWriters(moiPersisters)
 		}

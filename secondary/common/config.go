@@ -2535,6 +2535,22 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 
+	"indexer.plasma.encryption.LSSCleanerDropKeyRateLimit": ConfigValue{
+		0, // MB/s
+		"cleaner bandwidth limit in MiB/sec for drop-key cleanup. 0 means rate limit is disabled",
+		0,
+		false, // mutable
+		false, // case-insensitive
+	},
+
+	"indexer.plasma.encryption.LSSCleanerDropKeyMaxCpu": ConfigValue{
+		0.25,
+		"ratio based on GOMAXPROCS to determine number of concurrent drop-key workers",
+		0.25,
+		false, // mutable
+		false, // case-insensitive
+	},
+
 	"indexer.bhive.numReaders": ConfigValue{
 		runtime.GOMAXPROCS(0) * 3,
 		"Numbers of readers for bhive",

@@ -29,6 +29,8 @@ import (
 	"github.com/golang/protobuf/proto"
 )
 
+var slowCloseStreamThresholdNs = int64(defaultScanReportWaitTimeout)
+
 // GsiScanClient for scan operations.
 type GsiScanClient struct {
 	queryport string
@@ -278,7 +280,7 @@ func (c *GsiScanClient) doStreamingWithRetry(
 						c.logPrefix, requestId, closeErr,
 					)
 				}
-				
+
 				if wg != nil {
 					wg.Done()
 				}
@@ -1701,8 +1703,9 @@ func (c *GsiScanClient) closeStream(
 			// end of stream. callback will be handling the endStreamResponse in the same manner is
 			// it does when indexer sends
 			// endStreamResponse as part of normal stream response flow.
+			// Teardown path: deliver report-only so the handler skips cleanup.
 			if resp.GetServerScanReport() != nil {
-				callb(resp)
+				callb(reportOnlyReader{resp})
 			}
 			return
 		}

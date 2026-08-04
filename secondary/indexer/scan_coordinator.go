@@ -346,9 +346,14 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 			req.srvrScanReport.SrvrNs.TotalDur = time.Since(ttime).Nanoseconds()
 		}
 
-		s.handleError(req.LogPrefix, w.Done(readUnits, clientVersion, req.srvrScanReport))
+		doneErr := w.Done(readUnits, clientVersion, req.srvrScanReport)
+		s.handleError(req.LogPrefix, doneErr)
 		if stats != nil && req.srvrScanReport != nil {
 			stats.numScanReportsGen.Add(1)
+			if doneErr != nil {
+				// report was generated but could not be written to the client
+				stats.numScanReportsUndeliv.Add(1)
+			}
 		}
 
 		req.Done()
@@ -437,7 +442,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 	if err != nil {
 		logging.Errorf("%s Error in getRequestedIndexSnapshot, instId: %v, partnIds: %v, err: %v", req.LogPrefix, req.IndexInstId, req.PartitionIds, err)
 
-		// Added to detect wait duration in scan report in case of errored out 
+		// Added to detect wait duration in scan report in case of errored out
 		// request
 		if req.srvrScanReport != nil && req.srvrScanReport.SrvrNs != nil {
 			req.srvrScanReport.SrvrNs.WaitDur = time.Since(t0).Nanoseconds()
