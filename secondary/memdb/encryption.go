@@ -158,12 +158,21 @@ type dirOpCtx struct {
 	cancel, done context.CancelFunc
 }
 
+// use nativeGo
+// Ref: https://docs.google.com/document/d/10gcZiZO_Oz_5L57sTHxXMpuymVk-N-Bt7pShB5WCyDg/edit?usp=sharing
+func DefaultCbCryptoConfig() gocbcrypto.Config {
+	cfg := gocbcrypto.DefaultConfig()
+	cfg.CryptLib = gocbcrypto.NativeGo
+	return cfg
+}
+
 func (m *MemDB) NewEncryptionContext(keyId []byte, cipher string) (gocbcrypto.EncryptionContext, error) {
 	if cipher == gocbcrypto.CipherNameAES256GCM {
 		if len(keyId) == 0 {
 			return nil, gocbcrypto.ErrInvalidArgs
 		}
-		return gocbcrypto.NewAESGCM256ContextWithOpenSSL(keyId, m.GetEncryptionKeyById(keyId), KDFLabelCtx, 0)
+
+		return gocbcrypto.NewAESGCM256Context(keyId, m.GetEncryptionKeyById(keyId), KDFLabelCtx, 0, DefaultCbCryptoConfig())
 	}
 
 	return nil, gocbcrypto.ErrCipherUnsupported

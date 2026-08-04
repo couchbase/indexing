@@ -719,7 +719,8 @@ func testEncryptionDropKeyIdsFromSnapshot(t *testing.T, conf Config) {
 	// This triggers GC which flushes the gc list and removes the dead items from the index
 	assert.NoError(t, db.StoreToDisk(conf.Path, snap, runtime.GOMAXPROCS(0), keyId, cipher, nil))
 
-	ctx, _ := db.NewEncryptionContext(keyId, cipher)
+	ctx, err := db.NewEncryptionContext(keyId, cipher)
+	assert.NoError(t, err)
 	err = gocbcrypto.WriteFile(filepath.Join(conf.Path, "manifest.json"), make([]byte, 1), FilePermMode, ctx, nil)
 	assert.NoError(t, err)
 	for i := range unencryptedFiles {
