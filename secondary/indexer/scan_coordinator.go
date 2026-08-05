@@ -656,6 +656,7 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	if req.srvrScanReport != nil && req.srvrScanReport.SrvrNs != nil && req.srvrScanReport.SrvrCounts != nil {
 		req.srvrScanReport.SrvrNs.WaitDur = waitTime.Nanoseconds()
 		req.srvrScanReport.SrvrNs.ScanDur = scanTime.Nanoseconds()
+		req.srvrScanReport.SrvrNs.DiskReadDur = req.GetPlasmaScanLSSReadDur().Nanoseconds()
 		req.srvrScanReport.SrvrCounts.RowsReturn = scanPipeline.RowsReturned()
 		req.srvrScanReport.SrvrCounts.RowsScan = scanPipeline.RowsScanned()
 		req.srvrScanReport.SrvrCounts.BytesRead = scanPipeline.BytesRead()
