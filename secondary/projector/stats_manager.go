@@ -470,6 +470,9 @@ func (sm *statsManager) doLogEvaluatorStats(evalStatsMap map[string]interface{},
 			if errSkipAll > 0 {
 				evalStatsKeyMap["skipCount"] = errSkipAll
 			}
+			if n1qlErrs := val.GetN1qlTransformErrs(); n1qlErrs > 0 {
+				evalStatsKeyMap["n1qlTransformErrCount"] = n1qlErrs
+			}
 			vectorErrs := val.GetVectorErrs()
 			for k, v := range vectorErrs {
 				evalStatsKeyMap[k] = v

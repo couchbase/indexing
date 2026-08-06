@@ -837,6 +837,23 @@ type IndexEvaluatorStats struct {
 	ErrInvalidVectorType      stats.Int64Val
 	ErrZeroVectorForCosine    stats.Int64Val
 
+	// ErrN1qlTransform counts the documents that N1QLTransform (or
+	// N1QLTransformForVectorIndex) declined to produce a key for because of a
+	// *failure* -- an EvaluateForIndex error, a nil scalar/array, or a
+	// collatejson encoding error.
+	//
+	// It deliberately excludes the cases where returning no key is by design
+	// (MISSING leading key, empty or missing leading array), which are common
+	// and expected. Those are indistinguishable from a failure to the caller,
+	// which is why this is counted inside the transform rather than at the
+	// call sites.
+	//
+	// A non-zero value means documents are being silently dropped from the
+	// index: the transform returns a nil key with a nil error, and a nil key
+	// is applied downstream as a delete. ErrSkip does not cover these, because
+	// it only increments when a non-nil error reaches TransformRoute.
+	ErrN1qlTransform stats.Int64Val
+
 	InstId     common.IndexInstId
 	Topic      string
 	KeyspaceId string
@@ -856,6 +873,8 @@ func (ie *IndexEvaluatorStats) Init() {
 	ie.ErrInvalidVectorDimension.Init()
 	ie.ErrHeterogenousVectorData.Init()
 	ie.ErrZeroVectorForCosine.Init()
+
+	ie.ErrN1qlTransform.Init()
 }
 
 func (ies *IndexEvaluatorStats) add(duration time.Duration) {
@@ -892,6 +911,12 @@ func (ies *IndexEvaluatorStats) GetAndResetErrorSkip() int64 {
 
 func (ies *IndexEvaluatorStats) GetErrorSkipAll() int64 {
 	return ies.ErrSkipAll.Value()
+}
+
+// GetN1qlTransformErrs returns the cumulative count of documents that the N1QL
+// transform skipped due to an evaluation or encoding failure.
+func (ies *IndexEvaluatorStats) GetN1qlTransformErrs() int64 {
+	return ies.ErrN1qlTransform.Value()
 }
 
 func (ies *IndexEvaluatorStats) GetVectorErrs() map[string]int64 {
