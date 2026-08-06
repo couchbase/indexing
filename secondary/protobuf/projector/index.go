@@ -463,7 +463,23 @@ func (ie *IndexEvaluator) ProcessEvent(m *mc.DcpEvent, encodeBuf []byte,
 		// Hence, re-use the encodeBuf for include column evaluation
 		includeColumn, newBuf, err = ie.includeColumns(m, m.Key, docval, context, encodeBuf[:0])
 		if err != nil {
-			return npkey, opkey, nkey, okey, includeColumn, newBuf, where, opcode, nil, nil, err
+			// A document whose include columns cannot be built must not be
+			// indexed: the secondary key is still valid, so the row would be
+			// persisted with no include bytes and every include-column filter
+			// would then reject it.
+			//
+			// Drop the secondary key so this behaves exactly like an evaluate()
+			// failure, which returns a nil key. populateData then sends an Upsert
+			// with an empty key, and the indexer's slice treats len(key)==0 as a
+			// delete for that docid. Unlike returning the error -- which would
+			// make TransformRoute force an UpsertDeletion -- this also removes the
+			// document on partitioned indexes without a WHERE clause, where the
+			// flusher skips UpsertDeletion as immutable.
+			//
+			// N1QLTransform has already logged the specific failure along with
+			// the docid, so no additional logging here (these paths are per
+			// mutation and would otherwise flood).
+			nkey, includeColumn, nVectors, centroidPos, err = nil, nil, nil, nil, nil
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
@@ -740,7 +756,27 @@ func (ie *IndexEvaluator) includeColumns(
 		// include filter then panicked slicing meta[codeSize:].
 		out, newBuf, err := N1QLTransform(docid, docval, context, ie.includeExprs,
 			0, encodeBuf, ie.stats, true)
-		return out, newBuf, err
+		if err != nil {
+			return nil, newBuf, err
+		}
+
+		// N1QLTransform reports its remaining failure modes -- EvaluateForIndex
+		// error, scalar==nil, and CollateJSONEncode failure -- by logging and
+		// returning a nil key with a *nil* error. For a secondary key that is
+		// self-consistent: a nil key means the document is simply not indexed.
+		// For include columns it is not, because the vector key is still valid,
+		// so the row gets persisted with no include bytes and every
+		// include-column filter then rejects it -- the same corruption as
+		// MB-72479, just from a different trigger.
+		//
+		// Report it as an error and let ProcessEvent decide the policy.
+		if len(out) == 0 {
+			return nil, newBuf, fmt.Errorf("failed to evaluate include columns %v "+
+				"for docid %s, instId %v", defn.GetInclude(),
+				logging.TagUD(string(docid)), ie.instance.GetInstId())
+		}
+
+		return out, newBuf, nil
 	}
 	return nil, nil, nil
 }
