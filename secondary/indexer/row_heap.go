@@ -3,7 +3,6 @@ package indexer
 import (
 	"container/heap"
 	"errors"
-	"math"
 	"sort"
 
 	"github.com/couchbase/indexing/secondary/logging"
@@ -12,6 +11,33 @@ import (
 var ErrorZeroCapactiy = errors.New("Empty heap is not allowed")
 
 type RowsCompareLessFn func(i, j *Row) bool
+
+// lessDist reports whether distance di sorts before dj in a heap of the given
+// orientation. A NaN is the worst distance there is: two NaNs are equal, and a
+// lone NaN sinks to the bottom of a min-heap and rises to the top of a
+// max-heap - so it never displaces a real row in a top-K heap, and one that is
+// already there is the first evicted when a real row arrives.
+//
+// Comparison stays in float32 and detects NaN with self-comparison (x != x),
+// which the compiler lowers to a single FP compare - avoiding the math.IsNaN
+// call and float64 conversion that dominated the comparator in profiles. The
+// NaN branch is entered only when a NaN is actually present, so the common
+// path is just the guard plus the comparison.
+func lessDist(di, dj float32, isMin bool) bool {
+	if di != di || dj != dj { // at least one NaN (rare)
+		if di != di && dj != dj {
+			return false // consider NaNs equal to each other
+		}
+		if di != di {
+			return !isMin // NaN is worst: last in a min-heap, root of a max-heap
+		}
+		return isMin
+	}
+	if isMin {
+		return di < dj
+	}
+	return di > dj
+}
 
 // RowHeap is a heap of *Row based on the dist field.
 type RowHeap struct {
@@ -28,27 +54,7 @@ func (h RowHeap) Less(i, j int) bool {
 		}
 		return h.less(h.rows[j], h.rows[i])
 	}
-
-	di := float64(h.rows[i].dist)
-	dj := float64(h.rows[j].dist)
-
-	// Handle NaN comparisons
-	if math.IsNaN(di) && math.IsNaN(dj) {
-		return false // consider NaNs equal to each other
-	}
-	if math.IsNaN(di) {
-		// if di is NaN, in a min-heap it should be considered greater, in a max-heap it should be considered lesser
-		return h.isMin
-	}
-	if math.IsNaN(dj) {
-		// if dj is NaN, in a min-heap it should be considered lesser, in a max-heap it should be considered greater
-		return !h.isMin
-	}
-
-	if h.isMin {
-		return di < dj
-	}
-	return di > dj
+	return lessDist(h.rows[i].dist, h.rows[j].dist, h.isMin)
 }
 func (h RowHeap) Swap(i, j int) { h.rows[i], h.rows[j] = h.rows[j], h.rows[i] }
 
@@ -99,27 +105,7 @@ func (h *RowHeap) LessRows(rowi, rowj *Row) bool {
 		}
 		return h.less(rowj, rowi)
 	}
-
-	di := float64(rowi.dist)
-	dj := float64(rowj.dist)
-
-	// Handle NaN comparisons
-	if math.IsNaN(di) && math.IsNaN(dj) {
-		return false // consider NaNs equal to each other
-	}
-	if math.IsNaN(di) {
-		// if di is NaN, in a min-heap it should be considered greater, in a max-heap it should be considered lesser
-		return h.isMin
-	}
-	if math.IsNaN(dj) {
-		// if dj is NaN, in a min-heap it should be considered lesser, in a max-heap it should be considered greater
-		return !h.isMin
-	}
-
-	if h.isMin {
-		return di < dj
-	}
-	return di > dj
+	return lessDist(rowi.dist, rowj.dist, h.isMin)
 }
 
 // TopKRowHeap is a heap that maintains a fixed size.
@@ -164,6 +150,34 @@ func (h *TopKRowHeap) Push(row *Row) {
 		} else {
 			row.free() // not using the row so free it
 		}
+	}
+}
+
+// ReplaceRows rewrites the rows held by the heap in place. substitute is
+// called for every row and, when it returns a non-nil row, that row takes the
+// place of the one it was given. Heap order is re-established afterwards, so
+// a replacement need not compare equal to the row it displaces.
+//
+// Order is restored once at the end rather than per replacement on purpose:
+// re-heaping while walking the rows moves them between slots, which would let
+// the walk visit a row twice or miss one entirely - and a missed row is one
+// substitute never got the chance to replace.
+func (h *TopKRowHeap) ReplaceRows(substitute func(row *Row) *Row) {
+	replaced := false
+
+	// safe to index while assigning: slot i is written only on its own
+	// iteration and no row moves until the walk is done
+	for i, row := range h.heap.rows {
+		newRow := substitute(row)
+		if newRow == nil {
+			continue
+		}
+		h.heap.SetRow(i, newRow)
+		replaced = true
+	}
+
+	if replaced {
+		heap.Init(&h.heap)
 	}
 }
 

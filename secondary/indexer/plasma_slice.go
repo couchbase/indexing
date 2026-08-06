@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/bhive"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/iowrap"
@@ -232,6 +233,20 @@ type plasmaSlice struct {
 	nlist int // number of centroids to use for training
 	// For Sparse vector index, used for sparseJL representation of concise vector
 	sparseJLBuf [][]float32
+	// For Sparse vector index, scratch buffer per writer used for top-N
+	// pruned concise vector when indexer.vector.sparse.maxNNZ > 0.
+	sparseTruncBuf [][]float32
+	// For Sparse vector index, scratch buffer per writer used for
+	// threshold-pruned concise vector when indexer.vector.sparse.minAbsWeight > 0.
+	sparseThreshBuf [][]float32
+	// For Sparse vector index, scratch buffer per writer used to hold the
+	// scalar-quantized payload when indexer.vector.sparse.quantizeStorage is on.
+	sparseQuantBuf [][]byte
+	// Cached prune threshold derived from the sparse codebook's training-time
+	// weight histogram. Refreshed whenever the codebook is trained or loaded.
+	// At insert time, max(operator-set minAbsWeight, cachedSparseDerivedTau)
+	// is used as the effective threshold. 0 means no histogram present.
+	cachedSparseDerivedTau float32
 
 	codebook codebook.Codebook
 
@@ -2362,13 +2377,48 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 				mdb.codeSize,
 				mdb.quantizedCodeBuf[workerId])
 		} else {
-			quantizedCodeOrConciseVec = Float32ToByteSlice(vec)
-			mdb.sparseJLBuf[workerId] = resizeSparseJLBuf(
-				mdb.sparseJLBuf[workerId],
-				mdb.codebook.Dimension(),
-				true)
-			if _, err = mdb.getSparseJLVec(vec, mdb.sparseJLBuf[workerId]); err == nil {
-				centroidId, err = mdb.getNearestCentroidId(mdb.sparseJLBuf[workerId])
+			mdb.confLock.RLock()
+			maxNNZ := mdb.sysconf["vector.sparse.maxNNZ"].Int()
+			minAbsWeight := float32(mdb.sysconf["vector.sparse.minAbsWeight"].Float64())
+			quantizeStorage := mdb.sysconf["vector.sparse.quantizeStorage"].Bool()
+			mdb.confLock.RUnlock()
+			// The codebook's training-time derived τ is honored as an
+			// additional floor. Operator setting can only tighten it further.
+			if mdb.cachedSparseDerivedTau > minAbsWeight {
+				minAbsWeight = mdb.cachedSparseDerivedTau
+			}
+			if pruned, ok := common.PruneConciseByThreshold(vec, minAbsWeight, mdb.sparseThreshBuf[workerId]); ok {
+				mdb.sparseThreshBuf[workerId] = pruned
+				vec = pruned
+			}
+			if truncated, ok := common.TruncateConciseTopN(vec, maxNNZ, mdb.sparseTruncBuf[workerId]); ok {
+				mdb.sparseTruncBuf[workerId] = truncated
+				vec = truncated
+			}
+			// Storage payload. Centroid assignment below always runs on the
+			// float32 `vec`; quantization affects only the stored bytes.
+			if quantizeStorage {
+				// Store the bhive quantized sparse wire (same format the bhive
+				// slice persists; the header carries the per-vector L2 norm) so
+				// the scan pipeline can run the bhive sparse dot-product kernel
+				// directly on the stored bytes.
+				mdb.sparseQuantBuf[workerId] = resizeSparseQuantBuf(
+					mdb.sparseQuantBuf[workerId], bhive.QuantizedSparseSize(vec))
+				var n int
+				if n, err = bhive.QuantizeSparseVectorTo(vec, mdb.sparseQuantBuf[workerId]); err == nil {
+					quantizedCodeOrConciseVec = mdb.sparseQuantBuf[workerId][:n]
+				}
+			} else {
+				quantizedCodeOrConciseVec = Float32ToByteSlice(vec)
+			}
+			if err == nil {
+				mdb.sparseJLBuf[workerId] = resizeSparseJLBuf(
+					mdb.sparseJLBuf[workerId],
+					mdb.codebook.Dimension(),
+					true)
+				if _, err = mdb.getSparseJLVec(vec, mdb.sparseJLBuf[workerId]); err == nil {
+					centroidId, err = mdb.getNearestCentroidId(mdb.sparseJLBuf[workerId])
+				}
 			}
 		}
 
@@ -2423,6 +2473,11 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 			mdb.idxStats.rawDataSize.Add(int64(len(mainIndexEntry) + len(quantizedCodeOrConciseVec)))
 			addKeySizeStat(mdb.idxStats, len(mainIndexEntry))
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(mainIndexEntry)+len(quantizedCodeOrConciseVec)))
+
+			if isSparseVector && len(vec) > 0 {
+				mdb.idxStats.sparseTotalNNZ.Add(int64(common.ConciseSparseVector(vec).NNZ()))
+				mdb.idxStats.sparseNumVecsIndexed.Add(1)
+			}
 		}
 
 		backIndexEntry := entry2VectorBackIndexEntry(mainIndexEntry, encodedSHA)
@@ -5571,6 +5626,9 @@ func (slice *plasmaSlice) setupWriters() {
 	slice.keySzConf = make([]keySizeConfig, 0, slice.maxNumWriters)
 	if slice.idxDefn.HasSparseVector() {
 		slice.sparseJLBuf = make([][]float32, 0, slice.maxNumWriters)
+		slice.sparseTruncBuf = make([][]float32, 0, slice.maxNumWriters)
+		slice.sparseThreshBuf = make([][]float32, 0, slice.maxNumWriters)
+		slice.sparseQuantBuf = make([][]byte, 0, slice.maxNumWriters)
 	}
 
 	// initialize comand handler
@@ -5611,9 +5669,15 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 	}
 	if slice.idxDefn.IsVectorIndex && slice.idxDefn.HasSparseVector() {
 		slice.sparseJLBuf = slice.sparseJLBuf[:numWriters]
+		slice.sparseTruncBuf = slice.sparseTruncBuf[:numWriters]
+		slice.sparseThreshBuf = slice.sparseThreshBuf[:numWriters]
+		slice.sparseQuantBuf = slice.sparseQuantBuf[:numWriters]
 		for i := curNumWriters; i < numWriters; i++ {
 			// After training is completed, the sparse JL vector buffer will be resized
 			slice.sparseJLBuf[i] = make([]float32, 0)
+			slice.sparseTruncBuf[i] = nil
+			slice.sparseThreshBuf[i] = nil
+			slice.sparseQuantBuf[i] = nil
 		}
 	}
 
@@ -6248,8 +6312,33 @@ func (mdb *plasmaSlice) InitCodebookFromSerialized(content []byte) error {
 	mdb.initQuantizedCodeBuf()
 	if mdb.idxDefn.HasSparseVector() {
 		mdb.initSparseJLBuf()
+		mdb.refreshSparseDerivedTau()
 	}
 	return nil
+}
+
+// refreshSparseDerivedTau pulls the derived τ off the current sparse
+// codebook into the slice's cached field. Called whenever the codebook is
+// trained or loaded from disk. Also emits the three histogram stats.
+func (mdb *plasmaSlice) refreshSparseDerivedTau() {
+	if mdb.codebook == nil || !mdb.idxDefn.HasSparseVector() {
+		return
+	}
+	sparseCb, ok := mdb.codebook.(codebook.SparseCodebook)
+	if !ok {
+		return
+	}
+	mdb.cachedSparseDerivedTau = sparseCb.DerivedTau()
+	if obs, retained, tau, available := sparseCb.WeightHistogramSummary(); available {
+		// τ stored as fixed-point ×1e6, retention as basis points ×10000.
+		mdb.idxStats.sparseDerivedTau.Set(int64(tau * 1e6))
+		mdb.idxStats.sparseHistogramTotalObservations.Set(int64(obs))
+		mdb.idxStats.sparseHistogramL1Retained.Set(int64(retained * 10000))
+	} else {
+		mdb.idxStats.sparseDerivedTau.Set(0)
+		mdb.idxStats.sparseHistogramTotalObservations.Set(0)
+		mdb.idxStats.sparseHistogramL1Retained.Set(0)
+	}
 }
 
 func (mdb *plasmaSlice) Train(vecs []float32) error {
@@ -6257,11 +6346,27 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 		return ErrorCodebookNotInitialized
 	}
 
+	// Sparse path: observe weights into a histogram while iterating the
+	// training set for JL projection. After codebook.Train succeeds, derive
+	// τ from the histogram and attach it so it gets persisted along with
+	// the trained codebook.
+	var sparseCb codebook.SparseCodebook
+	var sparseHist *common.WeightHistogram
+	var sparseHistRetention float64
 	if mdb.idxDefn.HasSparseVector() {
-		sparseCb, ok := mdb.codebook.(codebook.SparseCodebook)
+		var ok bool
+		sparseCb, ok = mdb.codebook.(codebook.SparseCodebook)
 		if !ok {
 			return codebook.ErrIncorrectCodebook
 		}
+
+		mdb.confLock.RLock()
+		sparseHistRetention = mdb.sysconf["vector.sparse.histogramL1Retention"].Float64()
+		mdb.confLock.RUnlock()
+		if sparseHistRetention > 0 {
+			sparseHist = common.NewWeightHistogram()
+		}
+
 		totalVecs, err := common.FindTotalVectorsInSparse(vecs)
 		if err != nil {
 			return fmt.Errorf("training failed: %w", err)
@@ -6272,8 +6377,12 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 		for vecNum := 0; vecNum < totalVecs && idx < len(vecs); vecNum++ {
 			size := int(vecs[idx])
 			nextIdx := idx + (2 * size) + 1
+			conciseVec := vecs[idx:nextIdx]
+			if sparseHist != nil {
+				sparseHist.ObserveConcise(conciseVec)
+			}
 			if err := sparseCb.Concise2SparseJL(
-				vecs[idx:nextIdx],
+				conciseVec,
 				outVecs[vecNum*sparseJLDim:(vecNum+1)*sparseJLDim]); err != nil {
 				return err
 			}
@@ -6302,6 +6411,26 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 	mdb.initQuantizedCodeBuf()
 	if mdb.idxDefn.HasSparseVector() {
 		mdb.initSparseJLBuf()
+
+		// Attach histogram + derived τ to the trained codebook. Skipped on
+		// tiny training sets to avoid setting τ from noise.
+		const minHistObservations uint64 = 10000
+		if sparseHist != nil && sparseHist.TotalObs >= minHistObservations {
+			tau, retained := sparseHist.ThresholdForL1Retention(sparseHistRetention)
+			if setErr := sparseCb.SetWeightHistogram(sparseHist, tau, retained); setErr != nil {
+				logging.Warnf("plasmaSlice::Train SetWeightHistogram failed instId %v: %v",
+					mdb.idxInstId, setErr)
+			} else {
+				logging.Infof("plasmaSlice::Train sparse %s", sparseHist.Summary())
+				logging.Infof("plasmaSlice::Train instId %v derived τ=%.4f at %.4f L1 retention (target %.4f)",
+					mdb.idxInstId, tau, retained, sparseHistRetention)
+			}
+		} else if sparseHist != nil {
+			logging.Infof("plasmaSlice::Train instId %v skipping histogram-derived τ "+
+				"(only %d observations, need %d)",
+				mdb.idxInstId, sparseHist.TotalObs, minHistObservations)
+		}
+		mdb.refreshSparseDerivedTau()
 	}
 	return nil
 }
@@ -6475,6 +6604,16 @@ func resizeQuantizedCodeBuf(quantizedCodeBuf []byte, numVecs, codeSize int, doRe
 		quantizedCodeBuf = make([]byte, 0, newSize)
 	}
 	return quantizedCodeBuf
+}
+
+// resizeSparseQuantBuf grows the per-writer scratch holding the bhive
+// quantized sparse wire and sets its length to size, as required by
+// bhive.QuantizeSparseVectorTo (which validates len(dst), not cap).
+func resizeSparseQuantBuf(sparseQuantBuf []byte, size int) []byte {
+	if cap(sparseQuantBuf) < size {
+		return make([]byte, size)
+	}
+	return sparseQuantBuf[:size]
 }
 
 func resizeSparseJLBuf(sparseJLBuf []float32, dimension int, doResize bool) []float32 {

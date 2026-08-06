@@ -3773,6 +3773,18 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.scan.vector.enable_persistent_heap": ConfigValue{
+		true,
+		"For a limit-pushdown sparse vector scan, carry each scan worker's " +
+			"top-K heap across the jobs it runs instead of flushing it at every " +
+			"job end, and share the resulting k-th best distance across workers " +
+			"so they can drop candidate rows that cannot reach the final top-K. " +
+			"Turning this off restores the per-job flush and disables the shared " +
+			"threshold with it. Takes effect on the next scan",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.scan.vector.throttle.minRRThreshold": ConfigValue{
 		5,
 		"Minimum node level resident percent below which vector scan will be throttled. Set 0 to disable.",
@@ -5125,6 +5137,41 @@ var SystemConfig = Config{
 		DefaultVal:    30,
 		Immutable:     false,
 		Casesensitive: false,
+	},
+	"indexer.vector.sparse.maxNNZ": ConfigValue{
+		70,
+		"Max non-zero dims kept per stored sparse vector (SPLADE top-N pruning by |value|). 0 disables truncation.",
+		70,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.vector.sparse.minAbsWeight": ConfigValue{
+		0.07,
+		"Minimum |value| retained per dim in a stored sparse vector. Drops noise-tail dims below this raw weight. 0 disables; 0.07 is a conservative starter for SPLADE-style weights.",
+		0.07,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.vector.sparse.maxQueryNNZ": ConfigValue{
+		10,
+		"Max query terms kept per sparse vector scan (top-N by |value|). Caps per-vector Transpose cost at scan time. 0 disables; 10-20 is a typical SPLADE setting.",
+		10,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.vector.sparse.quantizeStorage": ConfigValue{
+		true,
+		"Store sparse vectors scalar-quantized in the bhive quantized wire format (uint8 weights + per-vector scale and L2 norm, uint16 dims) instead of float32 concise. ~62% smaller; scans compute distances with the bhive sparse dot-product kernel directly on the stored bytes. plasma-only; must be set consistently across the index's insert and scan lifetime. ",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.vector.sparse.histogramL1Retention": ConfigValue{
+		0.0,
+		"Target fraction of training-set L1 weight mass to retain when deriving the sparse prune threshold from the training histogram. Read at training time only — changing post-training has no effect until retraining. 0 disables histogram-based pruning. 0.98 is a good starting point.",
+		0.0,
+		false, // mutable
+		false, // case-insensitive
 	},
 	"indexer.encryption.enable_test": ConfigValue{
 		Value:         false,

@@ -158,6 +158,13 @@ type ScanRequest struct {
 
 	queryVector       []float32
 	sparseQueryVector common.ConciseSparseVector // Concise format: [N, idx1, ..., idxN, val1, ..., valN]
+	// sparseQueryQuantized is the (pruned) sparse query in the bhive quantized
+	// wire format, built once per request. Scan workers score rows lacking a
+	// stored graph-search distance by running the bhive sparse dot-product
+	// kernel over this wire and the stored quantized vectors. Set for bhive
+	// sparse scans and for plasma sparse scans with quantizeStorage on;
+	// read-only after setup (workers share it).
+	sparseQueryQuantized []byte
 
 	codebookMap              map[common.PartitionId]codebook.Codebook
 	centroidMap              map[common.PartitionId][]int64
@@ -764,6 +771,23 @@ func (r *ScanRequest) useHeapForVectorIndex() bool {
 	return r.Limit != 0 && r.Limit != math.MaxInt64
 }
 
+// usePersistentVectorHeap reports whether scan workers carry their local top-K
+// heap across jobs instead of flushing it at every job end. Limited to
+// non-bhive sparse vector scans - see ScanWorker.usePersistentHeap for why -
+// and to operators who leave scan.vector.enable_persistent_heap on.
+//
+// Both the worker and the WorkerPool key off this: the pool only sets up the
+// shared top-K distance threshold when the workers will actually maintain it,
+// so the two must not answer the question differently. Both are given the same
+// config snapshot for the life of the scan, so toggling the setting mid-scan
+// cannot make them disagree - it takes effect on the next scan.
+func (r *ScanRequest) usePersistentVectorHeap(cfg common.Config) bool {
+	if !cfg["scan.vector.enable_persistent_heap"].Bool() {
+		return false
+	}
+	return r.useHeapForVectorIndex() && !r.isBhiveScan && r.IsSparseVectorIndexScan()
+}
+
 func (r *ScanRequest) getNearestCentroids() error {
 	r.centroidMap = make(map[common.PartitionId][]int64)
 
@@ -808,6 +832,8 @@ func (r *ScanRequest) getNearestCentroids() error {
 		}
 		sparseJLDim := sparseCb.Dimension()
 		jlVec := make([]float32, sparseJLDim)
+		// Centroid lookup uses the full (unpruned) query: it's a one-time
+		// cheap operation and benefits from the most accurate query signal.
 		if err := sparseCb.Concise2SparseJL([]float32(r.sparseQueryVector), jlVec); err != nil {
 			return fmt.Errorf("error projecting sparse query vector to SparseJL: %v", err)
 		}
@@ -823,6 +849,36 @@ func (r *ScanRequest) getNearestCentroids() error {
 			}
 			centroids = pruneInvalidCentroids(centroids)
 			r.centroidMap[pid] = centroids
+		}
+
+		// Top-K query pruning, applied after centroid lookup. The pruned query
+		// is what each cell-scan worker uses for Transpose, where nqdim
+		// linearly drives per-vector cost. Per Lassance et al. (SIGIR 2023)
+		// and Two-Step SPLADE (2024), top-N query pruning gives ~2x scan
+		// speedup at <2% effectiveness drop on SPLADE workloads.
+		cfg := r.sco.config.Load()
+		maxQueryNNZ := cfg["vector.sparse.maxQueryNNZ"].Int()
+		if maxQueryNNZ > 0 {
+			origNNZ := r.sparseQueryVector.NNZ()
+			if pruned, ok := common.TruncateConciseTopN([]float32(r.sparseQueryVector), maxQueryNNZ, nil); ok {
+				r.sparseQueryVector = common.ConciseSparseVector(pruned)
+				if r.Stats != nil {
+					r.Stats.sparseQueryTermsPruned.Add(int64(origNNZ - r.sparseQueryVector.NNZ()))
+				}
+			}
+		}
+
+		// Quantize the (pruned) query once per request when the stored vectors
+		// are in the bhive quantized wire format: always for bhive slices, and
+		// for plasma slices when quantizeStorage is on. Scan workers run the
+		// bhive sparse dot-product kernel over this wire; quantizing after
+		// top-N pruning keeps the wire aligned with the query terms scored.
+		if r.isBhiveScan || cfg["vector.sparse.quantizeStorage"].Bool() {
+			quantized, err := bhiveQuantizeSparseQuery([]float32(r.sparseQueryVector))
+			if err != nil {
+				return fmt.Errorf("error quantizing sparse query vector: %v", err)
+			}
+			r.sparseQueryQuantized = quantized
 		}
 		return nil
 	}

@@ -53,6 +53,9 @@ type ScanPipeline struct {
 	decodeCnt  int64
 	distCmpDur int64
 	distCmpCnt int64
+
+	// sparse vector index specific
+	sparseScanNoMatchSkips uint64
 }
 
 func (p *ScanPipeline) Cancel(err error) {
@@ -81,6 +84,10 @@ func (p ScanPipeline) RowsFiltered() uint64 {
 
 func (p ScanPipeline) RowsReranked() uint64 {
 	return p.rowsReranked
+}
+
+func (p ScanPipeline) SparseScanNoMatchSkips() uint64 {
+	return p.sparseScanNoMatchSkips
 }
 
 func (p ScanPipeline) CacheHitRatio() int {

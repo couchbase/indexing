@@ -3,6 +3,7 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -37,14 +38,23 @@ type ScanJob struct {
 
 	coarseSize int
 
-	bytesRead    uint64
-	rowsScanned  uint64
+	bytesRead   uint64
+	rowsScanned uint64
+	// rowsReturned stays 0 on the persistent-heap path (non-bhive sparse limit
+	// pushdown): its heap spans jobs and is flushed once after the last one,
+	// so rows cannot be attributed back to the job that produced them. Use
+	// ScanWorker.rowsReturned there instead.
 	rowsReturned uint64
 	// when inline filter is pushed down, not all rows come to scan pipeline
 	// rowsFiltered captures those rows that have been skipped by storage
 	// from further processing. num_rows_scanned + num_rows_filtered will
 	// give the total rows that are processed in the scan pipeline
 	rowsFiltered uint64
+
+	// Candidate rows skipped by Transpose during sparse vector scans because
+	// the document had no overlap with any query term. Useful to gauge how
+	// often the IVF probe brings back useless candidates.
+	sparseScanNoMatchSkips uint64
 
 	decodeDur int64
 	decodeCnt int64
@@ -84,8 +94,8 @@ func (j *ScanJob) SetStartTime() {
 
 func (j *ScanJob) PrintStats() {
 	getDebugStr := func() string {
-		s := fmt.Sprintf("%v %v stats rowsScanned: %v, rowsReturned: %v, rowsFiltered: %v",
-			j.logPrefix, j.debugString, j.rowsScanned, j.rowsReturned, j.rowsFiltered)
+		s := fmt.Sprintf("%v %v stats rowsScanned: %v, rowsReturned: %v, rowsFiltered: %v, sparseScanNoMatchSkips: %v",
+			j.logPrefix, j.debugString, j.rowsScanned, j.rowsReturned, j.rowsFiltered, j.sparseScanNoMatchSkips)
 		if logging.IsEnabled(logging.Timing) {
 			s += fmt.Sprintf(" timeTaken: %v", time.Since(j.startTime))
 		}
@@ -161,6 +171,28 @@ type ScanWorker struct {
 	//local heap for each worker
 	heap *TopKRowHeap
 
+	// usePersistentHeap keeps the local heap alive across jobs. At each job
+	// end the storage-backed rows surviving in the heap are copied in place
+	// (materialized) instead of being flushed downstream, and the heap is
+	// flushed only once after the last job. Enabled for non-bhive
+	// limit-pushdown scans.
+	usePersistentHeap bool
+
+	// globalTopKDist, when non-nil, holds the scan-wide smallest published
+	// top-K root distance (as float32 bits). A worker whose persistent heap
+	// is full publishes its root (its k-th best distance) via CAS-min and
+	// all workers prune candidate rows that cannot beat the published
+	// value: some worker already holds heapSize rows which are all better
+	// and will all be sent downstream. Only set for dist-only ordering
+	// where a scalar threshold is valid.
+	globalTopKDist *atomic.Uint32
+
+	// lastPublishedDist is the last root distance this worker published
+	lastPublishedDist float32
+
+	// rowsPruned counts rows dropped using globalTopKDist
+	rowsPruned uint64
+
 	//reference to the current batch rows
 	currBatchRows []*Row
 
@@ -172,6 +204,17 @@ type ScanWorker struct {
 	// Cached sparse query vector values once per worker.
 	sparseQueryValues []float32
 
+	// sparseQuantizedScan is true when the stored sparse payload is the bhive
+	// quantized wire: always for bhive slices, and for plasma slices when
+	// vector.sparse.quantizeStorage is on. Resolved once at worker setup - it
+	// is fixed for the life of the request, so the per-batch scan path must
+	// not pay a config map lookup for it.
+	sparseQuantizedScan bool
+
+	// Scratch holding the stored quantized wires of one batch, passed to the
+	// bhive sparse dot-product kernel.
+	sparseWires [][]byte
+
 	cktmp [][]byte
 
 	dtable []float32
@@ -181,7 +224,7 @@ type ScanWorker struct {
 	// and reset per job (see Scanner), since the buffer is centroid-specific.
 	queryBP []byte
 
-	rowBuf *AtomicRowBuffer
+	rowBuf *RowPool
 
 	// temporary buffer to process each include column
 	includeColumnBuf     []byte
@@ -204,7 +247,7 @@ type ScanWorker struct {
 
 func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- *Row,
 	stopCh chan struct{}, errCh chan error, wg *sync.WaitGroup, config c.Config,
-	sendLastRowPerJob bool) *ScanWorker {
+	sendLastRowPerJob bool, globalTopKDist *atomic.Uint32) *ScanWorker {
 
 	senderChSize := config["scan.vector.scanworker_senderch_size"].Int()
 
@@ -241,10 +284,26 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	w.codes = make([]byte, 0, bufferInitBatchSize*r.getVectorCodeSize())
 	w.dists = make([]float32, bufferInitBatchSize)
 
+	// Stored sparse payload format. Must match what the inserter wrote (no
+	// mixed-format support; operator owns consistency) - see
+	// processSparseVectorBatch.
+	if r.IsSparseVectorIndexScan() {
+		w.sparseQuantizedScan = r.isBhiveScan ||
+			config["vector.sparse.quantizeStorage"].Bool()
+	}
+
 	fvecsDim := bufferInitBatchSize * r.getVectorDim()
 	if r.IsSparseVectorIndexScan() && len(r.sparseQueryVector) > 0 {
 		w.sparseQueryDim = r.sparseQueryVector.NNZ()
-		fvecsDim = bufferInitBatchSize * w.sparseQueryDim
+		if w.sparseQuantizedScan {
+			// The quantized path scores straight out of the stored wires: it
+			// uses fvecs only to stage one inner product per compute row of a
+			// mixed batch, never the queryDim-wide Transpose blocks the float
+			// path needs.
+			fvecsDim = bufferInitBatchSize
+		} else {
+			fvecsDim = bufferInitBatchSize * w.sparseQueryDim
+		}
 	}
 	w.fvecs = make([]float32, 0, fvecsDim)
 
@@ -268,10 +327,23 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		if r.Offset != 0 {
 			w.heapSize += int(r.Offset)
 		}
+		// Carry the heap across jobs for non-bhive sparse vector scans only.
+		// Everything else keeps flushing per job:
+		//   - bhive, because materializeHeapRows does not carry the bhive only
+		//     fields (storeId/recordId/cid/partnId) that dedup and rerank read.
+		//   - dense, to keep this optimization scoped to the sparse scan path.
+		// sendLastRowPerJob (merge-sort) would also need rows flushed per job
+		// but is always off here, as ScanRangeSequencing is disabled for
+		// limit-pushdown scans.
+		w.usePersistentHeap = r.usePersistentVectorHeap(config)
+		if w.usePersistentHeap {
+			w.globalTopKDist = globalTopKDist
+			w.lastPublishedDist = float32(math.Inf(1))
+		}
 		w.heap, _ = NewTopKRowHeap(w.heapSize, false, r.getRowCompare())
 
 		//pre-allocate rows twice the size of buffer+heapSize
-		w.rowBuf = NewAtomicRowBuffer((bufferInitBatchSize + w.heapSize) * 2)
+		w.rowBuf = NewRowPool((bufferInitBatchSize + w.heapSize) * 2)
 	}
 
 	w.logPrefix = fmt.Sprintf("%v[%v]ScanWorker[%v]", r.LogPrefix, r.RequestId, id)
@@ -330,6 +402,12 @@ func (w *ScanWorker) setSenderBatchSize() {
 }
 
 func (w *ScanWorker) Close() {
+	// free rows still held by the persistent heap (error/early-stop path;
+	// on successful scans flushPersistentHeap has already detached them)
+	if w.usePersistentHeap && w.heap != nil {
+		w.heap.Destroy()
+	}
+
 	w.r.connCtx.Put(fmt.Sprintf("%v%v", VectorScanWorker, w.id), w.mem)
 	w.mem = nil
 
@@ -339,6 +417,7 @@ func (w *ScanWorker) Close() {
 	w.codes = nil
 	w.fvecs = nil
 	w.dists = nil
+	w.sparseWires = nil
 	w.cktmp = nil
 	w.dtable = nil
 	w.queryBP = nil
@@ -365,8 +444,8 @@ func (w *ScanWorker) SetStartTime() {
 
 func (w *ScanWorker) PrintStats() {
 	getDebugStr := func() string {
-		s := fmt.Sprintf("%v Stats rowsScanned: %v rowsReturned: %v",
-			w.logPrefix, w.rowsScanned, w.rowsReturned)
+		s := fmt.Sprintf("%v Stats rowsScanned: %v rowsReturned: %v rowsPruned: %v",
+			w.logPrefix, w.rowsScanned, w.rowsReturned, w.rowsPruned)
 		if logging.IsEnabled(logging.Timing) {
 			s += fmt.Sprintf(" timeTaken: %v", time.Since(w.startTime))
 		}
@@ -413,7 +492,9 @@ func (w *ScanWorker) Scanner() {
 
 		w.senderCh = make(chan *Row, w.senderChSize)
 		w.senderErrCh = make(chan error)
-		w.heap, _ = NewTopKRowHeap(w.heapSize, false, w.r.getRowCompare())
+		if !w.usePersistentHeap {
+			w.heap, _ = NewTopKRowHeap(w.heapSize, false, w.r.getRowCompare())
+		}
 
 		scan := job.scan
 		snap := job.snap.Snapshot()
@@ -487,7 +568,10 @@ func (w *ScanWorker) finishJob() {
 }
 
 // flushLocalHeap makes a copy of the rows in the local heap and
-// sends it to the next stage of the scan pipeline.
+// sends it to the next stage of the scan pipeline. This is the per job flush,
+// used by every limit-pushdown scan except non-bhive sparse ones, which carry
+// one heap across jobs and flush it once (see materializeHeapRows and
+// flushPersistentHeap).
 func (w *ScanWorker) flushLocalHeap() {
 
 	logging.Verbosef("%v flushLocalHeap %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid)
@@ -538,15 +622,340 @@ func (w *ScanWorker) finishCallback() {
 	}
 	//flush the local heap once done
 	if w.r.useHeapForVectorIndex() {
-		w.flushLocalHeap()
-		w.heap.Destroy()
+		if w.usePersistentHeap {
+			//rows surviving in the heap are copied in place and the heap
+			//is carried over to the next job; flushed after the last job
+			w.materializeHeapRows()
+		} else {
+			w.flushLocalHeap()
+			w.heap.Destroy()
+		}
 	}
 
 }
 
-// processSparseVectorBatch decodes sparse vectors, performs query term matching
-// using Transpose, and computes distances.
+// materializeHeapRows is called at job end, before the storage iterator
+// closes. Rows pushed into the heap during the current job hold references
+// to storage-owned memory, so any such row surviving in the heap is replaced
+// in place with a self-owned copy. Rows materialized at earlier job
+// boundaries (rowBuf == nil) are left untouched.
+//
+// The copy carries only what the merge stage reads and sizes its buffers to
+// the data - see Row.copyForVectorHeap - because these rows stay resident
+// until the final flush, numWorkers * (limit+offset) of them at once.
+func (w *ScanWorker) materializeHeapRows() {
+
+	logging.Verbosef("%v materializeHeapRows %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid)
+
+	w.heap.ReplaceRows(func(row *Row) *Row {
+		if row.rowBuf == nil {
+			return nil //already materialized at an earlier job boundary
+		}
+
+		newRow := &Row{}
+		newRow.init(w.mem)
+		newRow.copyForVectorHeap(row)
+
+		entry1 := secondaryIndexEntry(row.key)
+		newRow.len = entry1.lenKey()
+		newRow.workerId = w.id
+
+		row.free() //return the storage-backed row to rowBuf
+		return newRow
+	})
+}
+
+// flushPersistentHeap sends the rows accumulated in the worker's persistent
+// heap to the next stage of the scan pipeline. The rows already own their
+// buffers (materialized at job boundaries), so ownership is transferred
+// downstream without another copy. Must only be called after all submitted
+// jobs have finished, when the scanner goroutine is idle.
+func (w *ScanWorker) flushPersistentHeap() {
+
+	if !w.usePersistentHeap || w.heap == nil {
+		return
+	}
+
+	logging.Verbosef("%v flushPersistentHeap rows %v", w.logPrefix, w.heap.Len())
+	rowList := w.heap.List()
+
+	pruneDist, pruneActive := w.getGlobalPruneDist()
+	prunedBefore := w.rowsPruned
+
+	for i, row := range rowList {
+
+		// Rows strictly worse than the final published threshold cannot
+		// enter the final top-K - the publisher flushes heapSize rows which
+		// are all better. Strict compare: rows tying the threshold may be
+		// the publisher's own kept rows and must be sent.
+		if pruneActive && row.dist > pruneDist {
+			row.free()
+			w.rowsPruned++
+			continue
+		}
+
+		if !w.sendRow(row) {
+			//scan is stopping; free the rows not yet handed downstream.
+			//Rows before i were either sent or pruned and freed, so this
+			//range holds only rows this worker still owns.
+			for _, r := range rowList[i:] {
+				r.free()
+			}
+			w.heap = nil
+			return
+		}
+		w.rowsReturned++
+	}
+	if pruned := w.rowsPruned - prunedBefore; pruned > 0 {
+		logging.Verbosef("%v flushPersistentHeap pruned %v rows", w.logPrefix, pruned)
+	}
+	w.heap = nil //ownership of rows transferred downstream
+}
+
+// sendRow hands one row to the next stage of the scan pipeline, blocking
+// until it is taken or the scan stops. It returns false when the scan stopped
+// instead, in which case the row was not sent and the caller still owns it.
+//
+// stopCh is checked before the send too, not just as one arm of the select: a
+// select picks a ready case at random, and outCh is buffered, so an already
+// closed stopCh on its own would not keep rows of an aborted scan from
+// reaching the consumer.
+func (w *ScanWorker) sendRow(row *Row) bool {
+	if w.workerStopped() {
+		return false
+	}
+
+	select {
+	case <-w.stopCh:
+		return false
+	case w.outCh <- row:
+		return true
+	}
+}
+
+// getGlobalPruneDist returns the scan-wide prune threshold, if one has been
+// published. Only rows strictly worse than the threshold are unconditionally
+// droppable: the threshold is the publisher's k-th best distance, so a row
+// tying it may be that kept row itself, and freeing every tying row would
+// leave the merge with fewer than heapSize candidates. A worker still
+// scanning may drop ties as well (see processCurrentBatch) - it is dropping
+// its own candidates against a floor heapSize rows already meet - but the
+// final flush of the heaps must not.
+func (w *ScanWorker) getGlobalPruneDist() (float32, bool) {
+	if w.globalTopKDist == nil {
+		return 0, false
+	}
+	d := math.Float32frombits(w.globalTopKDist.Load())
+	if math.IsInf(float64(d), 1) {
+		return 0, false
+	}
+	return d, true
+}
+
+// publishTopKDist publishes this worker's heap root distance (its current
+// k-th best) to the shared scan-wide threshold. Valid only once the heap is
+// full: at that point the heap holds heapSize rows which are all at least as
+// good as the root and are guaranteed to be sent downstream.
+func (w *ScanWorker) publishTopKDist() {
+	if w.globalTopKDist == nil || w.heap.Len() < w.heapSize {
+		return
+	}
+
+	root := w.heap.List()[0].dist
+	if math.IsNaN(float64(root)) || root >= w.lastPublishedDist {
+		return
+	}
+	w.lastPublishedDist = root
+	casMinFloat32(w.globalTopKDist, root)
+}
+
+// casMinFloat32 atomically lowers the float32 stored in a (as bits) to v if
+// v is smaller. Comparison is done in float space as the uint32 bit pattern
+// ordering does not hold for negative floats (e.g. negated inner products).
+//
+// A NaN v is dropped rather than stored. NaN compares false against every
+// value, so a stored NaN would both stop all pruning and let the following
+// call install whatever it is given - even a value larger than the one it
+// replaces, turning this into a CAS-max. Keeping the guard here, not just in
+// the caller, is what makes "the stored value is never NaN" an invariant of
+// the only code that writes it.
+func casMinFloat32(a *atomic.Uint32, v float32) {
+	if v != v { // NaN
+		return
+	}
+
+	for {
+		old := a.Load()
+		if v >= math.Float32frombits(old) {
+			return
+		}
+		if a.CompareAndSwap(old, math.Float32bits(v)) {
+			return
+		}
+	}
+}
+
+// processSparseVectorBatch computes distances for a batch of sparse-vector
+// rows, dispatching on the stored payload format. bhive slices always store
+// the bhive quantized sparse wire; plasma slices store it when
+// vector.sparse.quantizeStorage is on (the setting must match the format the
+// inserter wrote - no mixed-format support; operator owns consistency) and
+// the float32 concise wire otherwise.
 func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
+	if w.sparseQuantizedScan {
+		return w.processSparseVectorBatchQuantized(vecCount)
+	}
+	return w.processSparseVectorBatchFloat(vecCount)
+}
+
+// processSparseVectorBatchQuantized scores rows whose stored payload is the
+// bhive quantized sparse wire. A batch may mix two kinds of rows:
+//   - Rows carrying a valid stored (quantized) search distance produced by
+//     the graph search (row.distValid). Their on-disk payload may have been
+//     dropped, so they must NOT be rescored - we reuse the stored distance
+//     directly (which may legitimately be 0, e.g. -IP == 0).
+//   - Rows without a stored distance (bhive flush buffer / disk, or plasma
+//     storage). These are scored with a single bhive sparse dot-product
+//     kernel call over the quantized query wire and the stored wires - no
+//     per-row term matching and no float32 materialization.
+//
+// Distance is the negated inner product. An IP of 0 means the row shares no
+// terms with the query (the quantizer clamps stored weights to >= 1, so any
+// real overlap yields a strictly positive IP); such rows are dropped,
+// mirroring Transpose's keep == false on the float path.
+func (w *ScanWorker) processSparseVectorBatchQuantized(vecCount int) error {
+
+	if cap(w.dists) < vecCount {
+		w.dists = make([]float32, vecCount)
+	} else {
+		w.dists = w.dists[:vecCount]
+	}
+
+	// Gather pass: stage the stored wire of every row lacking a stored
+	// distance. row.value is exactly the quantized wire on both engines -
+	// the bhive iterator callback frames it out of the record meta
+	// (value = meta[:wireSz], include columns follow), and plasma stores the
+	// bare wire as the whole value (plasma vector indexes carry no include
+	// columns). Each wire is still validated against its self-describing
+	// header count: the kernel scores a malformed wire as IP 0, which the
+	// compaction below cannot tell apart from a genuine no-term-overlap, so
+	// a truncated payload - an index whose stored format does not match
+	// vector.sparse.quantizeStorage, say - would silently return an empty
+	// result set instead of an error. The staged entries are slice headers
+	// written into the per-worker scratch - no per-row heap allocation once
+	// the scratch has grown to the batch size.
+	t0 := time.Now()
+	if cap(w.sparseWires) < vecCount {
+		w.sparseWires = make([][]byte, 0, vecCount)
+	}
+	wires := w.sparseWires[:0]
+	storedCnt := 0
+	for i := 0; i < vecCount; i++ {
+		row := w.currBatchRows[i]
+		if row.distValid {
+			storedCnt++
+			continue
+		}
+		if sz := bhiveQuantizedWireSize(row.value); sz == 0 || sz > len(row.value) {
+			return fmt.Errorf("sparse vector: malformed quantized wire (len %v)", len(row.value))
+		}
+		wires = append(wires, row.value)
+	}
+	w.sparseWires = wires
+	atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
+	atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
+
+	// One kernel call for the whole batch. When no row carries a stored
+	// distance - always the case for plasma, whose reader never sets
+	// distValid - wires[i] pairs 1:1 with currBatchRows[i], so the kernel
+	// writes IPs straight into w.dists and the compaction below negates in
+	// place; fvecs is not touched. Mixed bhive batches stage IPs in fvecs
+	// and scatter them to the compute rows.
+	computeCount := len(wires)
+	ips := w.dists[:computeCount]
+	if storedCnt > 0 {
+		if cap(w.fvecs) < computeCount {
+			w.fvecs = make([]float32, computeCount)
+		}
+		ips = w.fvecs[:computeCount]
+	}
+	if computeCount > 0 {
+		t0 = time.Now()
+		bhiveSparseDotBatchNQuantized(w.r.sparseQueryQuantized, wires, ips)
+		atomic.AddInt64(&w.currJob.distCmpDur, int64(time.Now().Sub(t0)))
+		atomic.AddInt64(&w.currJob.distCmpCnt, int64(computeCount))
+	}
+
+	// Compaction pass: negate computed IPs, reuse stored distances, and
+	// drop no-overlap rows in place (order preserved).
+	validCount := 0
+	if storedCnt == 0 {
+		// All-compute batch: ips aliases w.dists, row i pairs with ips[i].
+		// The write cursor trails the read cursor, so negating in place is
+		// safe.
+		for i := 0; i < vecCount; i++ {
+			ip := ips[i]
+			if ip == 0 {
+				// No matching terms between query and document vector - skip
+				// this document.
+				row := w.currBatchRows[i]
+				row.free() // Return row to pool to prevent pool exhaustion
+				w.currBatchRows[i] = nil
+				continue
+			}
+			if validCount != i {
+				w.currBatchRows[validCount] = w.currBatchRows[i]
+			}
+			w.dists[validCount] = -ip
+			validCount++
+		}
+	} else {
+		k := 0
+		for i := 0; i < vecCount; i++ {
+			row := w.currBatchRows[i]
+
+			var dist float32
+			if row.distValid {
+				dist = row.dist
+			} else {
+				ip := ips[k]
+				k++
+				if ip == 0 {
+					// No matching terms between query and document vector -
+					// skip this document.
+					row.free() // Return row to pool to prevent pool exhaustion
+					w.currBatchRows[i] = nil
+					continue
+				}
+				dist = -ip
+			}
+
+			if validCount != i {
+				w.currBatchRows[validCount] = row
+			}
+			w.dists[validCount] = dist
+			validCount++
+		}
+	}
+
+	// Restrict to surviving rows.
+	w.currBatchRows = w.currBatchRows[:validCount]
+	w.dists = w.dists[:validCount]
+
+	// Track candidate rows that produced no query-term match. Their volume
+	// is a useful signal for tuning IVF probe count and the input quality.
+	if skipped := vecCount - validCount; skipped > 0 {
+		w.currJob.sparseScanNoMatchSkips += uint64(skipped)
+	}
+
+	return nil
+}
+
+// processSparseVectorBatchFloat scores rows whose stored payload is the
+// float32 concise wire (plasma with quantizeStorage off): decode each
+// vector, term-match it against the query with Transpose, then compute
+// inner products via the codebook.
+func (w *ScanWorker) processSparseVectorBatchFloat(vecCount int) error {
 	sparseCb := w.currJob.codebook.(codebook.SparseCodebook)
 
 	qvec := w.r.sparseQueryVector
@@ -555,17 +964,12 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 		w.sparseQueryValues = qvec.Values()
 	}
 
-	// A batch may mix two kinds of rows:
-	//   - Rows carrying a valid stored (quantized) search distance produced by
-	//     the graph search (row.distValid). Their on-disk payload may have been
-	//     dropped, so they must NOT be decoded/recomputed - we reuse the stored
-	//     distance directly (which may legitimately be 0, e.g. -IP == 0).
-	//   - Rows without a stored distance (served from the flush buffer / disk).
-	//     These must be term-matched and have their distance computed here.
-	// We make a single pass: stored rows keep their distance; compute rows are
-	// term-matched and staged contiguously into fvecs. Surviving rows are
-	// compacted in place (order preserved). The staged distances are written
-	// back afterwards.
+	// A batch may mix rows carrying a valid stored search distance
+	// (row.distValid - reused directly) with rows that must be term-matched
+	// and have their distance computed here. We make a single pass: stored
+	// rows keep their distance; compute rows are term-matched and staged
+	// contiguously into fvecs. Surviving rows are compacted in place (order
+	// preserved). The staged distances are written back afterwards.
 	if cap(w.dists) < vecCount {
 		w.dists = make([]float32, vecCount)
 	} else {
@@ -598,34 +1002,20 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 			continue
 		}
 
-		var concise common.ConciseSparseVector
-		if !w.r.IndexInst.Defn.IsBhive() {
-			// No stored distance: decode the sparse vector and term-match it
-			// against the query.
-			valBytes := row.value
-			if len(valBytes) < 4 {
-				return errors.New("sparse vector too short")
-			}
+		// No stored distance: decode the sparse vector and term-match it
+		// against the query.
+		valBytes := row.value
+		if len(valBytes) < 4 {
+			return errors.New("sparse vector too short")
+		}
 
-			// Zero-copy reinterpret the raw bytes as ConciseSparseVector and use NNZ() to decode N.
-			concise = common.ConciseSparseVector(ByteSliceToFloat32(valBytes))
-			nnz := concise.NNZ()
-			expectedSize := 4 * concise.Size() // Size() returns element count; bytes = 4 * elements
-			if len(valBytes) < expectedSize {
-				return fmt.Errorf("sparse vector size %d less than expected %d for %d elements",
-					len(valBytes), expectedSize, nnz)
-			}
-		} else {
-			// No stored distance: these rows bypassed the graph search (flush
-			// buffer / disk), so term-match them against the query here. row.value
-			// holds the QUANTIZED sparse wire (the full vector is dropped);
-			// dequantize it to the concise full-wire form Transpose/ComputeDistance
-			// expect. A nil result means a malformed/truncated wire; an empty vector
-			// decodes to [count=0], which Transpose simply finds no match for.
-			concise = common.ConciseSparseVector(bhiveDequantizeSparseWire(row.value))
-			if len(concise) == 0 {
-				return fmt.Errorf("sparse vector: malformed quantized wire (len %d)", len(row.value))
-			}
+		// Zero-copy reinterpret the raw bytes as ConciseSparseVector and use NNZ() to decode N.
+		concise := common.ConciseSparseVector(ByteSliceToFloat32(valBytes))
+		nnz := concise.NNZ()
+		expectedSize := 4 * concise.Size() // Size() returns element count; bytes = 4 * elements
+		if len(valBytes) < expectedSize {
+			return fmt.Errorf("sparse vector size %d less than expected %d for %d elements",
+				len(valBytes), expectedSize, nnz)
 		}
 
 		result := w.fvecs[computeCount*queryDim : (computeCount+1)*queryDim]
@@ -656,6 +1046,13 @@ func (w *ScanWorker) processSparseVectorBatch(vecCount int) error {
 
 	atomic.AddInt64(&w.currJob.decodeDur, int64(time.Now().Sub(t0)))
 	atomic.AddInt64(&w.currJob.decodeCnt, int64(vecCount))
+
+	// Track candidate rows that produced no query-term match. These rows would
+	// otherwise be passed through ComputeDistance unnecessarily; their volume
+	// is a useful signal for tuning IVF probe count and the input quality.
+	if skipped := vecCount - validCount; skipped > 0 {
+		w.currJob.sparseScanNoMatchSkips += uint64(skipped)
+	}
 
 	// Every surviving row already had a valid stored distance; nothing to compute.
 	if computeCount == 0 {
@@ -813,6 +1210,48 @@ func (w *ScanWorker) processDenseVectorBatch(vecCount int) (err error) {
 	return nil
 }
 
+// pruneBatch frees the rows of the scored batch that cannot enter the final
+// top-K and compacts the survivors to the front of currBatchRows/dists (order
+// preserved, as processSparseVectorBatchQuantized does), returning how many
+// survived. Some worker already holds heapSize rows at least as good as the
+// published threshold and will send all of them downstream, so a row that
+// cannot beat it - ties included - can only displace an equally good row.
+//
+// This is a pass of its own rather than a test inside the per-row loop below:
+// that loop runs for every row of every batch, and most scans never see a
+// published threshold at all. Hoisting the decision here costs one branch per
+// batch instead of one per row, and leaves the per-row loop with no pruning
+// concern in it.
+func (w *ScanWorker) pruneBatch(vecCount int) int {
+
+	pruneDist, pruneActive := w.getGlobalPruneDist()
+	if !pruneActive {
+		return vecCount
+	}
+
+	validCount := 0
+	for i := 0; i < vecCount; i++ {
+		if w.dists[i] >= pruneDist {
+			w.currBatchRows[i].free()
+			w.currBatchRows[i] = nil
+			w.rowsPruned++
+			continue
+		}
+		if validCount != i {
+			w.currBatchRows[validCount] = w.currBatchRows[i]
+			w.dists[validCount] = w.dists[i]
+		}
+		validCount++
+	}
+
+	// Restrict to surviving rows. The caller re-inits both slices for the
+	// next batch, so the stale entries past validCount are never read.
+	w.currBatchRows = w.currBatchRows[:validCount]
+	w.dists = w.dists[:validCount]
+
+	return validCount
+}
+
 // processCurrentBatch decodes current batch of rows, computes
 // the distance from query vector and either stores in local heap(limit pushdown)
 // or sends it to the next stage of scan pipeline.
@@ -848,8 +1287,13 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		}
 	}
 
+	// Drop the rows that cannot enter the final top-K before doing any
+	// per-row work on them
+	vecCount = w.pruneBatch(vecCount)
+
 	// Substitue distance in place centroidId and send to outCh or store in local heap
 	for i := 0; i < vecCount; i++ {
+
 		w.currBatchRows[i].dist = w.dists[i] // Add distance for sorting in heap
 
 		var sortKey []byte
@@ -878,6 +1322,8 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		}
 		w.currBatchRows[i] = nil
 	}
+
+	w.publishTopKDist()
 
 	//re-init for the next batch
 	w.currBatchRows = w.currBatchRows[:0]
@@ -1216,7 +1662,7 @@ func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
 
 	// Carry the (quantized) search distance from the iterator side channel.
 	// Establish a clean default first: a pooled Row (heap path) is not reset
-	// for scalar fields by AtomicRowBuffer.Put, so it could otherwise retain a
+	// for scalar fields by RowPool.Put, so it could otherwise retain a
 	// stale distValid=true from a previous use and be wrongly treated as having
 	// a valid stored distance. Only a BHIVE reader context supplies a real
 	// stored distance; everything else must be computed downstream.
@@ -1380,6 +1826,11 @@ type WorkerPool struct {
 	mergeHeap  *TopKRowHeap
 	r          *ScanRequest
 
+	// topKDist is the scan-wide smallest published top-K root distance
+	// shared by all workers for candidate pruning. See
+	// ScanWorker.globalTopKDist.
+	topKDist *atomic.Uint32
+
 	config c.Config
 }
 
@@ -1405,6 +1856,17 @@ func NewWorkerPool(r *ScanRequest, numWorkers int, mergeSort bool, config c.Conf
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	// Only the workers that keep a persistent heap publish and consume this
+	// threshold, and a scalar one is only valid when rows are ordered by
+	// distance alone - a nil row compare. Such ordering is always ascending:
+	// ANN search is nearest-first by design, so ORDER BY distance DESC is
+	// never pushed down to the indexer and the k-th best distance is always a
+	// valid admission floor here.
+	if r.usePersistentVectorHeap(config) && r.getRowCompare() == nil {
+		wp.topKDist = &atomic.Uint32{}
+		wp.topKDist.Store(math.Float32bits(float32(math.Inf(1))))
 	}
 	wp.logPrefix = fmt.Sprintf("%v[%v]WorkerPool", wp.r.LogPrefix, wp.r.RequestId)
 	return wp, nil
@@ -1435,7 +1897,7 @@ func (wp *WorkerPool) Init() {
 		}
 
 		wp.workers[i] = NewScanWorker(i, wp.r, wp.jobs, outCh, wp.stopCh, wp.errCh,
-			&wp.jobsWg, wp.config, wp.mergeSort)
+			&wp.jobsWg, wp.config, wp.mergeSort, wp.topKDist)
 	}
 }
 
@@ -1572,6 +2034,26 @@ func (wp *WorkerPool) Wait() error {
 	return nil
 }
 
+// FlushPersistentHeaps drains the per-worker persistent heaps into the
+// downstream channel. Must be called after Wait has returned for all
+// submitted jobs (workers are idle) and before StopOutCh. No-op for
+// workers not using a persistent heap.
+//
+// It is also a no-op once the pool is stopped: the results of an aborted
+// scan must not reach the consumer. Wait returns nil when it observes
+// stopCh, so a stopped pool is otherwise indistinguishable from a clean
+// finish at the call site. Rows left in the heaps are freed by
+// ScanWorker.Close.
+func (wp *WorkerPool) FlushPersistentHeaps() {
+	if wp.IsStopped() {
+		logging.Verbosef("%v FlushPersistentHeaps: skipping flush, workerpool is stopped", wp.logPrefix)
+		return
+	}
+	for _, w := range wp.workers {
+		w.flushPersistentHeap()
+	}
+}
+
 func (wp *WorkerPool) GetOutCh() <-chan *Row {
 	return wp.sendCh
 }
@@ -1586,6 +2068,18 @@ func (wp *WorkerPool) StopOutCh() {
 func (wp *WorkerPool) sendLastRow() {
 	row := &Row{last: true}
 	wp.sendCh <- row
+}
+
+// IsStopped reports whether the pool has been stopped, either by the user or
+// on an internal error. Wait does not surface this - it returns nil when it
+// observes stopCh - so post-scan work must check it explicitly.
+func (wp *WorkerPool) IsStopped() bool {
+	select {
+	case <-wp.stopCh:
+		return true
+	default:
+		return false
+	}
 }
 
 // Stop signals all workers to stop. Use Wait to wait till submitted jobs are done.
@@ -2320,6 +2814,7 @@ func (s *IndexScanSource2) Routine() error {
 				s.p.decodeCnt += job.decodeCnt
 				s.p.distCmpDur += job.distCmpDur
 				s.p.distCmpCnt += job.distCmpCnt
+				s.p.sparseScanNoMatchSkips += job.sparseScanNoMatchSkips
 			}
 		}
 		s.p.rowsReranked += fanIn.rowsReranked
@@ -2369,6 +2864,11 @@ func (s *IndexScanSource2) Routine() error {
 				return
 			}
 		}
+		// All jobs are done and the workers are idle; send the rows held in
+		// the per-worker persistent heaps downstream. Reaching here does not
+		// mean the scan finished cleanly - Wait also returns nil when the
+		// pool was stopped - so FlushPersistentHeaps rechecks that itself.
+		wp.FlushPersistentHeaps()
 	}()
 
 	// Wait for Merge Operator to terminate it will happen either when we stopped worker pool
@@ -2508,83 +3008,52 @@ func (w *ScanWorker) makeSortKeyForOrderBy(compositeKeys, explodedIncludekeys []
 	return buf, err
 }
 
-// AtomicRowBuffer is a thread-safe queue for Row pointers
-type AtomicRowBuffer struct {
-	queue []*Row
-	head  int64
-	tail  int64
-	size  int64
-	count int64
+// RowPool is a per-worker free list of reusable *Row objects for vector
+// index scans. Get and Put run only on the owning worker's scanner
+// goroutine - Get from the storage iterator callback, Put via Row.free
+// during batch processing, heap eviction and heap materialization - so it
+// needs no synchronization. Rows that cross the worker output channel are
+// copies that own their buffers, with rowBuf == nil, and never return here, so
+// the pool is never touched by the downstream merge goroutine. It replaces an
+// earlier lock-free ring whose atomics were pure overhead on this
+// single-producer/single-consumer path.
+type RowPool struct {
+	free []*Row
 }
 
-// NewRowBuffer initializes a new queue with a given size and pre-allocated Rows
-func NewAtomicRowBuffer(size int) *AtomicRowBuffer {
-	q := &AtomicRowBuffer{
-		queue: make([]*Row, size),
-		size:  int64(size),
-		count: int64(size),
-	}
-	// Pre-allocate Row objects in the queue
+// NewRowPool creates a pool pre-populated with size reusable Rows.
+func NewRowPool(size int) *RowPool {
+	p := &RowPool{free: make([]*Row, size)}
+	// Pre-allocate Row objects in the pool
 	for i := 0; i < size; i++ {
-		q.queue[i] = &Row{rowBuf: q}
+		p.free[i] = &Row{rowBuf: p}
 	}
-	q.tail = int64(size - 1)
-	return q
+	return p
 }
 
-// Put adds a new Row pointer to the queue and blocks if the queue is full
-func (q *AtomicRowBuffer) Put(row *Row) {
-
-	//set row references to nil
+// Put returns a Row to the pool. It clears only the reference fields; the
+// scan resets scalar fields such as dist/distValid explicitly on reuse. The
+// row holds storage-owned or freshly made slices that must not be retained.
+func (p *RowPool) Put(row *Row) {
 	row.key = nil
 	row.value = nil
 	row.includeColumn = nil
 	row.cid = nil
 	row.sortKey = nil
-
-	for {
-		// Check if the queue is full
-		if atomic.LoadInt64(&q.count) == q.size {
-			continue // Spin-wait if full
-		}
-
-		// Atomically increment count before proceeding
-		if atomic.AddInt64(&q.count, 1) <= q.size {
-			// Enqueue the row atomically
-			tail := atomic.LoadInt64(&q.tail)
-			tail = (tail + 1) % q.size
-			q.queue[tail] = row
-			// Move tail pointer in a circular fashion
-			atomic.StoreInt64(&q.tail, tail)
-			return
-		} else {
-			// Decrement count if the enqueue fails due to race
-			atomic.AddInt64(&q.count, -1)
-		}
-	}
+	p.free = append(p.free, row)
 }
 
-// Get removes a Row pointer from the queue and blocks if the queue is empty
-func (q *AtomicRowBuffer) Get() *Row {
-	for {
-		// Check if the queue is empty
-		if atomic.LoadInt64(&q.count) == 0 {
-			continue // Spin-wait if empty
-		}
-
-		// Atomically decrement count before proceeding
-		if atomic.AddInt64(&q.count, -1) >= 0 {
-			// Dequeue the row atomically
-			head := atomic.LoadInt64(&q.head)
-			row := q.queue[head]
-			// Move head pointer
-			atomic.StoreInt64(&q.head, (head+1)%q.size)
-			return row
-		} else {
-			// Increment count if the dequeue fails due to race
-			atomic.AddInt64(&q.count, 1)
-		}
+// Get returns a reusable Row, allocating a fresh pool-bound one if the pool
+// is momentarily exhausted (more rows outstanding than the pre-sized pool).
+func (p *RowPool) Get() *Row {
+	n := len(p.free)
+	if n == 0 {
+		return &Row{rowBuf: p}
 	}
+	row := p.free[n-1]
+	p.free[n-1] = nil
+	p.free = p.free[:n-1]
+	return row
 }
 
 func (w *ScanWorker) sparseVectorSizeFromMeta(meta []byte) int {

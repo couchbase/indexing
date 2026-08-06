@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -225,7 +226,7 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 		cfg.SetValue("scan.vector.scanworker_batch_size", senderBatchSize)
 		cfg.SetValue("scan.vector.scanworker_senderch_size", senderChSize)
 
-		NewScanWorker(1, r, workCh, recvCh, stopCh, errCh, nil, cfg, false)
+		NewScanWorker(1, r, workCh, recvCh, stopCh, errCh, nil, cfg, false, nil)
 
 		var j = ScanJob{
 			pid:      c.PartitionId(0),
@@ -713,4 +714,275 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 		testFunc(nil, false, false, false, true)
 		logging.Infof("gCount: %v", gCount)
 	})
+}
+
+// ----------------------------------
+// Shared top-K distance threshold
+// ----------------------------------
+
+func newTopKDist(v float32) *atomic.Uint32 {
+	a := &atomic.Uint32{}
+	a.Store(math.Float32bits(v))
+	return a
+}
+
+func loadTopKDist(a *atomic.Uint32) float32 {
+	return math.Float32frombits(a.Load())
+}
+
+func equalDists(a, b []float32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestCasMinFloat32 verifies the shared top-K threshold lowers correctly,
+// including for negative distances (negated inner products) where uint32
+// bit-pattern ordering does not match float ordering.
+func TestCasMinFloat32(t *testing.T) {
+	a := newTopKDist(float32(math.Inf(1)))
+
+	load := func() float32 { return loadTopKDist(a) }
+
+	casMinFloat32(a, 5.0)
+	if load() != 5.0 {
+		t.Fatalf("expected 5.0 got %v", load())
+	}
+	casMinFloat32(a, 7.0) // larger, must not raise
+	if load() != 5.0 {
+		t.Fatalf("expected 5.0 got %v", load())
+	}
+	casMinFloat32(a, -3.5) // negative must lower below positive
+	if load() != -3.5 {
+		t.Fatalf("expected -3.5 got %v", load())
+	}
+	casMinFloat32(a, -1.0) // less negative, must not raise
+	if load() != -3.5 {
+		t.Fatalf("expected -3.5 got %v", load())
+	}
+	casMinFloat32(a, -8.25) // more negative must lower
+	if load() != -8.25 {
+		t.Fatalf("expected -8.25 got %v", load())
+	}
+
+	// A NaN must be dropped, not stored: a stored NaN compares false against
+	// everything, so it would stop all pruning and let the next call install
+	// any value, including a larger one.
+	casMinFloat32(a, float32(math.NaN()))
+	if load() != -8.25 {
+		t.Fatalf("NaN must not be stored, expected -8.25 got %v", load())
+	}
+	casMinFloat32(a, -2.0) // still must not raise after the NaN attempt
+	if load() != -8.25 {
+		t.Fatalf("expected -8.25 got %v", load())
+	}
+	casMinFloat32(a, -9.0) // and must still lower
+	if load() != -9.0 {
+		t.Fatalf("expected -9.0 got %v", load())
+	}
+}
+
+// TestScanWorkerPruneBatch covers the batch-level top-K prune. It must drop
+// exactly the rows that cannot beat the published threshold - ties included,
+// since the publisher already holds heapSize rows at least as good - keep the
+// survivors in their original order, and keep dists in step with the rows it
+// compacts. A threshold that was never published (the +Inf sentinel) and a
+// scan with no shared threshold at all must both leave the batch untouched.
+func TestScanWorkerPruneBatch(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	// Row.dist is set up front here only so the assertions can tell the rows
+	// apart; processCurrentBatch assigns it after pruning, from w.dists.
+	newWorker := func(topKDist *atomic.Uint32, dists []float32) *ScanWorker {
+		w := &ScanWorker{logPrefix: "pruneBatchTest", globalTopKDist: topKDist}
+		w.dists = append(w.dists, dists...)
+		for _, d := range dists {
+			w.currBatchRows = append(w.currBatchRows, &Row{dist: d})
+		}
+		return w
+	}
+	rowDists := func(w *ScanWorker) []float32 {
+		out := make([]float32, 0, len(w.currBatchRows))
+		for _, row := range w.currBatchRows {
+			out = append(out, row.dist)
+		}
+		return out
+	}
+
+	tests := []struct {
+		name     string
+		topKDist *atomic.Uint32
+		dists    []float32
+		kept     []float32
+	}{
+		{
+			name:  "NoSharedThreshold",
+			dists: []float32{9.0, 1.0, 5.0},
+			kept:  []float32{9.0, 1.0, 5.0},
+		},
+		{
+			name:     "ThresholdNotYetPublished",
+			topKDist: newTopKDist(float32(math.Inf(1))),
+			dists:    []float32{9.0, 1.0, 5.0},
+			kept:     []float32{9.0, 1.0, 5.0},
+		},
+		{
+			name:     "DropsWorseAndTies",
+			topKDist: newTopKDist(5.0),
+			dists:    []float32{9.0, 1.0, 5.0, 4.0},
+			kept:     []float32{1.0, 4.0},
+		},
+		{
+			// negated inner products: the threshold and the rows are negative,
+			// where uint32 bit-pattern ordering would disagree with float order
+			name:     "NegativeDistances",
+			topKDist: newTopKDist(-3.0),
+			dists:    []float32{-1.0, -8.0, -3.0, -4.0},
+			kept:     []float32{-8.0, -4.0},
+		},
+		{
+			name:     "AllPruned",
+			topKDist: newTopKDist(0.5),
+			dists:    []float32{9.0, 1.0},
+			kept:     []float32{},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := newWorker(test.topKDist, test.dists)
+
+			if got := w.pruneBatch(len(test.dists)); got != len(test.kept) {
+				t.Fatalf("pruneBatch returned %v, expected %v", got, len(test.kept))
+			}
+			if got := rowDists(w); !equalDists(got, test.kept) {
+				t.Fatalf("surviving rows %v, expected %v", got, test.kept)
+			}
+			if !equalDists(w.dists, test.kept) {
+				t.Fatalf("dists %v out of step with rows %v", w.dists, test.kept)
+			}
+			if want := uint64(len(test.dists) - len(test.kept)); w.rowsPruned != want {
+				t.Fatalf("rowsPruned %v, expected %v", w.rowsPruned, want)
+			}
+		})
+	}
+}
+
+// TestScanWorkerPublishTopKDist covers publishing a worker's k-th best
+// distance to the shared threshold: only a full heap has a k-th best row to
+// publish, the shared value only ever lowers, and a worker does not republish
+// a root it has already published.
+func TestScanWorkerPublishTopKDist(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	newWorker := func(topKDist *atomic.Uint32, heapSize int, dists ...float32) *ScanWorker {
+		heap, err := NewTopKRowHeap(heapSize, false, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range dists {
+			heap.Push(&Row{dist: d})
+		}
+		return &ScanWorker{
+			logPrefix:         "publishTest",
+			globalTopKDist:    topKDist,
+			heap:              heap,
+			heapSize:          heapSize,
+			lastPublishedDist: float32(math.Inf(1)),
+		}
+	}
+
+	// a heap that is not full yet has no k-th best row to publish
+	shared := newTopKDist(float32(math.Inf(1)))
+	w := newWorker(shared, 3, 1.0, 2.0)
+	w.publishTopKDist()
+	if got := loadTopKDist(shared); !math.IsInf(float64(got), 1) {
+		t.Fatalf("a partial heap must not publish, got %v", got)
+	}
+
+	// once full, the root - the worst row it kept - is its k-th best
+	w.heap.Push(&Row{dist: 7.0})
+	w.publishTopKDist()
+	if got := loadTopKDist(shared); got != 7.0 {
+		t.Fatalf("expected 7.0 got %v", got)
+	}
+
+	// a better row lowers the root, and with it the shared threshold
+	w.heap.Push(&Row{dist: 3.0})
+	w.publishTopKDist()
+	if got := loadTopKDist(shared); got != 3.0 {
+		t.Fatalf("expected 3.0 got %v", got)
+	}
+
+	// a root already published is not published again. Raising the shared
+	// value by hand is the only way to observe that from outside: a
+	// republish would lower it back to 3.
+	shared.Store(math.Float32bits(10.0))
+	w.publishTopKDist()
+	if got := loadTopKDist(shared); got != 10.0 {
+		t.Fatalf("root 3.0 was already published, expected 10.0 got %v", got)
+	}
+
+	// a worker whose k-th best is worse must not raise the shared value
+	shared.Store(math.Float32bits(3.0))
+	newWorker(shared, 2, 20.0, 30.0).publishTopKDist()
+	if got := loadTopKDist(shared); got != 3.0 {
+		t.Fatalf("shared threshold must not rise, got %v", got)
+	}
+
+	// a scan with no shared threshold must be a no-op, not a panic
+	newWorker(nil, 2, 1.0, 2.0).publishTopKDist()
+}
+
+// TestScanWorkerFlushPersistentHeapPrune covers the final flush of a worker's
+// persistent heap. Rows strictly worse than the published threshold are
+// dropped, but rows tying it are sent: the threshold is some worker's k-th
+// best distance, so a tying row may be that row itself, and dropping every
+// tie could leave the merge with fewer than heapSize candidates.
+func TestScanWorkerFlushPersistentHeapPrune(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	heap, err := NewTopKRowHeap(3, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []float32{1.0, 5.0, 9.0} {
+		heap.Push(&Row{dist: d})
+	}
+
+	outCh := make(chan *Row, 8)
+	w := &ScanWorker{
+		logPrefix:         "flushTest",
+		usePersistentHeap: true,
+		heap:              heap,
+		heapSize:          3,
+		globalTopKDist:    newTopKDist(5.0),
+		stopCh:            make(chan struct{}),
+		outCh:             outCh,
+	}
+
+	w.flushPersistentHeap()
+	close(outCh)
+
+	// heap order is unspecified, so compare the flushed set
+	got := make([]float32, 0, 3)
+	for row := range outCh {
+		got = append(got, row.dist)
+	}
+	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+
+	// 9.0 is strictly worse than the threshold and dropped; 5.0 ties it and
+	// must still be sent
+	if want := []float32{1.0, 5.0}; !equalDists(got, want) {
+		t.Fatalf("flushed %v, expected %v", got, want)
+	}
+	if w.heap != nil {
+		t.Fatal("heap must be released once its rows are handed downstream")
+	}
 }

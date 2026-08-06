@@ -1841,6 +1841,23 @@ func TestSparseCompositeIndexSparseSmall(t *testing.T) {
 	testSparseVectorIndexWithAllSparseSmallQueries(t, 0, 1, 1, false /*isBhive*/)
 }
 
+// TestSparseCompositeIndexSparseSmallQuantized runs the composite (plasma)
+// sparse test with scalar-quantized storage: vectors are persisted in the
+// bhive quantized wire format and scans score them with the bhive sparse
+// dot-product kernel instead of Transpose + ComputeDistance.
+func TestSparseCompositeIndexSparseSmallQuantized(t *testing.T) {
+	err := secondaryindex.ChangeIndexerSettings("indexer.vector.sparse.quantizeStorage", true,
+		clusterconfig.Username, clusterconfig.Password, kvaddress)
+	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
+	defer func() {
+		err := secondaryindex.ChangeIndexerSettings("indexer.vector.sparse.quantizeStorage", false,
+			clusterconfig.Username, clusterconfig.Password, kvaddress)
+		FailTestIfError(err, "Error in ChangeIndexerSettings", t)
+	}()
+
+	testSparseVectorIndexWithAllSparseSmallQueries(t, 0, 1, 1, false /*isBhive*/)
+}
+
 // TestSparseBhiveReplicatedPartnIndexAllSparseSmall tests replicated bhive sparse index
 func TestSparseBhiveReplicatedPartnIndexSparseSmall(t *testing.T) {
 	t.Skipf("Skipping test for now...")

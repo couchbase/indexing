@@ -371,6 +371,36 @@ type IndexStats struct {
 
 	// Vector scan admission stats
 	vectorScanQueued stats.Int64Val
+
+	// Sparse vector stats. sparseTotalNNZ accumulates the NNZ count of every
+	// stored sparse vector (post top-N truncation if enabled). sparseNumVecsIndexed
+	// is the count of sparse vector inserts. avgSparseNNZ is the derived
+	// avg = sparseTotalNNZ / sparseNumVecsIndexed, populated at stats-emit time.
+	sparseTotalNNZ       stats.Int64Val
+	sparseNumVecsIndexed stats.Int64Val
+	avgSparseNNZ         stats.Int64Val
+
+	// Count of candidate rows skipped by Transpose during sparse vector scans
+	// because the document had no overlap with any query term. Useful to
+	// gauge how often the IVF probe is bringing back useless candidates.
+	sparseScanNoMatchSkips stats.Int64Val
+
+	// Cumulative count of query terms dropped by top-K pruning across all
+	// sparse vector scans (incremented by originalNNZ-prunedNNZ per scan).
+	// Pair with num_completed_requests to derive avg terms pruned per query.
+	sparseQueryTermsPruned stats.Int64Val
+
+	// Histogram-derived pruning state, refreshed when the sparse codebook is
+	// trained or loaded. Encoded as fixed-point integers because IndexStats
+	// uses stats.Int64Val:
+	//   sparseDerivedTau                 = τ × 1e6 (so 0.05 → 50000)
+	//   sparseHistogramL1Retained        = retained fraction × 10000 bps
+	//                                      (so 0.98 → 9800)
+	//   sparseHistogramTotalObservations = count of weight observations
+	//                                      that informed the histogram
+	sparseDerivedTau                 stats.Int64Val
+	sparseHistogramTotalObservations stats.Int64Val
+	sparseHistogramL1Retained        stats.Int64Val
 }
 
 type IndexerStatsHolder struct {
@@ -651,6 +681,14 @@ func (s *IndexStats) Init() {
 	s.codebookSize.Init()
 	s.cbTrainDuration.Init()
 	s.graphBuildProgress.Init()
+	s.sparseTotalNNZ.Init()
+	s.sparseNumVecsIndexed.Init()
+	s.avgSparseNNZ.Init()
+	s.sparseScanNoMatchSkips.Init()
+	s.sparseQueryTermsPruned.Init()
+	s.sparseDerivedTau.Init()
+	s.sparseHistogramTotalObservations.Init()
+	s.sparseHistogramL1Retained.Init()
 
 	// Set filters
 	// Note that the filters will be set on both: instance level stats and
@@ -2377,6 +2415,59 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 				return ss.graphBuildProgress.Value()
 			},
 			&s.graphBuildProgress, s.partnAvgInt64Stats)
+
+		// Average NNZ across all stored sparse vectors. Aggregates sum and count
+		// across partitions before dividing to avoid the average-of-averages skew.
+		totalNNZ := s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.sparseTotalNNZ.Value()
+		})
+		numVecs := s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.sparseNumVecsIndexed.Value()
+		})
+		var avg int64
+		if numVecs > 0 {
+			avg = totalNNZ / numVecs
+		}
+		s.avgSparseNNZ.Set(avg)
+		statMap.AddStatValueFiltered("avg_sparse_nnz", &s.avgSparseNNZ)
+
+		statMap.AddAggrStatFiltered("sparse_scan_no_match_skips",
+			func(ss *IndexStats) int64 {
+				return ss.sparseScanNoMatchSkips.Value()
+			},
+			&s.sparseScanNoMatchSkips, s.partnInt64Stats)
+
+		statMap.AddAggrStatFiltered("sparse_query_terms_pruned",
+			func(ss *IndexStats) int64 {
+				return ss.sparseQueryTermsPruned.Value()
+			},
+			&s.sparseQueryTermsPruned, s.partnInt64Stats)
+
+		// τ and L1-retention are per-codebook state derived from the same
+		// training data; partitions converge to the same value in the common
+		// case. Aggregate as an average so a single-value report is correct
+		// when partitions agree and informative when they diverge.
+		// sparse_derived_tau_x1e6 is τ scaled by 1e6 (so 0.05 → 50000).
+		// sparse_histogram_l1_retained_bps is fraction in basis points
+		// (so 0.98 → 9800). Observations sum: total weights observed during
+		// the most recent training across all partitions.
+		statMap.AddAggrStatFiltered("sparse_derived_tau_x1e6",
+			func(ss *IndexStats) int64 {
+				return ss.sparseDerivedTau.Value()
+			},
+			&s.sparseDerivedTau, s.partnAvgInt64Stats)
+
+		statMap.AddAggrStatFiltered("sparse_histogram_total_observations",
+			func(ss *IndexStats) int64 {
+				return ss.sparseHistogramTotalObservations.Value()
+			},
+			&s.sparseHistogramTotalObservations, s.partnInt64Stats)
+
+		statMap.AddAggrStatFiltered("sparse_histogram_l1_retained_bps",
+			func(ss *IndexStats) int64 {
+				return ss.sparseHistogramL1Retained.Value()
+			},
+			&s.sparseHistogramL1Retained, s.partnAvgInt64Stats)
 	}
 
 	// -------------------------------
