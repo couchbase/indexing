@@ -986,3 +986,260 @@ func TestScanWorkerFlushPersistentHeapPrune(t *testing.T) {
 		t.Fatal("heap must be released once its rows are handed downstream")
 	}
 }
+
+// TestScanWorkerDedupBatch covers keeping a doc returned by two jobs of the
+// same bhive scan out of the worker's persistent heap. Without it the two
+// copies would take two of the heapSize slots the worker gets to fill, and the
+// merge - which deduplicates only after every worker has made its cut - could
+// not recover the distinct candidate they displaced.
+func TestScanWorkerDedupBatch(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	// (storeId, recordId) identifies the doc; a repeat carries the same
+	// distance, as both copies read the same stored entry
+	type doc struct {
+		storeId  uint64
+		recordId uint64
+		dist     float32
+	}
+
+	newWorker := func(seen map[rowDedupKey]struct{}, docs []doc) *ScanWorker {
+		w := &ScanWorker{logPrefix: "dedupBatchTest", seen: seen}
+		for _, d := range docs {
+			w.currBatchRows = append(w.currBatchRows, &Row{
+				storeId: d.storeId, recordId: d.recordId, dist: d.dist,
+			})
+			w.dists = append(w.dists, d.dist)
+		}
+		return w
+	}
+
+	tests := []struct {
+		name string
+		seen map[rowDedupKey]struct{}
+		docs []doc
+		kept []float32
+	}{
+		{
+			// a worker with no dedup map - any non-bhive scan - is untouched
+			name: "NoDedupMap",
+			docs: []doc{{1, 1, 5.0}, {1, 1, 5.0}},
+			kept: []float32{5.0, 5.0},
+		},
+		{
+			name: "DistinctDocsAllKept",
+			seen: map[rowDedupKey]struct{}{},
+			docs: []doc{{1, 1, 5.0}, {1, 2, 4.0}, {2, 1, 3.0}},
+			kept: []float32{5.0, 4.0, 3.0},
+		},
+		{
+			// recordId numbering is per-kvstore, so storeId disambiguates it
+			name: "SameRecordIdDifferentStore",
+			seen: map[rowDedupKey]struct{}{},
+			docs: []doc{{1, 7, 5.0}, {2, 7, 4.0}},
+			kept: []float32{5.0, 4.0},
+		},
+		{
+			name: "RepeatWithinOneBatch",
+			seen: map[rowDedupKey]struct{}{},
+			docs: []doc{{1, 1, 5.0}, {1, 2, 4.0}, {1, 1, 5.0}},
+			kept: []float32{5.0, 4.0},
+		},
+		{
+			// the sentinel job resurfacing a doc a per-cell job already offered
+			name: "RepeatFromEarlierJob",
+			seen: map[rowDedupKey]struct{}{{storeId: 1, recordId: 1}: {}},
+			docs: []doc{{1, 1, 5.0}, {1, 2, 4.0}},
+			kept: []float32{4.0},
+		},
+		{
+			name: "EveryRowARepeat",
+			seen: map[rowDedupKey]struct{}{{storeId: 1, recordId: 1}: {}},
+			docs: []doc{{1, 1, 5.0}, {1, 1, 5.0}},
+			kept: []float32{},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := newWorker(test.seen, test.docs)
+
+			if got := w.dedupBatch(len(test.docs)); got != len(test.kept) {
+				t.Fatalf("dedupBatch returned %v, expected %v", got, len(test.kept))
+			}
+
+			got := make([]float32, 0, len(w.currBatchRows))
+			for _, row := range w.currBatchRows {
+				got = append(got, row.dist)
+			}
+			if !equalDists(got, test.kept) {
+				t.Fatalf("surviving rows %v, expected %v", got, test.kept)
+			}
+			if !equalDists(w.dists, test.kept) {
+				t.Fatalf("dists %v out of step with rows %v", w.dists, test.kept)
+			}
+			if want := uint64(len(test.docs) - len(test.kept)); w.rowsDeduped != want {
+				t.Fatalf("rowsDeduped %v, expected %v", w.rowsDeduped, want)
+			}
+		})
+	}
+
+	// every surviving doc must be recorded, so a later job's repeat is caught
+	seen := map[rowDedupKey]struct{}{}
+	w := newWorker(seen, []doc{{1, 1, 5.0}, {1, 2, 4.0}})
+	w.dedupBatch(2)
+	for _, want := range []rowDedupKey{{storeId: 1, recordId: 1}, {storeId: 1, recordId: 2}} {
+		if _, ok := seen[want]; !ok {
+			t.Fatalf("doc %+v was offered to the heap but not recorded", want)
+		}
+	}
+}
+
+// TestScanWorkerMaterializeHeapRowsBhive covers the job-end materialization of
+// a bhive scan's persistent heap. A surviving row must outlive the storage
+// iterator that produced it - so its key and include column are copied out of
+// iterator memory - and must still carry the record identity the merge stage
+// reads to deduplicate docs across scan sources and to re-rank on the full
+// vector.
+func TestScanWorkerMaterializeHeapRowsBhive(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	heap, err := NewTopKRowHeap(2, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// iterator-owned memory, reused once the current job's iterator closes
+	itrKey := []byte("docid-1")
+	itrInclude := []byte("include-1")
+	cid := []byte("centroid-1") // request-owned, outlives every row of the scan
+
+	pool := NewRowPool(1)
+	row := pool.Get()
+	row.key = itrKey
+	row.includeColumn = itrInclude
+	row.value = []byte("quantized-sparse-wire")
+	row.len = len(itrKey)
+	row.dist = -7.0
+	row.distValid = true
+	row.storeId = 11
+	row.recordId = 22
+	row.partnId = 3
+	row.cid = cid
+	heap.Push(row)
+
+	w := &ScanWorker{
+		logPrefix:         "materializeTest",
+		id:                4,
+		r:                 &ScanRequest{isBhiveScan: true},
+		currJob:           &ScanJob{},
+		usePersistentHeap: true,
+		heap:              heap,
+		heapSize:          2,
+	}
+
+	w.materializeHeapRows()
+
+	// the worker moves on to its next job and the iterator memory is rewritten
+	copy(itrKey, "docid-9")
+	copy(itrInclude, "include-9")
+
+	rows := heap.List()
+	if len(rows) != 1 {
+		t.Fatalf("heap holds %v rows, expected 1", len(rows))
+	}
+	got := rows[0]
+
+	if got.rowBuf != nil {
+		t.Fatal("materialized row must not be pool-bound; the storage-backed row it replaced went back to the pool")
+	}
+	if string(got.key) != "docid-1" {
+		t.Fatalf("key %q, expected it copied out of iterator memory", got.key)
+	}
+	if string(got.includeColumn) != "include-1" {
+		t.Fatalf("includeColumn %q, expected it copied out of iterator memory", got.includeColumn)
+	}
+	if got.value != nil {
+		t.Fatal("value holds the vector payload, already consumed to compute dist, and must not be carried")
+	}
+	if got.len != len("docid-1") {
+		t.Fatalf("len %v, expected the docid length the bhive iterator recorded", got.len)
+	}
+	if got.dist != -7.0 || !got.distValid {
+		t.Fatalf("dist %v distValid %v, expected -7 and true", got.dist, got.distValid)
+	}
+	if got.storeId != 11 || got.recordId != 22 || got.partnId != 3 {
+		t.Fatalf("record identity lost: storeId %v recordId %v partnId %v", got.storeId, got.recordId, got.partnId)
+	}
+	if string(got.cid) != "centroid-1" {
+		t.Fatalf("cid %q, expected the request-owned centroid id", got.cid)
+	}
+	if got.workerId != 4 {
+		t.Fatalf("workerId %v, expected the id of the worker that materialized it", got.workerId)
+	}
+
+	// the next job boundary must leave an already materialized row alone
+	w.materializeHeapRows()
+	if heap.List()[0] != got {
+		t.Fatal("an already materialized row must not be copied again")
+	}
+}
+
+// TestScanWorkerMaterializeHeapRowsComposite is the composite counterpart. Only
+// bhiveIteratorCallback writes the record identity fields, so a composite row
+// must not pick them up - copying them regardless would also alias cid on a
+// row that outlives its iterator. Its len, unlike a bhive row's, is the length
+// of the secondary index entry its key is.
+func TestScanWorkerMaterializeHeapRowsComposite(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	entry, err := newSKEntry([]byte(`["a",1]`), []byte("docid-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	heap, err := NewTopKRowHeap(2, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pool := NewRowPool(1)
+	row := pool.Get()
+	row.key = entry
+	row.len = len(entry)
+	row.dist = 2.5
+	// set to pin the gate, not because a composite scan produces these: a
+	// pooled Row keeps its scalars until the scan overwrites them
+	row.storeId = 11
+	row.recordId = 22
+	row.partnId = 3
+	row.cid = []byte("centroid-1")
+	heap.Push(row)
+
+	w := &ScanWorker{
+		logPrefix:         "materializeCompositeTest",
+		id:                4,
+		r:                 &ScanRequest{},
+		currJob:           &ScanJob{},
+		usePersistentHeap: true,
+		heap:              heap,
+		heapSize:          2,
+	}
+
+	w.materializeHeapRows()
+
+	got := heap.List()[0]
+	if got.rowBuf != nil {
+		t.Fatal("materialized row must not be pool-bound")
+	}
+	if got.storeId != 0 || got.recordId != 0 || got.partnId != 0 || got.cid != nil {
+		t.Fatalf("composite row carried bhive record identity: storeId %v recordId %v partnId %v cid %q",
+			got.storeId, got.recordId, got.partnId, got.cid)
+	}
+	if want := entry.lenKey(); got.len != want {
+		t.Fatalf("len %v, expected the secondary entry key length %v", got.len, want)
+	}
+	if string(got.key) != string(entry) {
+		t.Fatalf("key %q, expected a copy of %q", got.key, entry)
+	}
+}

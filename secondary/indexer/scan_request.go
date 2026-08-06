@@ -772,9 +772,9 @@ func (r *ScanRequest) useHeapForVectorIndex() bool {
 }
 
 // usePersistentVectorHeap reports whether scan workers carry their local top-K
-// heap across jobs instead of flushing it at every job end. Limited to
-// non-bhive sparse vector scans - see ScanWorker.usePersistentHeap for why -
-// and to operators who leave scan.vector.enable_persistent_heap on.
+// heap across jobs instead of flushing it at every job end. Limited to sparse
+// vector scans - see NewScanWorker for why - and to operators who leave
+// scan.vector.enable_persistent_heap on.
 //
 // Both the worker and the WorkerPool key off this: the pool only sets up the
 // shared top-K distance threshold when the workers will actually maintain it,
@@ -785,7 +785,7 @@ func (r *ScanRequest) usePersistentVectorHeap(cfg common.Config) bool {
 	if !cfg["scan.vector.enable_persistent_heap"].Bool() {
 		return false
 	}
-	return r.useHeapForVectorIndex() && !r.isBhiveScan && r.IsSparseVectorIndexScan()
+	return r.useHeapForVectorIndex() && r.IsSparseVectorIndexScan()
 }
 
 func (r *ScanRequest) getNearestCentroids() error {

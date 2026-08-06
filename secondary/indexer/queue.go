@@ -348,19 +348,28 @@ func (r *Row) copy(source *Row) {
 }
 
 // copyForVectorHeap copies the fields a row needs to outlive the storage
-// iterator and reach the merge stage of a non-BHIVE sparse vector scan.
+// iterator and reach the merge stage of a sparse vector scan.
 //
 // It differs from copy in two ways, both because these rows are long lived - a
 // worker's persistent top-K heap holds up to limit+offset of them for the
 // whole scan (see ScanWorker.materializeHeapRows):
 //   - value is not copied. On a vector scan it holds the vector payload, which
 //     is consumed to compute dist before the row ever enters the heap and is
-//     not read again by any later stage.
+//     not read again by any later stage. A BHIVE re-rank does need the full
+//     vector, but refetches it from storage by (storeId, recordId, cid) rather
+//     than reading it off the row - see MergeOperator.rerankOnRow.
 //   - buffers are sized to the data, as the caller leaves mem nil. Taking them
 //     from the row allocator instead would pin a full ScanBufPoolSize buffer
 //     per row - far more than a secondary key needs - and the allocator cannot
 //     recycle them anyway while every row is held to the end of the scan.
-func (r *Row) copyForVectorHeap(source *Row) {
+//
+// isBhive selects the fields that only a BHIVE row carries, the way the caller
+// picks between copy and copyForBhive on the per job flush. Only
+// bhiveIteratorCallback writes them, so they are zero on a composite row and
+// copying them regardless would read as though a composite scan might carry
+// record identity. It would also alias cid unconditionally, which is safe only
+// because the one writer of cid takes it from the scan request's spans.
+func (r *Row) copyForVectorHeap(source *Row, isBhive bool) {
 	r.len = source.len
 	r.last = source.last
 	r.dist = source.dist
@@ -369,6 +378,20 @@ func (r *Row) copyForVectorHeap(source *Row) {
 
 	if source.includeColumn != nil {
 		r.copyInclude(source.includeColumn)
+	}
+
+	if isBhive {
+		// Identity of the stored record. The merge stage reads these to
+		// deduplicate docs returned by more than one scan source and to
+		// re-rank on the full vector.
+		r.partnId = source.partnId
+		r.recordId = source.recordId
+		r.storeId = source.storeId
+
+		// cid is not deep copied, for the same reason copyForBhive does not
+		// copy it: it points into the scan request's spans, which stay alive
+		// as long as the request - and so outlive every row of the scan.
+		r.cid = source.cid
 	}
 
 	r.sortKey = source.sortKey

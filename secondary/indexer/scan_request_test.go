@@ -494,15 +494,23 @@ func TestScanRequestUsePersistentVectorHeap(t *testing.T) {
 		t.Fatalf("%v must be able to turn the persistent heap off", setting)
 	}
 
-	// the setting cannot turn it on where it is unsafe
+	// a bhive scan's jobs can return the same doc, which ScanWorker.dedupBatch
+	// keeps out of the heap; the heap itself is carried either way
 	bhive := newSparseRequest()
 	bhive.isBhiveScan = true
-	if bhive.usePersistentVectorHeap(cfg) {
-		t.Fatal("a bhive scan must not use the persistent heap")
+	if !bhive.usePersistentVectorHeap(cfg) {
+		t.Fatal("a bhive sparse limit-pushdown scan must use the persistent heap")
 	}
+
+	// the setting cannot turn it on where it is unsafe
 	noLimit := newSparseRequest()
 	noLimit.Limit = 0
 	if noLimit.usePersistentVectorHeap(cfg) {
 		t.Fatal("a scan without limit pushdown must not use the persistent heap")
+	}
+	dense := newSparseRequest()
+	dense.IndexInst.Defn.SecExprsAttrs = c.SecExprAttrsArray{0, 0}
+	if dense.usePersistentVectorHeap(cfg) {
+		t.Fatal("a dense vector scan must not use the persistent heap")
 	}
 }
