@@ -39,6 +39,19 @@ func getVectorStatStr(err error) string {
 	return err.Error()
 }
 
+// countN1qlTransformErr records a document that N1QLTransform declined to
+// produce a key for because of a failure -- an EvaluateForIndex error, a nil
+// scalar/array, or a collatejson encoding error. It is deliberately NOT called
+// on the by-design paths (MISSING leading key, empty/missing leading array),
+// which are expected and common.
+//
+// stats can be nil (some callers pass nil), so the check is mandatory.
+func countN1qlTransformErr(stats *IndexEvaluatorStats) {
+	if stats != nil {
+		stats.ErrN1qlTransform.Add(1)
+	}
+}
+
 // CompileN1QLExpression will take expressions defined in N1QL's DDL statement
 // and compile them for evaluation.
 func CompileN1QLExpression(expressions []string) ([]interface{}, error) {
@@ -83,6 +96,7 @@ func N1QLTransform(
 			arg1 := logging.TagUD(exprstr)
 			arg2 := logging.TagUD(string(docid))
 			logging.Errorf(fmsg, arg1, arg2, err)
+			countN1qlTransformErr(stats)
 			return nil, nil, nil
 		}
 		isArray, _, isFlattened := expr.IsArrayIndexKey()
@@ -93,6 +107,7 @@ func N1QLTransform(
 				arg1 := logging.TagUD(exprstr)
 				arg2 := logging.TagUD(string(docid))
 				logging.Errorf(fmsg, arg1, arg2)
+				countN1qlTransformErr(stats)
 				return nil, nil, nil
 			}
 			key := scalar
@@ -111,6 +126,7 @@ func N1QLTransform(
 				arg1 := logging.TagUD(exprstr)
 				arg2 := logging.TagUD(string(docid))
 				logging.Errorf(fmsg, arg1, arg2)
+				countN1qlTransformErr(stats)
 				return nil, nil, nil
 			}
 			if isLeadingKey {
@@ -172,6 +188,7 @@ func N1QLTransform(
 				fmsg := "N1QLTransform[%v<-%v] CollateJSONEncode: index field for docid: %s (err: %v), instId: %v skip document"
 				arg := logging.TagUD(docid)
 				logging.Errorf(fmsg, stats.KeyspaceId, stats.Topic, arg, err, stats.InstId)
+				countN1qlTransformErr(stats)
 				return nil, newBuf, nil
 			}
 			return out, newBuf, err // return as collated JSON array
@@ -217,12 +234,14 @@ func N1QLTransformForVectorIndex(
 		}
 		if err != nil {
 			logError("EvaluateForIndex(%q) for docid %v, err: %v skip document", expr, docid, err)
+			countN1qlTransformErr(stats)
 			return nil, nil, nil, nil, nil
 		}
 		isArray, _, isFlattened := expr.IsArrayIndexKey()
 		if isArray == false {
 			if scalar == nil { //nil is ERROR condition
 				logError("EvaluateForIndex(%q) scalar=nil, skip document %v", expr, docid, nil)
+				countN1qlTransformErr(stats)
 				return nil, nil, nil, nil, nil
 			}
 			key := scalar
@@ -273,6 +292,7 @@ func N1QLTransformForVectorIndex(
 			// [VECTOR_TODO]: Add support for array expressions with VECTOR attribute
 			if array == nil { //nil is ERROR condition
 				logError("EvaluateForIndex(%q) array=nil, skip document %v", expr, docid, nil)
+				countN1qlTransformErr(stats)
 				return nil, nil, nil, nil, nil
 			}
 
@@ -359,6 +379,7 @@ func N1QLTransformForVectorIndex(
 				fmsg := "N1QLTransformForVectorIndex[%v<-%v] CollateJSONEncode2: index field for docid: %s (err: %v), instId: %v skip document"
 				arg := logging.TagUD(docid)
 				logging.Errorf(fmsg, stats.KeyspaceId, stats.Topic, arg, err, stats.InstId)
+				countN1qlTransformErr(stats)
 				return nil, newBuf, nil, centroidPos, nil
 			}
 			return out, newBuf, vectors, centroidPos, err // return as collated JSON array
