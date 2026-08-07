@@ -4698,6 +4698,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.bhive.invertedIndex.overlayBlocks": ConfigValue{
+		128,
+		"Per-flush-worker pending-mutation overlay capacity for the common inverted index, in 256-entry blocks (capacity = blocks * 256). The overlay absorbs accepted postings between background merges; a worker that fills it runs the merge itself, which can block behind a running compaction, so size against the compaction window at peak mutation rates. Blocks allocate lazily. <=0 uses the default of 128 (32768 entries)",
+		128,
+		false,
+		false,
+	},
 	"indexer.bhive.invertedIndex.skipRoutedCells": ConfigValue{
 		true,
 		"When true, the common inverted index only surfaces candidates from centroids the cosine router did NOT pick (recovering cosine-far high-IP vectors). When false, it also covers routed cells, recovering high-IP vectors the per-cell Vamana search missed (intra-cell misses), with docId dedup against per-cell results",

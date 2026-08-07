@@ -503,6 +503,7 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.InvertedIndexBlockSize = slice.sysconf["bhive.invertedIndex.blockSize"].Int()
 	cfg.InvertedIndexTopN = slice.sysconf["bhive.invertedIndex.topN"].Int()
 	cfg.InvertedIndexCandidateMultiplier = slice.sysconf["bhive.invertedIndex.candidateMultiplier"].Int()
+	cfg.InvertedIndexOverlayBlocks = slice.sysconf["bhive.invertedIndex.overlayBlocks"].Int()
 	cfg.VanamaBuildQuota = slice.sysconf["bhive.vanama.buildQuota"].Int()
 	cfg.FilterThreshold = float32(slice.sysconf["bhive.vanama.filterThreshold"].Float64())
 	cfg.NumCompactor = slice.sysconf["bhive.numCompactor"].Int()
@@ -2013,13 +2014,15 @@ func (mdb *bhiveSlice) buildGraph(idxInstId common.IndexInstId, callb BuildDoneC
 			// TBD: error check
 			mdb.mainstore.BuildGraph()
 
-			// Build the slice-wide inverted index — see
-			// bhive/common_inverted_index.go for the design.
+			// The initial build stream is complete: for sparse vector
+			// indexes, run one curation compaction of the common
+			// inverted index so every posting list is in its final
+			// top-K state BEFORE the index is announced ready (a
+			// static index never trips the growth-based compaction
+			// trigger, and scans must not measure the un-curated
+			// index). Synchronous: returns when compaction is done.
 			if mdb.idxDefn.HasSparseVector() {
-				if err := mdb.mainstore.BuildInvertedIndex(); err != nil {
-					logging.Warnf("bhiveSlice::buildGraph BuildInvertedIndex failed for instId %v partnId %v: %v",
-						mdb.IndexInstId(), mdb.IndexPartnId(), err)
-				}
+				mdb.mainstore.CompactInvertedIndex()
 			}
 
 			close(donech)
