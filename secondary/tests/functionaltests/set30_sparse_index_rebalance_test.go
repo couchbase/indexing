@@ -393,7 +393,8 @@ func runSparseRebalanceCancelTest(t *testing.T, cfg sparseRebalanceConfig, tag t
 	tc.HandleError(err, "Failed to activate testactions")
 
 	defer func() {
-		waitForRebalanceCleanup()
+		// removeNode below starts another rebalance; see waitForRebalanceCancelCleanup.
+		waitForRebalanceCancelCleanup(clusterconfig.Nodes[3], t)
 		configChanges := map[string]interface{}{
 			"indexer.shardRebalance.execTestAction": false,
 		}
