@@ -7931,7 +7931,7 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 	}
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
-	collectionId := idx.streamKeyspaceIdCollectionId[streamId][bucket]
+	collectionId := idx.streamKeyspaceIdCollectionId[common.MAINT_STREAM][bucket]
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
