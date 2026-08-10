@@ -2074,6 +2074,13 @@ func TestFileBasedRebalanceMultiBucketEncryption(t *testing.T) {
 			kvutility.DeleteBucket(b, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 		}
 
+		// Setup deleted the pre-existing "default" bucket to free RAM quota for
+		// the buckets above (see comment there) - restore it so later tests in
+		// this binary that assume "default" exists don't fail.
+		kvutility.CreateBucket("default", "sasl", "", clusterconfig.Username,
+			clusterconfig.Password, kvaddress, "1500", "11213")
+		time.Sleep(5 * time.Second)
+
 		resetConfig := map[string]interface{}{
 			"indexer.settings.enable_shard_affinity":       false,
 			"indexer.plasma.minShardsPerNode":              10,
