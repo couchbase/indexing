@@ -1475,6 +1475,7 @@ loop:
 				}
 
 				////////// copy shard keys to temporary directory to avoid tranfer failure during key drops
+				defer sr.cleanupStagedShardKeys(ttid)
 				bucketToKeyPathsMap, err := sr.prepareShardKeyBundles(ttid, tt, shardKeysBundle)
 
 				if err != nil {
@@ -1496,6 +1497,9 @@ loop:
 
 				////////// tranfer staging key copies to destination
 				err = sr.sendEarKeyCopyMsg(ttid, tt, getUniqueShardKeyFileNames(bucketToKeyPathsMap))
+				//sendEarKeyCopyMsg is synchronous
+				sr.cleanupStagedShardKeys(ttid)
+
 				if err != nil {
 					//nolint:golines
 					l.Errorf("ShardRebalancer::startShardTransfer shard key copy failed ttid:%v err:%v",
@@ -1675,6 +1679,9 @@ const (
 	keyCopyRetryInterval = 191 * time.Millisecond
 	keyCopyMaxRetries    = 5
 	keyCopyRetryFactor   = 2
+
+	// staged EaR keys are readable only by the indexer that staged them
+	keyStageDirPerm os.FileMode = 0700
 )
 
 func (sr *ShardRebalancer) copySingleKey(
@@ -1725,25 +1732,40 @@ func (sr *ShardRebalancer) copySingleKey(
 	}()
 
 	////////// Create staging file
-	tmpPath := filepath.Clean(filepath.Join(stagingDir, fileNameWithVersion))
-	if !strings.HasPrefix(tmpPath, stagingDir) {
+
+	keyStagePath := filepath.Clean(filepath.Join(stagingDir, fileNameWithVersion))
+	if !strings.HasPrefix(keyStagePath, stagingDir) {
 		return "", fmt.Errorf("failed to generate staging path for key file %v (%w)",
 			fileNameWithVersion, errMissingKeyPath)
 	}
 
-	stagingKeyFile, err := os.OpenFile(tmpPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600) //nolint:mnd
+	stagingKeyFile, err := os.CreateTemp(stagingDir, fileNameWithVersion+".tmp")
 	if err != nil {
-		if os.IsExist(err) {
-			return fileNameWithVersion, nil
-		}
-		err = fmt.Errorf("failed to create file %v: %w", tmpPath, err)
+		err = fmt.Errorf("failed to create staging file for %v: %w", fileNameWithVersion, err)
 		l.Warnf("ShardRebalancer::prepareShardKeyBundles: %v", err)
 		return "", err
 	}
+	tmpPath := stagingKeyFile.Name()
+
+	var staged, closed bool
+	closeStagingFile := func() error {
+		if closed {
+			return nil
+		}
+		closed = true
+		return stagingKeyFile.Close()
+	}
 	defer func() {
-		if err := stagingKeyFile.Close(); err != nil {
+		if staged {
+			return
+		}
+		if cerr := closeStagingFile(); cerr != nil {
 			l.Warnf("ShardRebalancer::prepareShardKeyBundles: err in close staging file %v: %v",
-				tmpPath, err)
+				tmpPath, cerr)
+		}
+		if rerr := os.Remove(tmpPath); rerr != nil && !os.IsNotExist(rerr) {
+			l.Warnf("ShardRebalancer::prepareShardKeyBundles: err removing partial staging "+
+				"file %v: %v", tmpPath, rerr)
 		}
 	}()
 
@@ -1753,6 +1775,24 @@ func (sr *ShardRebalancer) copySingleKey(
 		l.Warnf("ShardRebalancer::prepareShardKeyBundles: %v", err)
 		return "", err
 	}
+
+	////////// Publish the copy
+	if err = stagingKeyFile.Sync(); err != nil {
+		err = fmt.Errorf("sync of staging file %v failed: %w", tmpPath, err)
+		l.Warnf("ShardRebalancer::prepareShardKeyBundles: %v", err)
+		return "", err
+	}
+	if err = closeStagingFile(); err != nil {
+		err = fmt.Errorf("close of staging file %v failed: %w", tmpPath, err)
+		l.Warnf("ShardRebalancer::prepareShardKeyBundles: %v", err)
+		return "", err
+	}
+	if err = os.Rename(tmpPath, keyStagePath); err != nil {
+		err = fmt.Errorf("publish of staging file %v failed: %w", keyStagePath, err)
+		l.Warnf("ShardRebalancer::prepareShardKeyBundles: %v", err)
+		return "", err
+	}
+	staged = true
 
 	return fileNameWithVersion, nil
 }
@@ -1777,8 +1817,10 @@ func (sr *ShardRebalancer) prepareShardKeyBundles(
 		return nil, err
 	}
 
-	var baseDir, _ = c.GetStorageDirs(sr.config.Load(), c.Plasma_StorageEngine)
-	var stagingDir = filepath.Join(baseDir, GetRPCRootDir())
+	var stagingDir = sr.earKeyStageDir(ttid)
+	if err := os.MkdirAll(stagingDir, keyStageDirPerm); err != nil {
+		return nil, fmt.Errorf("failed to create key staging dir %v: %w", stagingDir, err)
+	}
 
 	var keyFileNames = make(map[c.KeyID]string, keyCount)
 	var fileCopyResCh = make(chan struct {
@@ -1978,6 +2020,34 @@ func (sr *ShardRebalancer) waitForDropKeys(shardKeys []c.ShardKeyBundle) error {
 	return nil
 }
 
+func earKeyStageDirName(rebalanceId, ttid string) string {
+	formatUUID := func(str string) string {
+		return strings.ReplaceAll(str, ":", "_")
+	}
+	return fmt.Sprintf("%s_%s", formatUUID(rebalanceId), formatUUID(ttid))
+}
+
+func (sr *ShardRebalancer) earKeyStageDir(ttid string) string {
+	baseDir, _ := c.GetStorageDirs(sr.config.Load(), c.Plasma_StorageEngine)
+	return filepath.Join(baseDir, GetRPCRootDir(),
+		earKeyStageDirName(sr.rebalToken.RebalId, ttid))
+}
+
+func (sr *ShardRebalancer) cleanupStagedShardKeys(ttid string) {
+	dir := sr.earKeyStageDir(ttid)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return
+	}
+
+	if err := os.RemoveAll(dir); err != nil {
+		l.Warnf("ShardRebalancer::cleanupStagedShardKeys failed to remove %v for ttid %v: %v",
+			dir, ttid, err)
+		return
+	}
+	l.Debugf("ShardRebalancer::cleanupStagedShardKeys removed staged key copies at %v for ttid %v",
+		dir, ttid)
+}
+
 func (sr *ShardRebalancer) importShardKeys(ttid string, tt *c.TransferToken) error {
 	if len(tt.ShardKeys) == 0 {
 		l.Infof("ShardRebalancer::importShardKeys no shard keys to import for transfer token %v",
@@ -1985,10 +2055,7 @@ func (sr *ShardRebalancer) importShardKeys(ttid string, tt *c.TransferToken) err
 		return nil
 	}
 
-	formatUUID := func(str string) string {
-		return strings.ReplaceAll(str, ":", "_")
-	}
-	prefix := fmt.Sprintf("%s_%s", formatUUID(sr.rebalToken.RebalId), formatUUID(ttid))
+	prefix := earKeyStageDirName(sr.rebalToken.RebalId, ttid)
 
 	baseDir, _ := c.GetStorageDirs(sr.config.Load(), c.Plasma_StorageEngine)
 	stagingRoot := filepath.Join(baseDir, GetRPCRootDir())
