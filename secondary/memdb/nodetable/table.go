@@ -14,6 +14,7 @@ package nodetable
 
 import (
 	"fmt"
+	"math"
 	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/logging"
@@ -22,7 +23,17 @@ import (
 
 var emptyResult ntResult
 
-const approxItemSize = 42
+// Approximate heap cost of a single hash table entry, calibrated for the
+// swiss table map implementation (go1.24+).
+// fastHT map[uint32]uint64: 13 bytes/slot (8B value + 4B key + 1B control)
+// at 44-88% slot occupancy, averaged.
+// slowHT map[uint32][]uint64: 29 bytes/slot (24B slice header + 4B key +
+// 1B control) at 44-88% occupancy, plus the slice backing array. Most
+// entries are single-element slices from 2-way crc32 collisions.
+const (
+	approxFastItemSize = 24
+	approxSlowItemSize = 75
+)
 
 var dbInstances *skiplist.Skiplist
 
@@ -39,6 +50,12 @@ type NodeTable struct {
 	fastHTCount uint64
 	slowHTCount uint64
 	conflicts   uint64
+
+	// High watermarks of the entry counts. Go maps never release memory
+	// on delete, so memory usage is governed by the peak count, not the
+	// current count.
+	fastHTMaxCount uint64
+	slowHTMaxCount uint64
 
 	hash     HashFn
 	keyEqual EqualKeyFn
@@ -86,22 +103,31 @@ func (nt *NodeTable) Stats() string {
 	return fmt.Sprintf("{\n"+
 		`"FastHTCount":  %d,`+"\n"+
 		`"SlowHTCount":  %d,`+"\n"+
+		`"FastHTMaxCount":  %d,`+"\n"+
+		`"SlowHTMaxCount":  %d,`+"\n"+
 		`"Conflicts":   %d,`+"\n"+
 		`"MemoryInUse": %d`+"\n}",
-		nt.fastHTCount, nt.slowHTCount, nt.conflicts, nt.MemoryInUse())
+		nt.fastHTCount, nt.slowHTCount, nt.fastHTMaxCount, nt.slowHTMaxCount,
+		nt.conflicts, nt.MemoryInUse())
 }
 
 func (nt *NodeTable) StatsMap() map[string]interface{} {
 	mp := make(map[string]interface{})
 	mp["FastHTCount"] = nt.fastHTCount
 	mp["SlowHTCount"] = nt.slowHTCount
+	mp["FastHTMaxCount"] = nt.fastHTMaxCount
+	mp["SlowHTMaxCount"] = nt.slowHTMaxCount
 	mp["Conflicts"] = nt.conflicts
 	mp["MemoryInUse"] = nt.MemoryInUse()
 	return mp
 }
 
 func (nt *NodeTable) MemoryInUse() int64 {
-	return int64(approxItemSize * (nt.fastHTCount + nt.slowHTCount))
+	mem := approxFastItemSize*nt.fastHTMaxCount + approxSlowItemSize*nt.slowHTMaxCount
+	if mem > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(mem)
 }
 
 func (nt *NodeTable) Get(key []byte) unsafe.Pointer {
@@ -174,6 +200,9 @@ func (nt *NodeTable) Update(key []byte, nptr unsafe.Pointer) (updated bool, oldP
 				nt.conflicts++
 			}
 			nt.slowHTCount++
+			if nt.slowHTCount > nt.slowHTMaxCount {
+				nt.slowHTMaxCount = nt.slowHTCount
+			}
 		} else {
 			// Insert new item into fastHT
 			if nptr == nil {
@@ -182,6 +211,9 @@ func (nt *NodeTable) Update(key []byte, nptr unsafe.Pointer) (updated bool, oldP
 			}
 			nt.fastHT[res.hash] = encodePointer(nptr, false)
 			nt.fastHTCount++
+			if nt.fastHTCount > nt.fastHTMaxCount {
+				nt.fastHTMaxCount = nt.fastHTCount
+			}
 		}
 	}
 
@@ -325,6 +357,8 @@ func (nt *NodeTable) find(key []byte) (res *ntResult) {
 func (nt *NodeTable) Close() {
 	nt.fastHTCount = 0
 	nt.slowHTCount = 0
+	nt.fastHTMaxCount = 0
+	nt.slowHTMaxCount = 0
 	nt.conflicts = 0
 	nt.fastHT = make(map[uint32]uint64)
 	nt.slowHT = make(map[uint32][]uint64)

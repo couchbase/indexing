@@ -463,7 +463,23 @@ func (ie *IndexEvaluator) ProcessEvent(m *mc.DcpEvent, encodeBuf []byte,
 		// Hence, re-use the encodeBuf for include column evaluation
 		includeColumn, newBuf, err = ie.includeColumns(m, m.Key, docval, context, encodeBuf[:0])
 		if err != nil {
-			return npkey, opkey, nkey, okey, includeColumn, newBuf, where, opcode, nil, nil, err
+			// A document whose include columns cannot be built must not be
+			// indexed: the secondary key is still valid, so the row would be
+			// persisted with no include bytes and every include-column filter
+			// would then reject it.
+			//
+			// Drop the secondary key so this behaves exactly like an evaluate()
+			// failure, which returns a nil key. populateData then sends an Upsert
+			// with an empty key, and the indexer's slice treats len(key)==0 as a
+			// delete for that docid. Unlike returning the error -- which would
+			// make TransformRoute force an UpsertDeletion -- this also removes the
+			// document on partitioned indexes without a WHERE clause, where the
+			// flusher skips UpsertDeletion as immutable.
+			//
+			// N1QLTransform has already logged the specific failure along with
+			// the docid, so no additional logging here (these paths are per
+			// mutation and would otherwise flood).
+			nkey, includeColumn, nVectors, centroidPos, err = nil, nil, nil, nil, nil
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
@@ -731,9 +747,36 @@ func (ie *IndexEvaluator) includeColumns(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
+		// Include columns are never a leading index key, so a MISSING
+		// value must be encoded as MISSING instead of dropping the whole
+		// include-column array. Passing indexMissingLeadingKey=true clears
+		// N1QLTransform's isLeadingKey, which otherwise makes a MISSING first
+		// include field return a nil include column. That nil made the indexer
+		// persist the BHIVE row with no include bytes, and the scan-time
+		// include filter then panicked slicing meta[codeSize:].
 		out, newBuf, err := N1QLTransform(docid, docval, context, ie.includeExprs,
-			0, encodeBuf, ie.stats, false)
-		return out, newBuf, err
+			0, encodeBuf, ie.stats, true)
+		if err != nil {
+			return nil, newBuf, err
+		}
+
+		// N1QLTransform reports its remaining failure modes -- EvaluateForIndex
+		// error, scalar==nil, and CollateJSONEncode failure -- by logging and
+		// returning a nil key with a *nil* error. For a secondary key that is
+		// self-consistent: a nil key means the document is simply not indexed.
+		// For include columns it is not, because the vector key is still valid,
+		// so the row gets persisted with no include bytes and every
+		// include-column filter then rejects it -- the same corruption as
+		// MB-72479, just from a different trigger.
+		//
+		// Report it as an error and let ProcessEvent decide the policy.
+		if len(out) == 0 {
+			return nil, newBuf, fmt.Errorf("failed to evaluate include columns %v "+
+				"for docid %s, instId %v", defn.GetInclude(),
+				logging.TagUD(string(docid)), ie.instance.GetInstId())
+		}
+
+		return out, newBuf, nil
 	}
 	return nil, nil, nil
 }
@@ -794,6 +837,23 @@ type IndexEvaluatorStats struct {
 	ErrInvalidVectorType      stats.Int64Val
 	ErrZeroVectorForCosine    stats.Int64Val
 
+	// ErrN1qlTransform counts the documents that N1QLTransform (or
+	// N1QLTransformForVectorIndex) declined to produce a key for because of a
+	// *failure* -- an EvaluateForIndex error, a nil scalar/array, or a
+	// collatejson encoding error.
+	//
+	// It deliberately excludes the cases where returning no key is by design
+	// (MISSING leading key, empty or missing leading array), which are common
+	// and expected. Those are indistinguishable from a failure to the caller,
+	// which is why this is counted inside the transform rather than at the
+	// call sites.
+	//
+	// A non-zero value means documents are being silently dropped from the
+	// index: the transform returns a nil key with a nil error, and a nil key
+	// is applied downstream as a delete. ErrSkip does not cover these, because
+	// it only increments when a non-nil error reaches TransformRoute.
+	ErrN1qlTransform stats.Int64Val
+
 	InstId     common.IndexInstId
 	Topic      string
 	KeyspaceId string
@@ -813,6 +873,8 @@ func (ie *IndexEvaluatorStats) Init() {
 	ie.ErrInvalidVectorDimension.Init()
 	ie.ErrHeterogenousVectorData.Init()
 	ie.ErrZeroVectorForCosine.Init()
+
+	ie.ErrN1qlTransform.Init()
 }
 
 func (ies *IndexEvaluatorStats) add(duration time.Duration) {
@@ -849,6 +911,12 @@ func (ies *IndexEvaluatorStats) GetAndResetErrorSkip() int64 {
 
 func (ies *IndexEvaluatorStats) GetErrorSkipAll() int64 {
 	return ies.ErrSkipAll.Value()
+}
+
+// GetN1qlTransformErrs returns the cumulative count of documents that the N1QL
+// transform skipped due to an evaluation or encoding failure.
+func (ies *IndexEvaluatorStats) GetN1qlTransformErrs() int64 {
+	return ies.ErrN1qlTransform.Value()
 }
 
 func (ies *IndexEvaluatorStats) GetVectorErrs() map[string]int64 {
