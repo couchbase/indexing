@@ -265,12 +265,13 @@ func (c *GsiScanClient) doStreamingWithRetry(
 	}
 
 	defer func() {
-		go func() {
-			if healthy && closeStream {
-				if wg != nil {
-					wg.Add(1)
-				}
+		doClose := healthy && closeStream
+		if wg != nil && doClose {
+			wg.Add(1)
+		}
 
+		go func() {
+			if doClose {
 				conn, pkt := connectn.conn, connectn.pkt
 				var closeErr error
 				closeErr, healthy = c.closeStream(conn, pkt, requestId, callb)
