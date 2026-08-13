@@ -2054,7 +2054,8 @@ func (stm *ShardTransferManager) processEarKeyCopyMessage(cmd Message) {
 	defer copier.Done()
 
 	storageDir, _ := c.GetStorageDirs(stm.config, c.Plasma_StorageEngine)
-	stagingDir := filepath.Join(storageDir, GetRPCRootDir())
+	stagingDir := filepath.Join(storageDir, GetRPCRootDir(),
+		earKeyStageDirName(msg.GetRebalanceId(), msg.GetTransferTokenId()))
 	copyRoot := getKeyCopyRootDir(meta)
 
 	for _, fileName := range msg.GetKeyFilePaths() {
@@ -2198,16 +2199,8 @@ func generatePlasmaCopierConfigForKeys(meta *plasmaCopyConfigMeta) *plasma.Confi
 }
 
 func getKeyCopyRootDir(meta *plasmaCopyConfigMeta) string {
-	rebalanceId := meta.GetRebalanceId()
-	ttid := meta.GetTransferTokenId()
-	destination := meta.GetDestination()
-
-	formatUUID := func(str string) string {
-		return strings.ReplaceAll(str, ":", "_")
-	}
-
-	prefix := fmt.Sprintf("%s_%s", formatUUID(rebalanceId), formatUUID(ttid))
-	return joinURIPath(destination, KEY_COPY_PREFIX, prefix)
+	prefix := earKeyStageDirName(meta.GetRebalanceId(), meta.GetTransferTokenId())
+	return joinURIPath(meta.GetDestination(), KEY_COPY_PREFIX, prefix)
 }
 
 type ShardTypeMapper struct {

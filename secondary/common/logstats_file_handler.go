@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/logstats/logstats"
@@ -54,6 +55,10 @@ type LogStatsFileHandler struct {
 	mu         sync.Mutex
 	getKey     func() (keyID string, key []byte)
 	getKeyByID func(keyID string) ([]byte, string)
+	// Serializes RefreshKeyIdList
+	refreshMu sync.Mutex
+	// current active + all rotated
+	inUseIDs atomic.Pointer[[]string]
 }
 
 func NewLogStatsFileHandler(
@@ -95,6 +100,7 @@ func (h *LogStatsFileHandler) Open(fileName string) (logstats.SyncWriteCloser, i
 			f.Close()
 			return nil, 0, err
 		}
+		h.RefreshKeyIdList(fileName)
 		return &encryptedStatsWriter{f: f, w: w}, int(fi.Size()), nil
 	}
 	f, err := os.OpenFile(fileName, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -106,6 +112,7 @@ func (h *LogStatsFileHandler) Open(fileName string) (logstats.SyncWriteCloser, i
 		f.Close()
 		return nil, 0, err
 	}
+	h.RefreshKeyIdList(fileName)
 	return f, int(fi.Size()), nil
 }
 
@@ -117,6 +124,9 @@ func (h *LogStatsFileHandler) Rotate(fileName string, numFiles int) (logstats.Sy
 		return h.skipRotate(fileName)
 	}
 	defer h.mu.Unlock()
+	// Deferred so every exit path leaves the cache describing what is on disk.
+	defer h.RefreshKeyIdList(fileName)
+
 	if h.getKey == nil {
 		return nil, 0, fmt.Errorf("LogStatsFileHandler.Rotate: getKey callback is nil")
 	}
@@ -160,6 +170,81 @@ func (h *LogStatsFileHandler) PauseRotation() {
 }
 func (h *LogStatsFileHandler) ResumeRotation() {
 	h.mu.Unlock()
+}
+func (h *LogStatsFileHandler) GetKeyIdList() []string {
+	ids := h.inUseIDs.Load()
+	if ids == nil {
+		return nil // no refresh has run yet
+	}
+	return append([]string(nil), *ids...)
+}
+
+func (h *LogStatsFileHandler) RefreshKeyIdList(fileName string) {
+
+	h.refreshMu.Lock()
+	defer h.refreshMu.Unlock()
+
+	ids, complete := statsLogKeyIDs(fileName)
+	if !complete {
+		// The scan hit an error, so it may be missing keys that are still in
+		// use. Keep whatever we published before rather than shrinking the list of keys
+		prev := h.GetKeyIdList()
+		seen := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			seen[id] = true
+		}
+		for _, id := range prev {
+			if !seen[id] {
+				ids = append(ids, id)
+			}
+		}
+	}
+	h.inUseIDs.Store(&ids)
+}
+
+// statsLogKeyIDs reads the key ID out of the active file and every rotated
+// slot. complete is false when a file could not be
+// read, meaning the returned set may be short/not complete.
+func statsLogKeyIDs(fileName string) (ids []string, complete bool) {
+	complete = true
+
+	stem := fileName
+	if filepath.Ext(stem) == ".log" {
+		stem = stem[:len(stem)-len(".log")]
+	}
+	rotated, err := filepath.Glob(stem + ".log.*")
+	if err != nil {
+		logging.Errorf("LogStatsFileHandler: cannot list rotated slots for %q: %v", fileName, err)
+		complete = false
+	}
+
+	seen := make(map[string]bool, len(rotated)+1)
+	ids = make([]string, 0, len(rotated)+1)
+
+	for _, path := range append([]string{fileName}, rotated...) {
+		if strings.HasSuffix(path, ".tmp") {
+			continue // half-written reencrypt output; rotation skips these too
+		}
+		id, err := GetStatsLogFileKeyID(path)
+		switch {
+		case err == nil:
+			// id is the key this file was encrypted with
+		case errors.Is(err, ErrCBCryptoHeader):
+			id = "" // plaintext or .gz slot
+		case os.IsNotExist(err):
+			continue // no active file yet, or a slot rotated away underneath us
+		default:
+			// Cannot determine this file's key, so we cannot pin it.
+			logging.Errorf("LogStatsFileHandler: cannot read key ID from %q: %v", path, err)
+			complete = false
+			continue
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids, complete
 }
 
 func GetStatsLogFileKeyID(path string) (string, error) {

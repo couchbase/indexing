@@ -19,9 +19,11 @@ func NewLogStatsFileHandler(_ func() (keyID string, key []byte), _ func(string) 
 	return &LogStatsFileHandler{}
 }
 
-func (h *LogStatsFileHandler) DisableCompression() {}
-func (h *LogStatsFileHandler) PauseRotation()      {}
-func (h *LogStatsFileHandler) ResumeRotation()     {}
+func (h *LogStatsFileHandler) DisableCompression()       {}
+func (h *LogStatsFileHandler) PauseRotation()            {}
+func (h *LogStatsFileHandler) ResumeRotation()           {}
+func (h *LogStatsFileHandler) GetKeyIdList() []string    { return nil }
+func (h *LogStatsFileHandler) RefreshKeyIdList(_ string) {}
 
 func (h *LogStatsFileHandler) Open(fileName string) (logstats.SyncWriteCloser, int, error) {
 	if err := os.MkdirAll(filepath.Dir(fileName), 0o755); err != nil {

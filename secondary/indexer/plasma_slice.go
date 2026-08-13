@@ -1529,6 +1529,7 @@ type plasmaReaderCtx struct {
 	user             string
 	skipReadMetering bool
 	cursorCtx
+	scanRLSSReadDur time.Duration
 }
 
 func (ctx *plasmaReaderCtx) Init(donech chan bool) bool {
@@ -5299,7 +5300,11 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 		return ErrIndexRollback
 	}
 
-	defer it.Close()
+	defer func() {
+		scanStats := it.CloseAndGetScanStats()
+		reader.scanRLSSReadDur += scanStats.RLSSScanDur
+	}()
+
 	//call fincb before iterator close. This allows caller to do
 	//any final actions before iterator resources get freed up.
 	if fincb != nil {
@@ -5419,6 +5424,15 @@ loop:
 	}
 
 	return nil
+}
+
+func (r *ScanRequest) GetPlasmaScanLSSReadDur() (dur time.Duration) {
+	for _, ctx := range r.Ctxs {
+		if prc, ok := ctx.(*plasmaReaderCtx); ok {
+			dur += prc.scanRLSSReadDur
+		}
+	}
+	return
 }
 
 func (s *plasmaSnapshot) isPrimary() bool {

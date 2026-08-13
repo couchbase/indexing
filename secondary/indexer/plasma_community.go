@@ -13,6 +13,7 @@ package indexer
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
 )
@@ -67,6 +68,10 @@ func RecoveryDone_Plasma() {
 // GetEmptyShardInfo_Plasma - placeholder for community edition
 func GetEmptyShardInfo_Plasma() ([]common.ShardId, error) {
 	return nil, nil
+}
+
+func (r *ScanRequest) GetPlasmaScanLSSReadDur() (dur time.Duration) {
+	return 0
 }
 
 // DestroyShard_Plasma - placeholder for community edition
