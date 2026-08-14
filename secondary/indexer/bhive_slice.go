@@ -164,6 +164,16 @@ type bhiveSlice struct {
 	stopPersistor     bool
 	persistorQueue    *bhiveSnapshot
 	snapCount         uint64
+	// persistDoneCh is closed when the current (or next) CreateRecoveryPoint2
+	// completes.  Created on demand by SubscribeNextPersistDone or doPersistSnapshot
+	// and reset to nil after being closed, then re-created for the next run.
+	persistDoneCh chan struct{}
+
+	// rollbackCh is closed whenever Rollback or RollbackToZero is called.
+	// A new channel is created after each closure so subsequent subscribers
+	// get a fresh signal.  Callers waiting on SubscribeNextPersistDone must
+	// also select on this channel and treat its closure as ErrIndexRollback.
+	rollbackCh chan struct{}
 
 	// rollback
 	lastRollbackTs *common.TsVbuuid
@@ -1035,6 +1045,7 @@ func (slice *bhiveSlice) setupWriters() {
 	slice.cmdCh = make([]chan *indexMutation, 0, slice.maxNumWriters)
 	slice.stopCh = make([]DoneChannel, 0, slice.maxNumWriters)
 	slice.cmdStopCh = make(DoneChannel)
+	slice.rollbackCh = make(chan struct{})
 
 	// initialize writers
 	slice.mainWriters = make([]*bhive.Writer, 0, slice.maxNumWriters)
@@ -2334,6 +2345,10 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 
 	if !mdb.isPersistorActive {
 		mdb.isPersistorActive = true
+		// Create the done channel if no subscriber has already created it.
+		if mdb.persistDoneCh == nil {
+			mdb.persistDoneCh = make(chan struct{})
+		}
 		go mdb.persistSnapshot(s)
 	} else {
 		logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v EnQueuing SnapshotId %v ondisk"+
@@ -2359,9 +2374,13 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 		close(s.chkpointCh)
 
 		mdb.persistorLock.Lock()
-		defer mdb.persistorLock.Unlock()
-
+		doneCh := mdb.persistDoneCh
+		mdb.persistDoneCh = nil
 		mdb.isPersistorActive = false
+		mdb.persistorLock.Unlock()
+		if doneCh != nil {
+			close(doneCh)
+		}
 		return
 	}
 
@@ -2432,21 +2451,46 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 
 	mdb.cleanupOldRecoveryPoints(s.info)
 
+	persistOk := mErr == nil && bErr == nil
+
+	// Under a single lock acquisition: capture and reset persistDoneCh, then
+	// handle queued snapshot.  Doing this atomically means there is no window
+	// where persistDoneCh is nil while isPersistorActive is still true, which
+	// would cause SubscribeNextPersistDone to create a channel that never closes.
 	mdb.persistorLock.Lock()
-	defer mdb.persistorLock.Unlock()
+
+	var doneCh chan struct{}
+	if persistOk {
+		doneCh = mdb.persistDoneCh
+		mdb.persistDoneCh = nil
+	}
 
 	queuedS := mdb.persistorQueue
 	if !mdb.stopPersistor && queuedS != nil {
 		mdb.persistorQueue = nil
+		// Create a fresh channel for the queued snapshot's CreateRecoveryPoint2.
+		if persistOk {
+			mdb.persistDoneCh = make(chan struct{})
+		}
 		go mdb.persistSnapshot(queuedS)
+		mdb.persistorLock.Unlock()
+		// Close the previous run's channel outside the lock.
+		if doneCh != nil {
+			close(doneCh)
+		}
 		return
 	}
 	if queuedS != nil {
 		mdb.closeQueuedSnapNoLock()
 	}
-
 	mdb.stopPersistor = false
 	mdb.isPersistorActive = false
+	mdb.persistorLock.Unlock()
+
+	// Close outside the lock so that unblocked goroutines do not contend on it.
+	if doneCh != nil {
+		close(doneCh)
+	}
 }
 
 // Find rps that are present in only one of mainstore and
@@ -2662,6 +2706,8 @@ func (mdb *bhiveSlice) Rollback(s SnapshotInfo) error {
 	mdb.waitPersist()
 	mdb.waitForPersistorThread()
 
+	mdb.signalRollback()
+
 	qc := atomic.LoadInt64(&mdb.qCount)
 	if qc > 0 {
 		common.CrashOnError(fmt.Errorf("Slice Invariant Violation - rollback with pending mutations"))
@@ -2688,6 +2734,8 @@ func (mdb *bhiveSlice) Rollback(s SnapshotInfo) error {
 func (mdb *bhiveSlice) RollbackToZero(initialBuild bool) error {
 	mdb.waitPersist()
 	mdb.waitForPersistorThread()
+
+	mdb.signalRollback()
 
 	if err := mdb.resetStores(initialBuild); err != nil {
 		return err
@@ -3158,6 +3206,24 @@ func (mdb *bhiveSlice) Close() {
 	// be no-op
 	close(mdb.cmdStopCh)
 
+	// Unblock any SubscribeNextPersistDone waiters that are not covered by a
+	// running persistSnapshot's CheckCmdChStopped guard.  If isPersistorActive
+	// is true, persistSnapshot will close persistDoneCh via its own
+	// CheckCmdChStopped early-return path.  If false, no goroutine will ever
+	// close it, so we must do it here.
+	mdb.persistorLock.Lock()
+	var doneCh chan struct{}
+	if !mdb.isPersistorActive {
+		doneCh = mdb.persistDoneCh
+		mdb.persistDoneCh = nil
+	}
+	mdb.persistorLock.Unlock()
+	if doneCh != nil {
+		logging.Infof("bhiveSlice::Close Closing persistDoneCh for Slice Id %v, IndexInstId %v, PartitionId %v",
+			mdb.id, mdb.idxInstId, mdb.idxPartnId)
+		close(doneCh)
+	}
+
 	// After producer and consumer is closed set the qCount to 0 so that any
 	// routine waiting for queue to be empty can go ahead. Mutations remaining
 	// in cmdCh will be garbage collected eventually upon close
@@ -3337,6 +3403,45 @@ func (mdb *bhiveSlice) GetKeyIdList() ([][]byte, error) {
 	}
 
 	return keyIds, nil
+}
+
+// SubscribeNextPersistDone returns a channel that is closed when the current
+// or next CreateRecoveryPoint2 completes for this slice.
+// If a persist is already in progress the existing channel is returned.
+// If none is active a new channel is created and stored so that the next
+// doPersistSnapshot reuses it — ensuring no window where a caller misses
+// the completion signal.
+func (mdb *bhiveSlice) SubscribeNextPersistDone() <-chan struct{} {
+	mdb.persistorLock.Lock()
+	defer mdb.persistorLock.Unlock()
+
+	if mdb.persistDoneCh == nil {
+		mdb.persistDoneCh = make(chan struct{})
+	}
+	return mdb.persistDoneCh
+}
+
+// signalRollback closes the current rollbackCh (unblocking any waiters) and
+// installs a fresh channel for subsequent callers.  Must be called after
+// waitForPersistorThread so that no concurrent persistor is running.
+func (mdb *bhiveSlice) signalRollback() {
+	mdb.persistorLock.Lock()
+	ch := mdb.rollbackCh
+	mdb.rollbackCh = make(chan struct{})
+	mdb.persistorLock.Unlock()
+	close(ch)
+}
+
+// GetRollbackNotifyCh returns a channel that is closed when Rollback or
+// RollbackToZero is called on this slice.
+func (mdb *bhiveSlice) GetRollbackNotifyCh() <-chan struct{} {
+	mdb.persistorLock.Lock()
+	defer mdb.persistorLock.Unlock()
+	return mdb.rollbackCh
+}
+
+func (mdb *bhiveSlice) SliceType() string {
+	return SliceTypeBhive
 }
 
 func (mdb *bhiveSlice) SetCodebookEncryptionKey(key []byte, keyId string, cipher string, kdt KeyDataType) error {

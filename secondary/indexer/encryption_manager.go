@@ -1255,6 +1255,7 @@ func (e *EncryptionMgr) SetClusterEncrKeysInfoNoLock(kdt KeyDataType, info *Encr
 	var dkinfo EncrKeysInfo
 	dkinfo = *info
 
+	logging.Infof("EncryptionMgr:SetClusterEncrKeysInfoNoLock for type:%v", kdt)
 	encrKeysInfo, ok := e.dataTypeKeyInfoMap[kdt]
 	if !ok || encrKeysInfo == nil {
 		//New entry

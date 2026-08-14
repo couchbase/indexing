@@ -30,6 +30,7 @@ import (
 var (
 	ErrIndexRollback            = errors.New("Indexer rollback")
 	ErrIndexRollbackOrBootstrap = errors.New("Indexer rollback or warmup")
+	ErrStorageMgrStopping       = errors.New("StorageMgr stopping")
 )
 
 type KeyspaceIdInstList map[string][]common.IndexInstId
@@ -100,6 +101,18 @@ type storageMgr struct {
 
 	// used to phase out the minQuotaThreshold over time
 	plasmaLastCreateTime, bhiveLastCreateTime time.Time
+
+	// diskSnapDoneMu protects diskSnapDoneChs
+	diskSnapDoneMu sync.Mutex
+	// diskSnapDoneChs holds per-(streamId, keyspaceId) channels that are
+	// replaced+closed each time a DISK_SNAP createSnapshotWorker completes.
+	// Callers block on a channel grabbed before the snap fires; the close
+	// unblocks them when that snap's OpenSnapshot calls are all done.
+	diskSnapDoneChs map[common.StreamId]map[string]chan struct{}
+
+	// shutdownCh is closed when storageMgr shuts down (STORAGE_MGR_SHUTDOWN).
+	// Used to unblock goroutines waiting on diskSnapDoneChs or persistDoneCh.
+	shutdownCh chan struct{}
 }
 
 type snapshotWaiter struct {
@@ -153,7 +166,9 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		wrkrCh:           make(chan Message, 100),
 		shardsInTransfer: make(map[common.ShardId][]chan bool),
 
-		quotaDistCh: make(chan bool),
+		quotaDistCh:     make(chan bool),
+		diskSnapDoneChs: make(map[common.StreamId]map[string]chan struct{}),
+		shutdownCh:      make(chan struct{}),
 	}
 	s.indexInstMap.Init()
 	s.indexPartnMap.Init()
@@ -231,6 +246,9 @@ loop:
 
 					// shutdown storage mem tuner
 					s.signalStorageTuner(true)
+
+					// unblock any goroutines waiting on diskSnapDoneChs or persistDoneCh
+					close(s.shutdownCh)
 
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
@@ -587,6 +605,58 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 }
 
+// getDiskSnapDoneCh returns the current pending channel for (streamId, keyspaceId).
+// If none exists one is created. Callers must grab this BEFORE the disk_snap fires
+// so that the subsequent signalDiskSnapDone closes the channel they are holding.
+func (s *storageMgr) getDiskSnapDoneCh(streamId common.StreamId, keyspaceId string) chan struct{} {
+	s.diskSnapDoneMu.Lock()
+	defer s.diskSnapDoneMu.Unlock()
+
+	if s.diskSnapDoneChs[streamId] == nil {
+		s.diskSnapDoneChs[streamId] = make(map[string]chan struct{})
+	}
+	ch, ok := s.diskSnapDoneChs[streamId][keyspaceId]
+	if !ok {
+		ch = make(chan struct{})
+		s.diskSnapDoneChs[streamId][keyspaceId] = ch
+	}
+	logging.Infof("StorageMgr::getDiskSnapDoneCh returned channel isNew:%v %v keyspace:%v", !ok, streamId, keyspaceId)
+	return ch
+}
+
+// signalDiskSnapDone closes the current channel for (streamId, keyspaceId) —
+// unblocking any goroutines waiting on it — and installs a fresh channel for
+// the next waiter.  Called after wg.Wait() in createSnapshotWorker for DISK_SNAP.
+func (s *storageMgr) signalDiskSnapDone(streamId common.StreamId, keyspaceId string) {
+	s.diskSnapDoneMu.Lock()
+	defer s.diskSnapDoneMu.Unlock()
+
+	if s.diskSnapDoneChs[streamId] == nil {
+		s.diskSnapDoneChs[streamId] = make(map[string]chan struct{})
+	}
+	old := s.diskSnapDoneChs[streamId][keyspaceId]
+	// Fresh channel for the next caller
+	s.diskSnapDoneChs[streamId][keyspaceId] = make(chan struct{})
+	if old != nil {
+		logging.Infof("StorageMgr::signalDiskSnapDone closing channel for %v keyspace %v", streamId, keyspaceId)
+		close(old)
+	}
+}
+
+// closeDiskSnapDoneCh closes and removes the channel for (streamId, keyspaceId),
+// unblocking any goroutine waiting on it.  Called when a keyspace is permanently
+// removed so waiters in handleEncryptionDropKey do not block indefinitely.
+func (s *storageMgr) closeDiskSnapDoneCh(streamId common.StreamId, keyspaceId string) {
+	s.diskSnapDoneMu.Lock()
+	defer s.diskSnapDoneMu.Unlock()
+	if m := s.diskSnapDoneChs[streamId]; m != nil {
+		if ch, ok := m[keyspaceId]; ok {
+			delete(m, keyspaceId)
+			close(ch)
+		}
+	}
+}
+
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId string,
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
@@ -619,6 +689,12 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	}
 
 	wg.Wait()
+
+	// Signal any goroutines waiting for a RP
+	// to complete handleEncryptionDropKey.
+	if needsCommit || forceCommit {
+		s.signalDiskSnapDone(streamId, keyspaceId)
+	}
 
 	keyspaceStats := s.stats.GetKeyspaceStats(streamId, keyspaceId)
 	end := time.Now().UnixNano()
@@ -1512,6 +1588,19 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	indexSnapMap := s.indexSnapMap.Clone()
 
 	streamKeyspaceIdInstList := getStreamKeyspaceIdInstListFromInstMap(indexInstMap)
+
+	// Close diskSnapDoneCh for any (stream, keyspace) pairs that have disappeared,
+	// so that goroutines in handleEncryptionDropKey do not block indefinitely.
+	oldStreamKeyspaceIdInstList := s.streamKeyspaceIdInstList.Get()
+	for streamId, oldKsMap := range oldStreamKeyspaceIdInstList {
+		for keyspaceId := range oldKsMap {
+			if newKsMap, ok := streamKeyspaceIdInstList[streamId]; !ok || len(newKsMap[keyspaceId]) == 0 {
+				logging.Infof("StorageMgr::handleUpdateIndexInstMap closing diskSnapDoneCh for stream %v keyspace %v", streamId, keyspaceId)
+				s.closeDiskSnapDoneCh(streamId, keyspaceId)
+			}
+		}
+	}
+
 	s.streamKeyspaceIdInstList.Set(streamKeyspaceIdInstList)
 
 	streamKeyspaceIdInstsPerWorker := getStreamKeyspaceIdInstsPerWorker(streamKeyspaceIdInstList, s.getNumSnapshotWorkers())
@@ -3853,6 +3942,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 	activeEarKey := cmd.(*MsgEncryptionDropKey).GetActiveEarKey()
 	respCh := cmd.(*MsgEncryptionDropKey).GetRespCh()
 	earkey := cmd.(*MsgEncryptionDropKey).GetActiveEarKey()
+	retryCount := cmd.(*MsgEncryptionDropKey).GetRetryCount()
 	logging.Infof("StorageMgr::handleEncryptionDropKey keydatatype:%v", kdt)
 
 	dropKeyIdsBytes := make([][]byte, len(dropKeyIds))
@@ -3872,7 +3962,62 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, 1)
 
+	// Step 1: Check whether any bhive slices exist for this bucketUUID.
+	// If so, wait for the next CreateRecoveryPoint2 to complete for each bhive
+	// slice before calling DropKeys, so that the drop key is not applied before
+	// the data encrypted with the old key has been durably persisted.
+	hasBhive := false
+	for instId, inst := range indexInstMap {
+		if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+		if inst.Stream != common.INIT_STREAM && inst.Stream != common.MAINT_STREAM && inst.Stream != common.NIL_STREAM {
+			continue
+		}
+		partnMap, ok := indexPartnMap[instId]
+		if !ok {
+			continue
+		}
+		for _, partnInst := range partnMap {
+			for _, slice := range partnInst.Sc.GetAllSlices() {
+				if slice.SliceType() == SliceTypeBhive {
+					hasBhive = true
+				}
+			}
+		}
+	}
+
 	go func() {
+		// For each bhive slice, subscribe to be notified when the current or
+		// next CreateRecoveryPoint2 completes.  SubscribeNextPersistDone is
+		// safe to call without a prior disk-snap wait: persistorLock guarantees
+		// that persistDoneCh=nil and isPersistorActive=false are always set
+		// together, so any channel created here is either closed by the
+		// in-progress RP or picked up and closed by the next doPersistSnapshot.
+		indexInstMap = s.indexInstMap.Get()
+		indexPartnMap = s.indexPartnMap.Get()
+
+		// For each bhive slice, subscribe to be notified when its current
+		// CreateRecoveryPoint2 completes.  This is atomic under persistorLock
+		// so there is no gap between "no persistor running" and "next one starts".
+		type persistWait struct {
+			persistCh  <-chan struct{}
+			rollbackCh <-chan struct{}
+			instId     common.IndexInstId
+			partnId    common.PartitionId
+		}
+
+		// Re-read maps one more time now that all CreateRecoveryPoint2 calls
+		// have completed for the affected slices.
+		indexInstMap = s.indexInstMap.Get()
+		indexPartnMap = s.indexPartnMap.Get()
+
+		// Check if at least one bhive/plasma slice returns ErrRetryDropKey
+		// For bhive ErrRetryDropKey, RP creation steps are required :MB-71944
+		// For plasma ErrRetryDropKey, only retries of slice.DropKey are required.
+		var bhiveErrRetryDropKey error
+		var plasmaErrRetryDropKey error
+		var errMu sync.Mutex
 
 		//Storage encryption
 		for instId, inst := range indexInstMap {
@@ -3927,9 +4072,21 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 						slice.DropKeys(dropKeyIdsBytes, respChSlice)
 						errResp := <-respChSlice
 						if errResp != nil {
-							select {
-							case errCh <- errResp:
-							default:
+							if errResp == ErrRetryDropKey {
+								func(){
+									errMu.Lock()
+									defer errMu.Unlock()
+									if slice.SliceType() == SliceTypeBhive {
+										bhiveErrRetryDropKey = ErrRetryDropKey
+									} else if slice.SliceType() == SliceTypePlasma {
+										plasmaErrRetryDropKey = ErrRetryDropKey
+									}	
+								}()
+							} else {
+								select {
+								case errCh <- errResp:
+								default:
+								}
 							}
 							logging.Errorf("StorageMgr::handleEncryptionDropKey DropKeys for instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), errResp)
 						} else {
@@ -3960,6 +4117,77 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 			return
 		default:
 			logging.Infof("StorageMgr::handleEncryptionDropKey done for storage slices %v", kdt)
+		}
+
+		// After DropKeys, bhive data has been re-encrypted with the new key but
+		// old recovery points (still referencing the dropped key) remain on disk
+		// until cleaned up by cleanupOldRecoveryPoints.  Wait for TWO successive
+		// CreateRecoveryPoint2 completions per bhive slice so that
+		// cleanupOldRecoveryPoints has had two chances to purge the stale RPs.
+		// We track completion at the slice level (via SubscribeNextPersistDone)
+		// rather than at the (stream, keyspace) level so that a stream transition
+		// (e.g. INIT_STREAM → MAINT_STREAM between the two iterations) does not
+		// result in only one effective RP per slice.
+		// Only then it is safe to assume dropKey complete if next DropKeys doesn't return ErrRetryDropKey
+		if hasBhive && retryCount == 0 && bhiveErrRetryDropKey == ErrRetryDropKey {
+			logging.Infof("StorageMgr::handleEncryptionDropKey waiting for 3 RP creations "+
+				"post DropKeys for %v", kdt)
+			for i := 0; i < 3; i++ {
+				// Re-read maps — topology may have changed since DropKeys completed.
+				indexInstMap = s.indexInstMap.Get()
+				indexPartnMap = s.indexPartnMap.Get()
+
+				// Subscribe to the next RP completion for every bhive slice.
+				// SubscribeNextPersistDone is safe without a prior disk-snap wait:
+				// persistorLock guarantees persistDoneCh=nil and isPersistorActive=false
+				// are set together, so any channel created here is either closed by the
+				// in-progress RP or picked up and closed by the next doPersistSnapshot.
+				var postDropWaits []persistWait
+				for instId, inst := range indexInstMap {
+					if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
+						continue
+					}
+					partnMap, ok := indexPartnMap[instId]
+					if !ok {
+						continue
+					}
+					for _, partnInst := range partnMap {
+						for _, slice := range partnInst.Sc.GetAllSlices() {
+							if slice.SliceType() == SliceTypeBhive {
+								postDropWaits = append(postDropWaits, persistWait{
+									persistCh:  slice.SubscribeNextPersistDone(),
+									rollbackCh: slice.GetRollbackNotifyCh(),
+									instId:     instId,
+									partnId:    slice.IndexPartnId(),
+								})
+							}
+						}
+					}
+				}
+				for _, pw := range postDropWaits {
+					select {
+					case <-pw.persistCh:
+					case <-pw.rollbackCh:
+						logging.Warnf("StorageMgr::handleEncryptionDropKey aborting post-DropKeys persist wait: "+
+							"slice rollback instId:%v partnId:%v", pw.instId, pw.partnId)
+						respCh <- ErrIndexRollback
+						return
+					case <-s.shutdownCh:
+						logging.Warnf("StorageMgr::handleEncryptionDropKey aborting post-DropKeys persist wait: "+
+							"storageMgr shutting down instId:%v partnId:%v", pw.instId, pw.partnId)
+						respCh <- ErrStorageMgrStopping
+						return
+					}
+				}
+
+				logging.Infof("StorageMgr::handleEncryptionDropKey post-DropKeys RP creation "+
+					"%v/3 complete for %v", i+1, kdt)
+			}
+		}
+		if plasmaErrRetryDropKey == ErrRetryDropKey || bhiveErrRetryDropKey == ErrRetryDropKey {
+			logging.Warnf("StorageMgr::handleEncryptionDropKey slice returned ErrRetryDropKey %v", kdt)
+			respCh <- ErrRetryDropKey
+			return
 		}
 
 		// Codebook encryption

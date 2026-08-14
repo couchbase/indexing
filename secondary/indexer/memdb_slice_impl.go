@@ -2834,6 +2834,22 @@ func safeGetInt64(inp interface{}) int64 {
 	return inp.(int64)
 }
 
+func (mdb *memdbSlice) SubscribeNextPersistDone() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (mdb *memdbSlice) GetRollbackNotifyCh() <-chan struct{} {
+	return nil
+}
+
+// SliceType normalises the two memdb IndexType values ("memdb" / "memory_optimized")
+// to the single SliceTypeMemdb constant.
+func (mdb *memdbSlice) SliceType() string {
+	return SliceTypeMemdb
+}
+
 func getNodeItemSize(node *skiplist.Node) int {
 	item := (*memdb.Item)(node.Item())
 	return len(item.Bytes())
