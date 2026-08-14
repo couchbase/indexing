@@ -660,6 +660,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		mCfg.LSSCleanerThreshold = slice.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 		mCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
 		mCfg.LSSCleanerMinSize = int64(slice.sysconf["plasma.mainIndex.LSSFragMinFileSize"].Int())
+		mCfg.LSSCleanerMinRollbackDataSz = int64(slice.sysconf["plasma.mainIndex.LSSCleanerMinRollbackSize"].Int())
 		mCfg.EnablePeriodicEvict = slice.sysconf["plasma.mainIndex.enablePeriodicEvict"].Bool()
 		mCfg.EvictMinThreshold = slice.sysconf["plasma.mainIndex.evictMinThreshold"].Float64()
 		mCfg.EvictMaxThreshold = slice.sysconf["plasma.mainIndex.evictMaxThreshold"].Float64()
@@ -702,6 +703,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		bCfg.LSSCleanerThreshold = slice.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 		bCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
 		bCfg.LSSCleanerMinSize = int64(slice.sysconf["plasma.backIndex.LSSFragMinFileSize"].Int())
+		bCfg.LSSCleanerMinRollbackDataSz = int64(slice.sysconf["plasma.backIndex.LSSCleanerMinRollbackSize"].Int())
 		bCfg.EnablePeriodicEvict = slice.sysconf["plasma.backIndex.enablePeriodicEvict"].Bool()
 		bCfg.EvictMinThreshold = slice.sysconf["plasma.backIndex.evictMinThreshold"].Float64()
 		bCfg.EvictMaxThreshold = slice.sysconf["plasma.backIndex.evictMaxThreshold"].Float64()
@@ -3852,7 +3854,7 @@ func (mdb *plasmaSlice) Compact(abortTime time.Time, minFrag int) error {
 			if mdb.IsSoftDeleted() || mdb.IsSoftClosed() {
 				return false
 			}
-			return mdb.mainstore.TriggerLSSCleaner(minFrag, mdb.mainstore.LSSCleanerMinSize)
+			return mdb.mainstore.TriggerLSSCleaner(minFrag, mdb.mainstore.LSSCleanerMinSize, mdb.mainstore.LSSCleanerMinRollbackDataSz)
 		}
 
 		err = mdb.mainstore.CleanLSS(shouldClean)
@@ -3871,7 +3873,7 @@ func (mdb *plasmaSlice) Compact(abortTime time.Time, minFrag int) error {
 				if mdb.IsSoftDeleted() || mdb.IsSoftClosed() {
 					return false
 				}
-				return mdb.backstore.TriggerLSSCleaner(minFrag, mdb.backstore.LSSCleanerMinSize)
+				return mdb.backstore.TriggerLSSCleaner(minFrag, mdb.backstore.LSSCleanerMinSize, mdb.backstore.LSSCleanerMinRollbackDataSz)
 			}
 
 			err = mdb.backstore.CleanLSS(shouldClean)
@@ -4249,6 +4251,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.LSSCleanerThreshold = mdb.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 	mdb.mainstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
 	mdb.mainstore.LSSCleanerMinSize = int64(mdb.sysconf["plasma.mainIndex.LSSFragMinFileSize"].Int())
+	mdb.mainstore.LSSCleanerMinRollbackDataSz = int64(mdb.sysconf["plasma.mainIndex.LSSCleanerMinRollbackSize"].Int())
 	mdb.mainstore.LSSCleanerFlushInterval = time.Duration(mdb.sysconf["plasma.LSSCleanerFlushInterval"].Int()) * time.Minute
 	mdb.mainstore.LSSCleanerMinReclaimSize = int64(mdb.sysconf["plasma.LSSCleanerMinReclaimSize"].Int())
 
@@ -4376,6 +4379,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.LSSCleanerThreshold = mdb.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 		mdb.backstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
 		mdb.backstore.LSSCleanerMinSize = int64(mdb.sysconf["plasma.backIndex.LSSFragMinFileSize"].Int())
+		mdb.backstore.LSSCleanerMinRollbackDataSz = int64(mdb.sysconf["plasma.backIndex.LSSCleanerMinRollbackSize"].Int())
 		mdb.backstore.LSSCleanerFlushInterval = time.Duration(mdb.sysconf["plasma.LSSCleanerFlushInterval"].Int()) * time.Minute
 		mdb.backstore.LSSCleanerMinReclaimSize = int64(mdb.sysconf["plasma.LSSCleanerMinReclaimSize"].Int())
 		mdb.backstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
