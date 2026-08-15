@@ -4678,9 +4678,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.bhive.invertedIndex.enable": ConfigValue{
-		false,
+		true,
 		"Master on/off switch for the slice-wide common inverted index. When false, the index is never built and the sentinel-centroid scan returns immediately (engine falls back to the pure per-cell scan path). Independent of invertedIndex.topN; both must be enabled for the feature to run",
-		false,
+		true,
 		false,
 		false,
 	},
