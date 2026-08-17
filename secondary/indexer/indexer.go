@@ -9873,7 +9873,8 @@ func (idx *indexer) initFromPersistedState() error {
 			if len(inst.Pc.GetAllPartitions()) == 0 {
 				defn := inst.Defn
 				idx.stats.addIndexStats(inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name,
-					inst.ReplicaId, defn.IsArrayIndex, defn.HasArrItemsCount, defn.IsVectorIndex)
+					inst.ReplicaId, defn.IsArrayIndex, defn.HasArrItemsCount, defn.IsVectorIndex,
+					defn.HasSparseVector(), defn.IsBhive())
 
 				idx.stats.addBucketStats(defn.Bucket)
 			} else {
