@@ -97,10 +97,7 @@ func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (cb codebook.Code
 	case common.NO_QUANTIZATION_SPARSE:
 		// For sparse codebook, use the sparseJLDimension from VectorMetadata if specified,
 		// otherwise use the default dimension
-		sparseJLDim := vectorMeta.SparseJLDimension
-		if sparseJLDim <= 0 {
-			sparseJLDim = DEFAULT_SPARSEJL_DIM
-		}
+		sparseJLDim := vectorMeta.GetSparseJLDimension()
 		cb, err = NewCodebookSparse(sparseJLDim, nlist)
 		if err != nil {
 			return nil, err

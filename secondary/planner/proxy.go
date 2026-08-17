@@ -2387,8 +2387,8 @@ func populateShardDealerWithNode(dealer *ShardDealer, node *IndexerNode) {
 	}
 }
 
-// Direct copy of the function of codebookIVFSQ.Size(), codebookIVFPQ.Size()
-// and codebookIVFRaBitQ.Size().
+// Direct copy of the function of codebookIVFSQ.Size(), codebookIVFPQ.Size(),
+// codebookIVFRaBitQ.Size() and codebookSparse.Size().
 func estimateCodebookMemUsage(vecMeta *common.VectorMetadata, nlist int) uint64 {
 	const float32Size = 4
 	// Size of storage_idx_t, used for internal storage of vectors (32 bits)
@@ -2396,7 +2396,18 @@ func estimateCodebookMemUsage(vecMeta *common.VectorMetadata, nlist int) uint64 
 	// Number of connections per point (set to 32 by default)
 	const numConnection = 32
 
-	if nlist <= 0 || vecMeta.Dimension <= 0 {
+	if vecMeta == nil || vecMeta.Quantizer == nil || nlist <= 0 {
+		return 0
+	}
+
+	// Sparse vectors carry no declared dimension in the index definition. Their
+	// codebook is built on the SparseJL reduced dimension instead.
+	dimension := vecMeta.Dimension
+	if vecMeta.Quantizer.Type == common.NO_QUANTIZATION_SPARSE {
+		dimension = vecMeta.GetSparseJLDimension()
+	}
+
+	if dimension <= 0 {
 		return 0
 	}
 
@@ -2404,12 +2415,12 @@ func estimateCodebookMemUsage(vecMeta *common.VectorMetadata, nlist int) uint64 
 	case common.SQ:
 
 		var sqCbSize uint64
-		coarseCbSize := uint64(nlist) * uint64(vecMeta.Dimension) * uint64(float32Size)
+		coarseCbSize := uint64(nlist) * uint64(dimension) * uint64(float32Size)
 		// No quantization codebook is stored for fp16.
 		if vecMeta.Quantizer.SQRange != common.SQ_FP16 {
 			// Memory usage for Scalar Quantization (SQ) codebook.
 			// Each dimension requires two float32 values (min and max) for range.
-			sqCbSize = uint64(2) * uint64(vecMeta.Dimension) * uint64(float32Size)
+			sqCbSize = uint64(2) * uint64(dimension) * uint64(float32Size)
 		}
 
 		// Memory usage for HNSW graph as IVF_HNSW is used
@@ -2420,7 +2431,7 @@ func estimateCodebookMemUsage(vecMeta *common.VectorMetadata, nlist int) uint64 
 		return coarseCbSize + sqCbSize + hnswGraphSize
 
 	case common.PQ:
-		coarseCbSize := uint64(nlist) * uint64(vecMeta.Dimension) * uint64(float32Size)
+		coarseCbSize := uint64(nlist) * uint64(dimension) * uint64(float32Size)
 
 		// Memory usage for the Product Quantization (PQ) codebook
 		// PQ quantizes each sub-vector using a codebook of quantized vectors.
@@ -2431,7 +2442,7 @@ func estimateCodebookMemUsage(vecMeta *common.VectorMetadata, nlist int) uint64 
 		// since the original vector of dimension d is split into m sub-vectors.
 		// Each codebook entry represents a vector of size d/m.
 		pqCbSize := uint64(1<<vecMeta.Quantizer.Nbits) *
-			uint64(vecMeta.Dimension) * uint64(float32Size)
+			uint64(dimension) * uint64(float32Size)
 
 		// Memory usage for HNSW graph as IVF_HNSW is used.
 		// This memory is used for maintaing centroids' HNSW structure.
@@ -2441,11 +2452,21 @@ func estimateCodebookMemUsage(vecMeta *common.VectorMetadata, nlist int) uint64 
 		return coarseCbSize + pqCbSize + hnswGraphSize
 
 	case common.RaBitQ:
-		coarseCbSize := uint64(nlist) * uint64(vecMeta.Dimension) * uint64(float32Size)
+		coarseCbSize := uint64(nlist) * uint64(dimension) * uint64(float32Size)
 
 		// For RaBitQ, no extra quantizer codebook/range state is stored in memory
 		// (unlike SQ ranges and PQ codebooks). Planner estimate includes coarse
 		// centroids and the HNSW graph only.
+		hnswGraphSize := uint64(nlist) * uint64(numConnection) * uint64(hnswIndexStorageSize) * 2
+
+		return coarseCbSize + hnswGraphSize
+
+	case common.NO_QUANTIZATION_SPARSE:
+		// Sparse vectors are not quantized, so no quantizer codebook is stored
+		// in memory. The estimate includes the coarse centroids over the
+		// SparseJL reduced dimension and the HNSW graph only.
+		coarseCbSize := uint64(nlist) * uint64(dimension) * uint64(float32Size)
+
 		hnswGraphSize := uint64(nlist) * uint64(numConnection) * uint64(hnswIndexStorageSize) * 2
 
 		return coarseCbSize + hnswGraphSize
