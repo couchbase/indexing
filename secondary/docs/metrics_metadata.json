@@ -330,7 +330,7 @@
     },
     "index_avg_sparse_nnz": {
         "type": "gauge",
-        "help": "Average number of non-zero terms across all sparse vectors stored in this index",
+        "help": "Average number of non-zero terms across all sparse vectors indexed by this index",
         "added": "8.1.0",
         "labels": [
             "bucket",
@@ -338,7 +338,7 @@
             "collection",
             "index"
         ],
-        "notes": "Reported only for indexes with a sparse vector key. It is the total non-zero term count divided by the number of sparse vectors indexed, measured after top-N truncation if enabled."
+        "notes": "Reported only for indexes with a sparse vector key. It is the total non-zero term count divided by the number of sparse vectors indexed. Counted as the vector arrived in the document, before threshold pruning and top-N truncation, so it reflects input width rather than the stored footprint."
     },
     "index_state": {
         "type": "gauge",

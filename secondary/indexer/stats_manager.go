@@ -375,11 +375,13 @@ type IndexStats struct {
 	vectorScanQueued stats.Int64Val
 
 	// Sparse vector stats. sparseTotalNNZ accumulates the NNZ count of every
-	// stored sparse vector, as stored: plasma counts it after threshold pruning
-	// and top-N truncation, bhive counts the vector as-is (it does neither).
-	// sparseNumVecsIndexed is the count of sparse vector inserts. avgSparseNNZ
-	// is the derived avg = sparseTotalNNZ / sparseNumVecsIndexed, populated at
-	// stats-emit time.
+	// indexed sparse vector as it arrived in the document, before indexer-side
+	// reduction: plasma counts it ahead of threshold pruning and top-N
+	// truncation, bhive counts the vector as-is (it does neither). So this
+	// tracks input width, not the stored footprint, and the two engines stay
+	// comparable. sparseNumVecsIndexed is the count of sparse vector inserts.
+	// avgSparseNNZ is the derived avg = sparseTotalNNZ / sparseNumVecsIndexed,
+	// populated at stats-emit time.
 	sparseTotalNNZ       stats.Int64Val
 	sparseNumVecsIndexed stats.Int64Val
 	avgSparseNNZ         stats.Int64Val
