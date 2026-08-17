@@ -5203,6 +5203,8 @@ const num_rollbacks = "nrb"
 const num_rollbacks_to_zero = "nrbz"
 const chunkSz = "chunkSz"
 const codebook_train_duration = "cbtd"
+const sparse_total_nnz = "stnnz"
+const sparse_num_vecs_indexed = "snvi"
 const STREAM_PREFIX = "stream"
 
 func (s *statsManager) GetStatsForIndexesToBePersisted(indexInstances []common.IndexInstId, compress bool) ([]byte, error) {
@@ -5258,6 +5260,16 @@ func getStatsToBePersistedMap(indexerStats *IndexerStats) (statsMap map[string]i
 				statsMap[instdId+":"+partnId+":"+avg_scan_rate] = partnStats.avgScanRate.Value()
 				statsMap[instdId+":"+partnId+":"+num_rows_scanned] = partnStats.numRowsScanned.Value()
 				statsMap[instdId+":"+partnId+":"+last_num_rows_scanned] = partnStats.lastNumRowsScanned.Value()
+
+				// The slices accumulate these on the partition stats object.
+				// They are only advanced by sparse vector inserts, so without
+				// persistence avg_sparse_nnz reads 0 after a restart until the
+				// next mutation - recovery loads the index from disk rather
+				// than re-inserting it.
+				if indexStats.isSparseIndex {
+					statsMap[instdId+":"+partnId+":"+sparse_total_nnz] = partnStats.sparseTotalNNZ.Value()
+					statsMap[instdId+":"+partnId+":"+sparse_num_vecs_indexed] = partnStats.sparseNumVecsIndexed.Value()
+				}
 			}
 		}
 
@@ -5392,6 +5404,16 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 				val, ok := getInt64Val(value, statName)
 				if ok {
 					indexerStats.indexes[instdId].partitions[partnId].lastNumRowsScanned.Set(val)
+				}
+			case sparse_total_nnz:
+				val, ok := getInt64Val(value, statName)
+				if ok {
+					indexerStats.indexes[instdId].partitions[partnId].sparseTotalNNZ.Set(val)
+				}
+			case sparse_num_vecs_indexed:
+				val, ok := getInt64Val(value, statName)
+				if ok {
+					indexerStats.indexes[instdId].partitions[partnId].sparseNumVecsIndexed.Set(val)
 				}
 			}
 		}
