@@ -409,6 +409,11 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 		codebookRecoveryStartTm := time.Now()
 		err = slice.recoverCodebook(slice.codebookPath)
 		if err != nil {
+			if err == errCodebookPathNotFound {
+				// Already logged with the codepath in recoverCodebook, and classified by handleCodebookRecoveryError,
+				// which logs Info when expected (untrained index) and Error when not.
+				return slice, err
+			}
 			logging.Errorf("plasmaSlice::recoverCodebook SliceId: %v IndexInstId: %v PartitionId %v Codebook "+
 				"recovery finished with err %v", slice.id, slice.idxInstId, slice.idxPartnId, err)
 			return slice, err
