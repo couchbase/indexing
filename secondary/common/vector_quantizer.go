@@ -63,19 +63,40 @@ type VectorQuantizer struct {
 	SQRange ScalarQuantizerRange `json:"sqrange,omitempty"`
 }
 
+const (
+	// Documents per IVF centroid used to derive Nlist when the index
+	// description does not specify one.
+	//
+	// Sparse vectors pick their ratio by storage engine: bhive partitions
+	// the keyspace far more coarsely than plasma (non-bhive), which uses a
+	// smaller ratio than dense vectors so the keyspace is split more finely.
+	itemsPerCentroidDense        = 1000
+	itemsPerCentroidSparseBhive  = 10000
+	itemsPerCentroidSparsePlasma = 500
+)
+
 // computeNlistFromItemsCount returns the minimum number of IVF centroids
 // required for a keyspace with itemsCount documents. There will be at least
-// one centroid even when fewer than 1000 items are present.
-func computeNlistFromItemsCount(itemsCount uint64) int {
-	return int(math.Ceil(float64(itemsCount) / 1000))
+// one centroid even when fewer than itemsPerCentroid items are present.
+func computeNlistFromItemsCount(itemsCount uint64, itemsPerCentroid int) int {
+	return max(1, int(math.Ceil(float64(itemsCount)/float64(itemsPerCentroid))))
 }
 
 // ComputeNlist returns the effective number of IVF centroids (Nlist) to use.
 // If Nlist is explicitly configured it is returned as-is; otherwise it is
-// derived from itemsCount.
-func (vq *VectorQuantizer) ComputeNlist(itemsCount uint64) int {
+// derived from itemsCount. isBhive selects between the two sparse ratios and
+// is ignored for dense vectors.
+func (vq *VectorQuantizer) ComputeNlist(itemsCount uint64, isBhive bool) int {
 	if vq == nil || vq.Nlist == 0 {
-		return computeNlistFromItemsCount(itemsCount)
+		itemsPerCentroid := itemsPerCentroidDense
+		if vq != nil && vq.Type == NO_QUANTIZATION_SPARSE {
+			if isBhive {
+				itemsPerCentroid = itemsPerCentroidSparseBhive
+			} else {
+				itemsPerCentroid = itemsPerCentroidSparsePlasma
+			}
+		}
+		return computeNlistFromItemsCount(itemsCount, itemsPerCentroid)
 	}
 	return vq.Nlist
 }

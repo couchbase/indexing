@@ -40,7 +40,7 @@ type ScanJob struct {
 
 	bytesRead   uint64
 	rowsScanned uint64
-	// rowsReturned stays 0 on the persistent-heap path (non-bhive sparse limit
+	// rowsReturned stays 0 on the persistent-heap path (sparse vector limit
 	// pushdown): its heap spans jobs and is flushed once after the last one,
 	// so rows cannot be attributed back to the job that produced them. Use
 	// ScanWorker.rowsReturned there instead.
@@ -174,8 +174,8 @@ type ScanWorker struct {
 	// usePersistentHeap keeps the local heap alive across jobs. At each job
 	// end the storage-backed rows surviving in the heap are copied in place
 	// (materialized) instead of being flushed downstream, and the heap is
-	// flushed only once after the last job. Enabled for non-bhive
-	// limit-pushdown scans.
+	// flushed only once after the last job. Enabled for sparse vector
+	// limit-pushdown scans - see ScanRequest.usePersistentVectorHeap.
 	usePersistentHeap bool
 
 	// globalTopKDist, when non-nil, holds the scan-wide smallest published
@@ -190,8 +190,18 @@ type ScanWorker struct {
 	// lastPublishedDist is the last root distance this worker published
 	lastPublishedDist float32
 
+	// seen holds the docs this worker has already offered to its persistent
+	// heap, so a doc returned by two of its jobs cannot occupy two heap slots.
+	// Only set for a bhive sparse scan, the only kind whose jobs can overlap
+	// - see dedupBatch. nil turns dedupBatch into a no-op.
+	seen map[rowDedupKey]struct{}
+
 	// rowsPruned counts rows dropped using globalTopKDist
 	rowsPruned uint64
+
+	// rowsDeduped counts rows dropped as repeats of a doc already offered to
+	// the persistent heap
+	rowsDeduped uint64
 
 	//reference to the current batch rows
 	currBatchRows []*Row
@@ -327,18 +337,27 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 		if r.Offset != 0 {
 			w.heapSize += int(r.Offset)
 		}
-		// Carry the heap across jobs for non-bhive sparse vector scans only.
-		// Everything else keeps flushing per job:
-		//   - bhive, because materializeHeapRows does not carry the bhive only
-		//     fields (storeId/recordId/cid/partnId) that dedup and rerank read.
-		//   - dense, to keep this optimization scoped to the sparse scan path.
-		// sendLastRowPerJob (merge-sort) would also need rows flushed per job
-		// but is always off here, as ScanRangeSequencing is disabled for
-		// limit-pushdown scans.
+		// Carry the heap across jobs for sparse vector scans, on both engines.
+		// Dense scans keep flushing per job, to keep this optimization scoped
+		// to the sparse scan path. sendLastRowPerJob (merge-sort) would also
+		// need rows flushed per job but is always off here, as
+		// ScanRangeSequencing is disabled for limit-pushdown scans.
 		w.usePersistentHeap = r.usePersistentVectorHeap(config)
 		if w.usePersistentHeap {
 			w.globalTopKDist = globalTopKDist
 			w.lastPublishedDist = float32(math.Inf(1))
+
+			// Only a bhive sparse scan can return one doc from two jobs, so
+			// only its heap needs dedup of its own - see dedupBatch. Both
+			// terms are spelled out rather than leaning on the sparse-only
+			// scoping of usePersistentVectorHeap above: the common inverted
+			// index that creates the overlap is built for sparse vectors
+			// alone, so widening the persistent heap to dense scans must not
+			// drag this pass along with it. Sized like MergeOperator.seen,
+			// which tracks the same docs.
+			if r.isBhiveScan && r.IsSparseVectorIndexScan() {
+				w.seen = make(map[rowDedupKey]struct{}, w.heapSize*4)
+			}
 		}
 		w.heap, _ = NewTopKRowHeap(w.heapSize, false, r.getRowCompare())
 
@@ -421,6 +440,7 @@ func (w *ScanWorker) Close() {
 	w.cktmp = nil
 	w.dtable = nil
 	w.queryBP = nil
+	w.seen = nil
 
 	w.includeColumnBuf = nil
 	w.includeColumnExplode = nil
@@ -444,8 +464,8 @@ func (w *ScanWorker) SetStartTime() {
 
 func (w *ScanWorker) PrintStats() {
 	getDebugStr := func() string {
-		s := fmt.Sprintf("%v Stats rowsScanned: %v rowsReturned: %v rowsPruned: %v",
-			w.logPrefix, w.rowsScanned, w.rowsReturned, w.rowsPruned)
+		s := fmt.Sprintf("%v Stats rowsScanned: %v rowsReturned: %v rowsPruned: %v rowsDeduped: %v",
+			w.logPrefix, w.rowsScanned, w.rowsReturned, w.rowsPruned, w.rowsDeduped)
 		if logging.IsEnabled(logging.Timing) {
 			s += fmt.Sprintf(" timeTaken: %v", time.Since(w.startTime))
 		}
@@ -569,9 +589,9 @@ func (w *ScanWorker) finishJob() {
 
 // flushLocalHeap makes a copy of the rows in the local heap and
 // sends it to the next stage of the scan pipeline. This is the per job flush,
-// used by every limit-pushdown scan except non-bhive sparse ones, which carry
-// one heap across jobs and flush it once (see materializeHeapRows and
-// flushPersistentHeap).
+// used by every limit-pushdown scan that does not carry one heap across jobs
+// and flush it once (see ScanRequest.usePersistentVectorHeap,
+// materializeHeapRows and flushPersistentHeap).
 func (w *ScanWorker) flushLocalHeap() {
 
 	logging.Verbosef("%v flushLocalHeap %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid)
@@ -647,6 +667,8 @@ func (w *ScanWorker) materializeHeapRows() {
 
 	logging.Verbosef("%v materializeHeapRows %v %v", w.logPrefix, w.currJob.batch, w.currJob.pid)
 
+	isBhive := w.r.isBhiveScan
+
 	w.heap.ReplaceRows(func(row *Row) *Row {
 		if row.rowBuf == nil {
 			return nil //already materialized at an earlier job boundary
@@ -654,10 +676,15 @@ func (w *ScanWorker) materializeHeapRows() {
 
 		newRow := &Row{}
 		newRow.init(w.mem)
-		newRow.copyForVectorHeap(row)
+		newRow.copyForVectorHeap(row, isBhive)
 
-		entry1 := secondaryIndexEntry(row.key)
-		newRow.len = entry1.lenKey()
+		// Only a composite row's key is a secondary index entry. A bhive row's
+		// key is the raw docid, and its len - the length the iterator callback
+		// recorded - is carried over by the copy, as it is on the per job flush.
+		if !isBhive {
+			entry1 := secondaryIndexEntry(row.key)
+			newRow.len = entry1.lenKey()
+		}
 		newRow.workerId = w.id
 
 		row.free() //return the storage-backed row to rowBuf
@@ -1252,6 +1279,68 @@ func (w *ScanWorker) pruneBatch(vecCount int) int {
 	return validCount
 }
 
+// dedupBatch frees the rows of the batch whose doc this worker has already
+// offered to its persistent heap and compacts the survivors to the front, the
+// same way pruneBatch does, returning how many survived.
+//
+// A bhive sparse scan can return one doc from two of its jobs: when the
+// slice-wide common inverted index also covers the cells the cosine router
+// picked, the sentinel-centroid job resurfaces docs the per-cell jobs already
+// returned (see bhiveSliceSnapshot.Range2). That index is built for sparse
+// vectors only, so no other kind of scan has overlapping sources and no other
+// kind gets a seen map. MergeOperator deduplicates across workers,
+// but only after each worker has cut its candidates down to heapSize - so
+// without this pass a worker that ran both jobs would spend two of those slots
+// on one doc and evict a distinct candidate that belonged in the top-K. The
+// per-job flush had no such exposure, as it gave the merge heapSize candidates
+// from every job.
+//
+// Dropping the repeat and keeping the copy already offered is what the merge
+// does too, and loses nothing: both copies read the same stored entry, so they
+// carry the same distance. The copy offered first is either still in the heap,
+// or was rejected or evicted from it - and since the heap's root only ever
+// improves, a row of that distance offered again would be rejected anyway.
+//
+// A doc is recorded as offered even if the heap did not keep it, which is why
+// this runs after pruneBatch: a row that cannot reach the top-K need not be
+// remembered, and the threshold that pruned it only tightens.
+//
+// This runs for every bhive sparse scan, not only for the inverted index
+// settings that let two jobs overlap. Those settings are mutable, so deciding
+// per scan from a config snapshot would silently cost recall on a scan already
+// in flight when they are turned on - and the pass costs one map lookup per
+// surviving row, against a heap push and a key copy for the rows it keeps.
+func (w *ScanWorker) dedupBatch(vecCount int) int {
+
+	if w.seen == nil {
+		return vecCount
+	}
+
+	validCount := 0
+	for i := 0; i < vecCount; i++ {
+		row := w.currBatchRows[i]
+		key := rowDedupKey{storeId: row.storeId, recordId: row.recordId}
+		if _, dup := w.seen[key]; dup {
+			row.free()
+			w.currBatchRows[i] = nil
+			w.rowsDeduped++
+			continue
+		}
+		w.seen[key] = struct{}{}
+
+		if validCount != i {
+			w.currBatchRows[validCount] = row
+			w.dists[validCount] = w.dists[i]
+		}
+		validCount++
+	}
+
+	w.currBatchRows = w.currBatchRows[:validCount]
+	w.dists = w.dists[:validCount]
+
+	return validCount
+}
+
 // processCurrentBatch decodes current batch of rows, computes
 // the distance from query vector and either stores in local heap(limit pushdown)
 // or sends it to the next stage of scan pipeline.
@@ -1287,9 +1376,11 @@ func (w *ScanWorker) processCurrentBatch() (err error) {
 		}
 	}
 
-	// Drop the rows that cannot enter the final top-K before doing any
-	// per-row work on them
+	// Drop the rows that cannot enter the final top-K, and the repeats of a
+	// doc already offered to a persistent heap, before doing any per-row work
+	// on them
 	vecCount = w.pruneBatch(vecCount)
+	vecCount = w.dedupBatch(vecCount)
 
 	// Substitue distance in place centroidId and send to outCh or store in local heap
 	for i := 0; i < vecCount; i++ {

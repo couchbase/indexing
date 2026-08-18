@@ -14151,7 +14151,7 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 			continue
 		}
 
-		centroids := inst.Defn.VectorMeta.Quantizer.ComputeNlist(itemsCount)
+		centroids := inst.Defn.VectorMeta.Quantizer.ComputeNlist(itemsCount, inst.Defn.VectorMeta.IsBhive)
 		logging.Infof("Indexer::computeCentroids Number of centroids for keyspaceId: %v "+
 			"with items_count: %v are: %v", keyspaceId, itemsCount, centroids)
 

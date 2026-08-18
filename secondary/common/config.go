@@ -1610,6 +1610,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.LSSCleanerMinRollbackSize": ConfigValue{
+		1 * 1024 * 1024 * 1024,
+		"Min rollback metadata size on disk to factor into LSS cleaning trigger",
+		1 * 1024 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.enablePeriodicEvict": ConfigValue{
 		true,
 		"Enable Periodic Eviction",
@@ -1822,6 +1829,13 @@ var SystemConfig = Config{
 		16 * 1024 * 1024,
 		"Min File Size to trigger log cleaning",
 		16 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.LSSCleanerMinRollbackSize": ConfigValue{
+		1 * 1024 * 1024 * 1024,
+		"Min rollback metadata size on disk to factor into LSS cleaning trigger",
+		1 * 1024 * 1024 * 1024,
 		false, // mutable
 		false, // case-insensitive
 	},

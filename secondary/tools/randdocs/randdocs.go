@@ -150,7 +150,8 @@ func Run(cfg Config) error {
 				defer wg.Done()
 				for i := 0; i < cfg.NumDocs/cfg.Threads; i++ {
 					start := time.Now()
-					docid := fmt.Sprintf("%0*d", cfg.DocIdLen, i+offset+cfg.DocNumOffset)[:cfg.DocIdLen]
+					docNum := i + offset + cfg.DocNumOffset
+					docid := fmt.Sprintf("%0*d", cfg.DocIdLen, docNum)[:cfg.DocIdLen]
 
 					if cfg.UseRandDocID {
 						key := md5.Sum([]byte(docid))
@@ -188,7 +189,12 @@ func Run(cfg Config) error {
 						if cfg.SparseVecDim > 0 {
 							key = "sparse_dim"
 						}
-						value[key] = generateSparseVector(cfg.SparseVecDim, cfg.VecSeed)
+						// Seed per document. A fixed seed gives every document the
+						// same vector, which makes term overlap with a query
+						// all-or-nothing across the whole corpus - a single term
+						// dropped by insert-time pruning then takes every document
+						// with it. Still deterministic: docNum is stable per doc.
+						value[key] = generateSparseVector(cfg.SparseVecDim, cfg.VecSeed+docNum)
 					}
 
 					if cfg.JunkFieldSize != 0 {
@@ -223,7 +229,7 @@ func Run(cfg Config) error {
 								key = "sparse_dim"
 							}
 							value[key] = nil // placeholder
-							vectorData = generateSparseVector(cfg.SparseVecDim, cfg.VecSeed)
+							vectorData = generateSparseVector(cfg.SparseVecDim, cfg.VecSeed+docNum)
 						}
 
 						if cfg.UseSIFTSmall {

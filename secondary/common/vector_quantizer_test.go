@@ -123,6 +123,7 @@ func TestSparseVectorQuantizerParser(t *testing.T) {
 		{"  IVF1024  ", 1024},                 // spaces are trimmed
 		{"IVF1", 1},                           // minimum valid nlist
 		{"IVF43241343143214", 43241343143214}, // large number of centroids
+		{"IVF", 0},                            // nlist omitted; indexer computes it at build time
 	}
 
 	invalidFormats := []string{
@@ -135,7 +136,6 @@ func TestSparseVectorQuantizerParser(t *testing.T) {
 
 	invalidInputs := []string{
 		"IVF0", // nlist can not be zero
-		"IVF",  // nlist must be specified
 	}
 
 	for _, tc := range validInputs {
@@ -169,5 +169,59 @@ func TestSparseVectorQuantizerParser(t *testing.T) {
 			t.Fatalf("Expected parsing to fail but parsing succeeded for input: %v", inp)
 		}
 		fmt.Printf("  Error (expected): %v\n", err)
+	}
+}
+
+func TestComputeNlist(t *testing.T) {
+
+	testCases := []struct {
+		desc          string
+		quantizer     *VectorQuantizer
+		itemsCount    uint64
+		isBhive       bool
+		expectedNlist int
+	}{
+		// Sparse vectors on plasma derive nlist at one centroid per 500 items.
+		{"sparse plasma zero items", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE}, 0, false, 1},
+		{"sparse plasma below ratio", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE}, 1, false, 1},
+		{"sparse plasma rounds up", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE}, 501, false, 2},
+		{"sparse plasma exact multiple", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE}, 500, false, 1},
+		{"sparse plasma 1M items", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE}, 1000000, false, 2000},
+
+		// Sparse vectors on bhive derive nlist at one centroid per 10000 items.
+		{"sparse bhive zero items", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE}, 0, true, 1},
+		{"sparse bhive below ratio", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE}, 1, true, 1},
+		{"sparse bhive rounds up", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE}, 10001, true, 2},
+		{"sparse bhive exact multiple", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE}, 10000, true, 1},
+		{"sparse bhive 1M items", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE}, 1000000, true, 100},
+		// The plasma ratio would give 2 centroids here, the bhive one gives 1.
+		{"sparse bhive below plasma ratio", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE}, 501, true, 1},
+
+		// Dense vectors derive nlist at one centroid per 1000 items on either
+		// storage engine - isBhive does not change the dense ratio.
+		{"dense SQ 1M items", &VectorQuantizer{Type: SQ, SQRange: SQ_8BIT}, 1000000, false, 1000},
+		{"dense SQ 1M items bhive", &VectorQuantizer{Type: SQ, SQRange: SQ_8BIT}, 1000000, true, 1000},
+		{"dense PQ 1M items", &VectorQuantizer{Type: PQ, SubQuantizers: 32, Nbits: 4}, 1000000, false, 1000},
+		{"dense RaBitQ 1M items", &VectorQuantizer{Type: RaBitQ, RaBitQNbits: 1}, 1000000, false, 1000},
+		{"dense rounds up", &VectorQuantizer{Type: SQ, SQRange: SQ_8BIT}, 1001, false, 2},
+		{"dense zero items", &VectorQuantizer{Type: SQ, SQRange: SQ_8BIT}, 0, false, 1},
+		{"nil quantizer uses dense ratio", nil, 1000000, false, 1000},
+		{"nil quantizer bhive uses dense ratio", nil, 1000000, true, 1000},
+		{"nil quantizer zero items", nil, 0, false, 1},
+
+		// An explicitly configured nlist is used as-is for either kind.
+		{"sparse explicit nlist", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE, Nlist: 256}, 1000000, false, 256},
+		{"sparse bhive explicit nlist", &VectorQuantizer{Type: NO_QUANTIZATION_SPARSE, Nlist: 256}, 1000000, true, 256},
+		{"dense explicit nlist", &VectorQuantizer{Type: SQ, SQRange: SQ_8BIT, Nlist: 256}, 1000000, false, 256},
+	}
+
+	for _, tc := range testCases {
+		nlist := tc.quantizer.ComputeNlist(tc.itemsCount, tc.isBhive)
+		fmt.Printf("ComputeNlist(%v, isBhive=%v) for %v: %v\n", tc.itemsCount, tc.isBhive, tc.desc, nlist)
+
+		if nlist != tc.expectedNlist {
+			t.Fatalf("Expected nlist %v but got %v for %v with items_count: %v isBhive: %v",
+				tc.expectedNlist, nlist, tc.desc, tc.itemsCount, tc.isBhive)
+		}
 	}
 }
