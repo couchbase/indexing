@@ -1078,6 +1078,9 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 		}
 	}
 
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
 	var ss, se, seq uint64
 	hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][meta.keyspaceId]
 	if hwt != nil {
@@ -1088,9 +1091,6 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 	logging.Infof("TK StreamBegin %v %v %v %v %v %v %v. HWT [%v-%v,%v].", streamId, meta.keyspaceId,
 		meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, host, ss, se, seq)
-
-	tk.lock.Lock()
-	defer tk.lock.Unlock()
 
 	if tk.indexerState == INDEXER_PREPARE_UNPAUSE_MOI {
 		logging.Warnf("Timekeeper::handleStreamBegin Received StreamBegin In "+
