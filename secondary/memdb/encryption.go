@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math"
 	"os"
@@ -190,10 +191,32 @@ func (m *MemDB) initEncryption(snapDirs []string) (err error) {
 	}
 
 	// do not fail initialization if there is an error. memDbSlice openSnapshot error handling
-	// retries LoadFromDisk from successive snapshots on error
-	if _, snapKeyIds, _ := m.getActiveKeyIdsFromSnapshots(snapDirs); len(snapKeyIds) > 0 {
+	// retries LoadFromDisk from successive snapshots on error. Failed dirs are remembered so
+	// GetActiveKeyIdList can report list as incomplete.
+	_, snapKeyIds, keyIdErrs := m.getActiveKeyIdsFromSnapshots(snapDirs)
+
+	for dir, err2 := range keyIdErrs {
+
+		if _, statErr := iowrap.Os_Stat(dir); errors.Is(statErr, fs.ErrNotExist) {
+			// dir itself is gone, delete it immediately
+			logging.Infof("MemDB::%v initEncryption skipping removed snapshot %v keyId read error:%v",
+				m.Path, dir, err2)
+
+			delete(keyIdErrs, dir)
+			continue
+		}
+
+		// these errors could be transient or corruption
+		logging.Warnf("MemDB::%v initEncryption failed to read keyIds of snapshot %v error:%v",
+			m.Path, dir, err2)
+	}
+
+	m.encMu.Lock()
+	if len(snapKeyIds) > 0 {
 		m.snapKeyIds = snapKeyIds
 	}
+	m.snapKeyIdErrs = keyIdErrs
+	m.encMu.Unlock()
 
 	return nil
 }
@@ -401,9 +424,16 @@ func (m *MemDB) DeregisterSnapshot(snapDir string) {
 	defer m.encMu.Unlock()
 
 	delete(m.snapKeyIds, snapDir)
+	delete(m.snapKeyIdErrs, snapDir)
 }
 
-func (m *MemDB) GetActiveKeyIdList() [][]byte {
+// returns the keyIds across all known snapshots plus the current key.
+// If keyIds of some snapshots could not be read at init, the partial list is
+// returned with ErrKeyIdListIncomplete. The caller needs to then avoid
+// purging all the keys so that any missing keyIds due to transient errors
+// can be used when needed. IsCorruptKeyIdReadError can be used to
+// distinguish between transient and unrecoverable errors.
+func (m *MemDB) GetActiveKeyIdList() ([][]byte, error) {
 	m.encMu.RLock()
 	defer m.encMu.RUnlock()
 
@@ -416,15 +446,70 @@ func (m *MemDB) GetActiveKeyIdList() [][]byte {
 
 	// include current encryption key if not present
 	result = appendUniqueKeyId(result, m.encKeyId)
-	return result
+
+	if len(m.snapKeyIdErrs) > 0 {
+		dirs := make([]string, 0, len(m.snapKeyIdErrs))
+		for dir := range m.snapKeyIdErrs {
+			dirs = append(dirs, dir)
+		}
+		return result, fmt.Errorf("%w: %v snapshots: %v", ErrKeyIdListIncomplete, len(dirs), dirs)
+	}
+
+	return result, nil
+}
+
+// snapshot is verifiably damaged; a retry can never succeed
+func IsCorruptKeyIdReadError(err error) bool {
+	return errors.Is(err, gocbcrypto.ErrBlkInvalidChecksum) ||
+		errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// a successful full read of a snapshot (LoadFromDisk) proves its keyIds are
+// readable; re-read them and clear the recorded read error
+func (m *MemDB) clearSnapKeyIdReadErr(snapDir string) {
+	m.encMu.RLock()
+	_, failed := m.snapKeyIdErrs[snapDir]
+	m.encMu.RUnlock()
+	if !failed {
+		return
+	}
+
+	keyIds, err := m.getActiveKeyIdsFromSnapshot(snapDir)
+	if err != nil {
+		logging.Warnf("MemDB::%v failed to read keyIds of snapshot %v after load error:%v",
+			m.Path, snapDir, err)
+		return
+	}
+
+	m.encMu.Lock()
+	m.snapKeyIds[snapDir] = keyIds
+	delete(m.snapKeyIdErrs, snapDir)
+	m.encMu.Unlock()
+
+	logging.Infof("MemDB::%v cleared keyId read error for snapshot %v after load",
+		m.Path, snapDir)
+}
+
+// returns snapshot dirs whose keyIds could not be read at init, with their errors.
+// The caller can use this to remove snapshots that are unrecoverable.
+func (m *MemDB) SnapKeyIdReadErrors() map[string]error {
+	m.encMu.RLock()
+	defer m.encMu.RUnlock()
+
+	res := make(map[string]error, len(m.snapKeyIdErrs))
+	for dir, err := range m.snapKeyIdErrs {
+		res[dir] = err
+	}
+	return res
 }
 
 // called only during startup
 // result will have an empty keyId if snapshot is not encrypted
-func (m *MemDB) getActiveKeyIdsFromSnapshots(snapDirs []string) ([][]byte, map[string][][]byte, error) {
-	var firstErr error
+// keyIdErrs has an entry per snapshot dir that could not be read
+func (m *MemDB) getActiveKeyIdsFromSnapshots(snapDirs []string) ([][]byte, map[string][][]byte, map[string]error) {
 	result := make([][]byte, 0)
 	snapKeyIds := make(map[string][][]byte)
+	keyIdErrs := make(map[string]error)
 
 	for i := range snapDirs {
 		if keyIds, err := m.getActiveKeyIdsFromSnapshot(snapDirs[i]); err == nil {
@@ -432,12 +517,12 @@ func (m *MemDB) getActiveKeyIdsFromSnapshots(snapDirs []string) ([][]byte, map[s
 				result = appendUniqueKeyId(result, keyId)
 			}
 			snapKeyIds[snapDirs[i]] = keyIds
-		} else if firstErr == nil { // continue
-			firstErr = err
+		} else { // continue
+			keyIdErrs[snapDirs[i]] = err
 		}
 	}
 
-	return result, snapKeyIds, firstErr
+	return result, snapKeyIds, keyIdErrs
 }
 
 // returns unique encryption key IDs currently in use by snapshot.

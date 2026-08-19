@@ -287,9 +287,10 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	// Mark in use key for encryption
 	keys, err := mdb.GetKeyIdList()
 	if err != nil {
-		logging.Errorf("memdbSlice:NewMemDBSlice:GetKeyIdList Id %v IndexInstId %v "+
-			"failed error: %v", sliceId, idxInstId, err)
-		return nil, err
+		// keyids that encountered error during read make this list un-trustable, so
+		// do not return immedeately to allow slice to reconcile transient errors.
+		logging.Warnf("memdbSlice:NewMemDBSlice:GetKeyIdList Id %v IndexInstId %v "+
+			"incomplete: %v", sliceId, idxInstId, err)
 	}
 
 	for _, keyByte := range keys {
@@ -407,6 +408,10 @@ func (mdb *memdbSlice) initStores() error {
 	if err != nil {
 		return fmt.Errorf("init memdb mainstore: %w", err)
 	}
+
+	// A corrupt keyId read error is not transient (see memdb.IsCorruptKeyIdReadError)
+	// and such snapshots could be removedw here (memdb.SnapKeyIdReadErrors + RemoveSnapshot).
+	// For now let loadSnapshot fail on them and handle via the existing corruption path.
 
 	mdb.main = make([]*memdb.Writer, mdb.numWriters)
 	for i := 0; i < mdb.numWriters; i++ {
@@ -2231,15 +2236,17 @@ func (mdb *memdbSlice) SetCurrentEncryptionKey(key []byte, keyId []byte, cipher 
 //     It also includes current active key even though no snapshots are created yet.
 //     If at least one snapshot is unencrypted, keyIds will have an empty keyId - []byte
 //
-//   - error: Error if any snapshot fails to be read.
+//   - error: non-nil (memdb.ErrKeyIdListIncomplete) if keyIds of one or more
+//     snapshots could not be read; the returned list is then incomplete. The
+//     caller must ensure no key is purged while the list is incomplete: a key
+//     absent from an incomplete list may still be needed for decryption if
+//     transient error resolves
 //
 //   - The api is atomic. Key change cannot happen during the api call
-//
-// Note: performs disk I/O (encryption header read per file) as list is not cached
 func (mdb *memdbSlice) GetKeyIdList() ([][]byte, error) {
 	if mdb.CheckAndIncrRef() {
 		defer mdb.DecrRef()
-		return mdb.mainstore.GetActiveKeyIdList(), nil
+		return mdb.mainstore.GetActiveKeyIdList()
 	}
 
 	return nil, nil
