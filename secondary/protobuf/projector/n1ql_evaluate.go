@@ -40,6 +40,12 @@ func getVectorStatStr(err error) string {
 		return "data_out_of_bounds"
 	case ErrZeroVectorForCosine:
 		return "zero_vector_for_cosine"
+	case ErrInvalidSparseVector:
+		return "invalid_sparse_vec"
+	case ErrZeroSparseVector:
+		return "zero_sparse_vec"
+	case ErrDuplicateIndicesSparseVector:
+		return "duplicate_indices_sparse_vec"
 	}
 	return err.Error()
 }
