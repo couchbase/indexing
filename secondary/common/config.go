@@ -5201,6 +5201,16 @@ var SystemConfig = Config{
 		Immutable:     false,
 		Casesensitive: false,
 	},
+	"indexer.encryption.test_retain_corrupt_index_backup": ConfigValue{
+		Value: false,
+		Help: "Test only, do NOT switch on in production. Retains the corrupt index backup " +
+			"directory when encryption at rest is enabled, so a corrupted index can be " +
+			"recovered for debugging. May also retain backups taken before encryption was " +
+			"enabled, which are unencrypted.",
+		DefaultVal:    false,
+		Immutable:     false,
+		Casesensitive: false,
+	},
 	"indexer.queryport.backfill_pause_test_duration": ConfigValue{
 		Value:         0, // seconds
 		Help:          "Enable backfill testing by pausing backfill reader",
