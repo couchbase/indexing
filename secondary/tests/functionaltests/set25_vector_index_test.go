@@ -1833,47 +1833,111 @@ func formatSparseQueryVector(query randdocs.SparseVector) string {
 
 // TestSparseBhiveIndexAllSparseSmall tests bhive sparse vector index
 // (CREATE VECTOR INDEX) with all queries from the SparseSmall (MS MARCO) dataset.
+// bhive always scores in the quantized domain, so recall is asserted against
+// the threshold, not 100%.
 func TestSparseBhiveIndexSparseSmall(t *testing.T) {
-	testSparseVectorIndexWithAllSparseSmallQueries(t, 0, 1, 1, true /*isBhive*/)
+	testSparseVectorIndexWithAllSparseSmallQueries(t, 0, 1, 1, true /*isBhive*/, sparseSmallMinOverallRecall)
 }
 
+// TestSparseCompositeIndexSparseSmall runs the composite (plasma) sparse test
+// on the exact float32 path (lossy optimizations disabled), so an exhaustive
+// scan must reproduce the ground truth exactly.
 func TestSparseCompositeIndexSparseSmall(t *testing.T) {
-	testSparseVectorIndexWithAllSparseSmallQueries(t, 0, 1, 1, false /*isBhive*/)
+	restore := setSparseExactScanSettings(t)
+	defer restore()
+
+	testSparseVectorIndexWithAllSparseSmallQueries(t, 0, 1, 1, false /*isBhive*/, sparseSmallExactRecall)
 }
 
 // TestSparseCompositeIndexSparseSmallQuantized runs the composite (plasma)
-// sparse test with scalar-quantized storage: vectors are persisted in the
-// bhive quantized wire format and scans score them with the bhive sparse
-// dot-product kernel instead of Transpose + ComputeDistance.
+// sparse test on the default lossy path: scalar-quantized storage scored with
+// the bhive sparse dot-product kernel, plus stored-vector and query pruning.
 func TestSparseCompositeIndexSparseSmallQuantized(t *testing.T) {
+	// quantizeStorage=true is the shipped default; set it explicitly so this
+	// test keeps covering the quantized path even if the default changes, and
+	// leave it in place afterwards (no restore needed).
 	err := secondaryindex.ChangeIndexerSettings("indexer.vector.sparse.quantizeStorage", true,
 		clusterconfig.Username, clusterconfig.Password, kvaddress)
 	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
-	defer func() {
-		err := secondaryindex.ChangeIndexerSettings("indexer.vector.sparse.quantizeStorage", false,
-			clusterconfig.Username, clusterconfig.Password, kvaddress)
-		FailTestIfError(err, "Error in ChangeIndexerSettings", t)
-	}()
 
-	testSparseVectorIndexWithAllSparseSmallQueries(t, 0, 1, 1, false /*isBhive*/)
+	testSparseVectorIndexWithAllSparseSmallQueries(t, 0, 1, 1, false /*isBhive*/, sparseSmallMinOverallRecall)
 }
 
 // TestSparseBhiveReplicatedPartnIndexAllSparseSmall tests replicated bhive sparse index
 func TestSparseBhiveReplicatedPartnIndexSparseSmall(t *testing.T) {
 	t.Skipf("Skipping test for now...")
-	testSparseVectorIndexWithAllSparseSmallQueries(t, 2, 1, 1, true /*isBhive*/)
+	testSparseVectorIndexWithAllSparseSmallQueries(t, 2, 1, 1, true /*isBhive*/, sparseSmallMinOverallRecall)
 }
 
 func TestSparseCompositeReplicatedPartnIndexSparseSmall(t *testing.T) {
 	t.Skipf("Skipping test for now...")
-	testSparseVectorIndexWithAllSparseSmallQueries(t, 2, 1, 1, false /*isBhive*/)
+	testSparseVectorIndexWithAllSparseSmallQueries(t, 2, 1, 1, false /*isBhive*/, sparseSmallMinOverallRecall)
+}
+
+// MB-71503: by default sparse scans are lossy — stored vectors are truncated
+// (vector.sparse.maxNNZ / minAbsWeight), the query is pruned to its
+// top-maxQueryNNZ terms, and scoring runs in the bhive scalar-quantized
+// domain — so recall against the exact float32 ground truth stays below 100%
+// even for an exhaustive nprobes=256 scan.
+//
+// Composite (plasma) tests disable all of that via setSparseExactScanSettings
+// and keep the exact 100% expectation. bhive sparse indexes ALWAYS store and
+// score quantized (no exact mode exists), so bhive tests — and the quantized
+// composite variant, which deliberately runs the default lossy path — assert
+// the thresholds below instead. Recall on the SparseSmall (MS MARCO) dataset
+// is deterministic under the default settings (~79-81% over the 32-query set,
+// 6-7/10 on the single dev query); the thresholds leave margin for
+// kernel/pruning tuning while still catching scan-path regressions.
+const (
+	sparseSmallExactRecall          = 100.0 // exact float32 path (optimizations disabled)
+	sparseSmallMinOverallRecall     = 70.0  // 32-query aggregate recall@10, percent
+	sparseSmallMinSingleQueryRecall = 50.0  // single-query recall@10, percent
+)
+
+// setSparseExactScanSettings disables the MB-71503 lossy sparse optimizations
+// so plasma sparse indexes are exact float32 end to end: no stored-vector
+// truncation, no query top-N pruning, float32 concise storage with exact
+// scoring. Returns a restore func that puts the shipped defaults back.
+// quantizeStorage changes how the stored bytes are interpreted, so this must
+// be in effect for the index's whole insert+scan lifetime — call it before
+// creating the index. Has no effect on bhive sparse indexes, which always
+// store and score quantized.
+func setSparseExactScanSettings(t *testing.T) func() {
+	// ChangeIndexerSettings routes through the GSI client, so it works no
+	// matter which node currently runs the indexer (unlike
+	// ChangeMultipleIndexerSettings, which needs the indexer on the given node)
+	apply := func(settings map[string]interface{}) {
+		for key, val := range settings {
+			err := secondaryindex.ChangeIndexerSettings(key, val,
+				clusterconfig.Username, clusterconfig.Password, kvaddress)
+			FailTestIfError(err, fmt.Sprintf("Failed to set %v=%v", key, val), t)
+		}
+	}
+
+	apply(map[string]interface{}{
+		"indexer.vector.sparse.maxNNZ":          0,
+		"indexer.vector.sparse.minAbsWeight":    0.0,
+		"indexer.vector.sparse.maxQueryNNZ":     0,
+		"indexer.vector.sparse.quantizeStorage": false,
+	})
+
+	return func() {
+		apply(map[string]interface{}{
+			"indexer.vector.sparse.maxNNZ":          70,
+			"indexer.vector.sparse.minAbsWeight":    0.07,
+			"indexer.vector.sparse.maxQueryNNZ":     10,
+			"indexer.vector.sparse.quantizeStorage": true,
+		})
+	}
 }
 
 // testSparseVectorIndexWithAllSparseSmallQueries is the shared implementation for sparse vector
 // index tests using the SparseSmall (MS MARCO) dataset.
 // It supports both bhive (CREATE VECTOR INDEX) and composite (CREATE INDEX) index types.
-// nprobes is set high enough to scan all centroids for 100% recall.
-func testSparseVectorIndexWithAllSparseSmallQueries(t *testing.T, numReplica, numPartition, numIterations int, isBhive bool) {
+// nprobes is set high enough to scan all centroids (exhaustive scan); overall
+// recall is asserted against minRecall (sparseSmallExactRecall when the caller
+// runs with exact settings, sparseSmallMinOverallRecall otherwise).
+func testSparseVectorIndexWithAllSparseSmallQueries(t *testing.T, numReplica, numPartition, numIterations int, isBhive bool, minRecall float64) {
 	skipIfNotPlasma(t)
 
 	printClusterConfig(t.Name(), "entry")
@@ -1891,7 +1955,7 @@ func testSparseVectorIndexWithAllSparseSmallQueries(t *testing.T, numReplica, nu
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 
-	// Use high nprobes to scan all centroids for 100% recall
+	// Use high nprobes to scan all centroids.
 	// IVF256 has 256 centroids; setting nprobes=256 ensures exhaustive scan
 	nprobes := 256
 
@@ -2115,10 +2179,11 @@ func testSparseVectorIndexWithAllSparseSmallQueries(t *testing.T, numReplica, nu
 	overallRecall := 100 * (float64(totalRel) / (float64(groundTruthK) * float64(totalQueries)))
 	log.Printf("Overall Recall for SparseSmall (MS MARCO) dataset with %v Queries is %.2f%%", totalQueries, overallRecall)
 
-	// With nprobes=256 (exhaustive scan), we expect 100% recall
-	if overallRecall < 100 {
-		t.Fatalf("Test failed: expected 100%% recall with exhaustive scan (nprobes=%d), got %.2f%% relCount: %v numQueries: %v",
-			nprobes, overallRecall, totalRel, totalQueries)
+	// With nprobes=256 (exhaustive scan), recall is bounded only by the lossy
+	// sparse optimizations the caller left enabled (see the consts above)
+	if overallRecall < minRecall {
+		t.Fatalf("Test failed: expected at least %.0f%% recall with exhaustive scan (nprobes=%d), got %.2f%% relCount: %v numQueries: %v",
+			minRecall, nprobes, overallRecall, totalRel, totalQueries)
 	}
 }
 
@@ -2147,8 +2212,8 @@ func checkSparseSmallIndexInPlan(t *testing.T, idxName string, isBhive bool) {
 }
 
 // runSparseSmallQueryAndCheckRecall runs the first ground-truth query from the SparseSmall
-// dataset against the given index and asserts 100% recall@10.
-func runSparseSmallQueryAndCheckRecall(t *testing.T, idxName string, isBhive bool) {
+// dataset against the given index and asserts recall@10 meets minRecall.
+func runSparseSmallQueryAndCheckRecall(t *testing.T, idxName string, isBhive bool, minRecall float64) {
 	t.Helper()
 	nprobes := 256
 
@@ -2211,8 +2276,9 @@ func runSparseSmallQueryAndCheckRecall(t *testing.T, idxName string, isBhive boo
 
 	recall := 100.0 * float64(matches) / float64(len(truthTopK))
 	log.Printf("%v: Recall=%.2f%% (%d/%d)", idxName, recall, matches, len(truthTopK))
-	if recall < 100.0 {
-		t.Fatalf("%v: expected 100%% recall with nprobes=%d, got %.2f%%", idxName, nprobes, recall)
+	if recall < minRecall {
+		t.Fatalf("%v: expected at least %.0f%% recall with nprobes=%d, got %.2f%%",
+			idxName, minRecall, nprobes, recall)
 	}
 }
 
@@ -2225,6 +2291,16 @@ func runSparseSmallQueryAndCheckRecall(t *testing.T, idxName string, isBhive boo
 //  5. Re-checks the EXPLAIN plan and recall on the restored index.
 func testSparseSmallBackupRestore(t *testing.T, isBhive bool) {
 	skipIfNotPlasma(t)
+
+	// Composite indexes run on the exact float32 path (must be set before the
+	// index build below, and stay on through the restored index's build);
+	// bhive is always quantized, so it asserts the threshold instead.
+	minRecall := float64(sparseSmallMinSingleQueryRecall)
+	if !isBhive {
+		restore := setSparseExactScanSettings(t)
+		defer restore()
+		minRecall = sparseSmallExactRecall
+	}
 
 	if !sparseSmallVectorsLoaded {
 		vectorSetupSparseSmall(t, bucket, "", "", numSparseSmallDocs)
@@ -2262,7 +2338,7 @@ func testSparseSmallBackupRestore(t *testing.T, isBhive bool) {
 
 	// Verify explain plan and recall before backup
 	checkSparseSmallIndexInPlan(t, idxName, isBhive)
-	runSparseSmallQueryAndCheckRecall(t, idxName, isBhive)
+	runSparseSmallQueryAndCheckRecall(t, idxName, isBhive, minRecall)
 
 	// Backup
 	indexers, err := secondaryindex.GetIndexerNodesHttpAddresses(indexManagementAddress)
@@ -2302,7 +2378,7 @@ func testSparseSmallBackupRestore(t *testing.T, isBhive bool) {
 
 	// Verify explain plan and recall after restore
 	checkSparseSmallIndexInPlan(t, idxName, isBhive)
-	runSparseSmallQueryAndCheckRecall(t, idxName, isBhive)
+	runSparseSmallQueryAndCheckRecall(t, idxName, isBhive, minRecall)
 }
 
 // TestSparseBhiveIndexBackupRestore tests backup and restore of a bhive sparse vector
@@ -2344,8 +2420,9 @@ func checkSparseBase64IndexInPlan(t *testing.T, idxName string, isBhive bool) {
 }
 
 // runSparseBase64QueryAndCheckRecall runs the first ground-truth query from SparseSmall
-// against DECODE_VECTOR(sparsebase, false) and asserts 100% recall@10 with nprobes=256.
-func runSparseBase64QueryAndCheckRecall(t *testing.T, idxName string, isBhive bool) {
+// against DECODE_VECTOR(sparsebase, false) and asserts recall@10 meets
+// minRecall with nprobes=256.
+func runSparseBase64QueryAndCheckRecall(t *testing.T, idxName string, isBhive bool, minRecall float64) {
 	t.Helper()
 	const fieldExpr = "DECODE_VECTOR(sparsebase, false, \"sparse\")"
 	nprobes := 256
@@ -2409,8 +2486,9 @@ func runSparseBase64QueryAndCheckRecall(t *testing.T, idxName string, isBhive bo
 
 	recall := 100.0 * float64(matches) / float64(len(truthTopK))
 	log.Printf("%v: Recall=%.2f%% (%d/%d)", idxName, recall, matches, len(truthTopK))
-	if recall < 100.0 {
-		t.Fatalf("%v: expected 100%% recall with nprobes=%d, got %.2f%%", idxName, nprobes, recall)
+	if recall < minRecall {
+		t.Fatalf("%v: expected at least %.0f%% recall with nprobes=%d, got %.2f%%",
+			idxName, minRecall, nprobes, recall)
 	}
 }
 
@@ -2421,9 +2499,19 @@ func runSparseBase64QueryAndCheckRecall(t *testing.T, idxName string, isBhive bo
 //  3. Creates the index on DECODE_VECTOR(sparsebase, false) SPARSE VECTOR.
 //  4. Verifies items_count == numSparseSmallDocs.
 //  5. Verifies via EXPLAIN that the index is used.
-//  6. Runs one ground-truth query and asserts 100% recall@10.
+//  6. Runs one ground-truth query and asserts recall@10 (exact for composite,
+//     threshold for the always-quantized bhive).
 func testSparseSmallBase64VectorIndex(t *testing.T, isBhive bool) {
 	skipIfNotPlasma(t)
+
+	// Composite indexes run on the exact float32 path (set before the index
+	// build below); bhive is always quantized and asserts the threshold.
+	minRecall := float64(sparseSmallMinSingleQueryRecall)
+	if !isBhive {
+		restore := setSparseExactScanSettings(t)
+		defer restore()
+		minRecall = sparseSmallExactRecall
+	}
 
 	if !sparseSmallVectorsLoaded {
 		vectorSetupSparseSmall(t, bucket, "", "", numSparseSmallDocs)
@@ -2467,7 +2555,7 @@ func testSparseSmallBase64VectorIndex(t *testing.T, isBhive bool) {
 	log.Printf("%v: items_count=%v OK", idxName, itemsCount)
 
 	checkSparseBase64IndexInPlan(t, idxName, isBhive)
-	runSparseBase64QueryAndCheckRecall(t, idxName, isBhive)
+	runSparseBase64QueryAndCheckRecall(t, idxName, isBhive, minRecall)
 }
 
 // TestSparseAAA_ResetQuota resets indexer memory quota to 1500 MB before sparse tests run.

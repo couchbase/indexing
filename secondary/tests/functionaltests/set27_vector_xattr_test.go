@@ -408,10 +408,21 @@ func vectorSetupSparseSmallXATTR(t *testing.T) {
 //  2. Creates the appropriate index on meta().xattrs.sparse_xattr.
 //  3. Verifies items_count matches numSparseSmallDocs.
 //  4. Verifies via EXPLAIN that the index is used by the query planner.
-//  5. Runs 32 queries from the dataset ground truth and asserts 100% recall
-//     (achievable because nprobes=256 is exhaustive for IVF256).
+//  5. Runs 32 queries from the dataset ground truth and asserts recall
+//     (nprobes=256 is exhaustive for IVF256): exact 100% for composite, which
+//     runs with the MB-71503 lossy optimizations disabled, and
+//     sparseSmallMinOverallRecall for the always-quantized bhive.
 func testSparseVectorXATTRSparseSmall(t *testing.T, isBhive bool) {
 	skipIfNotPlasma(t)
+
+	// Composite indexes run on the exact float32 path (set before the index
+	// build below); bhive is always quantized and asserts the threshold.
+	minRecall := float64(sparseSmallMinOverallRecall)
+	if !isBhive {
+		restore := setSparseExactScanSettings(t)
+		defer restore()
+		minRecall = sparseSmallExactRecall
+	}
 
 	if !sparseSmallXATTRLoaded {
 		vectorSetupSparseSmallXATTR(t)
@@ -541,22 +552,22 @@ func testSparseVectorXATTRSparseSmall(t *testing.T, isBhive bool) {
 	overallRecall := 100 * float64(totalRel) / (float64(groundTruthK) * float64(totalQueries))
 	log.Printf("%v: Overall Recall=%.2f%% (%d rel / %d queries)", idxName, overallRecall, totalRel, totalQueries)
 
-	if overallRecall < 100 {
-		t.Fatalf("%v: expected 100%% recall with exhaustive scan (nprobes=%d), got %.2f%%",
-			idxName, nprobes, overallRecall)
+	if overallRecall < minRecall {
+		t.Fatalf("%v: expected at least %.0f%% recall with exhaustive scan (nprobes=%d), got %.2f%%",
+			idxName, minRecall, nprobes, overallRecall)
 	}
 }
 
 // TestSparseBhiveVectorXATTRSparseSmall creates a bhive sparse vector index
 // (CREATE VECTOR INDEX) on meta().xattrs.sparse_xattr loaded from the SparseSmall
-// (MS MARCO) dataset, then validates index usage and 100% recall@10.
+// (MS MARCO) dataset, then validates index usage and recall@10.
 func TestSparseBhiveVectorXATTRSparseSmall(t *testing.T) {
 	testSparseVectorXATTRSparseSmall(t, true /*isBhive*/)
 }
 
 // TestSparseCompositeVectorXATTRSparseSmall creates a composite sparse vector index
 // (CREATE INDEX) on scalar fields + meta().xattrs.sparse_xattr from the SparseSmall
-// (MS MARCO) dataset, then validates index usage and 100% recall@10.
+// (MS MARCO) dataset, then validates index usage and recall@10.
 func TestSparseCompositeVectorXATTRSparseSmall(t *testing.T) {
 	testSparseVectorXATTRSparseSmall(t, false /*isBhive*/)
 }
