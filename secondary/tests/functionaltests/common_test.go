@@ -1540,17 +1540,58 @@ func issueBuildStatement(bucket, scope, coll string, indexNames []string) (err e
 	return err
 }
 
+// cleanupWaitLimit bounds how long the rebalance-cleanup polls wait before failing.
+const cleanupWaitLimit = 5 * time.Minute
+
+// listRebalanceTokens returns the indexer's rebalance tokens as text: "cleanup did not
+// finish" is not actionable without knowing which token is stuck and who owns it.
+func listRebalanceTokens(indexerAddr string) string {
+	req, err := http.NewRequest("GET", "http://"+indexerAddr+"/listRebalanceTokens", nil)
+	if err != nil {
+		return fmt.Sprintf("<%v>", err)
+	}
+	req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
+
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Sprintf("<%v>", err)
+	}
+	defer resp.Body.Close()
+	body, _ := ioutil.ReadAll(resp.Body)
+	return strings.TrimSpace(string(body))
+}
+
+// Callers may invoke this from a deferred cleanup func, so every failure path uses
+// Errorf: Fatalf is runtime.Goexit and tc.HandleError is log.Panicf, either of which
+// would abandon the rest of that defer (leaving test actions armed, nodes un-ejected).
 func waitForRebalanceCleanupStatus(nodeAddr string, t *testing.T) {
 	indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username, clusterconfig.Password, nodeAddr)
 	if indexerAddr == "" {
-		t.Fatalf("indexerAddr is empty for nodeAddr: %v", nodeAddr)
+		// A cancelled swap can leave the swap-in node absent from nodeServices. The
+		// condition is cluster-wide (getCurrRebalTokens reads metaKV), so any node's
+		// answer is equivalent. Covers only "" - GetIndexHttpAddrOnNode can still
+		// panic on its unchecked type assertions.
+		log.Printf("waitForRebalanceCleanupStatus: could not resolve indexer on %v, "+
+			"observing %v instead", nodeAddr, clusterconfig.Nodes[1])
+		nodeAddr = clusterconfig.Nodes[1]
+		indexerAddr = secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username,
+			clusterconfig.Password, nodeAddr)
+		if indexerAddr == "" {
+			t.Errorf("indexerAddr is empty for nodeAddr: %v", nodeAddr)
+			return
+		}
 	}
 
 	var finalErr error
 
-	for i := 0; i < 300; i++ {
+	// Bounded by elapsed time, not iterations: with a per-request timeout an iteration
+	// count says nothing about duration.
+	deadline := time.Now().Add(cleanupWaitLimit)
+	for i := 0; time.Now().Before(deadline); i++ {
 		val := func() bool {
-			client := &http.Client{}
+			// Generous per-poll bound: the handler does a metakv.ListAllChildren under
+			// svcMgrMu, which the cleanup paths being waited on also contend for.
+			client := &http.Client{Timeout: 30 * time.Second}
 			address := "http://" + indexerAddr + "/rebalanceCleanupStatus"
 
 			req, _ := http.NewRequest("GET", address, nil)
@@ -1590,8 +1631,31 @@ func waitForRebalanceCleanupStatus(nodeAddr string, t *testing.T) {
 			return
 		}
 	}
-	// todo : error out if response is error
-	tc.HandleError(finalErr, "Get RebalanceCleanupStatus")
+	if finalErr != nil {
+		// Last-poll state, not "every poll errored".
+		t.Errorf("Get RebalanceCleanupStatus on %v: %v", nodeAddr, finalErr)
+		return
+	}
+	// Answered, but never "done" - name the offending tokens.
+	t.Errorf("Timed out after %v waiting for rebalance cleanup on node %v. Tokens: %v",
+		cleanupWaitLimit, nodeAddr, listRebalanceTokens(indexerAddr))
+}
+
+// waitForRebalanceCancelCleanup blocks until the transfer tokens left behind by a
+// cancelled rebalance are gone.
+//
+// waitForRebalanceCleanup()'s fixed 2s sleep is not enough after a *cancel*: if the
+// cancel lands while an index is in async recovery, LifecycleMgr defers the drop
+// (ErrIndexInAsyncRecovery) and cleanupLocalIndexInstsAndShardToken returns before
+// deleting the token from metaKV, leaving it to the rebalance janitor. prepareRebalance
+// cleans up once, re-checks, and hard-fails the *next* topology change with "cleanup
+// pending from previous failed/aborted rebalance".
+//
+// /rebalanceCleanupStatus reports "done" only once no token remains anywhere in metaKV -
+// a strictly stronger condition than the local check prepareRebalance gates on, so
+// observing any one node is enough.
+func waitForRebalanceCancelCleanup(nodeAddr string, t *testing.T) {
+	waitForRebalanceCleanupStatus(nodeAddr, t)
 }
 
 func waitForTokenCleanup(nodeAddr string, t *testing.T) {

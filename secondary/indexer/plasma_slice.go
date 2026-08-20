@@ -2387,6 +2387,12 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 	var quantizedCodeOrConciseVec []byte
 	vec := vecs[0]
 
+	// NNZ of the sparse document vector before threshold pruning and top-N
+	// truncation reduce it. Declared out here because vec is replaced in
+	// place by the reducers, and the stat is recorded further below once
+	// the insert has succeeded.
+	var rawNNZ int
+
 	if vec != nil {
 		var centroidId int64
 		var err error
@@ -2407,6 +2413,7 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 			if mdb.cachedSparseDerivedTau > minAbsWeight {
 				minAbsWeight = mdb.cachedSparseDerivedTau
 			}
+			rawNNZ = common.ConciseSparseVector(vec).NNZ()
 			if pruned, ok := common.PruneConciseByThreshold(vec, minAbsWeight, mdb.sparseThreshBuf[workerId]); ok {
 				mdb.sparseThreshBuf[workerId] = pruned
 				vec = pruned
@@ -2495,7 +2502,7 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(mainIndexEntry)+len(quantizedCodeOrConciseVec)))
 
 			if isSparseVector && len(vec) > 0 {
-				mdb.idxStats.sparseTotalNNZ.Add(int64(common.ConciseSparseVector(vec).NNZ()))
+				mdb.idxStats.sparseTotalNNZ.Add(int64(rawNNZ))
 				mdb.idxStats.sparseNumVecsIndexed.Add(1)
 			}
 		}

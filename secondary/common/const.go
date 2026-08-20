@@ -237,6 +237,11 @@ func IsVectorTrainingErrorQualifyingDocs(errStr string) bool {
 	return IsVectorTrainingError(errStr) && strings.Contains(errStr, "Number of qualifying")
 }
 
+// A training error is rebal safe if the index can be left as is on the destination
+// instead of failing the rebalance. ERR_RETRYABLE_TRAIN_LIST_SIZE is raised for
+// train_list_wait indexes whose keyspace does not have enough documents yet; the
+// build is retried in the background, so it must not fail the rebalance either.
 func IsRebalSafeVectorTrainingError(errStr string) bool {
-	return IsVectorTrainingError(errStr) && (strings.Contains(errStr, INVALID_TRAIN_LIST_SIZE) || strings.Contains(errStr, INVALID_ITEMS_COUNT))
+	return IsVectorTrainingError(errStr) && (strings.Contains(errStr, INVALID_TRAIN_LIST_SIZE) ||
+		strings.Contains(errStr, INVALID_ITEMS_COUNT) || IsRetryableTrainListSizeError(errStr))
 }

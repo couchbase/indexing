@@ -39,6 +39,7 @@ var (
 	ErrInvalid                  = errors.New("MemDB invalid arguments")
 	ErrInvalidRotationType      = errors.New("MemDB invalid rotation type")
 	ErrUnsupportedFileType      = errors.New("MemDB unsupported file type")
+	ErrKeyIdListIncomplete      = errors.New("MemDB keyId list incomplete due to snapshot keyId read errors in init")
 )
 
 type KeyCompare func([]byte, []byte) int
@@ -518,9 +519,10 @@ type MemDB struct {
 	restoreStats
 
 	// encryption
-	encMu      sync.RWMutex
-	encKeyId   []byte              // current keyId
-	snapKeyIds map[string][][]byte // snapshot dir -> keyIds mapping
+	encMu         sync.RWMutex
+	encKeyId      []byte              // current keyId
+	snapKeyIds    map[string][][]byte // snapshot dir -> keyIds mapping
+	snapKeyIdErrs map[string]error    // snapshot dir -> keyId read error, pending resolution
 
 	// context to manage encryption goroutines
 	encCtx    context.Context
@@ -535,17 +537,18 @@ type MemDB struct {
 
 func NewWithConfig(cfg Config) *MemDB {
 	m := &MemDB{
-		snapshots:   skiplist.New(),
-		gcsnapshots: skiplist.New(),
-		currSn:      1,
-		Config:      cfg,
-		gcchan:      make(chan *skiplist.Node, gcchanBufSize),
-		id:          int(atomic.AddInt64(&dbInstancesCount, 1)),
-		encKeyId:    NullKeyId,
-		encCtx:      context.Background(),
-		snapKeyIds:  make(map[string][][]byte),
-		dirGuard:    newDirOpGuard(),
-		encSts:      &EncryptionStats{},
+		snapshots:     skiplist.New(),
+		gcsnapshots:   skiplist.New(),
+		currSn:        1,
+		Config:        cfg,
+		gcchan:        make(chan *skiplist.Node, gcchanBufSize),
+		id:            int(atomic.AddInt64(&dbInstancesCount, 1)),
+		encKeyId:      NullKeyId,
+		encCtx:        context.Background(),
+		snapKeyIds:    make(map[string][][]byte),
+		snapKeyIdErrs: make(map[string]error),
+		dirGuard:      newDirOpGuard(),
+		encSts:        &EncryptionStats{},
 	}
 
 	m.initWriteBarrier(cfg.ioConcurrency)
@@ -1734,6 +1737,10 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 
 	stats := m.store.GetStats()
 	m.itemsCount = int64(stats.NodeCount)
+
+	// full read of the snapshot succeeded; clear any recorded keyId read error
+	m.clearSnapKeyIdReadErr(dir)
+
 	return m.NewSnapshot()
 }
 

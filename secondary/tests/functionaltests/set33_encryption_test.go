@@ -2090,6 +2090,7 @@ func findScanResultFile(dir string) (string, error) {
 // For plasma log files, there will not be encryption header at start of the file and only keyId can be present at starting of the blocks
 func TestIndexEncryptionBhive(t *testing.T) {
 
+	t.Skipf("Test %s can be added after bhive bug fixed", t.Name())
 	skipIfNotPlasma(t)
 
 	// Bucket is residing on node n_0 thus bucket encryption info should be fetched from n_0

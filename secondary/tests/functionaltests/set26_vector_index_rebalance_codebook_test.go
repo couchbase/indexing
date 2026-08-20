@@ -554,7 +554,8 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		tc.HandleError(err, "Failed to activate testactions")
 
 		defer func() {
-			waitForRebalanceCleanup()
+			// removeNode below starts another rebalance; see waitForRebalanceCancelCleanup.
+			waitForRebalanceCancelCleanup(clusterconfig.Nodes[3], subt)
 			configChanges := map[string]interface{}{
 				"indexer.shardRebalance.execTestAction": false,
 			}
@@ -592,7 +593,8 @@ func TestVectorIndexShardRebalance(t *testing.T) {
 		tc.HandleError(err, "Failed to activate testactions")
 
 		defer func() {
-			waitForRebalanceCleanup()
+			// removeNode below starts another rebalance; see waitForRebalanceCancelCleanup.
+			waitForRebalanceCancelCleanup(clusterconfig.Nodes[3], subt)
 			configChanges := map[string]interface{}{
 				"indexer.shardRebalance.execTestAction": false,
 			}

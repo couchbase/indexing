@@ -511,7 +511,8 @@ func TestWithShardAffinity(t *testing.T) {
 				report)
 		}
 
-		waitForRebalanceCleanup()
+		// The deferred removeNode starts another rebalance; wait out this cancel first.
+		waitForRebalanceCancelCleanup(clusterconfig.Nodes[3], subt)
 
 		performClusterStateValidation(subt, false)
 	})
@@ -563,7 +564,10 @@ func TestWithShardAffinity(t *testing.T) {
 				report)
 		}
 
-		waitForRebalanceCleanup()
+		// Cancelling after index recovery leaves n3's ShardTokenRecoverShard token past
+		// the first cleanup pass, so the deferred removeNode would be rejected with
+		// "cleanup pending from previous failed/aborted rebalance".
+		waitForRebalanceCancelCleanup(clusterconfig.Nodes[3], subt)
 
 		performClusterStateValidation(subt, false)
 	})
@@ -627,7 +631,9 @@ func TestWithShardAffinity(t *testing.T) {
 				subt.Fatalf("Rebalance report does not have any completion message - %v", report)
 			}
 
-			waitForRebalanceCleanup()
+			// The reset below and the next iteration's swap both rebalance; wait out
+			// this cancel so prepareRebalance does not reject them.
+			waitForRebalanceCancelCleanup(clusterconfig.Nodes[3], subt)
 
 			assertNoIndexerRestart(subt, uptimesBefore)
 

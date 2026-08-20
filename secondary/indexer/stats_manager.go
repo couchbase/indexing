@@ -219,6 +219,8 @@ type IndexStats struct {
 	isArrayIndex     bool
 	useArrItemsCount bool
 	isVectorIndex    bool
+	isSparseIndex    bool // vector index with at least one sparse vector key
+	isBhiveIndex     bool // backed by bhiveSlice; false for the plasmaSlice engine
 
 	partitions map[common.PartitionId]*IndexStats
 
@@ -373,9 +375,13 @@ type IndexStats struct {
 	vectorScanQueued stats.Int64Val
 
 	// Sparse vector stats. sparseTotalNNZ accumulates the NNZ count of every
-	// stored sparse vector (post top-N truncation if enabled). sparseNumVecsIndexed
-	// is the count of sparse vector inserts. avgSparseNNZ is the derived
-	// avg = sparseTotalNNZ / sparseNumVecsIndexed, populated at stats-emit time.
+	// indexed sparse vector as it arrived in the document, before indexer-side
+	// reduction: plasma counts it ahead of threshold pruning and top-N
+	// truncation, bhive counts the vector as-is (it does neither). So this
+	// tracks input width, not the stored footprint, and the two engines stay
+	// comparable. sparseNumVecsIndexed is the count of sparse vector inserts.
+	// avgSparseNNZ is the derived avg = sparseTotalNNZ / sparseNumVecsIndexed,
+	// populated at stats-emit time.
 	sparseTotalNNZ       stats.Int64Val
 	sparseNumVecsIndexed stats.Int64Val
 	avgSparseNNZ         stats.Int64Val
@@ -760,6 +766,8 @@ func (s *IndexStats) addPartition(id common.PartitionId) {
 		partnStats := &IndexStats{isArrayIndex: s.isArrayIndex,
 			useArrItemsCount: s.useArrItemsCount,
 			isVectorIndex:    s.isVectorIndex,
+			isSparseIndex:    s.isSparseIndex,
+			isBhiveIndex:     s.isBhiveIndex,
 		}
 		partnStats.Init()
 		s.partitions[id] = partnStats
@@ -827,6 +835,25 @@ func (s *IndexStats) partnInt64Stats(f func(*IndexStats) int64) int64 {
 func (s *IndexStats) partnAvgInt64Stats(f func(*IndexStats) int64) int64 {
 
 	return s.int64Stats(f)
+}
+
+// computeAvgSparseNNZ returns the average NNZ across all stored sparse vectors.
+// Sum and count are aggregated across partitions before dividing, to avoid the
+// average-of-averages skew.
+func (s *IndexStats) computeAvgSparseNNZ() int64 {
+
+	totalNNZ := s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.sparseTotalNNZ.Value()
+	})
+	numVecs := s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.sparseNumVecsIndexed.Value()
+	})
+
+	if numVecs <= 0 {
+		return 0
+	}
+
+	return totalNNZ / numVecs
 }
 
 func (s *IndexStats) partnMaxFloat64Stats(f func(*IndexStats) float64) float64 {
@@ -1212,7 +1239,8 @@ func (s *IndexerStats) Reset() {
 	// Recreate per-index objects
 	for instId, iStats := range old.indexes {
 		indexStats := s.addIndexStats(instId, iStats.bucket, iStats.scope, iStats.collection, iStats.name,
-			iStats.replicaId, iStats.isArrayIndex, iStats.useArrItemsCount, iStats.isVectorIndex)
+			iStats.replicaId, iStats.isArrayIndex, iStats.useArrItemsCount, iStats.isVectorIndex,
+			iStats.isSparseIndex, iStats.isBhiveIndex)
 
 		// Recreate per-partition subobjects
 		for partnId := range iStats.partitions {
@@ -1311,7 +1339,8 @@ func (s *IndexerStats) RemoveKeyspaceStats(streamId common.StreamId, keyspaceId 
 // stats map with populated metadata but empty stats values.
 func (s *IndexerStats) addIndexStats(instId common.IndexInstId,
 	bucket string, scope string, collection string, name string,
-	replicaId int, isArrIndex bool, useArrItemsCount bool, isVectorIndex bool) *IndexStats {
+	replicaId int, isArrIndex bool, useArrItemsCount bool, isVectorIndex bool,
+	isSparseIndex bool, isBhiveIndex bool) *IndexStats {
 
 	idxStats, ok := s.indexes[instId]
 	if !ok {
@@ -1324,6 +1353,8 @@ func (s *IndexerStats) addIndexStats(instId common.IndexInstId,
 			isArrayIndex:     isArrIndex,
 			useArrItemsCount: useArrItemsCount,
 			isVectorIndex:    isVectorIndex,
+			isSparseIndex:    isSparseIndex,
+			isBhiveIndex:     isBhiveIndex,
 		}
 		idxStats.Init()
 		s.indexes[instId] = idxStats
@@ -1346,7 +1377,8 @@ func (s *IndexerStats) AddPartitionStats(indexInst common.IndexInst, partitionId
 
 	if _, ok := s.indexes[instId]; !ok {
 		s.addIndexStats(instId, defn.Bucket, defn.Scope, defn.Collection, defn.Name,
-			indexInst.ReplicaId, defn.IsArrayIndex, defn.HasArrItemsCount, defn.IsVectorIndex)
+			indexInst.ReplicaId, defn.IsArrayIndex, defn.HasArrItemsCount, defn.IsVectorIndex,
+			defn.HasSparseVector(), defn.IsBhive())
 	}
 	s.indexes[instId].addPartition(partitionId)
 
@@ -2415,20 +2447,10 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 				return ss.graphBuildProgress.Value()
 			},
 			&s.graphBuildProgress, s.partnAvgInt64Stats)
+	}
 
-		// Average NNZ across all stored sparse vectors. Aggregates sum and count
-		// across partitions before dividing to avoid the average-of-averages skew.
-		totalNNZ := s.partnInt64Stats(func(ss *IndexStats) int64 {
-			return ss.sparseTotalNNZ.Value()
-		})
-		numVecs := s.partnInt64Stats(func(ss *IndexStats) int64 {
-			return ss.sparseNumVecsIndexed.Value()
-		})
-		var avg int64
-		if numVecs > 0 {
-			avg = totalNNZ / numVecs
-		}
-		s.avgSparseNNZ.Set(avg)
+	if s.isSparseIndex {
+		s.avgSparseNNZ.Set(s.computeAvgSparseNNZ())
 		statMap.AddStatValueFiltered("avg_sparse_nnz", &s.avgSparseNNZ)
 
 		statMap.AddAggrStatFiltered("sparse_scan_no_match_skips",
@@ -2443,6 +2465,10 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			},
 			&s.sparseQueryTermsPruned, s.partnInt64Stats)
 
+		// τ and the weight histogram are refreshed only by plasmaSlice
+		// (refreshSparseDerivedTau); bhiveSlice has no equivalent, so these
+		// would read a constant 0 there. Publish them for plasma only.
+		//
 		// τ and L1-retention are per-codebook state derived from the same
 		// training data; partitions converge to the same value in the common
 		// case. Aggregate as an average so a single-value report is correct
@@ -2451,23 +2477,25 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		// sparse_histogram_l1_retained_bps is fraction in basis points
 		// (so 0.98 → 9800). Observations sum: total weights observed during
 		// the most recent training across all partitions.
-		statMap.AddAggrStatFiltered("sparse_derived_tau_x1e6",
-			func(ss *IndexStats) int64 {
-				return ss.sparseDerivedTau.Value()
-			},
-			&s.sparseDerivedTau, s.partnAvgInt64Stats)
+		if !s.isBhiveIndex {
+			statMap.AddAggrStatFiltered("sparse_derived_tau_x1e6",
+				func(ss *IndexStats) int64 {
+					return ss.sparseDerivedTau.Value()
+				},
+				&s.sparseDerivedTau, s.partnAvgInt64Stats)
 
-		statMap.AddAggrStatFiltered("sparse_histogram_total_observations",
-			func(ss *IndexStats) int64 {
-				return ss.sparseHistogramTotalObservations.Value()
-			},
-			&s.sparseHistogramTotalObservations, s.partnInt64Stats)
+			statMap.AddAggrStatFiltered("sparse_histogram_total_observations",
+				func(ss *IndexStats) int64 {
+					return ss.sparseHistogramTotalObservations.Value()
+				},
+				&s.sparseHistogramTotalObservations, s.partnInt64Stats)
 
-		statMap.AddAggrStatFiltered("sparse_histogram_l1_retained_bps",
-			func(ss *IndexStats) int64 {
-				return ss.sparseHistogramL1Retained.Value()
-			},
-			&s.sparseHistogramL1Retained, s.partnAvgInt64Stats)
+			statMap.AddAggrStatFiltered("sparse_histogram_l1_retained_bps",
+				func(ss *IndexStats) int64 {
+					return ss.sparseHistogramL1Retained.Value()
+				},
+				&s.sparseHistogramL1Retained, s.partnAvgInt64Stats)
+		}
 	}
 
 	// -------------------------------
@@ -2994,6 +3022,13 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 		cbTrainDuration := s.int64Stats(func(ss *IndexStats) int64 { return ss.cbTrainDuration.Value() })
 		st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "codebook_train_duration"))...)
 		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "codebook_train_duration", s.bucket, collectionLabels, s.dispName, cbTrainDuration)
+		st = append(st, []byte(str)...)
+	}
+
+	if s.isSparseIndex {
+		avgSparseNNZ := s.computeAvgSparseNNZ()
+		st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "avg_sparse_nnz"))...)
+		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "avg_sparse_nnz", s.bucket, collectionLabels, s.dispName, avgSparseNNZ)
 		st = append(st, []byte(str)...)
 	}
 
@@ -5170,6 +5205,8 @@ const num_rollbacks = "nrb"
 const num_rollbacks_to_zero = "nrbz"
 const chunkSz = "chunkSz"
 const codebook_train_duration = "cbtd"
+const sparse_total_nnz = "stnnz"
+const sparse_num_vecs_indexed = "snvi"
 const STREAM_PREFIX = "stream"
 
 func (s *statsManager) GetStatsForIndexesToBePersisted(indexInstances []common.IndexInstId, compress bool) ([]byte, error) {
@@ -5225,6 +5262,16 @@ func getStatsToBePersistedMap(indexerStats *IndexerStats) (statsMap map[string]i
 				statsMap[instdId+":"+partnId+":"+avg_scan_rate] = partnStats.avgScanRate.Value()
 				statsMap[instdId+":"+partnId+":"+num_rows_scanned] = partnStats.numRowsScanned.Value()
 				statsMap[instdId+":"+partnId+":"+last_num_rows_scanned] = partnStats.lastNumRowsScanned.Value()
+
+				// The slices accumulate these on the partition stats object.
+				// They are only advanced by sparse vector inserts, so without
+				// persistence avg_sparse_nnz reads 0 after a restart until the
+				// next mutation - recovery loads the index from disk rather
+				// than re-inserting it.
+				if indexStats.isSparseIndex {
+					statsMap[instdId+":"+partnId+":"+sparse_total_nnz] = partnStats.sparseTotalNNZ.Value()
+					statsMap[instdId+":"+partnId+":"+sparse_num_vecs_indexed] = partnStats.sparseNumVecsIndexed.Value()
+				}
 			}
 		}
 
@@ -5359,6 +5406,16 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 				val, ok := getInt64Val(value, statName)
 				if ok {
 					indexerStats.indexes[instdId].partitions[partnId].lastNumRowsScanned.Set(val)
+				}
+			case sparse_total_nnz:
+				val, ok := getInt64Val(value, statName)
+				if ok {
+					indexerStats.indexes[instdId].partitions[partnId].sparseTotalNNZ.Set(val)
+				}
+			case sparse_num_vecs_indexed:
+				val, ok := getInt64Val(value, statName)
+				if ok {
+					indexerStats.indexes[instdId].partitions[partnId].sparseNumVecsIndexed.Set(val)
 				}
 			}
 		}
