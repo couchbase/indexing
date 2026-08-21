@@ -741,6 +741,11 @@ func (c *GsiClient) LookupInternal(
 		return err
 	}
 
+	var generateScanReport bool
+	if broker.scanReport != nil {
+		generateScanReport = true
+	}
+
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
@@ -756,7 +761,7 @@ func (c *GsiClient) LookupInternal(
 		return qc.Lookup(
 			uint64(index.DefnId), requestId, values, distinct, broker.GetLimit(), cons,
 			tsvector, callb, rollbackTime, partitions, dataEncFmt, broker.DoRetry(),
-			scanParams, reqDeadline, reqDeadlineSlack, wg)
+			scanParams, reqDeadline, reqDeadlineSlack, generateScanReport, wg)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -801,6 +806,11 @@ func (c *GsiClient) RangeInternal(
 		return err
 	}
 
+	var generateScanReport bool
+	if broker.scanReport != nil {
+		generateScanReport = true
+	}
+
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
@@ -831,14 +841,14 @@ func (c *GsiClient) RangeInternal(
 				uint64(index.DefnId), requestId, l, h, inclusion, distinct,
 				broker.GetLimit(), cons, tsvector, handler, rollbackTime,
 				partitions, dataEncFmt, broker.DoRetry(), scanParams, reqDeadline,
-				reqDeadlineSlack, wg)
+				reqDeadlineSlack, generateScanReport, wg)
 		}
 		// dealing with secondary index.
 		return qc.Range(
 			uint64(index.DefnId), requestId, low, high, inclusion, distinct,
 			broker.GetLimit(), cons, tsvector, handler, rollbackTime, partitions,
 			dataEncFmt, broker.DoRetry(), scanParams, reqDeadline, reqDeadlineSlack,
-			wg)
+			generateScanReport, wg)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -943,6 +953,11 @@ func (c *GsiClient) MultiScanInternal(
 		return err
 	}
 
+	var generateScanReport bool
+	if broker.scanReport != nil {
+		generateScanReport = true
+	}
+
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
@@ -961,14 +976,14 @@ func (c *GsiClient) MultiScanInternal(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
 				projection, broker.GetOffset(), broker.GetLimit(), cons,
 				tsvector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(),
-				scanParams, reqDeadline, reqDeadlineSlack, wg)
+				scanParams, reqDeadline, reqDeadlineSlack, generateScanReport, wg)
 		}
 
 		return qc.MultiScan(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
 			projection, broker.GetOffset(), broker.GetLimit(), cons, tsvector,
 			handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), scanParams,
-			reqDeadline, reqDeadlineSlack, wg)
+			reqDeadline, reqDeadlineSlack, generateScanReport, wg)
 	}
 
 	broker.SetScanRequestHandler(handler)

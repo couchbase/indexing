@@ -650,6 +650,14 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.Sorted = true
 		r.dataEncFmt = common.DataEncodingFormat(req.GetDataEncFmt())
 		r.SkipReadMetering = req.GetSkipReadMetering()
+		r.generateScanReport = req.GetGenerateScanReport()
+		if r.generateScanReport {
+			r.srvrScanReport = &report.HostScanReport{
+				ReqId:      r.RequestId,
+				SrvrNs:     &report.ServerTimings{},
+				SrvrCounts: &report.ServerCounts{},
+			}
+		}
 
 		if err = r.setIndexParams(); err != nil {
 			return
