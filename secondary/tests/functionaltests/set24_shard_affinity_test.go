@@ -1971,7 +1971,21 @@ func TestFileBasedRebalanceMultiBucketEncryption(t *testing.T) {
 		bucketEnc1  = "febr_enc1"  // encrypted, DEK rotated (leaves non-active key on shard)
 		bucketEnc2  = "febr_enc2"  // encrypted, single stable key
 		bucketPlain = "febr_plain" // unencrypted
+
+		// Shrinking "default" to 256MB leaves room for our three 256MB buckets
+		// without dropping the bucket the rest of the suite depends on.
+		febrDefaultBucket        = "default"
+		febrDefaultShrunkQuotaMB = "256"
+		// Used only if Setup never recorded the real quota. 256MB is what the other
+		// tests in this package create "default" with (set05 TestBucketDefaultDelete,
+		// set07 TestDeleteBucketWhileInitialIndexBuild).
+		febrDefaultFallbackQuotaMB = "256"
 	)
+	// Recorded in Setup, put back in Cleanup. Read rather than hard-coded, because
+	// how much RAM "default" holds here depends on the run: 1500MB from
+	// initClusterFromREST on a fresh cluster, 256MB once TestBucketDefaultDelete
+	// has recreated it, and whatever -s said under cluster_connect.
+	febrDefaultQuotaMB := ""
 	allBuckets := []string{bucketEnc1, bucketEnc2, bucketPlain}
 	encBuckets := []string{bucketEnc1, bucketEnc2}
 
@@ -2000,9 +2014,17 @@ func TestFileBasedRebalanceMultiBucketEncryption(t *testing.T) {
 			clusterconfig.Password, clusterconfig.Nodes[1])
 		tc.HandleError(err, fmt.Sprintf("Failed to change config %v", shardConfig))
 
-		// The pre-existing "default" bucket consumes the entire data RAM quota, so
-		// our buckets would fail to create. Drop it to free RAM (recreated in Cleanup).
-		kvutility.DeleteBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		// "default" can hold the whole data RAM quota, which would leave no room for
+		// our buckets. Shrink it rather than drop it: every later test in the suite
+		// reads "default", nothing in this package recreates it once set05 has run,
+		// and a sub-test below can leave a rebalance running that blocks bucket DDL
+		// outright - either way a dropped "default" makes the rest of the run panic
+		// on a 404 for it. Restored in Cleanup.
+		febrDefaultQuotaMB, err = clusterutility.GetBucketRamQuotaMB(kvaddress,
+			clusterconfig.Username, clusterconfig.Password, febrDefaultBucket)
+		FailTestIfError(err, "Failed to read the RAM quota of "+febrDefaultBucket, subt)
+		kvutility.EditBucket(febrDefaultBucket, "", clusterconfig.Username,
+			clusterconfig.Password, kvaddress, febrDefaultShrunkQuotaMB)
 		time.Sleep(2 * time.Second)
 
 		// Load SIFT vector data (feeds the bhive index on "sift" and scalar indexes
@@ -2064,6 +2086,15 @@ func TestFileBasedRebalanceMultiBucketEncryption(t *testing.T) {
 
 	// Cleanup runs after all sub-tests below (deferred t.Run executes on return).
 	defer t.Run("Cleanup", func(subt *testing.T) {
+		// A sub-test whose rebalance wait timed out leaves the rebalance running,
+		// and every step below (index drop, encryption key update, bucket delete,
+		// resetCluster) is rejected while it runs. Stop it first so cleanup can
+		// actually clean up.
+		if err := clusterutility.StopRebalance(kvaddress, clusterconfig.Username,
+			clusterconfig.Password, 10*time.Minute); err != nil {
+			subt.Logf("Cleanup: %v", err)
+		}
+
 		secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 		for _, b := range encBuckets {
 			if err := updateBucketEncryptionKey(b, 1, "-1"); err != nil {
@@ -2072,14 +2103,40 @@ func TestFileBasedRebalanceMultiBucketEncryption(t *testing.T) {
 		}
 		for _, b := range allBuckets {
 			kvutility.DeleteBucket(b, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+			// Under -useclient n1ql the framework caches a datastore client per
+			// bucket; drop ours so nothing holds a handle to a deleted bucket.
+			secondaryindex.RemoveClientForBucket(kvaddress, b)
 		}
 
-		// Setup deleted the pre-existing "default" bucket to free RAM quota for
-		// the buckets above (see comment there) - restore it so later tests in
-		// this binary that assume "default" exists don't fail.
-		kvutility.CreateBucket("default", "sasl", "", clusterconfig.Username,
-			clusterconfig.Password, kvaddress, "1500", "11213")
-		time.Sleep(5 * time.Second)
+		// Restoring the quota Setup recorded is the normal path - Setup only shrank
+		// "default", it did not delete it - because leaving it shrunk would silently
+		// change the memory budget of every later test. Fall back to the size the
+		// other tests in this package create it with if Setup never got that far.
+		restoreQuotaMB := febrDefaultQuotaMB
+		if restoreQuotaMB == "" {
+			restoreQuotaMB = febrDefaultFallbackQuotaMB
+		}
+
+		if _, err := clusterutility.GetBucketRamQuotaMB(kvaddress,
+			clusterconfig.Username, clusterconfig.Password, febrDefaultBucket); err == nil {
+			kvutility.EditBucket(febrDefaultBucket, "", clusterconfig.Username,
+				clusterconfig.Password, kvaddress, restoreQuotaMB)
+		} else {
+			// Something other than this test deleted it. Recreate it, and drop any
+			// cached client still bound to the bucket that went away. CreateBucket
+			// only logs a rejected create, so confirm the bucket is really back.
+			subt.Logf("Cleanup: %v is missing (%v), recreating it at %vMB",
+				febrDefaultBucket, err, restoreQuotaMB)
+			time.Sleep(bucketOpWaitDur * time.Second)
+			kvutility.CreateBucket(febrDefaultBucket, "sasl", "", clusterconfig.Username,
+				clusterconfig.Password, kvaddress, restoreQuotaMB, "11213")
+			secondaryindex.RemoveClientForBucket(kvaddress, febrDefaultBucket)
+			time.Sleep(bucketOpWaitDur * time.Second)
+			if _, err := clusterutility.GetBucketRamQuotaMB(kvaddress,
+				clusterconfig.Username, clusterconfig.Password, febrDefaultBucket); err != nil {
+				subt.Errorf("Cleanup: %v could not be recreated: %v", febrDefaultBucket, err)
+			}
+		}
 
 		resetConfig := map[string]interface{}{
 			"indexer.settings.enable_shard_affinity":       false,
