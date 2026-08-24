@@ -106,8 +106,9 @@ var (
 
 // Backup corrupt index data files
 const (
-	CORRUPT_DATA_SUBDIR = ".corruptData"
-	sliceDirPerm        = 0o777
+	CORRUPT_DATA_SUBDIR    = ".corruptData"
+	sliceDirPerm           = 0o777
+	retainCorruptBackupCfg = "encryption.test_retain_corrupt_index_backup"
 )
 
 var codebookKDFLabelCtx = []byte("indexing/codebook")
@@ -1964,7 +1965,7 @@ func (idx *indexer) handleEncryptionUpdateKey(msg Message) {
 	case kdtTypeServiceBucket:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
-		idx.cleanupCorruptDataDirIfEncrypted()
+		idx.cleanupCorruptDataDirIfEncrypted(idx.config)
 	case "log":
 		handlerContext.rhc.HandleEncryptionUpdateKey(encMsg.GetEarKey(), kdt)
 		idx.statsMgrCmdCh <- msg
@@ -2796,14 +2797,15 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 	// idxStats := idx.stats.Clone()
 	partnStats := idx.getPartnStats(&indexInst)
 	memQuota := idx.stats.memoryQuota.Value()
+	cfg := idx.config
 
 	go func() {
 
 		// testcode - not used in production
-		testcode.CorruptIndex(idx.config, &indexInst)
+		testcode.CorruptIndex(cfg, &indexInst)
 
 		////////////// Testing code - Not used in production //////////////
-		testcode.TestActionAtTag(idx.config, testcode.DEST_INDEXER_BEFORE_INDEX_RECOVERY)
+		testcode.TestActionAtTag(cfg, testcode.DEST_INDEXER_BEFORE_INDEX_RECOVERY)
 		///////////////////////////////////////////////////////////////////
 
 		//allocate partition/slice
@@ -2820,7 +2822,7 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 		)
 
 		////////////// Testing code - Not used in production //////////////
-		testcode.TestActionAtTag(idx.config, testcode.DEST_INDEXER_AFTER_INDEX_RECOVERY)
+		testcode.TestActionAtTag(cfg, testcode.DEST_INDEXER_AFTER_INDEX_RECOVERY)
 		///////////////////////////////////////////////////////////////////
 
 		// In case of nil error, send a message to indexer to add this instance
@@ -2851,7 +2853,7 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 				// because of that, we cannot run backup here as some instances could be out
 				// of recovery already
 			} else {
-				idx.backupCorruptIndexDataFiles(&indexInst, partId, SliceId(0), rebalId)
+				idx.backupCorruptIndexDataFiles(cfg, &indexInst, partId, SliceId(0), rebalId)
 			}
 		}
 
@@ -9439,7 +9441,7 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 
 	// Startup sweep: if a crash interrupted a previous os.RemoveAll during handleEncryptionUpdateKey,
 	// stale plaintext files may remain in .corruptData.
-	idx.cleanupCorruptDataDirIfEncrypted()
+	idx.cleanupCorruptDataDirIfEncrypted(idx.config)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
@@ -10164,17 +10166,24 @@ func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
 	}
 }
 
+// Test only, // not tracked for key lifecycle
+func retainCorruptDataUnderEncryption(cfg common.Config) bool {
+	return cfg[retainCorruptBackupCfg].Bool()
+}
+
 // cleanupCorruptDataDirIfEncrypted removes the .corruptData directory for all storage engines
 // if any bucket has storage encryption enabled.
-func (idx *indexer) cleanupCorruptDataDirIfEncrypted() {
-	if !idx.config["settings.enable_corrupt_index_backup"].Bool() {
-		return
-	}
+func (idx *indexer) cleanupCorruptDataDirIfEncrypted(cfg common.Config) {
 	if !idx.encryptionMgr.IsAnyBucketEncryptionEnabled() {
 		return
 	}
+	if retainCorruptDataUnderEncryption(cfg) {
+		logging.Infof("Indexer::cleanupCorruptDataDirIfEncrypted retaining %v, %v is set",
+			CORRUPT_DATA_SUBDIR, retainCorruptBackupCfg)
+		return
+	}
 	for _, engine := range []c.StorageEngine{c.Plasma_StorageEngine, c.Bhive_StorageEngine} {
-		_, engineDir := c.GetStorageDirs(idx.config, engine)
+		_, engineDir := c.GetStorageDirs(cfg, engine)
 		corruptDataDir := filepath.Join(engineDir, CORRUPT_DATA_SUBDIR)
 		if _, err := os.Stat(corruptDataDir); os.IsNotExist(err) {
 			continue
@@ -10190,12 +10199,12 @@ func (idx *indexer) cleanupCorruptDataDirIfEncrypted() {
 // "move" the data files from original location to backup location.
 // return true if any error has occured during backup and cleanup is needed.
 // return false if "move" is successful and no need to cleanup data.
-func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
+func (idx *indexer) backupCorruptIndexDataFiles(cfg common.Config, indexInst *common.IndexInst,
 	partnId common.PartitionId, sliceId SliceId, rebalanceId string) (needsDataCleanup bool) {
 	logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v take backup of corrupt data files",
 		indexInst.InstId, partnId)
 
-	if idx.config["settings.corrupt_index_num_backups"].Int() < 1 {
+	if cfg["settings.corrupt_index_num_backups"].Int() < 1 {
 		logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v no need to backup as num backups is < 1",
 			indexInst.InstId, partnId)
 		needsDataCleanup = true
@@ -10203,14 +10212,18 @@ func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
 	}
 
 	if idx.encryptionMgr.IsAnyBucketEncryptionEnabled() {
-		logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v skipping backup: bucket encryption is active",
-			indexInst.InstId, partnId)
-		idx.cleanupCorruptDataDirIfEncrypted()
-		needsDataCleanup = true
-		return
+		if !retainCorruptDataUnderEncryption(cfg) {
+			logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v skipping backup: bucket encryption is active",
+				indexInst.InstId, partnId)
+			idx.cleanupCorruptDataDirIfEncrypted(cfg)
+			needsDataCleanup = true
+			return
+		}
+		logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v retaining encrypted backup, %v is set",
+			indexInst.InstId, partnId, retainCorruptBackupCfg)
 	}
 
-	storageDir, storeEngineDir := c.GetStorageDirs(idx.config, c.GetStorageEngineForIndexDefn(&indexInst.Defn))
+	storageDir, storeEngineDir := c.GetStorageDirs(cfg, c.GetStorageEngineForIndexDefn(&indexInst.Defn))
 	corruptDataDir := filepath.Join(storeEngineDir, CORRUPT_DATA_SUBDIR)
 
 	if err := iowrap.Os_MkdirAll(corruptDataDir, 0755); err != nil {
@@ -10266,7 +10279,7 @@ func (idx *indexer) forceCleanupIndexPartition(indexInst *common.IndexInst,
 	// backup the corrupt index data files, if enabled
 	needsDataCleanup := true
 	if idx.config["settings.enable_corrupt_index_backup"].Bool() {
-		needsDataCleanup = idx.backupCorruptIndexDataFiles(indexInst, partnId, SliceId(0), "")
+		needsDataCleanup = idx.backupCorruptIndexDataFiles(idx.config, indexInst, partnId, SliceId(0), "")
 	}
 
 	if needsDataCleanup {

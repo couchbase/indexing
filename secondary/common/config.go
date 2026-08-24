@@ -4678,9 +4678,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.bhive.invertedIndex.enable": ConfigValue{
-		false,
+		true,
 		"Master on/off switch for the slice-wide common inverted index. When false, the index is never built and the sentinel-centroid scan returns immediately (engine falls back to the pure per-cell scan path). Independent of invertedIndex.topN; both must be enabled for the feature to run",
-		false,
+		true,
 		false,
 		false,
 	},
@@ -5197,6 +5197,16 @@ var SystemConfig = Config{
 	"indexer.encryption.enable_test": ConfigValue{
 		Value:         false,
 		Help:          "Enable testing by using encryption test REST apis",
+		DefaultVal:    false,
+		Immutable:     false,
+		Casesensitive: false,
+	},
+	"indexer.encryption.test_retain_corrupt_index_backup": ConfigValue{
+		Value: false,
+		Help: "Test only, do NOT switch on in production. Retains the corrupt index backup " +
+			"directory when encryption at rest is enabled, so a corrupted index can be " +
+			"recovered for debugging. May also retain backups taken before encryption was " +
+			"enabled, which are unencrypted.",
 		DefaultVal:    false,
 		Immutable:     false,
 		Casesensitive: false,

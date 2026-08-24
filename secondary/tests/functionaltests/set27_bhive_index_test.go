@@ -327,6 +327,89 @@ func TestBhiveIndexWithIncludeColumns(t *testing.T) {
 	log.Printf("TestBhiveIndexWithIncludeColumns:Case-6 recall observed is: %v", recall)
 }
 
+// Dataset note: randdocs only sets the "missing" field when overflow%10 != 0.
+// Loading exactly numDocs (10000) docs from SIFT10K keeps overflow at 0 for
+// every doc, so `missing` is absent from all of them while `direction` is
+// "east" for all of them. That makes `missing` a usable "always absent" first
+// include field.
+func TestBhiveIncludeColumnMissingFirstField(t *testing.T) {
+	skipIfNotPlasma(t)
+
+	// Reload unconditionally: other tests in this package load different doc
+	// counts, and this test needs every doc to come from overflow==0.
+	vectorSetup(t, bucket, "", "", numDocs)
+	vectorsLoaded = true
+
+	// Precondition: the first include field must be absent from every doc,
+	// otherwise the docs that do have it would mask the bug.
+	cntStmt := fmt.Sprintf("select count(*) as cnt from %v where `missing` is missing", bucket)
+	cntResults, err := execN1QL(bucket, cntStmt)
+	FailTestIfError(err, "Error counting docs without the `missing` field", t)
+	if len(cntResults) != 1 {
+		t.Fatalf("Expected 1 row from %v, got %v", cntStmt, len(cntResults))
+	}
+	cnt := cntResults[0].(map[string]interface{})["cnt"].(float64)
+	if cnt != float64(numDocs) {
+		t.Fatalf("Test precondition failed: expected the `missing` field to be absent "+
+			"from all %v docs, but only %v docs lack it", numDocs, cnt)
+	}
+
+	idx_bhive_missing := "idx_bhive_include_missing_first"
+	// `missing` is the first include field and is absent from every document.
+	stmt := "CREATE VECTOR INDEX " + idx_bhive_missing +
+		" ON default(sift VECTOR) INCLUDE(`missing`, `direction`, `docnum`) " +
+		" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"defer_build\":true};"
+	err = createWithDeferAndBuild(idx_bhive_missing, bucket, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating "+idx_bhive_missing, t)
+
+	queryVectorStr := "["
+	for _, val := range indexVector.QueryVector {
+		queryVectorStr += fmt.Sprintf("%v,", val)
+	}
+	queryVectorStr = queryVectorStr[:len(queryVectorStr)-1]
+	queryVectorStr += "]"
+
+	limit := int64(5)
+
+	// Filter on `direction`, a non-leading include column. This pushes an
+	// include-column span down to the indexer and drives inlineFilterCb2,
+	annScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, direction, docnum, "+
+		"APPROX_VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\", %v, true) as distance "+
+		"from %v where direction = \"east\" ORDER BY distance limit %v",
+		queryVectorStr, indexVector.Probes, bucket, limit)
+	annScanResults, err := execN1QL(bucket, annScanStmt)
+	FailTestIfError(err, "Error during bhive include-column scan", t)
+
+	// Before the fix every row was dropped by the swallowed filter error, so
+	// this returned 0 rows.
+	if int64(len(annScanResults)) != limit {
+		t.Fatalf("Expected %v rows from the include-column filtered ANN scan, got %v. "+
+			"A count of 0 means the include-column filter rejected every row "+
+			"include columns dropped for docs whose first include field is MISSING). "+
+			"Results: %v", limit, len(annScanResults), annScanResults)
+	}
+
+	// num_rows_returned would be 0 before the fix even though no scan error is
+	// reported, because bhive discards the filter error.
+	validateScanStats(bucket, idx_bhive_missing, 1, limit, t)
+
+	// Confirm the surviving include columns carry correct values by matching
+	// the exact-search equivalent.
+	knnScanStmt := fmt.Sprintf("with qvec as (%v) select meta().id, direction, docnum, "+
+		"VECTOR_DISTANCE(sift, qvec, \"L2_SQUARED\") as distance "+
+		"from %v where direction = \"east\" ORDER BY distance limit %v",
+		queryVectorStr, bucket, limit)
+	knnScanResults, err := execN1QL(bucket, knnScanStmt)
+	FailTestIfError(err, "Error during KNN scan", t)
+	validateScanStats(bucket, idx_bhive_missing, 1, limit, t)
+
+	recall := computeRecallWithKNNResults(annScanResults, knnScanResults, 4, t)
+	log.Printf("TestBhiveIncludeColumnMissingFirstField recall observed is: %v", recall)
+	if recall < 0.5 {
+		log.Printf("ANN scan results: %v, KNN scan results: %v", annScanResults, knnScanResults)
+	}
+}
+
 func TestPartitionSetsWithBhiveIndex(t *testing.T) {
 	skipIfNotPlasma(t)
 

@@ -731,6 +731,7 @@ func (s *scanCoordinator) handleVectorScanRequest(req *ScanRequest, w ScanRespon
 
 		req.srvrScanReport.SrvrNs.WaitDur = waitTime.Nanoseconds()
 		req.srvrScanReport.SrvrNs.ScanDur = scanTime.Nanoseconds()
+		req.srvrScanReport.SrvrNs.DiskReadDur = req.GetPlasmaScanLSSReadDur().Nanoseconds()
 		req.srvrScanReport.SrvrCounts.RowsReturn = scanPipeline.RowsReturned()
 		req.srvrScanReport.SrvrCounts.RowsScan = scanPipeline.RowsScanned()
 		req.srvrScanReport.SrvrCounts.BytesRead = scanPipeline.BytesRead()
@@ -872,6 +873,8 @@ func (s *scanCoordinator) handleMultiScanCountRequest(req *ScanRequest, w ScanRe
 
 func (s *scanCoordinator) handleFastCountRequest(req *ScanRequest, w ScanResponseWriter,
 	is IndexSnapshot, t0 time.Time) {
+	waitTime := time.Now().Sub(t0)
+
 	var rows uint64
 	var err error
 	var snapshots []SliceSnapshot
@@ -893,6 +896,15 @@ func (s *scanCoordinator) handleFastCountRequest(req *ScanRequest, w ScanRespons
 			}
 			rows += r
 		}
+	}
+	scanTime := time.Now().Sub(t0)
+
+	if req.srvrScanReport != nil && req.srvrScanReport.SrvrNs != nil && req.srvrScanReport.SrvrCounts != nil {
+		req.srvrScanReport.SrvrNs.WaitDur = waitTime.Nanoseconds()
+		req.srvrScanReport.SrvrNs.ScanDur = scanTime.Nanoseconds()
+		req.srvrScanReport.SrvrNs.DiskReadDur = req.GetPlasmaScanLSSReadDur().Nanoseconds()
+		req.srvrScanReport.SrvrCounts.RowsReturn = rows
+		req.srvrScanReport.SrvrCounts.RowsScan = rows
 	}
 
 	if s.tryRespondWithError(w, req, err) {

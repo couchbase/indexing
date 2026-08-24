@@ -1185,6 +1185,10 @@ const (
 var DEFAULT_VECTOR_SIMILARITY = "L2_SQUARED"
 var DEFAULT_SPARSE_VECTOR_SIMILARITY = "DOT"
 
+// DEFAULT_SPARSEJL_DIM is the SparseJL reduced dimension used for sparse
+// vectors when the index definition does not specify one.
+const DEFAULT_SPARSEJL_DIM = 2048
+
 type VectorMetadata struct {
 	IsCompositeIndex  bool             `json:"isCompositeIndex,omitempty"`
 	IsBhive           bool             `json:"isBhive,omitempty"`
@@ -1247,6 +1251,16 @@ func (v *VectorMetadata) IsEquivalent(u *VectorMetadata) bool {
 	}
 
 	return v.Quantizer.IsEquivalent(u.Quantizer)
+}
+
+// GetSparseJLDimension returns the effective SparseJL reduced dimension used
+// to build the sparse codebook. It is only meaningful for sparse vectors, as
+// they carry no declared dimension in the index definition.
+func (v *VectorMetadata) GetSparseJLDimension() int {
+	if v == nil || v.SparseJLDimension <= 0 {
+		return DEFAULT_SPARSEJL_DIM
+	}
+	return v.SparseJLDimension
 }
 
 func (v *VectorMetadata) WaitForTrainList() bool {
