@@ -842,6 +842,7 @@ type IndexEvaluatorStats struct {
 	ErrInvalidSparseVector          stats.Int64Val
 	ErrZeroSparseVector             stats.Int64Val
 	ErrDuplicateIndicesSparseVector stats.Int64Val
+	ErrSparseDimOutOfBounds         stats.Int64Val
 
 	// ErrN1qlTransform counts the documents that N1QLTransform (or
 	// N1QLTransformForVectorIndex) declined to produce a key for because of a
@@ -883,6 +884,7 @@ func (ie *IndexEvaluatorStats) Init() {
 	ie.ErrInvalidSparseVector.Init()
 	ie.ErrZeroSparseVector.Init()
 	ie.ErrDuplicateIndicesSparseVector.Init()
+	ie.ErrSparseDimOutOfBounds.Init()
 
 	ie.ErrN1qlTransform.Init()
 }
@@ -963,6 +965,10 @@ func (ies *IndexEvaluatorStats) GetVectorErrs() map[string]int64 {
 		out[getVectorStatStr(ErrDuplicateIndicesSparseVector)] = ies.ErrDuplicateIndicesSparseVector.Value()
 	}
 
+	if ies.ErrSparseDimOutOfBounds.Value() > 0 {
+		out[getVectorStatStr(ErrSparseDimOutOfBounds)] = ies.ErrSparseDimOutOfBounds.Value()
+	}
+
 	return out
 
 }
@@ -992,6 +998,9 @@ func (ies *IndexEvaluatorStats) updateErrCount(err error) {
 		return
 	case ErrDuplicateIndicesSparseVector:
 		ies.ErrDuplicateIndicesSparseVector.Add(1)
+		return
+	case ErrSparseDimOutOfBounds:
+		ies.ErrSparseDimOutOfBounds.Add(1)
 		return
 	}
 }

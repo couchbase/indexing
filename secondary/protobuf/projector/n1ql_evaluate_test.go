@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
+	"github.com/couchbase/indexing/secondary/common"
 	qexpr "github.com/couchbase/query/expression"
 	qvalue "github.com/couchbase/query/value"
 )
@@ -362,5 +363,64 @@ func TestSortSparseByIndices(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateSparseVectorDimBounds(t *testing.T) {
+	// A sparse vector is [[indices...], [values...]]
+	mkSparse := func(indices []interface{}, values []interface{}) qvalue.Value {
+		return qvalue.NewValue([]interface{}{indices, values})
+	}
+
+	tests := []struct {
+		name        string
+		vector      qvalue.Value
+		expectedErr error
+	}{
+		{
+			name:        "dim at max is accepted",
+			vector:      mkSparse([]interface{}{0, common.MaxSparseVectorDim}, []interface{}{0.5, 0.5}),
+			expectedErr: nil,
+		},
+		{
+			name:        "dim one past max is rejected",
+			vector:      mkSparse([]interface{}{0, common.MaxSparseVectorDim + 1}, []interface{}{0.5, 0.5}),
+			expectedErr: ErrSparseDimOutOfBounds,
+		},
+		{
+			// The dimension from MB-73406's panic report.
+			name:        "dim from panic report is rejected",
+			vector:      mkSparse([]interface{}{86353}, []interface{}{0.5}),
+			expectedErr: ErrSparseDimOutOfBounds,
+		},
+		{
+			name:        "negative dim still reports out of bounds",
+			vector:      mkSparse([]interface{}{-1}, []interface{}{0.5}),
+			expectedErr: ErrDataOutOfBounds,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := validateSparseVector(test.vector)
+			if err != test.expectedErr {
+				t.Fatalf("validateSparseVector(%v) err = %v, expected %v",
+					test.vector, err, test.expectedErr)
+			}
+		})
+	}
+}
+
+// The dim overflow must land in its own stat rather than falling through
+// updateErrCount's switch, which would drop the rejection silently.
+func TestSparseDimOutOfBoundsStat(t *testing.T) {
+	var stats IndexEvaluatorStats
+	stats.Init()
+
+	stats.updateErrCount(ErrSparseDimOutOfBounds)
+
+	errs := stats.GetVectorErrs()
+	if got := errs["sparse_dim_out_of_bounds"]; got != 1 {
+		t.Fatalf("sparse_dim_out_of_bounds = %v, expected 1. Full stats: %v", got, errs)
 	}
 }

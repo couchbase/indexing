@@ -1303,6 +1303,18 @@ type SparseVector struct {
 	Values  []float32
 }
 
+// MaxSparseVectorDim is the largest dimension index a sparse vector may
+// carry. The storage layer encodes dims as uint16 in the quantized sparse
+// wire format (bhive's sparseQuantMaxDim, the source of truth for this
+// value); it is mirrored here because the projector cannot import bhive,
+// which is EE-only.
+//
+// The cap is applied unconditionally when a document is validated. It is
+// deliberately not conditioned on the storage engine or on
+// indexer.vector.sparse.quantizeStorage: that setting is node-local and
+// mutable, so it cannot back a dimension-range guarantee.
+const MaxSparseVectorDim = 65535
+
 // ConciseSparseVector is a sparse vector in concise float32 format:
 // [float32(N), float32(idx1), ..., float32(idxN), val1, ..., valN]
 // N and indices are stored as plain float32 casts of their integer values.
