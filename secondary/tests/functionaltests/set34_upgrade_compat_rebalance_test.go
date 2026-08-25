@@ -29,6 +29,8 @@ const (
 	set34IndexName      = "set34_idx_age"
 	set34VecIndexName   = "set34_idx_sift"
 	set34BhiveIndexName = "set34_idx_bhive_sift"
+	// See set34CreateCoTenantIndex for what this one is for.
+	set34CoTenantIndexName = "set34_idx_cotenant"
 	// set34BhiveFailedIdxName  = "set34_idx_bhive_fail"
 	// set34PlasmaFailedIdxName = "set34_idx_plasma_fail"
 	set34Bucket = BUCKET // "default"
@@ -245,23 +247,47 @@ func set34ConfigCompatV1(t *testing.T, caller, clusterNode string) {
 }
 
 // set34CreateIndexes creates the scalar (and optionally vector/bhive) set34 indexes.
-// withReplica=true adds num_replica:1 to each index statement.
+// withReplica=true gives each index one replica; the scalar index gets its replica by
+// expansion rather than at create time, for the placement reason described below.
 func set34CreateIndexes(t *testing.T, caller string, withReplica bool) {
-	replicaClause := ""
 	if withReplica {
-		replicaClause = `"num_replica":1`
-	}
+		// Create pinned and unreplicated, then expand. A pinned unreplicated create
+		// puts index replica 0 on Nodes[1], and the shard dealer stamps the slot
+		// replica id from the index replica id, so slot replica 0 lands on Nodes[1]
+		// too. The expansion then places replica 1 on the only other index node.
+		//
+		// The order matters for the co-tenant in
+		// TestPathUpgrade_ReplicaRepairCompatV1ToV2: reusing a slot requires the slot
+		// replica id on the target node to equal the index replica id, so an
+		// unreplicated co-tenant pinned to Nodes[1] can only join a slot whose
+		// replica 0 is there. Creating both replicas at once lets the planner put
+		// replica 0 on either node, which would send the co-tenant to a slot of its
+		// own and stop the case covering anything.
+		scalarStmt := fmt.Sprintf(
+			`CREATE INDEX %v ON `+"`%v`.`%v`.`%v`"+`(age) WITH {"nodes":["%v"]}`,
+			set34IndexName, set34Bucket, set34Scope, set34Coll, clusterconfig.Nodes[1],
+		)
+		executeN1qlStmt(scalarStmt, set34Bucket, caller, t)
+		waitForIndexActiveWithTimeout(set34Bucket, set34IndexName, 15*time.Minute, t)
 
-	scalarWith := ``
-	if replicaClause != "" {
-		scalarWith = replicaClause
+		// set34 indexes live on the default scope and collection, so the two part
+		// bucket.index form resolves them.
+		alterStmt := fmt.Sprintf(
+			"alter index `%v`.%v with {\"action\":\"replica_count\", \"num_replica\":1}",
+			set34Bucket, set34IndexName,
+		)
+		executeN1qlStmt(alterStmt, set34Bucket, caller, t)
+		waitForIndexActiveWithTimeout(set34Bucket, fmt.Sprintf("%v (replica 1)", set34IndexName), 15*time.Minute, t)
+		log.Printf("%v Scalar index %v created on %v with slot replica 0, then expanded to num_replica:1",
+			caller, set34IndexName, clusterconfig.Nodes[1])
+	} else {
+		scalarStmt := fmt.Sprintf(
+			`CREATE INDEX %v ON `+"`%v`.`%v`.`%v`"+`(age) WITH {}`,
+			set34IndexName, set34Bucket, set34Scope, set34Coll,
+		)
+		executeN1qlStmt(scalarStmt, set34Bucket, caller, t)
+		log.Printf("%v Scalar index %v created (no replica)", caller, set34IndexName)
 	}
-	scalarStmt := fmt.Sprintf(
-		`CREATE INDEX %v ON `+"`%v`.`%v`.`%v`"+`(age) WITH {%v}`,
-		set34IndexName, set34Bucket, set34Scope, set34Coll, scalarWith,
-	)
-	executeN1qlStmt(scalarStmt, set34Bucket, caller, t)
-	log.Printf("%v Scalar index %v created (replica=%v)", caller, set34IndexName, withReplica)
 
 	if clusterconfig.IndexUsing == "plasma" {
 		if err := loadVectorData(t, set34Bucket, set34Scope, set34Coll, 10000); err != nil {
@@ -387,6 +413,27 @@ func set34CreateIndexes(t *testing.T, caller string, withReplica bool) {
 		// log.Printf("%v sleeping to clear tokens across indexers", caller)
 		// time.Sleep(10 * time.Second)
 	}
+}
+
+// set34CreateCoTenantIndex creates a single-instance index pinned to clusterNode.
+//
+// Replica repair moves only the instances whose replica is missing but copies the
+// shard whole, so this index arrives on the destination under its original v1 name
+// with no InstRenameMap entry. Plasma recovers it anyway and asks for its key by
+// path: that co-tenant instance is what MB-73417 hangs on.
+//
+// Needs at least planner.internal.min_shards_per_node (6) shards already on
+// clusterNode, else GetSlot pass 0 opens a fresh slot rather than reusing one and the
+// co-tenant lands in a shard of its own. The three non-primary set34 indexes supply
+// exactly 6 (mainstore plus backstore each), so shrinking that set breaks this.
+func set34CreateCoTenantIndex(t *testing.T, caller, clusterNode string) {
+	stmt := fmt.Sprintf(
+		`CREATE INDEX %v ON `+"`%v`.`%v`.`%v`"+`(company) WITH {"nodes":["%v"]}`,
+		set34CoTenantIndexName, set34Bucket, set34Scope, set34Coll, clusterNode,
+	)
+	executeN1qlStmt(stmt, set34Bucket, caller, t)
+	log.Printf("%v Co-tenant index %v created on %v (no replica, no token will cover it)",
+		caller, set34CoTenantIndexName, clusterNode)
 }
 
 // set34DropIndexes drops all set34 indexes.
@@ -571,10 +618,32 @@ func TestPathUpgrade_ReplicaRepairCompatV1ToV2Setup(t *testing.T) {
 	}
 	validateClusterStatus(expectedStatus, caller, t)
 
-	// Create indexes with num_replica:1.  With two nodes the planner places one
-	// instance on each: Nodes[1] (compat-v1 → old-format) and Nodes[2]
+	// The co-tenant case is plasma only: CanMaintanShardAffinity requires plasma, so
+	// on forestdb and memory_optimized replica repair runs over DCP, no shard is
+	// copied, and nothing can carry a co-tenant to the new node.
+	if clusterconfig.IndexUsing == "plasma" {
+		// Set here, ahead of the creates below, so this case builds its indexes and its
+		// co-tenant into shared shards: a slice decides shared vs dedicated when it is
+		// built. set34 indexes live on _default._default, where IndexOnCollection() is
+		// false and each slice would get a dedicated LSS, and shared LSS is what makes
+		// a shard recover all of its instances in one pass.
+		err = secondaryindex.ChangeMultipleIndexerSettings(
+			map[string]interface{}{"indexer.plasma.useSharedLSS": true},
+			clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1],
+		)
+		FailTestIfError(err, fmt.Sprintf("%v Error enabling plasma.useSharedLSS", caller), t)
+		log.Printf("%v Enabled indexer.plasma.useSharedLSS", caller)
+	}
+
+	// Create indexes with one replica each. With two index nodes that puts one
+	// instance on Nodes[1] (compat-v1 → old-format) and one on Nodes[2]
 	// (compat-v2 → new-format).
 	set34CreateIndexes(t, caller, true /* withReplica */)
+
+	if clusterconfig.IndexUsing == "plasma" {
+		// Rides along in the shard copy that replica repair makes, uncovered by any token.
+		set34CreateCoTenantIndex(t, caller, clusterconfig.Nodes[1])
+	}
 
 	// Confirm the expected on-disk path formats before failover.
 	set34ValidateOldFormat(t, caller, clusterconfig.Nodes[1], set34PlasmaIndexesToCheck())
@@ -631,6 +700,16 @@ func TestPathUpgrade_ReplicaRepairCompatV1ToV2(t *testing.T) {
 	// Verify indexes are queryable.
 	set34ScanIndexes(t, caller)
 
+	// Reaching this far is the MB-73417 regression check: the co-tenant's v1
+	// directory used to block shard recovery on Nodes[3]. Nodes[1] is the copy that
+	// never moved; Nodes[3] proves the shard carried it, and it survives there
+	// because plasma removes a destroyed instance's directory only when dedicated.
+	// Plasma only, for the same reason the co-tenant is created only there.
+	if clusterconfig.IndexUsing == "plasma" {
+		set34ValidateOldFormat(t, caller, clusterconfig.Nodes[1], []string{set34CoTenantIndexName})
+		set34ValidateOldFormat(t, caller, clusterconfig.Nodes[3], []string{set34CoTenantIndexName})
+	}
+
 	// Validate path formats: Nodes[1] unchanged (old-format), Nodes[3] new-format.
 	set34ValidateOldFormat(t, caller, clusterconfig.Nodes[1], set34PlasmaIndexesToCheck())
 	set34ValidateNewFormat(t, caller, clusterconfig.Nodes[3], set34PlasmaIndexesToCheck())
@@ -686,13 +765,33 @@ func TestPathUpgrade_ReplicaRepairCompatV1ToV2Cleanup(t *testing.T) {
 		return
 	}
 
+	// Deferred so a Fatal in the drops cannot leave either setting on for the rest of
+	// the run; useSharedLSS is cluster-wide. The drops must still run first, since
+	// the path a slice is destroyed at depends on simulateShardCompatV1.
+	defer func() {
+		err := secondaryindex.ChangeMultipleIndexerSettings(
+			map[string]interface{}{"indexer.thisNodeOnly.simulateShardCompatV1": false},
+			clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1],
+		)
+		tc.HandleError(err, fmt.Sprintf("%v Error disabling simulateShardCompatV1 on Nodes[1]", caller))
+
+		err = secondaryindex.ChangeMultipleIndexerSettings(
+			map[string]interface{}{"indexer.plasma.useSharedLSS": false},
+			clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1],
+		)
+		tc.HandleError(err, fmt.Sprintf("%v Error disabling plasma.useSharedLSS", caller))
+	}()
+
 	set34DropIndexes(t, caller)
 
-	err := secondaryindex.ChangeMultipleIndexerSettings(
-		map[string]interface{}{"indexer.thisNodeOnly.simulateShardCompatV1": false},
-		clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1],
-	)
-	tc.HandleError(err, fmt.Sprintf("%v Error disabling simulateShardCompatV1 on Nodes[1]", caller))
+	// Created only by the replica-repair setup, and only on plasma, so tolerate a
+	// missing index here rather than logging a drop failure on every other mode.
+	if clusterconfig.IndexUsing == "plasma" {
+		if err := secondaryindex.DropSecondaryIndex(
+			set34CoTenantIndexName, set34Bucket, indexManagementAddress); err != nil {
+			log.Printf("%v Ignoring drop error for %v: %v", caller, set34CoTenantIndexName, err)
+		}
+	}
 
 	setupCluster(t) // reset back to [0: kv n1ql] [1: index]
 	printClusterConfig(caller, "exit")

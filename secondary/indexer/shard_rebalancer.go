@@ -5707,8 +5707,20 @@ func extractIndexInfoFromRenamePath(trimmedCurrPath, trimmedNewPath string) (cur
 
 // This function is inline with the executor.go::getRenamePath2() function called during tt generation.
 // It handles three rename scenarios that appear in InstRenameMap:
+//
 //   - v2 source → v2 dest (normal rebalance or replica repair between same-version nodes)
+//
 //   - v1 source → v2 dest (upgrade: source key uses "<bucket>_<name>_" prefix)
+//
+//   - v1 source → v1 dest (replica repair whose source reports ShardCompatVersion=1).
+//     Only getCodebookPaths sees this shape: under MsgStartShardTransfer it needs a
+//     2ici_test build, since a real v1 source runs an older binary, and under
+//     cleanupTranferredData a real v2 destination reaches it, where the names only
+//     gate a boolean and log lines. RestoreCodebook gets the map already rewritten
+//     to v2 by reconstructRenameMapForV2Dest.
+//
+// A v2 source with a v1 dest cannot occur: addToInstRenamePath2 runs only under
+// shardMovementCompatCheck, which requires dest >= source.
 func generateCodebookRenamePaths2(
 	renameMap map[string]string,
 	bucket, name, bucketUUID string,
@@ -5740,16 +5752,34 @@ func generateCodebookRenamePaths2(
 			if n, err := fmt.Sscanf(trimmedCurrPath, "%d_%d.index", &currInstId, &extractedPartnId); err != nil || n != 2 || extractedPartnId != partnId {
 				continue
 			}
-			trimmedNewPath := strings.TrimPrefix(newPath, v2Prefix)
+			// Dest is v2 on an upgrade, v1 when the map was published v1->v1.
+			var trimmedNewPath string
+			var v1Dest bool
+			if s, isV2Dest := strings.CutPrefix(newPath, v2Prefix); isV2Dest {
+				trimmedNewPath = s
+			} else if s, isV1Dest := strings.CutPrefix(newPath, v1Prefix); isV1Dest {
+				trimmedNewPath, v1Dest = s, true
+			} else {
+				continue
+			}
 			var newInstId common.IndexInstId
 			var destPartnId common.PartitionId
 			if n, err := fmt.Sscanf(trimmedNewPath, "%d_%d.index", &newInstId, &destPartnId); err != nil || n != 2 || destPartnId != partnId || newInstId != instId {
 				continue
 			}
 			srcIndexPath := fmt.Sprintf("%s_%s_%d_%d.index", bucket, name, currInstId, partnId)
+
+			// Match the dest shape, so a caller that stops discarding it does not
+			// get a v2 name for a v1 destination.
 			dstIndexPath := fmt.Sprintf("%s_%d_%d.index", bucketUUID, newInstId, partnId)
+			dstCodebook := fmt.Sprintf("%d_%d.codebook", newInstId, partnId)
+			if v1Dest {
+				dstIndexPath = fmt.Sprintf("%s_%s_%d_%d.index", bucket, name, newInstId, partnId)
+				dstCodebook = fmt.Sprintf("%s_%s_%d_%d.codebook", bucket, name, newInstId, partnId)
+			}
+
 			return filepath.Join(srcIndexPath, CODEBOOK_DIR, fmt.Sprintf("%s_%s_%d_%d.codebook", bucket, name, currInstId, partnId)),
-				filepath.Join(dstIndexPath, CODEBOOK_DIR, fmt.Sprintf("%d_%d.codebook", newInstId, partnId))
+				filepath.Join(dstIndexPath, CODEBOOK_DIR, dstCodebook)
 		}
 	}
 	return "", ""
