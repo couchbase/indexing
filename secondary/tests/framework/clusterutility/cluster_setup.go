@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,11 @@ var (
 	ErrRebalanceTimedout  = errors.New("Rebalance did not finish after 30 minutes")
 	ErrRebalanceFailed    = errors.New("Rebalance failed")
 	ErrSystemIndexInBuild = errors.New("index on build for `_system` keyspace")
+
+	ErrStopRebalanceFailed   = errors.New("StopRebalance: failed to stop rebalance")
+	ErrStopRebalanceTimedout = errors.New("StopRebalance: rebalance still running")
+	ErrBucketQuotaFetch      = errors.New("failed to read RAM quota of bucket")
+	ErrBucketQuotaMissing    = errors.New("no quota.rawRAM reported for bucket")
 )
 
 func getInitServicesUrl(serverAddr string) string {
@@ -44,6 +50,10 @@ func getPoolsUrl(serverAddr string) string {
 
 func getRebalanceUrl(serverAddr string) string {
 	return prependHttp(serverAddr) + "/controller/rebalance"
+}
+
+func getStopRebalanceUrl(serverAddr string) string {
+	return prependHttp(serverAddr) + "/controller/stopRebalance"
 }
 
 func getRecoveryUrl(serverAddr string) string {
@@ -203,6 +213,19 @@ func otpNodes(serverAddr, username, password string, removeNodes []string) (stri
 	return knownNodes, ejectNodes
 }
 
+// getClusterTasks returns the cluster's task list from /pools/default/tasks.
+func getClusterTasks(serverAddr, username, password string) ([]interface{}, error) {
+	r, err := makeRequest(username, password, "GET", strings.NewReader(""), getTaskUrl(serverAddr))
+	if err != nil {
+		return nil, err
+	}
+	var tasks []interface{}
+	if err := json.Unmarshal(r, &tasks); err != nil {
+		return nil, fmt.Errorf("getClusterTasks: %w", err)
+	}
+	return tasks, nil
+}
+
 func waitForRebalanceFinish(serverAddr, username, password string) error {
 	timer := time.NewTicker(5 * time.Second)
 	timeout := time.After(30 * time.Minute)
@@ -220,9 +243,8 @@ func waitForRebalanceFinish(serverAddr, username, password string) error {
 		select {
 		case <-timer.C:
 
-			r, err := makeRequest(username, password, "GET", strings.NewReader(""), getTaskUrl(serverAddr))
-			tasks = nil
-			err = json.Unmarshal(r, &tasks)
+			var err error
+			tasks, err = getClusterTasks(serverAddr, username, password)
 			if err != nil {
 				fmt.Println("tasks fetch, err:", err)
 				return err
@@ -615,6 +637,94 @@ func Rebalance(serverAddr, username, password string) error {
 	}).RunWithConditionalError(func(err error) bool {
 		return !strings.Contains(err.Error(), ErrSystemIndexInBuild.Error())
 	})
+}
+
+// IsRebalanceRunning reports whether the cluster currently has a rebalance task
+// in the "running" state. The task list is fetched twice before reporting false
+// on error, so that a single transient failure does not turn StopRebalance into
+// a silent no-op and let the cascade it exists to prevent come back.
+func IsRebalanceRunning(serverAddr, username, password string) bool {
+	var tasks []interface{}
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		if tasks, err = getClusterTasks(serverAddr, username, password); err == nil {
+			break
+		}
+		log.Printf("IsRebalanceRunning: task fetch failed on %v, err: %v", serverAddr, err)
+		time.Sleep(2 * time.Second)
+	}
+	if err != nil {
+		return false
+	}
+
+	for _, v := range tasks {
+		task, ok := v.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if task["type"] == "rebalance" && task["status"] == "running" {
+			return true
+		}
+	}
+	return false
+}
+
+// StopRebalance asks ns_server to stop the in-flight rebalance and waits until
+// no rebalance task is running any more. It is a no-op when nothing is running.
+//
+// A test whose rebalance wait timed out leaves the rebalance running, and while
+// it runs the cluster rejects bucket DDL, failover and node addition. Calling
+// this from cleanup keeps one stuck rebalance from failing every later test.
+//
+// The wait here is deliberately not waitForRebalanceFinish: a rebalance we just
+// stopped reports an errorMessage, which that function turns into
+// ErrRebalanceFailed. Here the only question is whether the task has cleared.
+func StopRebalance(serverAddr, username, password string, timeout time.Duration) error {
+	if !IsRebalanceRunning(serverAddr, username, password) {
+		return nil
+	}
+
+	log.Printf("StopRebalance: stopping the in-flight rebalance on %v", serverAddr)
+	if _, err := makeRequest(username, password, "POST", strings.NewReader(""),
+		getStopRebalanceUrl(serverAddr)); err != nil {
+		return fmt.Errorf("%w: %v", ErrStopRebalanceFailed, err)
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !IsRebalanceRunning(serverAddr, username, password) {
+			log.Printf("StopRebalance: rebalance is no longer running on %v", serverAddr)
+			return nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("%w after %v", ErrStopRebalanceTimedout, timeout)
+}
+
+// GetBucketRamQuotaMB returns the per-node RAM quota of bucketName in MB, the unit
+// kvutility.EditBucket takes, so a test can record a quota, change it and put the
+// original back rather than hard-code a value that differs between clusters.
+func GetBucketRamQuotaMB(serverAddr, username, password, bucketName string) (string, error) {
+	addr := prependHttp(serverAddr) + "/pools/default/buckets/" + url.PathEscape(bucketName)
+	r, err := makeRequest(username, password, "GET", strings.NewReader(""), addr)
+	if err != nil {
+		return "", fmt.Errorf("%w %v: %v", ErrBucketQuotaFetch, bucketName, err)
+	}
+
+	// rawRAM is the per-node quota in bytes; quota.ram is the cluster-wide total.
+	// Field names are matched case-insensitively, so no json tags are needed.
+	var info struct {
+		Quota struct {
+			RawRAM int64
+		}
+	}
+	if err := json.Unmarshal(r, &info); err != nil {
+		return "", fmt.Errorf("%w %v: %v", ErrBucketQuotaFetch, bucketName, err)
+	}
+	if info.Quota.RawRAM == 0 {
+		return "", fmt.Errorf("%w %v", ErrBucketQuotaMissing, bucketName)
+	}
+	return strconv.Itoa(int(info.Quota.RawRAM / (1024 * 1024))), nil
 }
 
 func RecoverNode(serverAddr, username, password, hostname, recoveryType string) (err error) {
