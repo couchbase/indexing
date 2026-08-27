@@ -2,6 +2,7 @@ package protoProjector
 
 import (
 	"errors"
+	"fmt"
 	math "math"
 	"slices"
 	"sort"
@@ -27,6 +28,7 @@ var ErrZeroVectorForCosine = errors.New("Zero vector for cosine distance")
 var ErrZeroSparseVector = errors.New("Zero sparse vector")
 var ErrInvalidSparseVector = errors.New("Invalid sparse vector")
 var ErrDuplicateIndicesSparseVector = errors.New("Sparse vector contains duplicate indices")
+var ErrSparseDimOutOfBounds = fmt.Errorf("Sparse vector contains a dimension index greater than the maximum supported value of %v", common.MaxSparseVectorDim)
 
 func getVectorStatStr(err error) string {
 	switch err {
@@ -40,6 +42,14 @@ func getVectorStatStr(err error) string {
 		return "data_out_of_bounds"
 	case ErrZeroVectorForCosine:
 		return "zero_vector_for_cosine"
+	case ErrInvalidSparseVector:
+		return "invalid_sparse_vec"
+	case ErrZeroSparseVector:
+		return "zero_sparse_vec"
+	case ErrDuplicateIndicesSparseVector:
+		return "duplicate_indices_sparse_vec"
+	case ErrSparseDimOutOfBounds:
+		return "sparse_dim_out_of_bounds"
 	}
 	return err.Error()
 }
@@ -546,8 +556,15 @@ func validateSparseVector(vector qvalue.Value) ([]float32, error) {
 			return nil, ErrInvalidSparseVector
 		}
 		vi := value.AsNumberValue(v).Float64()
-		if vi < 0 || vi >= math.MaxUint32 {
+		if vi < 0 {
 			return nil, ErrDataOutOfBounds
+		}
+		// The storage layer encodes dims as uint16, so a document carrying a
+		// larger index cannot be indexed at all. Reject it here, with the rest
+		// of the sparse validation, rather than letting it reach the slice
+		// where the quantizer's error path is fatal to the indexer.
+		if vi > float64(common.MaxSparseVectorDim) {
+			return nil, ErrSparseDimOutOfBounds
 		}
 		indices = append(indices, uint32(vi))
 	}

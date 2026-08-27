@@ -3316,6 +3316,13 @@ func (s *storageMgr) collectCodebookKeys(shardIds []common.ShardId) (
 		if !inst.Defn.IsVectorIndex || inst.State == common.INDEX_STATE_DELETED {
 			continue
 		}
+		// A codebook is only written to disk when training completes.
+		// CREATED and READY are both pre-build states, so an untrained
+		// instance has no codebook and no key to transfer.
+		if inst.TrainingPhase != common.TRAINING_COMPLETED &&
+			(inst.State == common.INDEX_STATE_CREATED || inst.State == common.INDEX_STATE_READY) {
+			continue
+		}
 		partnMap, ok := indexPartnMap[instId]
 		if !ok {
 			continue

@@ -837,6 +837,13 @@ type IndexEvaluatorStats struct {
 	ErrInvalidVectorType      stats.Int64Val
 	ErrZeroVectorForCosine    stats.Int64Val
 
+	// Sparse vector specific errors. Only ErrDataOutOfBounds above is shared
+	// with the dense vector validation path.
+	ErrInvalidSparseVector          stats.Int64Val
+	ErrZeroSparseVector             stats.Int64Val
+	ErrDuplicateIndicesSparseVector stats.Int64Val
+	ErrSparseDimOutOfBounds         stats.Int64Val
+
 	// ErrN1qlTransform counts the documents that N1QLTransform (or
 	// N1QLTransformForVectorIndex) declined to produce a key for because of a
 	// *failure* -- an EvaluateForIndex error, a nil scalar/array, or a
@@ -873,6 +880,11 @@ func (ie *IndexEvaluatorStats) Init() {
 	ie.ErrInvalidVectorDimension.Init()
 	ie.ErrHeterogenousVectorData.Init()
 	ie.ErrZeroVectorForCosine.Init()
+
+	ie.ErrInvalidSparseVector.Init()
+	ie.ErrZeroSparseVector.Init()
+	ie.ErrDuplicateIndicesSparseVector.Init()
+	ie.ErrSparseDimOutOfBounds.Init()
 
 	ie.ErrN1qlTransform.Init()
 }
@@ -941,6 +953,22 @@ func (ies *IndexEvaluatorStats) GetVectorErrs() map[string]int64 {
 		out[getVectorStatStr(ErrZeroVectorForCosine)] = ies.ErrZeroVectorForCosine.Value()
 	}
 
+	if ies.ErrInvalidSparseVector.Value() > 0 {
+		out[getVectorStatStr(ErrInvalidSparseVector)] = ies.ErrInvalidSparseVector.Value()
+	}
+
+	if ies.ErrZeroSparseVector.Value() > 0 {
+		out[getVectorStatStr(ErrZeroSparseVector)] = ies.ErrZeroSparseVector.Value()
+	}
+
+	if ies.ErrDuplicateIndicesSparseVector.Value() > 0 {
+		out[getVectorStatStr(ErrDuplicateIndicesSparseVector)] = ies.ErrDuplicateIndicesSparseVector.Value()
+	}
+
+	if ies.ErrSparseDimOutOfBounds.Value() > 0 {
+		out[getVectorStatStr(ErrSparseDimOutOfBounds)] = ies.ErrSparseDimOutOfBounds.Value()
+	}
+
 	return out
 
 }
@@ -961,6 +989,18 @@ func (ies *IndexEvaluatorStats) updateErrCount(err error) {
 		return
 	case ErrZeroVectorForCosine:
 		ies.ErrZeroVectorForCosine.Add(1)
+		return
+	case ErrInvalidSparseVector:
+		ies.ErrInvalidSparseVector.Add(1)
+		return
+	case ErrZeroSparseVector:
+		ies.ErrZeroSparseVector.Add(1)
+		return
+	case ErrDuplicateIndicesSparseVector:
+		ies.ErrDuplicateIndicesSparseVector.Add(1)
+		return
+	case ErrSparseDimOutOfBounds:
+		ies.ErrSparseDimOutOfBounds.Add(1)
 		return
 	}
 }

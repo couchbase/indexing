@@ -119,7 +119,16 @@ func CodebookPath2(inst *common.IndexInst, partnId common.PartitionId, sliceId S
 	return filepath.Join(indexPath, CODEBOOK_DIR, CodebookName2(inst, partnId, sliceId))
 }
 
-// Expected input is *.index/mainIndex or *.index/docIndex
+// GetBucketUUIDIndexPath2 returns the bucket UUID encoded in an IndexPath2
+// directory name (bucketUUID_instId_partnId.index). Expected input is
+// *.index/mainIndex or *.index/docIndex.
+//
+// The old IndexPath layout (bucket_indexName_instId_partnId.index) holds a bucket
+// name in that field, and such directories outlive an upgrade for any instance
+// this node has no metadata for. Return BUCKET_UUID_NIL for those: a bucket name
+// reaching cbauth as a bucket UUID never resolves and parks the caller forever
+// (MB-73417). Callers read NIL as no active key for the path, which is correct
+// since the old layout predates encryption at rest.
 func GetBucketUUIDIndexPath2(path string) string {
 	path = filepath.Clean(path)
 	path = strings.TrimSuffix(path, string(os.PathSeparator)+"mainIndex")
@@ -130,7 +139,17 @@ func GetBucketUUIDIndexPath2(path string) string {
 	}
 	indexDir := pathSlice[len(pathSlice)-1]
 	indexDirSlice := strings.Split(indexDir, "_")
-	if len(indexDirSlice) == 0 {
+
+	// IndexPath2 has exactly three "_" separated fields, both trailing ones
+	// numeric. Names may contain "_", so v1 always yields a different shape.
+	if len(indexDirSlice) != 3 {
+		return common.BUCKET_UUID_NIL
+	}
+	if _, err := strconv.ParseUint(indexDirSlice[1], 10, 64); err != nil {
+		return common.BUCKET_UUID_NIL
+	}
+	partnId := strings.TrimSuffix(indexDirSlice[2], ".index")
+	if _, err := strconv.ParseUint(partnId, 10, 64); err != nil {
 		return common.BUCKET_UUID_NIL
 	}
 	return indexDirSlice[0]
