@@ -14848,9 +14848,17 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 						))
 					}
 
-					logging.Errorf("Indexer::initiateTraining instId: %v, partnId: %v err: %v", instId, partnId, errStr)
+					// Where retries are exhausted below, report and log a terminal message
+					// instead of the retrying one. Keep the "Number of qualifying" substring
+					// so IsVectorTrainingErrorQualifyingDocs classifies it the same way.
+					maxRetryErrStr := c.ERR_TRAINING + fmt.Sprintf("Maximum number of retries "+
+						"exceeded: Number of qualifying/valid vectors (%v) is less than what is "+
+						"needed (%v) to do training. Please try building index again when there "+
+						"are enough qualifying vectors.", vectorCount, effectiveMinVectors)
+
 					if retry > maxRetry {
-						updateErrMap(instId, partnId, errors.New(errStr))
+						logging.Errorf("Indexer::initiateTraining instId: %v, partnId: %v terminal err: %v", instId, partnId, maxRetryErrStr)
+						updateErrMap(instId, partnId, errors.New(maxRetryErrStr))
 					} else if retry == maxRetry {
 						//Change error states of indexes which will be excluded in last retry where centroids will be modified
 						if idxInst.Defn.VectorMeta.Quantizer.Nlist > 0 ||
@@ -14861,11 +14869,14 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 								idxInst.Defn.VectorMeta.Quantizer.Type == c.NO_QUANTIZATION_SPARSE) &&
 								instVectorsMap[instId] == 0) {
 
-							updateErrMap(instId, partnId, errors.New(errStr))
+							logging.Errorf("Indexer::initiateTraining instId: %v, partnId: %v terminal err: %v", instId, partnId, maxRetryErrStr)
+							updateErrMap(instId, partnId, errors.New(maxRetryErrStr))
 						} else {
+							logging.Errorf("Indexer::initiateTraining instId: %v, partnId: %v err: %v", instId, partnId, errStr)
 							updateRetryingMap(instId, partnId, true)
 						}
 					} else {
+						logging.Errorf("Indexer::initiateTraining instId: %v, partnId: %v err: %v", instId, partnId, errStr)
 						updateRetryingMap(instId, partnId, true)
 					}
 					continue
