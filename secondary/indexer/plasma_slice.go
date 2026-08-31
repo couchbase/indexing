@@ -5327,6 +5327,8 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 	}()
 
 	var entry IndexEntry
+	var se secondaryIndexEntry
+	var pe primaryIndexEntry
 	var err error
 	t0 := time.Now()
 
@@ -5413,7 +5415,7 @@ loop:
 			val = it.Value()
 		}
 
-		s.newIndexEntry(itm, &entry)
+		s.newIndexEntry(itm, &entry, &se, &pe)
 
 		// Iterator has reached past the high key, no need to scan further
 		if cmpFn(high, entry) <= 0 {
@@ -5478,15 +5480,22 @@ func (s *plasmaSnapshot) isPrimary() bool {
 	return s.slice.isPrimary
 }
 
-func (s *plasmaSnapshot) newIndexEntry(b []byte, entry *IndexEntry) {
-	var err error
-
+// newIndexEntry views b as an IndexEntry without allocating per row. The
+// caller owns one secondaryIndexEntry/primaryIndexEntry holder pair per
+// iterator; the interface in *entry wraps a pointer to the reused holder,
+// so each call only re-points the holder at b. The entry (and the bytes it
+// views) must not be retained beyond the current loop iteration.
+// BytesToPrimaryIndexEntry/BytesToSecondaryIndexEntry are plain type casts
+// that never return an error, so this preserves their behavior exactly.
+func (s *plasmaSnapshot) newIndexEntry(b []byte, entry *IndexEntry,
+	se *secondaryIndexEntry, pe *primaryIndexEntry) {
 	if s.slice.isPrimary {
-		*entry, err = BytesToPrimaryIndexEntry(b)
+		*pe = primaryIndexEntry(b)
+		*entry = pe
 	} else {
-		*entry, err = BytesToSecondaryIndexEntry(b)
+		*se = secondaryIndexEntry(b)
+		*entry = se
 	}
-	common.CrashOnError(err)
 }
 
 func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
@@ -5495,13 +5504,15 @@ func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
 	var err error
 
 	var entry IndexEntry
+	var se secondaryIndexEntry
+	var pe primaryIndexEntry
 	for ; it.Valid(); it.Next() {
 		itm := it.Key()
 		val := ([]byte)(nil)
 		if it.HasValue() {
 			val = it.Value()
 		}
-		s.newIndexEntry(itm, &entry)
+		s.newIndexEntry(itm, &entry, &se, &pe)
 		if cmpFn(k, entry) == 0 {
 			if callback != nil {
 				err = callback(itm, val)
