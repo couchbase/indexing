@@ -2670,7 +2670,7 @@ func (c *ClusterInfoCacheLiteClient) GetIndexScopeLimit(bucket, scope string) (u
 	return ci.GetIndexScopeLimit(bucket, scope)
 }
 
-// Validate Collection returns false for cases where we can check is successful and the bucket is
+// Validate Collection returns false for cases where we can check is successful and the keyspace is
 // invalid/deleted.
 // For any other errors that may be arising in cicl or timeouts are regarded as successful cases.
 // The caller should take an optimistic approach, where if the check can't be made currently, the
@@ -2701,11 +2701,21 @@ func (c *ClusterInfoCacheLiteClient) ValidateCollectionID(bucket, scope,
 	}
 
 	err := validateKeyspace()
-	if err != nil && retry == true {
-		err = validateKeyspace()
-		return err == nil || validitySoftCheck(KeyspaceDeletedErrorsInCreate, err)
+	if err == nil {
+		return true
 	}
-	return err == nil
+
+	if retry {
+		if err = validateKeyspace(); err == nil {
+			return true
+		}
+	}
+
+	// The check did not complete. Report the keyspace invalid only when the error
+	// confirms deletion. Any other error - cinfo failure, event wait timeout, lost
+	// cbauth connection - is inconclusive. Keep the keyspace valid and let the stream
+	// request or a DCP system event report a real drop authoritatively.
+	return validitySoftCheck(KeyspaceDeletedErrorsInCreate, err)
 }
 
 // Stub function to implement ClusterInfoProvider interface
