@@ -612,6 +612,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		cfg.LSSCleanerDropKeyInterval = time.Duration(slice.sysconf["plasma.encryption.LSSCleanerDropKeyInterval"].Int()) * time.Minute
 		cfg.LSSCleanerDropKeyRateLimit = int64(slice.sysconf["plasma.encryption.LSSCleanerDropKeyRateLimit"].Int()) * 1024 * 1024
 		cfg.LSSCleanerDropKeyMaxCpu = slice.sysconf["plasma.encryption.LSSCleanerDropKeyMaxCpu"].Float64()
+		cfg.LSSCleanerDropKeyMaxAhead = int64(slice.sysconf["plasma.encryption.LSSCleanerDropKeyMaxAhead"].Int()) * 1024 * 1024
+		cfg.LSSCleanerDropKeyMaxAheadProbes = slice.sysconf["plasma.encryption.LSSCleanerDropKeyMaxAheadProbes"].Int()
 
 		//turn off iterator refresh for vector index
 		if slice.idxDefn.IsVectorIndex {
@@ -4357,6 +4359,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.LSSCleanerDropKeyInterval = time.Duration(mdb.sysconf["plasma.encryption.LSSCleanerDropKeyInterval"].Int()) * time.Minute
 	mdb.mainstore.LSSCleanerDropKeyRateLimit = int64(mdb.sysconf["plasma.encryption.LSSCleanerDropKeyRateLimit"].Int()) * 1024 * 1024
 	mdb.mainstore.LSSCleanerDropKeyMaxCpu = mdb.sysconf["plasma.encryption.LSSCleanerDropKeyMaxCpu"].Float64()
+	mdb.mainstore.LSSCleanerDropKeyMaxAhead = int64(mdb.sysconf["plasma.encryption.LSSCleanerDropKeyMaxAhead"].Int()) * 1024 * 1024
+	mdb.mainstore.LSSCleanerDropKeyMaxAheadProbes = mdb.sysconf["plasma.encryption.LSSCleanerDropKeyMaxAheadProbes"].Int()
 
 	loadClientCopyConfig(&mdb.mainstore.Config.CopyConfig, mdb.sysconf, true)
 
@@ -4482,6 +4486,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.LSSCleanerDropKeyInterval = time.Duration(mdb.sysconf["plasma.encryption.LSSCleanerDropKeyInterval"].Int()) * time.Minute
 		mdb.backstore.LSSCleanerDropKeyRateLimit = int64(mdb.sysconf["plasma.encryption.LSSCleanerDropKeyRateLimit"].Int()) * 1024 * 1024
 		mdb.backstore.LSSCleanerDropKeyMaxCpu = mdb.sysconf["plasma.encryption.LSSCleanerDropKeyMaxCpu"].Float64()
+		mdb.backstore.LSSCleanerDropKeyMaxAhead = int64(mdb.sysconf["plasma.encryption.LSSCleanerDropKeyMaxAhead"].Int()) * 1024 * 1024
+		mdb.backstore.LSSCleanerDropKeyMaxAheadProbes = mdb.sysconf["plasma.encryption.LSSCleanerDropKeyMaxAheadProbes"].Int()
 
 		loadClientCopyConfig(&mdb.mainstore.Config.CopyConfig, mdb.sysconf, true)
 
