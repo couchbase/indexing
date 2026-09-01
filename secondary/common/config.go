@@ -4685,9 +4685,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.bhive.invertedIndex.maxPerDim": ConfigValue{
-		128,
+		64,
 		"Per-dimension cap (K) on the common inverted index posting lists; aggregates top-K-per-dim by weight across all cells' seed tables",
-		128,
+		64,
 		false,
 		false,
 	},
