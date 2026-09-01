@@ -132,30 +132,33 @@ type Plan struct {
 
 type IndexSpec struct {
 	// definition
-	Name                   string                  `json:"name,omitempty"`
-	Bucket                 string                  `json:"bucket,omitempty"`
-	Scope                  string                  `json:"scope,omitempty"`
-	Collection             string                  `json:"collection,omitempty"`
-	DefnId                 common.IndexDefnId      `json:"defnId,omitempty"`
-	IsPrimary              bool                    `json:"isPrimary,omitempty"`
-	SecExprs               []string                `json:"secExprs,omitempty"`
-	WhereExpr              string                  `json:"where,omitempty"`
-	Deferred               bool                    `json:"deferred,omitempty"`
-	Immutable              bool                    `json:"immutable,omitempty"`
-	IsArrayIndex           bool                    `json:"isArrayIndex,omitempty"`
-	IsCompositeVectorIndex bool                    `json:"isCompositeVectorIndex,omitempty"`
-	IsBhiveIndex           bool                    `json:"isBhiveIndex,omitempty"`
-	RetainDeletedXATTR     bool                    `json:"retainDeletedXATTR,omitempty"`
-	NumPartition           uint64                  `json:"numPartition,omitempty"`
-	PartitionScheme        string                  `json:"partitionScheme,omitempty"`
-	HashScheme             uint64                  `json:"hashScheme,omitempty"`
-	PartitionKeys          []string                `json:"partitionKeys,omitempty"`
-	Replica                uint64                  `json:"replica,omitempty"`
-	Desc                   []bool                  `json:"desc,omitempty"`
-	Using                  string                  `json:"using,omitempty"`
-	ExprType               string                  `json:"exprType,omitempty"`
-	NumCentroid            int                     `json:"numCentroid,omitempty"`
-	QuantizationType       common.QuantizationType `json:"quantizationType,omitempty"`
+	Name                   string                   `json:"name,omitempty"`
+	Bucket                 string                   `json:"bucket,omitempty"`
+	Scope                  string                   `json:"scope,omitempty"`
+	Collection             string                   `json:"collection,omitempty"`
+	DefnId                 common.IndexDefnId       `json:"defnId,omitempty"`
+	IsPrimary              bool                     `json:"isPrimary,omitempty"`
+	SecExprs               []string                 `json:"secExprs,omitempty"`
+	SecExprsAttrs          common.SecExprAttrsArray `json:"secExprsAttrs,omitempty"`
+	Include                []string                 `json:"include,omitempty"`
+	VectorMeta             *common.VectorMetadata   `json:"vectorMeta,omitempty"`
+	WhereExpr              string                   `json:"where,omitempty"`
+	Deferred               bool                     `json:"deferred,omitempty"`
+	Immutable              bool                     `json:"immutable,omitempty"`
+	IsArrayIndex           bool                     `json:"isArrayIndex,omitempty"`
+	IsCompositeVectorIndex bool                     `json:"isCompositeVectorIndex,omitempty"`
+	IsBhiveIndex           bool                     `json:"isBhiveIndex,omitempty"`
+	RetainDeletedXATTR     bool                     `json:"retainDeletedXATTR,omitempty"`
+	NumPartition           uint64                   `json:"numPartition,omitempty"`
+	PartitionScheme        string                   `json:"partitionScheme,omitempty"`
+	HashScheme             uint64                   `json:"hashScheme,omitempty"`
+	PartitionKeys          []string                 `json:"partitionKeys,omitempty"`
+	Replica                uint64                   `json:"replica,omitempty"`
+	Desc                   []bool                   `json:"desc,omitempty"`
+	Using                  string                   `json:"using,omitempty"`
+	ExprType               string                   `json:"exprType,omitempty"`
+	NumCentroid            int                      `json:"numCentroid,omitempty"`
+	QuantizationType       common.QuantizationType  `json:"quantizationType,omitempty"`
 
 	IndexMissingLeadingKey bool `json:"indexMissingLeadingKey,omitempty"`
 
@@ -4373,6 +4376,9 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.Instance.Defn.Collection = spec.Collection
 			index.Instance.Defn.IsPrimary = spec.IsPrimary
 			index.Instance.Defn.SecExprs = spec.SecExprs
+			index.Instance.Defn.SecExprsAttrs = spec.SecExprsAttrs
+			index.Instance.Defn.Include = spec.Include
+			index.Instance.Defn.HashScheme = common.HashScheme(spec.HashScheme)
 			index.Instance.Defn.WhereExpr = spec.WhereExpr
 			index.Instance.Defn.Immutable = spec.Immutable
 			index.Instance.Defn.IsArrayIndex = spec.IsArrayIndex
@@ -4404,17 +4410,23 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 
 			index.Instance.Defn.IsVectorIndex = spec.IsCompositeVectorIndex || spec.IsBhiveIndex
 			if index.Instance.Defn.IsVectorIndex {
-				index.Instance.Defn.VectorMeta = &common.VectorMetadata{
-					IsCompositeIndex: spec.IsCompositeVectorIndex,
-					IsBhive:          spec.IsBhiveIndex,
-				}
+				if spec.VectorMeta != nil {
+					// Clone so the planner cannot mutate the caller's metadata.
+					index.Instance.Defn.VectorMeta = spec.VectorMeta.Clone()
+				} else {
+					// Hand-written cbindexplan spec files only carry the flattened fields.
+					index.Instance.Defn.VectorMeta = &common.VectorMetadata{
+						IsCompositeIndex: spec.IsCompositeVectorIndex,
+						IsBhive:          spec.IsBhiveIndex,
+					}
 
-				quantizer := &common.VectorQuantizer{
-					Nlist: spec.NumCentroid,
-					Type:  spec.QuantizationType,
-				}
+					quantizer := &common.VectorQuantizer{
+						Nlist: spec.NumCentroid,
+						Type:  spec.QuantizationType,
+					}
 
-				index.Instance.Defn.VectorMeta.Quantizer = quantizer
+					index.Instance.Defn.VectorMeta.Quantizer = quantizer
+				}
 			}
 
 			// This is need to compute stats for new indexes

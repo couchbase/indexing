@@ -2721,6 +2721,8 @@ func (o *MetadataProvider) prepareIndexSpec(defn *c.IndexDefn) *planner.IndexSpe
 	spec.Collection = defn.Collection
 	spec.IsPrimary = defn.IsPrimary
 	spec.SecExprs = defn.SecExprs
+	spec.SecExprsAttrs = defn.SecExprsAttrs
+	spec.Include = defn.Include
 	spec.WhereExpr = defn.WhereExpr
 	spec.Deferred = defn.Deferred
 	spec.Immutable = defn.Immutable
@@ -2754,6 +2756,7 @@ func (o *MetadataProvider) prepareIndexSpec(defn *c.IndexDefn) *planner.IndexSpe
 	spec.Using = o.settings.StorageMode()
 
 	if defn.IsVectorIndex {
+		spec.VectorMeta = defn.VectorMeta
 		spec.IsCompositeVectorIndex = defn.VectorMeta.IsCompositeIndex
 		spec.IsBhiveIndex = defn.VectorMeta.IsBhive
 		if defn.VectorMeta.Quantizer != nil {

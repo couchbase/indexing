@@ -1,0 +1,148 @@
+{
+	"MemQuota": 5302940000,
+	"CpuQuota": 8,
+	"placement": [
+		{
+			"nodeId": "127.0.0.1:9001",
+			"nodeUUID": "node1",
+			"indexerId": "node1",
+			"restUrl": "http://127.0.0.1:9001",
+			"serverGroup": "Group 1",
+			"indexes": [
+				{
+					"defnId": 111,
+					"instId": 1111,
+					"name": "idx_city",
+					"bucket": "default",
+					"scope": "s",
+					"collection": "c",
+					"numOfDocs": 500,
+					"instance": {
+						"InstId": 1111,
+						"Defn": {
+							"defnId": 111,
+							"name": "idx_city",
+							"bucket": "default",
+							"scope": "s",
+							"collection": "c",
+							"secExprs": ["`city`"],
+							"secExprsAttrs": [0],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE"
+						}
+					}
+				},
+				{
+					"defnId": 112,
+					"instId": 1112,
+					"name": "idx_email",
+					"bucket": "default",
+					"scope": "s",
+					"collection": "c",
+					"numOfDocs": 500,
+					"instance": {
+						"InstId": 1112,
+						"Defn": {
+							"defnId": 112,
+							"name": "idx_email",
+							"bucket": "default",
+							"scope": "s",
+							"collection": "c",
+							"secExprs": ["`email`"],
+							"secExprsAttrs": [0],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE"
+						}
+					}
+				}
+			]
+		},
+		{
+			"nodeId": "127.0.0.1:9002",
+			"nodeUUID": "node2",
+			"indexerId": "node2",
+			"restUrl": "http://127.0.0.1:9002",
+			"serverGroup": "Group 1",
+			"indexes": [
+				{
+					"defnId": 121,
+					"instId": 1121,
+					"name": "idx_country",
+					"bucket": "default",
+					"scope": "s",
+					"collection": "c",
+					"numOfDocs": 500,
+					"instance": {
+						"InstId": 1121,
+						"Defn": {
+							"defnId": 121,
+							"name": "idx_country",
+							"bucket": "default",
+							"scope": "s",
+							"collection": "c",
+							"secExprs": ["`country`"],
+							"secExprsAttrs": [0],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE"
+						}
+					}
+				},
+				{
+					"defnId": 122,
+					"instId": 1122,
+					"name": "idx_age",
+					"bucket": "default",
+					"scope": "s",
+					"collection": "c",
+					"numOfDocs": 500,
+					"instance": {
+						"InstId": 1122,
+						"Defn": {
+							"defnId": 122,
+							"name": "idx_age",
+							"bucket": "default",
+							"scope": "s",
+							"collection": "c",
+							"secExprs": ["`age`"],
+							"secExprsAttrs": [0],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE"
+						}
+					}
+				}
+			]
+		},
+		{
+			"nodeId": "127.0.0.1:9003",
+			"nodeUUID": "node3",
+			"indexerId": "node3",
+			"restUrl": "http://127.0.0.1:9003",
+			"serverGroup": "Group 1",
+			"indexes": [
+				{
+					"defnId": 131,
+					"instId": 1131,
+					"name": "idx_name",
+					"bucket": "default",
+					"scope": "s",
+					"collection": "c",
+					"numOfDocs": 500,
+					"instance": {
+						"InstId": 1131,
+						"Defn": {
+							"defnId": 131,
+							"name": "idx_name",
+							"bucket": "default",
+							"scope": "s",
+							"collection": "c",
+							"secExprs": ["`name`"],
+							"secExprsAttrs": [0],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE"
+						}
+					}
+				}
+			]
+		}
+	]
+}
