@@ -4076,6 +4076,12 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 
 						// Slice will use recent key for encrypting data encrypted with dropKeys.
 						respChSlice := make(chan error, 1)
+						sliceKeyIds := make([]string, len(skeyids))
+						for i, keyid := range skeyids {
+							sliceKeyIds[i] = string(keyid)
+						}
+						logging.Infof("StorageMgr::handleEncryptionDropKey calling slice.DropKeys for instId:%v partnId:%v sliceId:%v numKeys:%v keyIds:%v",
+							instId, slice.IndexPartnId(), slice.Id(), len(skeyids), logKeyIDs(sliceKeyIds...))
 						slice.DropKeys(dropKeyIdsBytes, respChSlice)
 						errResp := <-respChSlice
 						if errResp != nil {
