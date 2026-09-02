@@ -730,10 +730,10 @@ func (v *keyRotationVisitor) process(ctx context.Context) error {
 			wg.Done()
 			break // context cancelled, stop scheduling more rotations
 		}
-		if !gWriteBarrier.get() {
+		if !gWriteBarrier.getWait(ctx) {
 			gDropKeySem.Release(1)
 			wg.Done()
-			break // write barrier unavailable
+			break // context cancelled while waiting for write barrier
 		}
 		go func(file string) {
 			defer wg.Done()
