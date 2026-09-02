@@ -618,10 +618,21 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 		return ErrInvalid
 	}
 
-	if keyIdList, err := m.getActiveKeyIdsFromSnapshot(snapDir); err == nil {
+	// cleanup could be in progress
+	g, err := m.dirGuard.TryAcquire(snapDir, m.encCtx)
+	if err != nil {
+		return err
+	}
+	defer m.dirGuard.Release(g)
+
+	// cache lookup under dirGuard in case of concurrent DropKeyIdsFromSnapshot
+	m.encMu.RLock()
+	cachedKeyIds, cached := m.snapKeyIds[snapDir]
+	m.encMu.RUnlock()
+	if cached {
 		hasDropKey := false
 		for _, keyId := range keyIds {
-			if keyIdExists(keyIdList, keyId) {
+			if keyIdExists(cachedKeyIds, keyId) {
 				hasDropKey = true
 				break
 			}
@@ -631,27 +642,20 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 		}
 	}
 
-	// cleanup could be in progress
-	g, err := m.dirGuard.TryAcquire(snapDir, m.encCtx)
-	if err != nil {
-		return err
-	}
-	defer m.dirGuard.Release(g)
-
 	// add current key
-	keyId, cipher, exists := m.RegisterSnapshotKeyId(snapDir)
+	currKeyId, cipher, exists := m.RegisterSnapshotKeyId(snapDir)
 
 	r := &keyRotationVisitor{
 		db:             m,
 		dropKeyIds:     keyIds,
 		candidateFiles: make([]string, 0),
-		dstKeyId:       keyId,
+		dstKeyId:       currKeyId,
 		cipher:         cipher,
 	}
 
 	if err = m.walkEncryptedFiles(snapDir, g.cancelCtx, r); err != nil {
 		if r.NumFilesRotated == 0 && !exists {
-			m.DeregisterSnapshotKeyId(snapDir, keyId) // remove current key if no files were encrypted with it
+			m.DeregisterSnapshotKeyId(snapDir, currKeyId) // remove current key if no files were encrypted with it
 		}
 		return err
 	}
@@ -659,6 +663,7 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 	for _, dropKey := range keyIds {
 		m.DeregisterSnapshotKeyId(snapDir, dropKey)
 	}
+
 	return nil
 }
 
