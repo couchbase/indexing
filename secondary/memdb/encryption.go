@@ -834,6 +834,11 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 			atomic.AddUint64(&v.NumFilesErrRencrypt, 1)
 		}
 
+		// file already has the target key
+		if err == nil && bytesWritten == 0 {
+			return nil
+		}
+
 	case Decrypt:
 		bytesWritten, err = gocbcrypto.DecryptFileByChunk(ctx, file, tmpDst,
 			v.db.GetEncryptionKeyById, KDFLabelCtx, iowrap.CountDiskFailures)
