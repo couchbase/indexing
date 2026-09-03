@@ -1636,6 +1636,8 @@ func prepareIndexSpec(defn *common.IndexDefn) *planner.IndexSpec {
 	spec.Collection = defn.Collection
 	spec.IsPrimary = defn.IsPrimary
 	spec.SecExprs = defn.SecExprs
+	spec.SecExprsAttrs = defn.SecExprsAttrs
+	spec.Include = defn.Include
 	spec.WhereExpr = defn.WhereExpr
 	spec.Deferred = defn.Deferred
 	spec.Immutable = defn.Immutable
@@ -1660,6 +1662,16 @@ func prepareIndexSpec(defn *common.IndexDefn) *planner.IndexSpec {
 	spec.ScanRate = 0
 
 	// TODO: Set storage mode correcly.
+
+	if defn.IsVectorIndex && defn.VectorMeta != nil {
+		spec.VectorMeta = defn.VectorMeta
+		spec.IsCompositeVectorIndex = defn.VectorMeta.IsCompositeIndex
+		spec.IsBhiveIndex = defn.VectorMeta.IsBhive
+		if defn.VectorMeta.Quantizer != nil {
+			spec.QuantizationType = defn.VectorMeta.Quantizer.Type
+			spec.NumCentroid = defn.VectorMeta.Quantizer.Nlist
+		}
+	}
 
 	return &spec
 }
