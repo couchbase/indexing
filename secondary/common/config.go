@@ -2565,6 +2565,24 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 
+	"indexer.plasma.encryption.LSSCleanerDropKeyMaxAhead": ConfigValue{
+		128, // MiB
+		"max step size in MiB to advance the shared data log head so the recovery " +
+			"log cleaner can drain dropped-key page headers stalled on isAhead",
+		128,
+		false, // mutable
+		false, // case-insensitive
+	},
+
+	"indexer.plasma.encryption.LSSCleanerDropKeyMaxAheadProbes": ConfigValue{
+		5,
+		"max probes when advancing the shared data log head to unstall the " +
+			"recovery log cleaner during drop-key",
+		5,
+		false, // mutable
+		false, // case-insensitive
+	},
+
 	"indexer.bhive.numReaders": ConfigValue{
 		runtime.GOMAXPROCS(0) * 3,
 		"Numbers of readers for bhive",

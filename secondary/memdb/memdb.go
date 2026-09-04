@@ -190,6 +190,15 @@ func (w *writeBarrier) get() bool {
 	return success
 }
 
+func (w *writeBarrier) getWait(ctx context.Context) bool {
+	select {
+	case <-w.semaphores:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (w *writeBarrier) release() {
 	select {
 	case w.semaphores <- true:
