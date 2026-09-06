@@ -140,6 +140,7 @@ type IndexSpec struct {
 	IsPrimary              bool                     `json:"isPrimary,omitempty"`
 	SecExprs               []string                 `json:"secExprs,omitempty"`
 	SecExprsAttrs          common.SecExprAttrsArray `json:"secExprsAttrs,omitempty"`
+	HasVectorAttr          []bool                   `json:"hasVectorAttr,omitempty"`
 	Include                []string                 `json:"include,omitempty"`
 	VectorMeta             *common.VectorMetadata   `json:"vectorMeta,omitempty"`
 	WhereExpr              string                   `json:"where,omitempty"`
@@ -4377,6 +4378,7 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.Instance.Defn.IsPrimary = spec.IsPrimary
 			index.Instance.Defn.SecExprs = spec.SecExprs
 			index.Instance.Defn.SecExprsAttrs = spec.SecExprsAttrs
+			index.Instance.Defn.HasVectorAttr = spec.HasVectorAttr
 			index.Instance.Defn.Include = spec.Include
 			index.Instance.Defn.HashScheme = common.HashScheme(spec.HashScheme)
 			index.Instance.Defn.WhereExpr = spec.WhereExpr

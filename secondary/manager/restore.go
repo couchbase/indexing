@@ -1637,6 +1637,7 @@ func prepareIndexSpec(defn *common.IndexDefn) *planner.IndexSpec {
 	spec.IsPrimary = defn.IsPrimary
 	spec.SecExprs = defn.SecExprs
 	spec.SecExprsAttrs = defn.SecExprsAttrs
+	spec.HasVectorAttr = defn.HasVectorAttr
 	spec.Include = defn.Include
 	spec.WhereExpr = defn.WhereExpr
 	spec.Deferred = defn.Deferred

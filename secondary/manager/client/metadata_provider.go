@@ -2722,6 +2722,7 @@ func (o *MetadataProvider) prepareIndexSpec(defn *c.IndexDefn) *planner.IndexSpe
 	spec.IsPrimary = defn.IsPrimary
 	spec.SecExprs = defn.SecExprs
 	spec.SecExprsAttrs = defn.SecExprsAttrs
+	spec.HasVectorAttr = defn.HasVectorAttr
 	spec.Include = defn.Include
 	spec.WhereExpr = defn.WhereExpr
 	spec.Deferred = defn.Deferred
