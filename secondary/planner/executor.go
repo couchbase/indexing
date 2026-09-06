@@ -4429,6 +4429,16 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 				}
 			}
 
+			// A spec that does not carry SecExprsAttrs would leave the definition
+			// with an empty bitmap, while the definitions it is compared against
+			// are decoded from JSON and always have one.  Derive it here so that
+			// a definition built from a spec is not seen as attribute less.  It
+			// is a no-op for a spec that carries a bitmap of its own.  Only Desc
+			// and IndexMissingLeadingKey are derived here: IndexSpec has no per
+			// key vector attribute, so a vector kind reaches the planner only in
+			// a bitmap the spec carries.
+			index.Instance.Defn.PopulateSecExprsAttrs()
+
 			// This is need to compute stats for new indexes
 			// The index size will be recomputed later on in plan/rebalance
 			if sizing != nil {
