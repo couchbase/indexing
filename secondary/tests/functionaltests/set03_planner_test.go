@@ -498,6 +498,12 @@ var iterationTestCases = []iterationTestCase{
 var greedyPlannerFuncTestCases = []greedyPlannerFuncTestCase{
 	// Place single index instace
 	{
+		"Avoid node holding an equivalent index - 3 nodes - 1 SG",
+		"../testdata/planner/plan/equiv-index-3-nodes-1-zone.json",
+		"../testdata/planner/index/equiv-index-on-name.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+	},
+	{
 		"Place Single Index Instance - 3 empty nodes - 1 SG",
 		"../testdata/planner/greedy/topologies/3_empty_nodes_1_sg.json",
 		"../testdata/planner/greedy/new_index_1.json",
@@ -816,6 +822,7 @@ func TestPlanner(t *testing.T) {
 	replicaRepairTest(t)
 	heterogenousRebalanceTest(t)
 	equivIndexRebalanceTest(t)
+	equivIndexPlacementSAPlannerTest(t)
 	bypassReplicaRepairConstraintCheckTest(t)
 }
 
@@ -1820,6 +1827,43 @@ func greedyPlannerTests(t *testing.T) {
 
 	greedyPlannerIdxDistTests(t)
 
+}
+func equivIndexPlacementSAPlannerTest(t *testing.T) {
+	const (
+		topology = "../testdata/planner/plan/equiv-index-3-nodes-1-zone.json"
+		index    = "../testdata/planner/index/equiv-index-on-name.json"
+		// 9003 is the least loaded node and holds the equivalent index.
+		equivNode = "127.0.0.1:9003"
+	)
+
+	log.Printf("-------------------------------------------")
+	log.Printf("Avoid node holding an equivalent index - SAPlanner - 3 nodes - 1 SG")
+
+	config := planner.DefaultRunConfig()
+	config.Resize = false
+	config.AddNode = -1
+	config.AllowSwap = false
+	config.AllowMove = false
+	config.UseGreedyPlanner = false
+
+	plan, err := planner.ReadPlan(topology)
+	FailTestIfError(err, "Fail to read plan", t)
+
+	indexSpecs, err := planner.ReadIndexSpecs(index)
+	FailTestIfError(err, "Fail to read index spec", t)
+
+	s := planner.NewSimulator()
+	p, _, err := s.RunSingleTestPlan(config, nil, plan, indexSpecs)
+	FailTestIfError(err, "Error in RunSingleTestPlan", t)
+
+	if _, ok := p.(*planner.GreedyPlanner); ok {
+		t.Fatalf("Greedy planner was chosen; this case must exercise SAPlanner")
+	}
+
+	validateGreedyPlacementFunc(t, p, indexSpecs,
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true})
+
+	log.Printf("SAPlanner placed the new index away from %v as expected", equivNode)
 }
 
 // Greedy planner functional tests.

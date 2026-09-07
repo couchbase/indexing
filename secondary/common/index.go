@@ -273,6 +273,58 @@ func (s SecExprAttrsArray) IsSparseAttrAtPos(keyPos int) bool {
 	return s[keyPos].IsSparseVector()
 }
 
+// PopulateSecExprsAttrs derives the per key SecExprsAttrs bitmap from the
+// independent Desc, HasVectorAttr and IndexMissingLeadingKey fields.
+//
+// SecExprsAttrs is added in 8.5.0. A definition that predates it, or one sent by
+// a client that predates it, carries the key attributes only in the independent
+// fields and would otherwise be seen as attribute less by every consumer of the
+// bitmap. It is a no-op for a definition that already carries the bitmap.
+func (idx *IndexDefn) PopulateSecExprsAttrs() {
+
+	if len(idx.SecExprs) == 0 || len(idx.SecExprsAttrs) != 0 {
+		return
+	}
+
+	attrs := make(SecExprAttrsArray, len(idx.SecExprs))
+	for i := range idx.SecExprs {
+		if i < len(idx.Desc) && idx.Desc[i] {
+			attrs[i] |= SEC_EXPR_ATTR_DESC
+		}
+		if i < len(idx.HasVectorAttr) && idx.HasVectorAttr[i] {
+			// Sparse and multi vectors are introduced along with SecExprsAttrs
+			// in 8.5.0. A vector key on an older definition is a dense vector.
+			attrs[i] |= SEC_EXPR_ATTR_DENSE_VECTOR
+		}
+	}
+
+	// Only the leading key is tracked for MISSING on older definitions
+	if idx.IndexMissingLeadingKey {
+		attrs[0] |= SEC_EXPR_ATTR_MISSING
+	}
+
+	idx.SecExprsAttrs = attrs
+}
+
+// UnmarshalJSON gives every definition built from bytes a consistent
+// SecExprsAttrs, whether it comes from recovered metadata or from an incoming
+// DDL request, so that a caller need not know how its definition was decoded.
+// It covers the definitions nested inside LocalIndexMetadata, IndexInst and the
+// DDL tokens as well, none of which go through UnmarshallIndexDefn.
+func (idx *IndexDefn) UnmarshalJSON(data []byte) error {
+
+	// alias sheds the method set and avoids recursing into this function
+	type indexDefn IndexDefn
+
+	if err := json.Unmarshal(data, (*indexDefn)(idx)); err != nil {
+		return err
+	}
+
+	idx.PopulateSecExprsAttrs()
+
+	return nil
+}
+
 // IndexDefn represents the index definition as specified
 // during CREATE INDEX
 type IndexDefn struct {
@@ -372,7 +424,8 @@ type IndexDefn struct {
 	IsVectorIndex bool            `json:"isVectorIndex,omitempty"`
 	VectorMeta    *VectorMetadata `json:"vectorMeta,omitempty"`
 
-	// SPARSE_TODO: Populate this field while recovering index definition
+	// Populated at create time by the query client and, when absent, derived from
+	// Desc/HasVectorAttr/IndexMissingLeadingKey on decode. See PopulateSecExprsAttrs.
 	SecExprsAttrs SecExprAttrsArray `json:"secExprsAttrs,omitempty"`
 }
 
