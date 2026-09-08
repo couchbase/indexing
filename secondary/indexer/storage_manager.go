@@ -3617,6 +3617,7 @@ type IndexInfo struct {
 	NumPartitions int               `json:"numPartitions"` // maximum number of partitions defined for this index
 	NumReplica    int               `json:"numReplica,omitempty"`
 	IndexState    common.IndexState `json:"indexState,omitempty"`
+	NoSnapshot    bool              `json:"noSnapshot,omitempty"` // set when the instance exists and is healthy but has not yet created any slice snapshot
 
 	timestamp []uint64 // Used only for internal processing - not exported
 	nodeId    string   // ID of the node on which the replica partition exists - Used only for internal processing
@@ -3699,6 +3700,48 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 				replicaID := indexInst.ReplicaId
 
 				partnSnaps := snapC.snap.Partitions()
+
+				if snapC.snap.IsEpoch() {
+					// Runs in a goroutine with no recover, so a nil Pc would crash the indexer.
+					if indexInst.Pc == nil {
+						logging.Warnf("storageMgr::handleGetTimestampedItemsCount inst: %v has nil "+
+							"partition container. Skipping presence report", indexInst.InstId)
+						return
+					}
+					partitionIds, _ := indexInst.Pc.GetAllPartitionIds()
+					if len(partitionIds) == 0 {
+						logging.Warnf("storageMgr::handleGetTimestampedItemsCount inst: %v has no snapshot "+
+							"and no partitions in its partition container. Skipping presence report", indexInst.InstId)
+						return
+					}
+					timestamp := snapC.snap.Timestamp().Seqnos
+					key := getTimestampedKey(timestamp)
+					if _, ok := timestampedCountsMap[key]; !ok {
+						timestampedCountsMap[key] = &TimestampedCounts{Timestamp: timestamp, NodeId: nodeId}
+					}
+					for _, partnId := range partitionIds {
+						indexInfo := &IndexInfo{
+							IndexName:    indexName,
+							DefnId:       uint64(indexInst.Defn.DefnId),
+							InstId:       uint64(indexInst.InstId),
+							ReplicaID:    replicaID,
+							PartitionID:  int(partnId),
+							Bucket:       indexInst.Defn.Bucket,
+							IsArrayIndex: indexInst.Defn.IsArrayIndex,
+							NumReplica:   indexInst.Defn.GetNumReplica(),
+							IndexState:   indexInst.State,
+							NoSnapshot:   true,
+						}
+						if common.IsPartitioned(indexInst.Defn.PartitionScheme) {
+							indexInfo.NumPartitions = indexInst.Pc.GetNumPartitions()
+						} else {
+							indexInfo.NumPartitions = 1
+						}
+						timestampedCountsMap[key].Indexes = append(timestampedCountsMap[key].Indexes, indexInfo)
+					}
+					return
+				}
+
 				for partnId, partnSnap := range partnSnaps {
 
 					sc := partnSnap.Slices()
