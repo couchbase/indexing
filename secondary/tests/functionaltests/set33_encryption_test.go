@@ -955,6 +955,49 @@ func forceEncryptionAtRest(bucketName string, nodeIndex int) error {
 	return nil
 }
 
+// dropEncryptionAtRestDeks asks ns_server to drop the bucket DEKs. Every service
+// then rewrites the data encrypted with them using the key that is active now,
+// which is plaintext once encryption has been disabled for the bucket.
+func dropEncryptionAtRestDeks(bucketName string, nodeIndex int) error {
+	if nodeIndex < 0 || nodeIndex >= len(clusterconfig.Nodes) {
+		return fmt.Errorf("invalid node index %d", nodeIndex)
+	}
+
+	hostaddress := clusterconfig.Nodes[nodeIndex]
+	serverUserName := clusterconfig.Username
+	serverPassword := clusterconfig.Password
+
+	client := &http.Client{}
+	address := "http://" + hostaddress + "/controller/dropEncryptionAtRestDeks/bucket/" + url.PathEscape(bucketName)
+
+	req, err := http.NewRequest("POST", address, nil)
+	if err != nil {
+		return err
+	}
+
+	req.SetBasicAuth(serverUserName, serverPassword)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("request to dropEncryptionAtRestDeks failed with status code %d", resp.StatusCode)
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %v", err)
+	}
+
+	log.Printf("Response from dropping encryption at rest deks for bucket %s on %s: %s", bucketName, hostaddress, string(body))
+
+	return nil
+}
+
 func updateBucketEncryptionKey(bucketName string, nodeIndex int, keyId string) error {
 	if nodeIndex < 0 || nodeIndex >= len(clusterconfig.Nodes) {
 		return fmt.Errorf("invalid node index %d", nodeIndex)
@@ -1493,31 +1536,68 @@ func TestIndexEncryptionPlasmaRotationDrop(t *testing.T) {
 
 }
 
-func verifyCodebookDecrypted(indexDir string, t *testing.T) {
+// codebookEncryptionTimeout bounds how long the codebook may take to follow an
+// encryption key change.  The codebook is not rewritten when the active key
+// changes, only when its current key is dropped (see MB-72618 and
+// StorageMgr::handleEncryptionUpdateKey), so it converges some time after the
+// key change rather than along with it.
+const codebookEncryptionTimeout = 3 * time.Minute
+
+// codebookEncryptionPoll is the gap between two checks while waiting for the
+// codebook to converge.
+const codebookEncryptionPoll = 5 * time.Second
+
+// waitForCodebookEncryption waits for every codebook under indexDir to be
+// encrypted with keyid, and returns the last failure if that does not happen
+// within codebookEncryptionTimeout.
+func waitForCodebookEncryption(indexDir string, keyid string) error {
+	deadline := time.Now().Add(codebookEncryptionTimeout)
+	for {
+		err := verifyCodebookEncryption(indexDir, keyid)
+		if err == nil || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(codebookEncryptionPoll)
+	}
+}
+
+// verifyCodebookDecryption returns an error while any codebook under indexDir
+// is still encrypted.
+func verifyCodebookDecryption(indexDir string) error {
 	codebookDir := filepath.Join(indexDir, tc.CODEBOOK_DIR)
 	if _, err := os.Stat(codebookDir); os.IsNotExist(err) {
 		log.Printf("Codebook directory does not exist: %s", codebookDir)
-		return
+		return nil
 	}
 
-	err := filepath.Walk(codebookDir, func(path string, info os.FileInfo, err error) error {
+	return filepath.Walk(codebookDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if !info.IsDir() {
 			encrypted, err := IsFileEncrypted(path)
 			if err != nil {
-				t.Errorf("Error checking if file %s is encrypted: %v", path, err)
-			} else if !encrypted {
-				log.Printf("Codebook file %s is NOT encrypted", path)
-			} else {
-				t.Errorf("Codebook file %s is encrypted", path)
+				return fmt.Errorf("error checking if file %s is encrypted: %v", path, err)
+			} else if encrypted {
+				return fmt.Errorf("codebook file %s is encrypted", path)
 			}
+			log.Printf("Codebook file %s is NOT encrypted", path)
 		}
 		return nil
 	})
-	if err != nil {
-		t.Errorf("Error walking codebook directory %s: %v", codebookDir, err)
+}
+
+// waitForCodebookDecryption waits for every codebook under indexDir to be
+// unencrypted, and returns the last failure if that does not happen within
+// codebookEncryptionTimeout.
+func waitForCodebookDecryption(indexDir string) error {
+	deadline := time.Now().Add(codebookEncryptionTimeout)
+	for {
+		err := verifyCodebookDecryption(indexDir)
+		if err == nil || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(codebookEncryptionPoll)
 	}
 }
 
@@ -1659,7 +1739,7 @@ func TestPlasmaCodebookEncryption(t *testing.T) {
 	tc.HandleError(err, "failed to filter non empty key id")
 
 	log.Printf("Basic persistCodebookToDisk...")
-	err = verifyCodebookEncryption(indexDir, ekeyId)
+	err = waitForCodebookEncryption(indexDir, ekeyId)
 	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
 
 	// Crash indexer
@@ -1668,7 +1748,7 @@ func TestPlasmaCodebookEncryption(t *testing.T) {
 	secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	log.Printf("Encrypted codebook crash recovery")
-	err = verifyCodebookEncryption(indexDir, ekeyId)
+	err = waitForCodebookEncryption(indexDir, ekeyId)
 	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
 
 	// Rotate Key & Drop Key
@@ -1689,7 +1769,7 @@ func TestPlasmaCodebookEncryption(t *testing.T) {
 	time.Sleep(15 * time.Second)
 	log.Printf("Encrypted codebook rotation")
 	// Make sure that ekeyId is not being used & ekeyId2 is being used
-	err = verifyCodebookEncryption(indexDir, ekeyId2)
+	err = waitForCodebookEncryption(indexDir, ekeyId2)
 	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
 
 	// Set to higher interval as one rotation should have happened
@@ -1701,14 +1781,23 @@ func TestPlasmaCodebookEncryption(t *testing.T) {
 	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
 
 	time.Sleep(10 * time.Second) // wait for key update
-	verifyCodebookDecrypted(indexDir, t)
+
+	// Disabling encryption only stops future writes from being encrypted.  The
+	// codebook is rewritten as plaintext when the DEKs that encrypt it are
+	// dropped, so ask for that explicitly.
+	err = dropEncryptionAtRestDeks(bucketName, nodeKv)
+	FailTestIfError(err, "Error in dropEncryptionAtRestDeks", t)
+
+	err = waitForCodebookDecryption(indexDir)
+	FailTestIfError(err, "Error in verifyCodebookDecryption", t)
 
 	// Crash indexer
 	triggerIndexerCrash(nodeIndex)
 	time.Sleep(15 * time.Second) // wait for indexer to recover
 	secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
-	verifyCodebookDecrypted(indexDir, t)
+	err = waitForCodebookDecryption(indexDir)
+	FailTestIfError(err, "Error in verifyCodebookDecryption", t)
 
 	// Delete index
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
@@ -1804,6 +1893,12 @@ func TestPlasmaCodebookEncryption2(t *testing.T) {
 	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
 	time.Sleep(10 * time.Second) // wait for key update
 
+	// The codebook was written before encryption was enabled.  Enabling only
+	// encrypts future writes, so ask ns_server to convert what is already on
+	// disk, which it does by dropping the null key.
+	err = forceEncryptionAtRest(bucketName, nodeKv)
+	FailTestIfError(err, "Error in forceEncryptionAtRest", t)
+
 	// Verify codebook encryption
 	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
 	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
@@ -1819,7 +1914,7 @@ func TestPlasmaCodebookEncryption2(t *testing.T) {
 	ekeyId, err := filterNonEmptyKeyId(ekeyIds)
 	tc.HandleError(err, "failed to filter non empty key id")
 
-	err = verifyCodebookEncryption(indexDir, ekeyId)
+	err = waitForCodebookEncryption(indexDir, ekeyId)
 	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
 }
 
@@ -1914,7 +2009,7 @@ func TestBhiveCodebookEncryption(t *testing.T) {
 	tc.HandleError(err, "failed to filter non empty key id")
 
 	log.Printf("Basic persistCodebookToDisk...")
-	err = verifyCodebookEncryption(indexDir, ekeyId)
+	err = waitForCodebookEncryption(indexDir, ekeyId)
 	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
 
 	// Crash indexer
@@ -1923,7 +2018,7 @@ func TestBhiveCodebookEncryption(t *testing.T) {
 	secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	log.Printf("Encrypted codebook crash recovery")
-	err = verifyCodebookEncryption(indexDir, ekeyId)
+	err = waitForCodebookEncryption(indexDir, ekeyId)
 	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
 
 	// Rotate Key & Drop Key
@@ -1944,7 +2039,7 @@ func TestBhiveCodebookEncryption(t *testing.T) {
 	time.Sleep(15 * time.Second)
 	log.Printf("Encrypted codebook rotation")
 	// Make sure that ekeyId is not being used & ekeyId2 is being used
-	err = verifyCodebookEncryption(indexDir, ekeyId2)
+	err = waitForCodebookEncryption(indexDir, ekeyId2)
 	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
 
 	// Set to higher interval as one rotation should have happened
@@ -1956,14 +2051,23 @@ func TestBhiveCodebookEncryption(t *testing.T) {
 	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
 
 	time.Sleep(10 * time.Second) // wait for key update
-	verifyCodebookDecrypted(indexDir, t)
+
+	// Disabling encryption only stops future writes from being encrypted.  The
+	// codebook is rewritten as plaintext when the DEKs that encrypt it are
+	// dropped, so ask for that explicitly.
+	err = dropEncryptionAtRestDeks(bucketName, nodeKv)
+	FailTestIfError(err, "Error in dropEncryptionAtRestDeks", t)
+
+	err = waitForCodebookDecryption(indexDir)
+	FailTestIfError(err, "Error in verifyCodebookDecryption", t)
 
 	// Crash indexer
 	triggerIndexerCrash(nodeIndex)
 	time.Sleep(15 * time.Second) // wait for indexer to recover
 	secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
-	verifyCodebookDecrypted(indexDir, t)
+	err = waitForCodebookDecryption(indexDir)
+	FailTestIfError(err, "Error in verifyCodebookDecryption", t)
 
 	// Delete index
 	err = secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
@@ -2047,6 +2151,12 @@ func TestBhiveCodebookEncryption2(t *testing.T) {
 	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
 	time.Sleep(10 * time.Second) // wait for key update
 
+	// The codebook was written before encryption was enabled.  Enabling only
+	// encrypts future writes, so ask ns_server to convert what is already on
+	// disk, which it does by dropping the null key.
+	err = forceEncryptionAtRest(bucketName, nodeKv)
+	FailTestIfError(err, "Error in forceEncryptionAtRest", t)
+
 	// Verify codebook encryption
 	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
 	storageDir = filepath.Join(storageDir, "@bhive")
@@ -2063,7 +2173,7 @@ func TestBhiveCodebookEncryption2(t *testing.T) {
 	ekeyId, err := filterNonEmptyKeyId(ekeyIds)
 	tc.HandleError(err, "failed to filter non empty key id")
 
-	err = verifyCodebookEncryption(indexDir, ekeyId)
+	err = waitForCodebookEncryption(indexDir, ekeyId)
 	FailTestIfError(err, "Error in verifyCodebookEncryption", t)
 }
 
