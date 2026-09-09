@@ -15751,6 +15751,9 @@ func (idx *indexer) pruneIndexInfo(sortedIndexInfo []*IndexInfo) []*IndexInfo {
 	defnWithMultipleStates := make(map[uint64]map[common.IndexState]string) // defnId -> IndexState -> NodeId
 	defnIdIndexStateMap := make(map[uint64]map[common.IndexState]string)    // defnId -> IndexState -> NodeId
 	for _, indexInfo := range sortedIndexInfo {
+		if indexInfo.NoSnapshot {
+			continue
+		}
 		defnId := indexInfo.DefnId
 		indexState := indexInfo.IndexState
 		nodeId := indexInfo.nodeId
@@ -15783,6 +15786,14 @@ func (idx *indexer) pruneIndexInfo(sortedIndexInfo []*IndexInfo) []*IndexInfo {
 }
 
 func (idx *indexer) checkForItemsCountMismatch(sortedIndexInfo []*IndexInfo) {
+
+	indexesWithCounts := make([]*IndexInfo, 0, len(sortedIndexInfo))
+	for _, indexInfo := range sortedIndexInfo {
+		if !indexInfo.NoSnapshot {
+			indexesWithCounts = append(indexesWithCounts, indexInfo)
+		}
+	}
+	sortedIndexInfo = indexesWithCounts
 
 	divergingReplicasMap := make(map[string]interface{})
 	bucketSeqnos := make(map[string][]uint64) // seqnos. per bucket
