@@ -151,6 +151,10 @@ type bhiveSlice struct {
 	quantizedCodeBuf [][]byte // For vector index, used for quantized code computation of vectors
 	// For Sparse vector index, used for sparseJL representation of concise vector
 	sparseJLBuf [][]float32
+	// For Sparse vector index: per-worker scratch for ingestion-time vector
+	// pruning (bhive.vector.pruneMaxDims); see insertVectorIndex
+	sparsePruneBuf    [][]float32
+	sparsePruneIdxBuf [][]int
 
 	//
 	// vector index related metadata
@@ -179,6 +183,9 @@ type bhiveSlice struct {
 	lastRollbackTs *common.TsVbuuid
 
 	persistFullVector bool
+
+	// cached bhive.vector.pruneMaxDims (see insertVectorIndex); 0 = disabled
+	vectorPruneMaxDims int
 
 	// error
 	fatalDbErr error // TODO
@@ -511,8 +518,12 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.MaxSeeds = slice.sysconf["bhive.vanama.maxSeeds"].Int()
 	cfg.SparseExpansionSeeds = slice.sysconf["bhive.vanama.sparse.expansionSeeds"].Int()
 	cfg.SparseSeedTrimMassFraction = float32(slice.sysconf["bhive.vanama.sparse.seedTrimMassFraction"].Float64())
-	cfg.QueryPruneMaxDims = slice.sysconf["bhive.query.pruneMaxDims"].Int()
-	cfg.VectorPruneMaxDims = slice.sysconf["bhive.vector.pruneMaxDims"].Int()
+	// One knob for query NNZ: the same setting the scan-request layer
+	// already prunes the sparse query with (TruncateConciseTopN in
+	// scan_request.go) before quantizing it for bhive — so bhive's
+	// internal prune is a consistent backstop, a no-op on queries that
+	// arrived through that path.
+	cfg.QueryPruneMaxDims = slice.sysconf["vector.sparse.maxQueryNNZ"].Int()
 	cfg.EnableInvertedIndex = slice.sysconf["bhive.invertedIndex.enable"].Bool()
 	cfg.InvertedIndexMaxPerDim = slice.sysconf["bhive.invertedIndex.maxPerDim"].Int()
 	cfg.InvertedIndexBlockSize = slice.sysconf["bhive.invertedIndex.blockSize"].Int()
@@ -800,6 +811,7 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 	}
 
 	slice.persistFullVector = mCfg.PersistFullVector
+	slice.vectorPruneMaxDims = slice.sysconf["bhive.vector.pruneMaxDims"].Int()
 
 	return err
 }
@@ -925,6 +937,11 @@ func (mdb *bhiveSlice) UpdateConfig(cfg common.Config) {
 	mCfg := mdb.setupMainstoreConfig()
 	bCfg := mdb.setupBackstoreConfig()
 
+	// pruning applies to vectors ingested after the change (each doc's
+	// back-entry SHA is over its pruned vector, so a mid-life change
+	// re-indexes a doc on its next mutation rather than mixing silently)
+	mdb.vectorPruneMaxDims = cfg["bhive.vector.pruneMaxDims"].Int()
+
 	mdb.mainstore.UpdateConfig(&mCfg)
 	mdb.backstore.UpdateConfig(&bCfg)
 }
@@ -1044,6 +1061,8 @@ func (slice *bhiveSlice) setupWriters() {
 	slice.quantizedCodeBuf = make([][]byte, 0, slice.maxNumWriters)
 	if slice.idxDefn.HasSparseVector() {
 		slice.sparseJLBuf = make([][]float32, 0, slice.maxNumWriters)
+		slice.sparsePruneBuf = make([][]float32, 0, slice.maxNumWriters)
+		slice.sparsePruneIdxBuf = make([][]int, 0, slice.maxNumWriters)
 	}
 
 	// initialize comand handler
@@ -1075,9 +1094,13 @@ func (slice *bhiveSlice) initWriters(numWriters int) {
 	}
 	if slice.idxDefn.IsVectorIndex && slice.idxDefn.HasSparseVector() {
 		slice.sparseJLBuf = slice.sparseJLBuf[:numWriters]
+		slice.sparsePruneBuf = slice.sparsePruneBuf[:numWriters]
+		slice.sparsePruneIdxBuf = slice.sparsePruneIdxBuf[:numWriters]
 		for i := curNumWriters; i < numWriters; i++ {
 			// After training is completed, the sparse JL vector buffer will be resized
 			slice.sparseJLBuf[i] = make([]float32, 0)
+			slice.sparsePruneBuf[i] = make([]float32, 0)
+			slice.sparsePruneIdxBuf[i] = make([]int, 0)
 		}
 	}
 
@@ -1344,6 +1367,20 @@ func (mdb *bhiveSlice) insertVectorIndex(key []byte, docid []byte, includeColumn
 	if !isSparseVector {
 		metaVecLen = mdb.codeSize
 	} else {
+		// Concentration-of-importance pruning (bhive.vector.pruneMaxDims):
+		// trim the sparse vector to its highest-|weight| coordinates BEFORE
+		// sizing, quantization, and centroid routing, so the quantized meta
+		// (header scale and norm included), the JL routing, the graph, the
+		// seed tables, and the common inverted index all derive from the
+		// pruned vector. The back-entry SHA below hashes the same pruned
+		// vec, so the update-time unchanged-doc skip stays consistent (and
+		// toggling the setting changes the SHA, which correctly forces a
+		// re-index on the doc's next mutation). vecs[0] is never mutated;
+		// the pruned wire lives in per-worker scratch.
+		if mdb.vectorPruneMaxDims > 0 {
+			vec = bhive.PruneSparseVectorWire(vec, mdb.vectorPruneMaxDims,
+				&mdb.sparsePruneIdxBuf[workerId], &mdb.sparsePruneBuf[workerId])
+		}
 		// Store the QUANTIZED sparse vector (its L2 norm is carried in the
 		// quantized header) in meta; the graph build consumes it directly.
 		// The full vector is not persisted for sparse (re-rank is not enabled).
