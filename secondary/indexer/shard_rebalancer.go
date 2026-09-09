@@ -1712,11 +1712,11 @@ func (sr *ShardRebalancer) copySingleKey(
 	}
 
 	////////// Open source file
-	keyFilePath := filepath.Clean(filepath.Join(dir, fileNameWithVersion))
-	if !strings.HasPrefix(keyFilePath, dir) {
+	if !filepath.IsLocal(fileNameWithVersion) {
 		return "", fmt.Errorf("key file %v not in directory %v (%w)",
 			fileNameWithVersion, dir, errMissingKeyPath)
 	}
+	keyFilePath := filepath.Join(dir, fileNameWithVersion)
 
 	keyFile, err := os.Open(keyFilePath)
 	if err != nil {
@@ -1733,11 +1733,7 @@ func (sr *ShardRebalancer) copySingleKey(
 
 	////////// Create staging file
 
-	keyStagePath := filepath.Clean(filepath.Join(stagingDir, fileNameWithVersion))
-	if !strings.HasPrefix(keyStagePath, stagingDir) {
-		return "", fmt.Errorf("failed to generate staging path for key file %v (%w)",
-			fileNameWithVersion, errMissingKeyPath)
-	}
+	keyStagePath := filepath.Join(stagingDir, fileNameWithVersion)
 
 	stagingKeyFile, err := os.CreateTemp(stagingDir, fileNameWithVersion+".tmp")
 	if err != nil {
