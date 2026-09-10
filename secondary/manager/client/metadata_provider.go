@@ -5633,6 +5633,7 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 // This function returns the an index instance which is an ensemble of different index partitions.
 // Each index partition has the highest version with active RState, and each one can be residing on
 // different indexer node.  This function will not check if the index instance has all the partitions.
+// This function suggests find Active but may include instances in others states like READY or CREATED.
 func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId,
 	meta *IndexMetadata) []*mc.IndexInstDistribution {
 

@@ -1132,6 +1132,18 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64,
 	replicas = shuffle(replicas)
 
 	//
+	// Filter out inst that cannot serve scans based on index state.
+	// Note that this must run after numPartition() above, so that the
+	// expected partition count is derived from the full replica list.
+	//
+	// allReplicas keeps the unfiltered list for the rebalance fallback below.  An
+	// instance that is pruned here was pruned on the state of its active-RState
+	// version; the version in rebalInsts is a different, more recent version and
+	// must still be reachable.
+	allReplicas := replicas
+	replicas, erroredReplica := b.pruneErrorReplica(currmeta, replicas)
+
+	//
 	// Filter out inst based on pending item stats.
 	//
 	rollbackTimesList, prunedReplica := b.pruneStaleReplica(replicas, excludes)
@@ -1176,7 +1188,7 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64,
 		} else {
 			// cannot find an indexer that holds an active partition
 			// try to find an indexer under rebalancing
-			for _, instId := range replicas {
+			for _, instId := range allReplicas {
 				if inst, ok := currmeta.rebalInsts[common.IndexInstId(instId)]; ok {
 					if _, ok := inst.IndexerId[common.PartitionId(partnId)]; ok {
 						chosenInst[common.PartitionId(partnId)] = inst
@@ -1190,8 +1202,8 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64,
 	if len(chosenInst) != int(numPartn) {
 		logging.Errorf("metadataClient:PickRandom: Fail to find indexer for all index partitions. Num partition %v.  Partition with instances %v ",
 			numPartn, len(chosenInst))
-		logging.Errorf("metadataClient:PickRandom: Replicas - %v, PrunedReplica - %v, FilteredReplica %v", replicas,
-			prunedReplica, filteredReplica)
+		logging.Errorf("metadataClient:PickRandom: Replicas - %v, PrunedReplica - %v, FilteredReplica %v, ErroredReplica %v",
+			replicas, prunedReplica, filteredReplica, erroredReplica)
 		for n, instId := range replicas {
 			for partnId := startPartnId; partnId < endPartnId; partnId++ {
 				ts, ok := rollbackTimesList[n][common.PartitionId(partnId)]
@@ -1271,6 +1283,45 @@ func (b *metadataClient) filterByTiming(currmeta *indexTopology, replicas []uint
 		}
 	}
 	return
+}
+
+// This method prunes the replicas that are known to be unable to serve a scan.
+//
+// A replica is pruned when its instance carries a non-empty Error while the
+// instance is not in ACTIVE state.  Such an instance is still building, is
+// retrying a build, or has otherwise reported a problem to the lifecycle
+// manager.  The indexer will reject the scan for it in findIndexInstance(),
+// so pruning here saves a round trip and a scan retry.
+//
+// An ACTIVE instance is never pruned, even when it carries an Error.  The
+// indexer does not clear IndexInstDistribution.Error when an instance is
+// promoted to ACTIVE, so an ACTIVE instance can carry stale error text from
+// an earlier build attempt while being perfectly able to serve scans.  This
+// mirrors the guard in indexState().
+//
+// A replica with no instance in the current metadata is left alone.  It is
+// rejected later by the instance lookup in the selection loop, and leaving it
+// in place keeps the rebalance fallback reachable.
+//
+func (b *metadataClient) pruneErrorReplica(currmeta *indexTopology, replicas []uint64) (
+	[]uint64, map[common.IndexInstId]string) {
+
+	var result []uint64
+	prunedInsts := make(map[common.IndexInstId]string)
+
+	for _, instId := range replicas {
+		inst, ok := currmeta.insts[common.IndexInstId(instId)]
+		if ok && inst.Error != "" && inst.State != common.INDEX_STATE_ACTIVE {
+			logging.Verbosef("remove inst %v from scan due to index state %v error %v",
+				instId, inst.State, inst.Error)
+			prunedInsts[common.IndexInstId(instId)] = fmt.Sprintf("{\"state\": %v, \"error\": %v}",
+				inst.State, inst.Error)
+			continue
+		}
+		result = append(result, instId)
+	}
+
+	return result, prunedInsts
 }
 
 // This method prune stale partitions from the given replica.  For each replica, it returns
@@ -1551,7 +1602,7 @@ func (b *metadataClient) printstats() {
 func (b *metadataClient) indexState(defnID uint64) (common.IndexState, error) {
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	if index, ok := currmeta.defns[common.IndexDefnId(defnID)]; ok {
-		if index.Error != "" {
+		if index.Error != "" && index.State != common.INDEX_STATE_ACTIVE {
 			return common.INDEX_STATE_ERROR, errors.New(index.Error)
 		}
 
