@@ -63,7 +63,8 @@ type mutationMgr struct {
 	internalRecvCh MsgChannel //Buffered channel to queue worker messages
 	supvCmdch      MsgChannel //supervisor sends commands on this channel
 	supvRespch     MsgChannel //channel to send any message to supervisor
-	streamBeginCh  MsgChannel // channel to process StreamBegin messages
+
+	vbMapUpdateCh MsgChannel //channel to process StreamBegin and vbMap/latency cleanup messages
 
 	shutdownCh DoneChannel //internal channel indicating shutdown
 
@@ -117,7 +118,7 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 
 		mutMgrRecvCh:   make(MsgChannel),
 		internalRecvCh: make(MsgChannel, WORKER_MSG_QUEUE_LEN),
-		streamBeginCh:  make(MsgChannel, WORKER_MSG_QUEUE_LEN),
+		vbMapUpdateCh:  make(MsgChannel, WORKER_MSG_QUEUE_LEN),
 		shutdownCh:     make(DoneChannel),
 		supvCmdch:      supvCmdch,
 		supvRespch:     supvRespch,
@@ -165,7 +166,7 @@ func (m *mutationMgr) run() {
 
 	go m.handleWorkerMsgs()
 	go m.listenWorkerMsgs()
-	go m.processStreamBegins()
+	go m.processVbMapUpdates()
 
 	//main Mutation Manager loop
 loop:
@@ -392,7 +393,7 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		//send message to supervisor to take decision
 		logging.Tracef("MutationMgr::handleWorkerMessage Received %v from worker", cmd)
 		m.supvRespch <- cmd
-		m.streamBeginCh <- cmd
+		m.vbMapUpdateCh <- cmd
 
 	default:
 		logging.Fatalf("MutationMgr::handleWorkerMessage Received unhandled "+
@@ -402,12 +403,12 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 
 }
 
-// This method will process stream begin messages and initializes latency
-// object for the corresponding stream
-func (m *mutationMgr) processStreamBegins() {
+// This method processes stream begin messages, initializes latency
+// object for the corresponding stream, and cleans up vbMap/latency state
+func (m *mutationMgr) processVbMapUpdates() {
 	for {
 		select {
-		case cmd := <-m.streamBeginCh:
+		case cmd := <-m.vbMapUpdateCh:
 			switch cmd.GetMsgType() {
 
 			case STREAM_READER_STREAM_BEGIN:
@@ -420,6 +421,11 @@ func (m *mutationMgr) processStreamBegins() {
 			case CLEANUP_PRJ_STATS:
 				streamId := cmd.(*MsgStream).GetStreamId()
 				m.cleanLatencyMap(streamId)
+
+			case CLEANUP_VBMAP_KEYSPACE:
+				streamId := cmd.(*MsgStream).GetStreamId()
+				keyspaceId := cmd.(*MsgStream).GetMutationMeta().keyspaceId
+				m.removeVbMapEntriesForKeyspace(streamId, keyspaceId)
 			}
 		case _, ok := <-m.shutdownCh:
 			if !ok {
@@ -802,7 +808,11 @@ func (m *mutationMgr) handleRemoveKeyspaceFromStream(cmd Message) {
 		delete(keyspaceIdAllowMarkFirstSnap, keyspaceId)
 
 		// Remove all vbMap entries for this stream/keyspace
-		m.removeVbMapEntriesForKeyspace(streamId, keyspaceId)
+		m.vbMapUpdateCh <- &MsgStream{
+			mType:    CLEANUP_VBMAP_KEYSPACE,
+			streamId: streamId,
+			meta:     &MutationMeta{keyspaceId: keyspaceId},
+		}
 	}
 
 	if len(keyspaceIdQueueMap) == 0 {
@@ -838,7 +848,6 @@ func (m *mutationMgr) handleRemoveKeyspaceFromStream(cmd Message) {
 }
 
 // removeVbMapEntriesForKeyspace removes all vbMap entries for a given stream/keyspace.
-// Caller must hold m.lock.
 func (m *mutationMgr) removeVbMapEntriesForKeyspace(streamId common.StreamId, keyspaceId string) {
 	perStreamKeyspaceId := fmt.Sprintf("%v/%v", streamId, keyspaceId)
 
@@ -1058,7 +1067,7 @@ func (m *mutationMgr) cleanupStream(streamId common.StreamId) {
 	delete(m.streamKeyspaceIdAllowMarkFirstSnap, streamId)
 
 	// Send a message to clean-up latency map
-	m.streamBeginCh <- &MsgStream{mType: CLEANUP_PRJ_STATS, streamId: streamId}
+	m.vbMapUpdateCh <- &MsgStream{mType: CLEANUP_PRJ_STATS, streamId: streamId}
 
 	m.flock.Lock()
 	defer m.flock.Unlock()
@@ -1383,6 +1392,11 @@ func (m *mutationMgr) handleUpdateKeyspaceStatsMap(cmd Message) {
 }
 
 func (m *mutationMgr) initLatencyObj(cmd Message) {
+	stats := m.stats.Get()
+	if stats == nil {
+		return
+	}
+
 	node := cmd.(*MsgStream).GetNode()
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -1390,19 +1404,13 @@ func (m *mutationMgr) initLatencyObj(cmd Message) {
 	vb := meta.vbucket
 	keyspaceId := meta.keyspaceId
 
+	// Skip if the stream or the keyspace is already gone. A keyspace can be
+	// removed without the stream being closed, so both are checked.
 	m.lock.Lock()
-	defer m.lock.Unlock()
-
-	stats := m.stats.Get()
-	if stats == nil {
-		return
-	}
-
-	// Check if stream/keyspace still exists, skip if cleaned up
-	if _, streamExists := m.streamReaderMap[streamId]; !streamExists {
-		return
-	}
-	if _, keyspaceInStream := m.streamKeyspaceIdQueueMap[streamId][keyspaceId]; !keyspaceInStream {
+	_, streamExists := m.streamReaderMap[streamId]
+	_, keyspaceExists := m.streamKeyspaceIdQueueMap[streamId][keyspaceId]
+	m.lock.Unlock()
+	if !streamExists || !keyspaceExists {
 		return
 	}
 

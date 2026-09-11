@@ -175,6 +175,7 @@ const (
 	CLOSE_STREAM
 	CLEANUP_STREAM
 	CLEANUP_PRJ_STATS
+	CLEANUP_VBMAP_KEYSPACE // remove vbMap/latency entries for a keyspace being dropped from a stream
 	INDEXER_UPDATE_BUILD_TS
 	RESET_STREAM
 
@@ -4006,6 +4007,8 @@ func (m MsgType) String() string {
 		return "CLEANUP_STREAM"
 	case CLEANUP_PRJ_STATS:
 		return "CLEANUP_PRJ_STATS"
+	case CLEANUP_VBMAP_KEYSPACE:
+		return "CLEANUP_VBMAP_KEYSPACE"
 	case INDEXER_UPDATE_BUILD_TS:
 		return "INDEXER_UPDATE_BUILD_TS"
 	case RESET_STREAM:

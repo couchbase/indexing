@@ -1093,12 +1093,63 @@ func (e *EncryptionMgr) getInUseKeysHandler(w http.ResponseWriter, r *http.Reque
 	return
 }
 
+// queuedUpdateKeyIdsForKdt returns the keyids of ENCRYPTION_UPDATE_KEY messages indexer has
+// already committed to apply for kdt - the one currently in flight (dropOrUpdateInProgress) plus
+// any still waiting in pendingMap. These are reported as in-use even though indexer may not have
+// started writing with them yet, so cbauth never treats a key indexer intends to adopt as unused
+// just because it hasn't been dequeued/applied. Locks/unlocks e.cbMu internally; callers must not
+// already hold it.
+func (e *EncryptionMgr) queuedUpdateKeyIdsForKdt(kdt KeyDataType) []string {
+	e.cbMu.Lock()
+	defer e.cbMu.Unlock()
+
+	var ids []string
+	if activeMsg, ok := e.dropOrUpdateInProgress[kdt]; ok {
+		if updMsg, ok := activeMsg.(*MsgEncryptionUpdateKey); ok {
+			ids = append(ids, updMsg.GetEarKey().Id)
+		}
+	}
+	for _, m := range e.pendingMap[kdt] {
+		if updMsg, ok := m.(*MsgEncryptionUpdateKey); ok {
+			ids = append(ids, updMsg.GetEarKey().Id)
+		}
+	}
+	return ids
+}
+
+// queuedUpdateKeyIdsAll is the GetInUseKeysAll counterpart of queuedUpdateKeyIdsForKdt, covering
+// every keydatatype with an in-flight or pending ENCRYPTION_UPDATE_KEY message. Locks/unlocks
+// e.cbMu internally; callers must not already hold it.
+func (e *EncryptionMgr) queuedUpdateKeyIdsAll() map[KeyDataType][]string {
+	e.cbMu.Lock()
+	defer e.cbMu.Unlock()
+
+	result := make(map[KeyDataType][]string)
+	for kdt, activeMsg := range e.dropOrUpdateInProgress {
+		if updMsg, ok := activeMsg.(*MsgEncryptionUpdateKey); ok {
+			result[kdt] = append(result[kdt], updMsg.GetEarKey().Id)
+		}
+	}
+	for kdt, pending := range e.pendingMap {
+		for _, m := range pending {
+			if updMsg, ok := m.(*MsgEncryptionUpdateKey); ok {
+				result[kdt] = append(result[kdt], updMsg.GetEarKey().Id)
+			}
+		}
+	}
+	return result
+}
+
 func (e *EncryptionMgr) GetInUseKeys(kdt KeyDataType) ([]string, error) {
 
 	if !e.isRecoveryDone.Load() {
 		return []string{}, ErrEncrMgrNotReady
 	}
 	logging.Infof("EncryptionMgr:GetInUseKeys %v", logKDT(kdt))
+
+	// Acquired and released before muid below - cbMu and muid are never held together.
+	queuedIds := e.queuedUpdateKeyIdsForKdt(kdt)
+
 	e.muid.Lock()
 	defer e.muid.Unlock()
 
@@ -1119,6 +1170,13 @@ func (e *EncryptionMgr) GetInUseKeys(kdt KeyDataType) ([]string, error) {
 		}
 	}
 
+	for _, id := range queuedIds {
+		if !seen[id] {
+			seen[id] = true
+			result = append(result, id)
+		}
+	}
+
 	logging.Infof("EncryptionMgn:GetInUseKeys %v - %v", logKDT(kdt), logKeyIDs(result...))
 
 	return result, nil
@@ -1132,19 +1190,42 @@ func (e *EncryptionMgr) GetInUseKeysAll() (map[KeyDataType][]string, error) {
 		return kdtKeysMap, ErrEncrMgrNotReady
 	}
 	logging.Infof("EncryptionMgr:GetInUseKeysAll")
+
+	// Acquired and released before muid below - cbMu and muid are never held together.
+	queuedAll := e.queuedUpdateKeyIdsAll()
+
 	e.muid.Lock()
 	defer e.muid.Unlock()
 
-	for key, value := range e.indexerUsedKeyIds {
-		sliceCopy := make([]string, len(value))
-		copy(sliceCopy, value)
-		kdtKeysMap[key] = sliceCopy
+	seenByKdt := make(map[KeyDataType]map[string]bool)
+	addUnique := func(kdt KeyDataType, id string) {
+		seen, ok := seenByKdt[kdt]
+		if !ok {
+			seen = make(map[string]bool)
+			seenByKdt[kdt] = seen
+		}
+		if !seen[id] {
+			seen[id] = true
+			kdtKeysMap[kdt] = append(kdtKeysMap[kdt], id)
+		}
 	}
 
-	for key, value := range e.rebalTransferKeyIDs {
-		sliceCopy := make([]string, len(value))
-		copy(sliceCopy, value)
-		kdtKeysMap[key] = sliceCopy
+	for kdt, value := range e.indexerUsedKeyIds {
+		for _, id := range value {
+			addUnique(kdt, id)
+		}
+	}
+
+	for kdt, value := range e.rebalTransferKeyIDs {
+		for _, id := range value {
+			addUnique(kdt, id)
+		}
+	}
+
+	for kdt, ids := range queuedAll {
+		for _, id := range ids {
+			addUnique(kdt, id)
+		}
 	}
 
 	return kdtKeysMap, nil
