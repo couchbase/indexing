@@ -85,8 +85,9 @@ type GetKeyByIdCb func(keyId []byte) (masterKey []byte, outKeyId []byte, cipher 
 // statistics
 type EncryptionStats struct {
 	// gauge
-	NumActiveKeys uint32 `json:"keys"`              // includes current key even if no snapshots are present
-	Status        string `json:"encryption_status"` // partial/encrypted/not_encrypted
+	NumActiveKeys uint32   `json:"keys"`              // includes current key even if no snapshots are present
+	ActiveKeyIds  []string `json:"key_ids"`           // the keys behind the count above
+	Status        string   `json:"encryption_status"` // partial/encrypted/not_encrypted
 
 	// counter
 	NumFilesRotated     uint64 `json:"files_rotated"`
@@ -100,6 +101,16 @@ type EncryptionStats struct {
 	numFilesPendingRencrypt uint64
 	numFilesPendingEncrypt  uint64
 	numFilesPendingDecrypt  uint64
+}
+
+func activeKeyIdList(keyIds [][]byte) []string {
+	out := make([]string, 0, len(keyIds))
+	for _, kid := range keyIds {
+		if len(kid) > 0 {
+			out = append(out, string(kid))
+		}
+	}
+	return out
 }
 
 func (e *EncryptionStats) String() string {
@@ -336,7 +347,14 @@ func (m *MemDB) encryptFileByItem(ctx context.Context, src, dst string, keyId []
 // To disable encryption: pass nil keyId and gocbcrypto.CipherNameNone.
 // key : can be nil when called during recovery
 // (assumption: keyId is never recycled)
-func (m *MemDB) SetCurrentEncryptionKey(key []byte, keyId []byte, cipher string) error {
+func (m *MemDB) SetCurrentEncryptionKey(key []byte, keyId []byte, cipher string) (err error) {
+	defer func() {
+		if len(keyId) > 0 && err == nil {
+			logging.Infof("MemDB::%v set current keyId:%s cipher:%v",
+				m.Path, string(keyId), cipher)
+		}
+	}()
+
 	m.encMu.Lock()
 	defer m.encMu.Unlock()
 
@@ -406,12 +424,25 @@ func (m *MemDB) RegisterSnapshotCurrKeyId(snapDir string) (keyId []byte, cipher 
 	// register only once per snapshot
 	if exists = keyIdExists(m.snapKeyIds[snapDir], keyId); !exists {
 		m.snapKeyIds[snapDir] = append(m.snapKeyIds[snapDir], keyId)
+		if len(keyId) > 0 {
+			logging.Infof("MemDB::%v keyId registered for snapshot:%v keyId:%s",
+				m.Path, filepath.Base(snapDir), string(keyId))
+		}
 	}
 
 	return
 }
 
+// After this the keyId is no longer reported by GetActiveKeyIdList for this
+// snapshot, so it is the point past which the key may be purged
 func (m *MemDB) DeregisterSnapshotKeyId(snapDir string, keyId []byte) {
+	defer func() {
+		if len(keyId) > 0 {
+			logging.Infof("MemDB::%v keyId deregistered for snapshot:%v keyId:%s",
+				m.Path, filepath.Base(snapDir), string(keyId))
+		}
+	}()
+
 	m.encMu.Lock()
 	defer m.encMu.Unlock()
 
@@ -425,9 +456,18 @@ func (m *MemDB) DeregisterSnapshotKeyId(snapDir string, keyId []byte) {
 }
 
 func (m *MemDB) DeregisterSnapshot(snapDir string) {
+	var keyIds [][]byte
+	defer func() {
+		if len(keyIds) > 0 {
+			logging.Infof("MemDB::%v keyIds deregistered for snapshot:%v keyIds:%s",
+				m.Path, filepath.Base(snapDir), keyIds)
+		}
+	}()
+
 	m.encMu.Lock()
 	defer m.encMu.Unlock()
 
+	keyIds = m.snapKeyIds[snapDir]
 	delete(m.snapKeyIds, snapDir)
 	delete(m.snapKeyIdErrs, snapDir)
 }
@@ -648,6 +688,8 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 			}
 		}
 		if !hasDropKey {
+			logging.Infof("MemDB::%v dropkeyId skip, keyIds:%s does not exist in snapshot:%v",
+				m.Path, keyIds, filepath.Base(snapDir))
 			return nil
 		}
 	}
@@ -663,6 +705,14 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 		cipher:         cipher,
 	}
 
+	logging.Infof("MemDB::%v dropping keyIds:%s for snapshot:%v", m.Path, keyIds, filepath.Base(snapDir))
+	defer func() {
+		if err != nil {
+			logging.Errorf("MemDB::%v dropkeyId failed for snapshot:%v rotated:%v error:%v",
+				m.Path, snapDir, r.NumFilesRotated, err)
+		}
+	}()
+
 	if err = m.walkEncryptedFiles(snapDir, g.cancelCtx, r); err != nil {
 		if r.NumFilesRotated == 0 && r.numFilesSkipped == 0 && !exists {
 			m.DeregisterSnapshotKeyId(snapDir, currKeyId) // remove current key if no files were encrypted with it
@@ -673,6 +723,9 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 	for _, dropKey := range keyIds {
 		m.DeregisterSnapshotKeyId(snapDir, dropKey)
 	}
+
+	logging.Infof("MemDB::%v dropkeyId:%s completed for snapshot:%v rotated files:%v bytes:%v current keyId:%s",
+		m.Path, keyIds, filepath.Base(snapDir), r.NumFilesRotated, r.NumBytesRotated, string(currKeyId))
 
 	return nil
 }
@@ -881,7 +934,7 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 		}
 
 	default:
-		return ErrInvalidRotationType
+		err = ErrInvalidRotationType
 	}
 
 	if err != nil {
@@ -1076,6 +1129,7 @@ func (m *MemDB) GetEncryptionStatsCached() (EncryptionStats, error) {
 	}
 
 	atomic.StoreUint32(&encSts.NumActiveKeys, numKeys)
+	encSts.ActiveKeyIds = activeKeyIdList(kids)
 	encSts.Status = status
 
 	return encSts, nil
@@ -1127,6 +1181,7 @@ func (m *MemDB) GetEncryptionStatsFromDisk() (EncryptionStats, error) {
 	} else {
 		encSts.NumActiveKeys = uint32(len(v.keyIds))
 	}
+	encSts.ActiveKeyIds = activeKeyIdList(v.keyIds)
 	encSts.numFiles = v.numFiles
 	encSts.numFilesPendingRencrypt = v.numFilesPendingRencrypt
 	encSts.numFilesPendingEncrypt = v.numFilesPendingEncrypt
