@@ -665,8 +665,12 @@ func (v *keyRotationVisitor) visit(ctx context.Context, fpath string) error {
 	var fkeyId []byte
 
 	// clean up stale rotation files from previous attempts (if janitor fails cleanup)
-	if _, _, err := handleStaleRotationFile(fpath); err != nil {
+	if resf, tmp, err := handleStaleRotationFile(fpath); err != nil {
 		return err
+	} else if tmp > 0 {
+		return nil
+	} else if len(resf) > 0 {
+		fpath = resf
 	}
 
 	if ok, err := gocbcrypto.IsFileEncrypted(fpath); err != nil {
@@ -964,9 +968,12 @@ func (v *keyRotationJanitor) process(ctx context.Context) error {
 	}()
 
 	for _, f := range v.candidates {
-		var er error
-		restored, cleanup, er = handleStaleRotationFile(f)
-		if er != nil && !os.IsNotExist(er) {
+		if resf, tmp, er := handleStaleRotationFile(f); er == nil {
+			if len(resf) > 0 {
+				restored++
+			}
+			cleanup += tmp
+		} else if !os.IsNotExist(er) {
 			if err == nil {
 				err = er
 			}
@@ -979,28 +986,28 @@ func (v *keyRotationJanitor) process(ctx context.Context) error {
 
 // restores the original file from a backup if needed, or removes stale backup/temp files
 // from failed rotation attempt due to crash
-func handleStaleRotationFile(f string) (restored, cleanedUp int, err error) {
+func handleStaleRotationFile(f string) (restored string, cleanedUp int, err error) {
 	if strings.HasSuffix(f, encrypt_bak_ext) {
 		orig := strings.TrimSuffix(f, encrypt_bak_ext)
-		if _, er := iowrap.Os_Stat(orig); er != nil {
-			if os.IsNotExist(er) {
-				if er = iowrap.Os_Rename(f, orig); er == nil {
-					restored++
+		if _, statErr := iowrap.Os_Stat(orig); statErr != nil {
+			if os.IsNotExist(statErr) {
+				if err = iowrap.Os_Rename(f, orig); err == nil {
+					restored = orig
+					logging.Infof("MemDB::keyRotationJanitor: restored:%v", orig)
 				}
 			} else {
-				if er = iowrap.Os_Remove(f); er == nil {
-					cleanedUp++
-				}
+				err = statErr // deleting is unsafe unless orig is confirmed present.
 			}
 		} else {
-			er := iowrap.Os_Remove(f)
-			if er == nil {
+			if err = iowrap.Os_Remove(f); err == nil {
 				cleanedUp++
+				logging.Infof("MemDB::keyRotationJanitor: removing :%v", f)
 			}
 		}
 	} else if strings.HasSuffix(f, rencrypt_tmp_ext) {
-		if er := iowrap.Os_Remove(f); er == nil {
+		if err = iowrap.Os_Remove(f); err == nil {
 			cleanedUp++
+			logging.Infof("MemDB::keyRotationJanitor: cleaned:%v", f)
 		}
 	}
 	return

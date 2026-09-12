@@ -1347,6 +1347,91 @@ func testEncryptionDropKeyIdsCorruptSnapshot(t *testing.T, conf Config) {
 	assert.NoError(t, db.RemoveSnapshot(snapDir))
 }
 
+// verifies that a rotation which walks into a leftover backup from an interrupted
+// attempt restores the original and rotates it
+func testEncryptionDropKeyIdsWithStaleBackupFile(t *testing.T, conf Config) {
+	snapDir := "db.dump"
+	os.RemoveAll(snapDir)
+	conf.Path = snapDir
+	conf.UseDeltaInterleaving()
+
+	db, err := NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+
+	var wg sync.WaitGroup
+	n := 10000
+
+	wg.Add(1)
+	w := db.NewWriter()
+	doInsertSafe(w, &wg, n, false)
+	wg.Wait()
+
+	snap, _ := db.NewSnapshot()
+	snap.Open()
+	oldId, cipher, _ := db.RegisterSnapshotKeyId(snapDir)
+	assert.NoError(t, db.PreparePersistence(snapDir, snap, oldId, cipher))
+	snap.Close()
+	assert.NoError(t, db.StoreToDisk(snapDir, snap, runtime.GOMAXPROCS(0), oldId, cipher, nil))
+
+	// simulate a rotation interrupted between the two renames in
+	// rotateSinglefile: the original was moved to its backup but
+	// the re-encrypted temp rename and original file restore failed
+	// with EMFILE (too many files) or due to anti-virus scans (windows)
+	dataDir := filepath.Join(snapDir, "data")
+	entries, err := os.ReadDir(dataDir)
+	assert.NoError(t, err)
+
+	// a shard, not a checksums/files manifest: the walk skips those, so a rotation
+	// never leaves a backup of one behind
+	var origFile string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), "shard-") {
+			origFile = filepath.Join(dataDir, e.Name())
+			break
+		}
+	}
+	assert.NotEmpty(t, origFile, "snapshot must have at least one shard file")
+
+	bakFile := origFile + encrypt_bak_ext
+	assert.NoError(t, os.Rename(origFile, bakFile))
+
+	// rotate without reopening, so the warmup janitor does not get to the backup
+	// first and the rotation walk is the one that finds it
+	newId := make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
+	rand.New(rand.NewSource(1)).Read(newId)
+	newKey := db.GetEncryptionKeyById(newId)
+	assert.NoError(t, db.SetCurrentEncryptionKey(newKey, newId, gocbcrypto.CipherNameAES256GCM))
+
+	dropIds := [][]byte{append([]byte(nil), oldId...)}
+	assert.NoError(t, db.DropKeyIdsFromSnapshot(dropIds, snapDir))
+
+	// backup restored, not left behind or removed
+	assert.FileExists(t, origFile)
+	assert.NoFileExists(t, bakFile)
+
+	// and the restored file was rotated, so the dropped key is gone from the list
+	keyIds, err := db.getActiveKeyIdsFromSnapshot(snapDir)
+	assert.NoError(t, err)
+	assert.False(t, containsKeyId(keyIds, oldId), "restored file must not keep the dropped key")
+	assert.True(t, containsKeyId(keyIds, newId))
+
+	db.Close()
+
+	if t.Failed() {
+		return
+	}
+
+	// the restored file is still a usable part of the snapshot
+	db, err = NewWithEncryptionConfig(conf, []string{snapDir})
+	assert.NoError(t, err)
+	defer db.Close()
+
+	snap2, err := db.LoadFromDisk(snapDir, runtime.GOMAXPROCS(0), nil)
+	assert.NoError(t, err)
+	defer snap2.Close()
+	assert.Equal(t, int64(n), snap2.Count())
+}
+
 // verifies that the key rotation janitor can be used to cleanup temporary and backup files.
 func testEncryptionCleanupDropKeyFiles(t *testing.T, conf Config) {
 	snapDir := "db.dump"
@@ -2234,6 +2319,10 @@ func TestEncryptionDropKeyIdsConcurrentManyInstances(t *testing.T) {
 
 func TestEncryptionDropKeyIdsCorruptSnapshot(t *testing.T) {
 	runTest(t, "TestEncryptionDropKeyIdsCorruptSnapshot", testEncryptionDropKeyIdsCorruptSnapshot, "encryption")
+}
+
+func TestEncryptionDropKeyIdsWithStaleBackupFile(t *testing.T) {
+	runTest(t, "TestEncryptionDropKeyIdsWithStaleBackupFile", testEncryptionDropKeyIdsWithStaleBackupFile, "encryption")
 }
 
 func TestEncryptionCleanupDropKeyFiles(t *testing.T) {
