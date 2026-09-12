@@ -195,8 +195,9 @@ func (m *MemDB) initEncryption(snapDirs []string) (err error) {
 		return err
 	}
 
-	if err2 := m.cleanupStaleDropKeyFilesFromSnapshot(); err2 != nil {
-		logging.Errorf("MemDB::%v cleanupStaleDropKeyFilesFromSnapshot error:%v", m.Path, err2)
+	if err = m.cleanupStaleDropKeyFilesFromSnapshot(); err != nil {
+		logging.Errorf("MemDB::%v cleanupStaleDropKeyFilesFromSnapshot error:%v", m.Path, err)
+		return err
 	}
 
 	// do not fail initialization if there is an error. memDbSlice openSnapshot error handling
@@ -789,15 +790,7 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 		return err
 	}
 
-	if err := iowrap.Os_Remove(backup); err != nil && !os.IsNotExist(err) {
-		logging.Errorf("MemDB::rotateSingleFile remove backup %v failed: %v", backup, err)
-		return err
-	}
-
 	defer func() {
-		if err := iowrap.Os_Remove(backup); err != nil && !os.IsNotExist(err) {
-			logging.Warnf("MemDB::rotateSingleFile cleanup backup %v failed: %v", backup, err)
-		}
 		if err := iowrap.Os_Remove(tmpDst); err != nil && !os.IsNotExist(err) {
 			logging.Warnf("MemDB::rotateSingleFile cleanup tmp %v failed: %v", tmpDst, err)
 		}
@@ -878,9 +871,6 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 
 	// Rename original file to backup
 	if err = iowrap.Os_Rename(file, backup); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
 
@@ -888,25 +878,26 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 	if err = iowrap.Os_Rename(tmpDst, file); err != nil {
 		// Attempt failed, restore original file
 		if restoreErr := iowrap.Os_Rename(backup, file); restoreErr != nil {
-			// restore has failed. snapshot is in an inconsistent state.
-			// a) We hope it is resolved in next rotation as it may be due to a transient error.
-			// b) in case there is a prior restart, checksum will fail
-			// For now, we just log an error
+			// restore has failed due to a transient error. snapshot is in an inconsistent state.
+			// a) it should be either resolved in next DropKey rotation attempt.
+			// b) or in case of restart/rollback,  cleanupStaleDropKeyFiles during initStores should resolve
+			// c) if transient error is not resolved, warmup/rollback will also fail
 			if !os.IsNotExist(restoreErr) {
 				err = fmt.Errorf("%v:%v file:%v original err:%v",
 					ErrKeyRotationRestore, restoreErr, file, err)
 			}
 		}
 
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
+	} else {
+		if err = iowrap.Os_Remove(backup); err != nil {
+			logging.Errorf("MemDB::rotateSingleFile cleanup backup %v failed: %v", backup, err)
+		} // if old backup file continues to exist, DropKey should be treated as failed
 	}
 
 	atomic.AddUint64(&v.NumFilesRotated, 1)
 	atomic.AddUint64(&v.NumBytesRotated, bytesWritten)
-	return nil
+	return err
 }
 
 // decryption error
