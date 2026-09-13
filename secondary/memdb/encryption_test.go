@@ -3,6 +3,7 @@ package memdb
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -1538,6 +1539,85 @@ func testEncryptionDropKeyIdsConcurrentWithKeyChange(t *testing.T, conf Config) 
 	assert.True(t, containsKeyId(keyIds, keyIdX))
 }
 
+// A caller that is about to tear the instance down (rollback) relies on
+// cancel for the rotation to exit for Rollback to proceed
+func testEncryptionDropKeyIdsCancel(t *testing.T, conf Config) {
+	snapDir := "db.dump"
+	os.RemoveAll(snapDir)
+	conf.Path = snapDir
+	conf.UseDeltaInterleaving()
+
+	db, err := NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	var wg sync.WaitGroup
+	n := 10000
+
+	wg.Add(1)
+	w := db.NewWriter()
+	doInsertSafe(w, &wg, n, false)
+	wg.Wait()
+
+	snap, _ := db.NewSnapshot()
+	snap.Open()
+	oldId, cipher, _ := db.RegisterSnapshotCurrKeyId(snapDir)
+	assert.NoError(t, db.PreparePersistence(snapDir, snap, oldId, cipher))
+	snap.Close()
+	assert.NoError(t, db.StoreToDisk(snapDir, snap, runtime.GOMAXPROCS(0), oldId, cipher, nil))
+
+	dropId := append([]byte(nil), oldId...)
+
+	// park the rotation inside the key lookup for the key being dropped, so the
+	// cancel below lands while the walk is in flight
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+	origGetKey := db.GetKeyById
+	db.GetKeyById = func(keyId []byte) ([]byte, []byte, string) {
+		if len(keyId) > 0 && bytes.Equal(keyId, dropId) {
+			startOnce.Do(func() { close(started) })
+			<-release
+		}
+		return origGetKey(keyId)
+	}
+
+	newId := make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
+	rand.New(rand.NewSource(3)).Read(newId)
+	newKey := db.GetEncryptionKeyById(newId)
+	assert.NoError(t, db.SetCurrentEncryptionKey(newKey, newId, gocbcrypto.CipherNameAES256GCM))
+
+	dropErr := make(chan error, 1)
+	go func() { dropErr <- db.DropKeyIdsFromSnapshot([][]byte{dropId}, snapDir) }()
+
+	select {
+	case <-started:
+	case <-time.After(60 * time.Second):
+		close(release)
+		t.Fatal("timed out waiting for the rotation to start")
+	}
+
+	// cancel while the rotation is parked, then let it run into the cancellation
+	db.CancelDropKeyIds()
+	close(release)
+
+	select {
+	case err := <-dropErr:
+		assert.Error(t, err, "a cancelled drop must not report success")
+		assert.True(t, errors.Is(err, context.Canceled),
+			"cancelled drop must report context.Canceled, got %v", err)
+	case <-time.After(60 * time.Second):
+		t.Fatal("DropKeyIdsFromSnapshot did not return after cancellation")
+	}
+
+	// the drop did not finish, so the key must still be reported in use and stay
+	// ineligible for purge
+	keyIds, err := db.getActiveKeyIdsFromSnapshot(snapDir)
+	assert.NoError(t, err)
+	assert.True(t, containsKeyId(keyIds, dropId),
+		"cancelled drop must leave the dropped key in the active list")
+}
+
 // verifies that the key rotation janitor can be used to cleanup temporary and backup files.
 func testEncryptionCleanupDropKeyFiles(t *testing.T, conf Config) {
 	snapDir := "db.dump"
@@ -2433,6 +2513,10 @@ func TestEncryptionDropKeyIdsWithStaleBackupFile(t *testing.T) {
 
 func TestEncryptionDropKeyIdsConcurrentWithKeyChange(t *testing.T) {
 	runTest(t, "TestEncryptionDropKeyIdsConcurrentWithKeyChange", testEncryptionDropKeyIdsConcurrentWithKeyChange, "encryption")
+}
+
+func TestEncryptionDropKeyIdsCancel(t *testing.T) {
+	runTest(t, "TestEncryptionDropKeyIdsCancel", testEncryptionDropKeyIdsCancel, "encryption")
 }
 
 func TestEncryptionCleanupDropKeyFiles(t *testing.T) {

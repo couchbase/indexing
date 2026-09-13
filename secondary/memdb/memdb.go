@@ -657,6 +657,9 @@ func (m *MemDB) Close() {
 }
 
 func (m *MemDB) Close2(concurr int) {
+	// cancel early as snapshots could remain open for a long time
+	m.CancelDropKeyIds()
+
 	// Wait until all snapshot iterators have finished
 	for s := m.snapshots.GetStats(); int(s.NodeCount) != 0; s = m.snapshots.GetStats() {
 		time.Sleep(time.Millisecond)
@@ -672,8 +675,6 @@ func (m *MemDB) Close2(concurr int) {
 		time.Sleep(time.Millisecond)
 	}
 	close(m.gcchan)
-
-	m.stopEncryption()
 
 	buf := dbInstances.MakeBuf()
 	defer dbInstances.FreeBuf(buf)

@@ -251,7 +251,11 @@ func (m *MemDB) restoreCurrentEncryptionKey() error {
 	return nil
 }
 
-func (m *MemDB) stopEncryption() {
+// this should be called only for a closing instance
+func (m *MemDB) CancelDropKeyIds() {
+	m.encMu.Lock()
+	defer m.encMu.Unlock()
+
 	if m.cancelCtx != nil {
 		m.cancelCtx()
 		m.cancelCtx = nil
@@ -1347,6 +1351,7 @@ func (g *dirOpGuard) Acquire(dir string, ctx context.Context) *dirOpCtx {
 		if dCtx, _ := g.TryAcquire(dir, ctx); dCtx != nil {
 			return dCtx
 		}
+
 		g.cancel(dir) // blocks until current op yields
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -324,4 +325,209 @@ func TestMemDBPersisterSemaphore(t *testing.T) {
 			t.Fatalf("moiWritersAllowed %d, want 8", moiWritersAllowed)
 		}
 	})
+}
+
+// TestMemDBSliceDropKeysWithConcurrentRollback verifies that Rollback and DropKeys
+// remain mutually exclusive.
+// Without the barrier the two MemDB instances would work on the same
+// snapshot directories at once, one writing other reading.
+//
+// test uses Rollback is called directly rather than through RollbackToZero as
+// latter calls cleanupAllOldSnapshotFiles, whose RemoveSnapshot takes the blocking
+// dirGuard.Acquire and would stall on the parked rotation due to test artifact.
+func TestMemDBSliceDropKeysWithConcurrentRollback(t *testing.T) {
+	path := filepath.Join(os.TempDir(), "mdbslice-dropkeys")
+	os.RemoveAll(path)
+	defer os.RemoveAll(path)
+
+	key := make([]byte, 32)
+	cbs := SliceEncryptionCallbacks{
+		getActiveKeyIdCipher: func(_, _ string) ([]byte, string, string) {
+			return key, "keyA", CipherNameAES256GCM
+		},
+		getKeyCipherById: func(_ string) ([]byte, string) { return key, CipherNameAES256GCM },
+		setInUseKeys:     func(_ KeyDataType, _ string) {},
+	}
+
+	stats := &IndexStats{}
+	stats.Init()
+	cfg := common.SystemConfig.SectionConfig("indexer.", true)
+	cfg.SetValue("numSliceWriters", 1)
+
+	slice, err := NewMemDBSlice(path, SliceId(0), common.IndexDefn{}, common.IndexInstId(0),
+		common.PartitionId(0), false, true, 1, cfg, stats, 1024, cbs)
+	if err != nil {
+		t.Fatalf("NewMemDBSlice: %v", err)
+	}
+	defer slice.Close()
+
+	for i := 0; i < 500; i++ {
+		meta := NewMutationMeta()
+		meta.vbucket = Vbucket(0)
+		if err := slice.Insert([]byte(fmt.Sprintf("[\"key-%d\"]", i)),
+			[]byte(fmt.Sprintf("docid-%d", i)), nil, nil, nil, meta); err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		meta.Free()
+	}
+
+	// a committed snapshot is persisted to disk under keyA
+	info, err := slice.NewSnapshot(nil, true)
+	if err != nil {
+		t.Fatalf("NewSnapshot: %v", err)
+	}
+	snap, err := slice.OpenSnapshot(info, nil)
+	if err != nil {
+		t.Fatalf("OpenSnapshot: %v", err)
+	}
+
+	for i := 0; len(slice.getSnapshotDirs()) == 0; i++ {
+		if i == 300 {
+			t.Fatal("timed out waiting for a disk snapshot")
+		}
+		time.Sleep(1 * time.Second)
+	}
+	snap.Close()
+
+	// The rollback target is the snapshot just persisted
+	infos, err := slice.GetSnapshots()
+	if err != nil || len(infos) == 0 {
+		t.Fatalf("GetSnapshots: %v (n=%d)", err, len(infos))
+	}
+	target := infos[0]
+
+	if err := slice.SetCurrentEncryptionKey(key, []byte("keyB"), CipherNameAES256GCM); err != nil {
+		t.Fatalf("SetCurrentEncryptionKey: %v", err)
+	}
+
+	// Park the DropKeys in the keyA lookup of this instance.
+	started := make(chan struct{})
+	release := make(chan struct{})
+	unpark := sync.OnceFunc(func() { close(release) })
+	defer unpark()
+
+	var parked int32
+	store := slice.mainstore
+	orig := store.GetKeyById
+	store.GetKeyById = func(id []byte) ([]byte, []byte, string) {
+		// Only the first lookup parks, and that one is the rotation's: the hook is
+		// installed after persistence, and DropKeys reaches ReadFileKeyId before
+		// Rollback runs. Later lookups must pass through, because Rollback's own
+		// GetSnapshots decrypts the manifest under keyA.
+		if string(id) == "keyA" && atomic.CompareAndSwapInt32(&parked, 0, 1) {
+			close(started)
+			<-release
+		}
+		return orig(id)
+	}
+
+	dropCh := make(chan error, 1)
+	slice.DropKeys([][]byte{[]byte("keyA")}, dropCh)
+
+	select {
+	case <-started:
+	case <-time.After(300 * time.Second):
+		t.Fatal("timed out waiting for the key rotation to start")
+	}
+
+	resetCh := make(chan error, 1)
+	go func() { resetCh <- slice.Rollback(target) }()
+
+	// the rotation holds dropKeyMu, so resetStores must not reach the swap
+	select {
+	case err := <-resetCh:
+		t.Fatalf("Rollback completed (err=%v) while DropKeys was still in flight", err)
+	case <-time.After(10 * time.Second):
+	}
+
+	if slice.mainstore != store {
+		t.Fatal("mainstore was swapped while DropKeys was in flight")
+	}
+
+	unpark() // Rollback has cancelled the DropKeys by now
+
+	if err := <-resetCh; err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if err := <-dropCh; err == nil {
+		t.Fatal("a cancelled DropKeys reported success")
+	}
+	if slice.mainstore == store {
+		t.Fatal("Rollback did not install a new mainstore instance")
+	}
+
+	// the rollback target survives the cancelled rotation and still loads: the new
+	// instance cleans up whatever the rotation left behind, and a disk snapshot
+	// reads back uncommitted, so OpenSnapshot goes through loadSnapshot
+	infos, err = slice.GetSnapshots()
+	if err != nil {
+		t.Fatalf("GetSnapshots after rollback: %v", err)
+	}
+	if len(infos) == 0 {
+		t.Fatal("no snapshot left after rollback")
+	}
+
+	sinfo := infos[0].(*memdbSnapshotInfo)
+
+	// A second DropKeys, this time on the instance the rollback installed, parked
+	// mid-rotation. loadSnapshot must stay out of the snapshot dir until it drains:
+	// the rotation renames every file it rewrites, so a reader that walks the dir
+	// alongside it can miss a file or read a half-swapped one.
+	store2 := slice.mainstore
+	started2 := make(chan struct{})
+	release2 := make(chan struct{})
+	unpark2 := sync.OnceFunc(func() { close(release2) })
+	defer unpark2()
+
+	// Same one-shot park as above: the rotation is the first keyA lookup on this
+	// instance, because initStores already read the snapshot keyIds during Rollback.
+	// Later lookups pass through, so the load can decrypt once it is let in.
+	var parked2 int32
+	orig2 := store2.GetKeyById
+	store2.GetKeyById = func(id []byte) ([]byte, []byte, string) {
+		if string(id) == "keyA" && atomic.CompareAndSwapInt32(&parked2, 0, 1) {
+			close(started2)
+			<-release2
+		}
+		return orig2(id)
+	}
+
+	dropCh2 := make(chan error, 1)
+	slice.DropKeys([][]byte{[]byte("keyA")}, dropCh2)
+
+	select {
+	case <-started2:
+	case <-time.After(300 * time.Second):
+		t.Fatal("timed out waiting for the second key rotation to start")
+	}
+
+	// the parked rotation holds dropKeyMu, so loadSnapshot must not reach LoadFromDisk
+	openCh := make(chan error, 1)
+	go func() {
+		var er error
+		snap, er = slice.OpenSnapshot(infos[0], nil)
+		openCh <- er
+	}()
+
+	select {
+	case er := <-openCh:
+		t.Fatalf("OpenSnapshot completed (err=%v) while DropKeys was still in flight", er)
+	case <-time.After(10 * time.Second):
+	}
+
+	unpark2()
+
+	if err := <-dropCh2; err != nil {
+		t.Fatalf("DropKeys after rollback: %v", err)
+	}
+
+	// the load runs once the rotation drains, and reads what the rotation left
+	if err := <-openCh; err != nil {
+		t.Fatalf("OpenSnapshot(%v) after rollback: %v", sinfo.dataPath, err)
+	}
+	defer snap.Close()
+
+	if n := sinfo.MainSnap.Count(); n != 500 {
+		t.Fatalf("snapshot loaded %v items after rollback, expected 500", n)
+	}
 }
