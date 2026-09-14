@@ -28,25 +28,32 @@ func populateAggregatedStorageMetrics(st []byte) []byte {
 	if common.GetStorageMode() == common.PLASMA {
 		aggregatedPlasmaStats := plasma.GetAggregatedStats(plasma.ListShards())
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "current_quota"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vcurrent_quota gauge\n", PLASMA_METRICS_PREFIX))...)
 		//TODO: Get Bhive memory quota
 		st = append(st, []byte(fmt.Sprintf("%vcurrent_quota %v\n", PLASMA_METRICS_PREFIX, plasma.GetMemQuota()))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "heap_limit"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vheap_limit gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vheap_limit %v\n", PLASMA_METRICS_PREFIX, plasma.GetHeapLimit()))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "memory_stats_size_page"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vmemory_stats_size_page gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vmemory_stats_size_page %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.MemSz))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "reclaim_pending_global"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vreclaim_pending_global gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vreclaim_pending_global %v\n", PLASMA_METRICS_PREFIX, plasma.GetGlobalReclaimPending()))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "num_pages"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_pages gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vnum_pages %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.NumPages))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "items_count"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vitems_count gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vitems_count %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.ItemsCount))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "avg_item_size"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vavg_item_size gauge\n", PLASMA_METRICS_PREFIX))...)
 		if aggregatedPlasmaStats.TotalRecords != 0 {
 			st = append(st, []byte(fmt.Sprintf("%vavg_item_size %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.TotalItemSize/aggregatedPlasmaStats.TotalRecords))...)
@@ -54,9 +61,11 @@ func populateAggregatedStorageMetrics(st []byte) []byte {
 			st = append(st, []byte(fmt.Sprintf("%vavg_item_size %v\n", PLASMA_METRICS_PREFIX, 0))...)
 		}
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "purges"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vpurges gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vpurges %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.Purges))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "lss_used_space"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vlss_used_space gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vlss_used_space %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.LSSUsedSpace+aggregatedPlasmaStats.RecoveryUsedSpace))...)
 
@@ -69,36 +78,47 @@ func populateAggregatedStorageMetrics(st []byte) []byte {
 			LSSFrag = 0
 		}
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "lss_fragmentation"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vlss_fragmentation gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vlss_fragmentation %v\n", PLASMA_METRICS_PREFIX, LSSFrag))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "lss_num_reads"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vlss_num_reads gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vlss_num_reads %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.NumLSSReads+aggregatedPlasmaStats.NumRecoveryReads))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "lss_blk_read_bs"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vlss_blk_read_bs gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vlss_blk_read_bs %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.LSSBlkReadBytes+aggregatedPlasmaStats.RecoveryBlkReadBytes))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "rlss_num_reads"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vrlss_num_reads gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vrlss_num_reads %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.ReaderNumLSSReads))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "lss_blk_rdr_reads_bs"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vlss_blk_rdr_reads_bs gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vlss_blk_rdr_reads_bs %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.ReaderLSSBlkReadBytes))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "lookup_num_reads"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vlookup_num_reads gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vlookup_num_reads %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.LookupNumLSSReads))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "lookup_blk_reads_bs"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vlookup_blk_reads_bs gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vlookup_blk_reads_bs %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.LookupLSSBlkReadBytes))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "bytes_written"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vbytes_written gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vbytes_written %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.BytesWritten+aggregatedPlasmaStats.RecoveryBytesWritten))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "bytes_incoming"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vbytes_incoming gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vbytes_incoming %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.BytesIncoming))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "resident_ratio"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vresident_ratio gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vresident_ratio %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.ResidentRatio))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "compression_ratio"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vcompression_ratio gauge\n", PLASMA_METRICS_PREFIX))...)
 		if aggregatedPlasmaStats.PageBytesCompressed != 0 {
 			st = append(st, []byte(fmt.Sprintf("%vcompression_ratio %v\n", PLASMA_METRICS_PREFIX, float64(aggregatedPlasmaStats.PageBytesMarshalled)/float64(aggregatedPlasmaStats.PageBytesCompressed)))...)
@@ -106,21 +126,27 @@ func populateAggregatedStorageMetrics(st []byte) []byte {
 			st = append(st, []byte(fmt.Sprintf("%vcompression_ratio %v\n", PLASMA_METRICS_PREFIX, 0))...)
 		}
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "num_burst_visits"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_burst_visits gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vnum_burst_visits %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.NumBurstVisits))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "num_periodic_visits"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_periodic_visits gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vnum_periodic_visits %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.NumPeriodicVisits))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "num_evicted"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_evicted gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vnum_evicted %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.NumEvicted))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "num_evictable"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_evictable gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vnum_evictable %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.NumEvictable))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "cleaner_num_reads"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vcleaner_num_reads gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vcleaner_num_reads %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.NumLSSCleanerReads+aggregatedPlasmaStats.NumRecoveryCleanerReads))...)
 
+		st = append(st, []byte(metricHelpLine(PLASMA_METRICS_PREFIX, "cleaner_blk_read_bs"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vcleaner_blk_read_bs gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vcleaner_blk_read_bs %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.LSSCleanerBlkReadBytes+aggregatedPlasmaStats.RecoveryCleanerBlkReadBytes))...)
 
@@ -128,51 +154,67 @@ func populateAggregatedStorageMetrics(st []byte) []byte {
 		vSts := aggregatedBhiveStats.VSStats.(*bhive.MagmaStats)
 		pSts := aggregatedBhiveStats.PSStats.(*bhive.LssStats)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "memory_used"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vmemory_used gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vmemory_used %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.MemUsed))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "buf_memused"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vbuf_memused gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vbuf_memused %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.BufMemUsed))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "num_reads"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_reads gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vnum_reads %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.NumReads))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "blk_read_bs"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vblk_read_bs gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vblk_read_bs %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.BlkReadBytes))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "num_reads_get"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_reads_get gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vnum_reads_get %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.ReaderNumReads))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "blk_reads_bs_get"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vblk_reads_bs_get gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vblk_reads_bs_get %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.ReaderBlkReadBytes))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "num_reads_lookup"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_reads_lookup gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vnum_reads_lookup %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.LookupNumReads))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "blk_reads_bs_lookup"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vblk_reads_bs_lookup gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vblk_reads_bs_lookup %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.LookupBlkReadBytes))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "bytes_written"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vbytes_written gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vbytes_written %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.BytesWritten))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "bytes_incoming"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vbytes_incoming gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vbytes_incoming %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.BytesIncoming))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "total_used_size"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vtotal_used_size gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vtotal_used_size %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.DiskUsedSpace))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "total_disk_size"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vtotal_disk_size gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vtotal_disk_size %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.DiskUsage))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "fragmentation"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vfragmentation gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vfragmentation %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.Frag))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "resident_ratio"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vresident_ratio gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vresident_ratio %v\n", HVI_METRICS_PREFIX, pSts.ResidentRatio))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "compacts"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vcompacts gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vcompacts %v\n", HVI_METRICS_PREFIX, vSts.NCompacts+pSts.NCompacts))...)
 
+		st = append(st, []byte(metricHelpLine(HVI_METRICS_PREFIX, "compression_ratio_avg"))...)
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vcompression_ratio_avg gauge\n", HVI_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vcompression_ratio_avg %v\n", HVI_METRICS_PREFIX, aggregatedBhiveStats.AvgCompressionRatio))...)
 	}
