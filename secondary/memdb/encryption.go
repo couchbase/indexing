@@ -469,23 +469,24 @@ func IsCorruptKeyIdReadError(err error) bool {
 
 // a successful full read of a snapshot (LoadFromDisk) proves its keyIds are
 // readable; re-read them and clear the recorded read error
-func (m *MemDB) clearSnapKeyIdReadErr(snapDir string) {
+func (m *MemDB) clearSnapKeyIdReadErr(snapDir string) error {
 	m.encMu.RLock()
 	_, failed := m.snapKeyIdErrs[snapDir]
 	m.encMu.RUnlock()
 	if !failed {
-		return
+		return nil
 	}
 
 	_, err := m.getActiveKeyIdsFromSnapshot(snapDir)
 	if err != nil {
 		logging.Warnf("MemDB::%v failed to read keyIds of snapshot %v after load error:%v",
 			m.Path, snapDir, err)
-		return
+		return err
 	}
 
 	logging.Infof("MemDB::%v cleared keyId read error for snapshot %v after load",
 		m.Path, snapDir)
+	return nil
 }
 
 // returns snapshot dirs whose keyIds could not be read at init, with their errors.
@@ -618,6 +619,12 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 		return ErrInvalid
 	}
 
+	// make sure the snapshot keys are readable
+	err := m.clearSnapKeyIdReadErr(snapDir)
+	if err != nil {
+		return err
+	}
+
 	// cleanup could be in progress
 	g, err := m.dirGuard.TryAcquire(snapDir, m.encCtx)
 	if err != nil {
@@ -629,6 +636,7 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 	m.encMu.RLock()
 	cachedKeyIds, cached := m.snapKeyIds[snapDir]
 	m.encMu.RUnlock()
+
 	if cached {
 		hasDropKey := false
 		for _, keyId := range keyIds {
