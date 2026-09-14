@@ -203,7 +203,7 @@ func (m *MemDB) initEncryption(snapDirs []string) (err error) {
 	// do not fail initialization if there is an error. memDbSlice openSnapshot error handling
 	// retries LoadFromDisk from successive snapshots on error. Failed dirs are remembered so
 	// GetActiveKeyIdList can report list as incomplete.
-	_, snapKeyIds, keyIdErrs := m.getActiveKeyIdsFromSnapshots(snapDirs)
+	_, keyIdErrs := m.getActiveKeyIdsFromSnapshots(snapDirs)
 
 	for dir, err2 := range keyIdErrs {
 
@@ -220,13 +220,6 @@ func (m *MemDB) initEncryption(snapDirs []string) (err error) {
 		logging.Warnf("MemDB::%v initEncryption failed to read keyIds of snapshot %v error:%v",
 			m.Path, dir, err2)
 	}
-
-	m.encMu.Lock()
-	if len(snapKeyIds) > 0 {
-		m.snapKeyIds = snapKeyIds
-	}
-	m.snapKeyIdErrs = keyIdErrs
-	m.encMu.Unlock()
 
 	return nil
 }
@@ -484,17 +477,12 @@ func (m *MemDB) clearSnapKeyIdReadErr(snapDir string) {
 		return
 	}
 
-	keyIds, err := m.getActiveKeyIdsFromSnapshot(snapDir)
+	_, err := m.getActiveKeyIdsFromSnapshot(snapDir)
 	if err != nil {
 		logging.Warnf("MemDB::%v failed to read keyIds of snapshot %v after load error:%v",
 			m.Path, snapDir, err)
 		return
 	}
-
-	m.encMu.Lock()
-	m.snapKeyIds[snapDir] = keyIds
-	delete(m.snapKeyIdErrs, snapDir)
-	m.encMu.Unlock()
 
 	logging.Infof("MemDB::%v cleared keyId read error for snapshot %v after load",
 		m.Path, snapDir)
@@ -516,9 +504,8 @@ func (m *MemDB) SnapKeyIdReadErrors() map[string]error {
 // called only during startup
 // result will have an empty keyId if snapshot is not encrypted
 // keyIdErrs has an entry per snapshot dir that could not be read
-func (m *MemDB) getActiveKeyIdsFromSnapshots(snapDirs []string) ([][]byte, map[string][][]byte, map[string]error) {
+func (m *MemDB) getActiveKeyIdsFromSnapshots(snapDirs []string) ([][]byte, map[string]error) {
 	result := make([][]byte, 0)
-	snapKeyIds := make(map[string][][]byte)
 	keyIdErrs := make(map[string]error)
 
 	for i := range snapDirs {
@@ -526,13 +513,12 @@ func (m *MemDB) getActiveKeyIdsFromSnapshots(snapDirs []string) ([][]byte, map[s
 			for _, keyId := range keyIds {
 				result = appendUniqueKeyId(result, keyId)
 			}
-			snapKeyIds[snapDirs[i]] = keyIds
 		} else { // continue
 			keyIdErrs[snapDirs[i]] = err
 		}
 	}
 
-	return result, snapKeyIds, keyIdErrs
+	return result, keyIdErrs
 }
 
 // returns unique encryption key IDs currently in use by snapshot.
@@ -556,9 +542,23 @@ func (m *MemDB) getActiveKeyIdsFromSnapshot(snapDir string) ([][]byte, error) {
 		db:         m,
 		allowEmpty: true,
 	}
-	if err := m.walkEncryptedFiles(snapDir, g.cancelCtx, v); err != nil {
+
+	err = m.walkEncryptedFiles(snapDir, g.cancelCtx, v)
+
+	// update cache under dirGuard
+	m.encMu.Lock()
+	defer m.encMu.Unlock()
+
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			m.snapKeyIdErrs[snapDir] = err // transient error or corruption
+		}
 		return nil, err
 	}
+
+	m.snapKeyIds[snapDir] = v.keyIds
+	delete(m.snapKeyIdErrs, snapDir)
+
 	return v.keyIds, nil
 }
 

@@ -475,19 +475,19 @@ func testEncryptionGetActiveKeyIdsManySnapshots(t *testing.T, testConf Config) {
 
 	t.Run("NonExistentSnapshot", func(t *testing.T) {
 		invalidPaths := []string{filepath.Join(db.Path, "nonexistent")}
-		_, _, keyIdErrs := db.getActiveKeyIdsFromSnapshots(invalidPaths)
+		_, keyIdErrs := db.getActiveKeyIdsFromSnapshots(invalidPaths)
 		assert.NotEmpty(t, keyIdErrs)
 	})
 
 	t.Run("MixValidAndInvalid", func(t *testing.T) {
 		mixedPaths := append([]string{snapPaths[0]}, filepath.Join(db.Path, "invalid"))
-		_, _, keyIdErrs := db.getActiveKeyIdsFromSnapshots(mixedPaths)
+		_, keyIdErrs := db.getActiveKeyIdsFromSnapshots(mixedPaths)
 		assert.NotEmpty(t, keyIdErrs)
 	})
 
 	t.Run("DuplicateSnapshots", func(t *testing.T) {
 		duplicatePaths := append(snapPaths, snapPaths[0], snapPaths[1])
-		keyIds, _, keyIdErrs := db.getActiveKeyIdsFromSnapshots(duplicatePaths)
+		keyIds, keyIdErrs := db.getActiveKeyIdsFromSnapshots(duplicatePaths)
 		assert.Empty(t, keyIdErrs)
 		assert.Equal(t, 1, len(keyIds))
 		assert.NotEmpty(t, keyIds[0])
@@ -505,7 +505,7 @@ func testEncryptionGetActiveKeyIdsManySnapshots(t *testing.T, testConf Config) {
 		assert.NoError(t, err)
 
 		// Now we should have 2 different keys across all snapshots
-		keyIds, _, keyIdErrs := db.getActiveKeyIdsFromSnapshots(snapPaths)
+		keyIds, keyIdErrs := db.getActiveKeyIdsFromSnapshots(snapPaths)
 		assert.Empty(t, keyIdErrs)
 		assert.Equal(t, 2, len(keyIds))
 
@@ -524,14 +524,14 @@ func testEncryptionGetActiveKeyIdsManySnapshots(t *testing.T, testConf Config) {
 		assert.True(t, foundNew, "New key should be present in rotated snapshot")
 
 		// Test with only rotated snapshot
-		keyIds, _, keyIdErrs = db.getActiveKeyIdsFromSnapshots([]string{snapPaths[0]})
+		keyIds, keyIdErrs = db.getActiveKeyIdsFromSnapshots([]string{snapPaths[0]})
 		assert.Empty(t, keyIdErrs)
 		assert.Equal(t, 1, len(keyIds), "Rotated snapshot should have 1 key")
 		assert.NotEmpty(t, keyIds[0])
 		assert.True(t, bytes.Equal(newKeyId, keyIds[0]), "Should be the new key")
 
 		// Test with only unrotated snapshots
-		keyIds, _, keyIdErrs = db.getActiveKeyIdsFromSnapshots(snapPaths[1:])
+		keyIds, keyIdErrs = db.getActiveKeyIdsFromSnapshots(snapPaths[1:])
 		assert.Empty(t, keyIdErrs)
 		assert.Equal(t, 1, len(keyIds), "Unrotated snapshots should have 1 key")
 		assert.NotEmpty(t, keyIds[0])
@@ -549,7 +549,7 @@ func testEncryptionGetActiveKeyIdsManySnapshots(t *testing.T, testConf Config) {
 			assert.NoError(t, err)
 		}
 
-		keyIds, _, keyIdErrs := db.getActiveKeyIdsFromSnapshots(snapPaths)
+		keyIds, keyIdErrs := db.getActiveKeyIdsFromSnapshots(snapPaths)
 		assert.Empty(t, keyIdErrs)
 		assert.Equal(t, 1, len(keyIds))
 		assert.Equal(t, 0, len(keyIds[0]))
