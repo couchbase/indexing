@@ -924,7 +924,7 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 			var bs []byte
 			if bs, err = iowrap.Os_ReadFile(file); err == nil {
 				if encryptCtx, err = v.db.NewEncryptionContext(keyId, cipher); err == nil {
-					err = gocbcrypto.WriteFile(tmpDst, bs, FilePermMode, encryptCtx, iowrap.CountDiskFailures)
+					bytesWritten, err = gocbcrypto.WriteFile2(tmpDst, bs, FilePermMode, encryptCtx, iowrap.CountDiskFailures)
 				}
 			}
 		}
