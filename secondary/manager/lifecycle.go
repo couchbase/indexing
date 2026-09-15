@@ -4462,6 +4462,14 @@ func (m *LifecycleMgr) handleServiceMap(content []byte) ([]byte, error) {
 
 func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 
+	// OPCODE_SERVICE_MAP bypasses the bootstrap queue in OnNewRequest, so this can
+	// run before Run() assigns m.repo. Reject instead of dereferencing nil; the
+	// client's watcher retries in the background.
+	if m.repo == nil {
+		logging.Warnf("LifecycleMgr::getServiceMap: metadata repo not yet initialized; rejecting OPCODE_SERVICE_MAP.")
+		return nil, errors.New("indexer is still initializing: metadata repo not ready")
+	}
+
 	uuid := time.Now().UnixNano()
 	userAgent := fmt.Sprintf("GetServiceMap_%v", uuid)
 
