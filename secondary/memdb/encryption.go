@@ -122,11 +122,13 @@ type keyIdVisitor struct {
 
 // keyRotationVisitor re-encrypts files for DropKeys
 type keyRotationVisitor struct {
-	db             *MemDB
-	dropKeyIds     [][]byte
-	dstKeyId       []byte
-	cipher         string
-	candidateFiles []string
+	db              *MemDB
+	dropKeyIds      [][]byte
+	dstKeyId        []byte
+	cipher          string
+	candidateFiles  []string
+	numFilesSkipped uint64
+
 	EncryptionStats
 }
 
@@ -388,7 +390,7 @@ func (m *MemDB) GetCurrentKeyId() ([]byte, string) {
 
 // registers current keyId for a snapshot. It is called during snapshot creation
 // and key rotation to keep track of active keys for snapshots.
-func (m *MemDB) RegisterSnapshotKeyId(snapDir string) (keyId []byte, cipher string, exists bool) {
+func (m *MemDB) RegisterSnapshotCurrKeyId(snapDir string) (keyId []byte, cipher string, exists bool) {
 	m.encMu.Lock()
 	defer m.encMu.Unlock()
 
@@ -651,7 +653,7 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 	}
 
 	// add current key
-	currKeyId, cipher, exists := m.RegisterSnapshotKeyId(snapDir)
+	currKeyId, cipher, exists := m.RegisterSnapshotCurrKeyId(snapDir)
 
 	r := &keyRotationVisitor{
 		db:             m,
@@ -662,7 +664,7 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 	}
 
 	if err = m.walkEncryptedFiles(snapDir, g.cancelCtx, r); err != nil {
-		if r.NumFilesRotated == 0 && !exists {
+		if r.NumFilesRotated == 0 && r.numFilesSkipped == 0 && !exists {
 			m.DeregisterSnapshotKeyId(snapDir, currKeyId) // remove current key if no files were encrypted with it
 		}
 		return err
@@ -701,6 +703,10 @@ func (v *keyRotationVisitor) visit(ctx context.Context, fpath string) error {
 			v.candidateFiles = append(v.candidateFiles, fpath)
 			return nil
 		}
+	}
+
+	if bytes.Equal(v.dstKeyId, fkeyId) {
+		v.numFilesSkipped++
 	}
 
 	return nil
