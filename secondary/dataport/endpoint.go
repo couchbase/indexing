@@ -334,10 +334,9 @@ func (endpoint *RouterEndpoint) getAuthInfo() (string, string, error) {
 		}
 	}
 
-	if security.ShouldUseClientCertAuth() {
-		logging.Infof("%v doAuth sending empty basic auth as client cert auth is enabled", endpoint.logPrefix)
-		return "", "", nil
-	}
+	// Always send credentials, even when the internal client certificate is
+	// presented: ns_server can be configured to authenticate such a request
+	// from its credentials rather than from the certificate.
 	user, pass, err := cbauth.GetHTTPServiceAuth(endpoint.authHost)
 	if err != nil {
 		logging.Errorf("%v doAuth cbauth.GetHTTPServiceAuth returns error %v", endpoint.logPrefix, err)

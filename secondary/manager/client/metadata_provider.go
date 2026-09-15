@@ -6710,14 +6710,13 @@ func (w *watcher) ClientAuth(pipe *common.PeerPipe) error {
 	var err error
 	user, pass := security.GetToolsCreds()
 	if !security.IsToolsConfigUsed() {
-		if security.ShouldUseClientCertAuth() {
-			user, pass = "", ""
-		} else {
-			user, pass, err = cbauth.GetHTTPServiceAuth(w.authHost)
-			if err != nil {
-				logging.Errorf("watcher:ClientAuth cbauth.GetHTTPServiceAuth returns error %v", err)
-				return err
-			}
+		// Always send credentials, even when the internal client certificate
+		// is presented: ns_server can be configured to authenticate such a
+		// request from its credentials rather than from the certificate.
+		user, pass, err = cbauth.GetHTTPServiceAuth(w.authHost)
+		if err != nil {
+			logging.Errorf("watcher:ClientAuth cbauth.GetHTTPServiceAuth returns error %v", err)
+			return err
 		}
 	}
 

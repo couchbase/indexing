@@ -242,11 +242,9 @@ func (cp *connectionPool) getAuthInfo() (string, string, error) {
 	var err error
 	user, pass := security.GetToolsCreds()
 	if !security.IsToolsConfigUsed() {
-		if security.ShouldUseClientCertAuth() {
-			logging.Infof("%v doAuth using empty basic auth as client cert auth is enabled",
-				cp.logPrefix)
-			return "", "", nil
-		}
+		// Always send credentials, even when the internal client certificate
+		// is presented: ns_server can be configured to authenticate such a
+		// request from its credentials rather than from the certificate.
 		user, pass, err = cbauth.GetHTTPServiceAuth(cp.authHost)
 		if err != nil {
 			logging.Errorf("%v doAuth cbauth.GetHTTPServiceAuth returns error %v", cp.logPrefix, err)
