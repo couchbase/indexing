@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/memdb"
+	"github.com/couchbase/plasma"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -327,23 +330,42 @@ func TestMemDBPersisterSemaphore(t *testing.T) {
 	})
 }
 
+func snapshotDirs(t *testing.T, slice *memdbSlice) []string {
+	t.Helper()
+	dirs, err := slice.getSnapshotDirs()
+	if err != nil {
+		t.Fatalf("getSnapshotDirs: %v", err)
+	}
+	return dirs
+}
+
 // TestMemDBSliceDropKeysWithConcurrentRollback verifies that Rollback and DropKeys
 // remain mutually exclusive.
 // Without the barrier the two MemDB instances would work on the same
 // snapshot directories at once, one writing other reading.
 //
-// test uses Rollback is called directly rather than through RollbackToZero as
-// latter calls cleanupAllOldSnapshotFiles, whose RemoveSnapshot takes the blocking
+// test uses Rollback rather than through RollbackToZero as latter calls
+// cleanupAllOldSnapshotFiles, whose RemoveSnapshot takes the blocking
 // dirGuard.Acquire and would stall on the parked rotation due to test artifact.
+//
+// This also checks that DropKey is not concurrently writing to a snapshot being
+// removed else RemoveSnapshot can fail (Windows) which is treated as Rollback failure.
 func TestMemDBSliceDropKeysWithConcurrentRollback(t *testing.T) {
 	path := filepath.Join(os.TempDir(), "mdbslice-dropkeys")
 	os.RemoveAll(path)
 	defer os.RemoveAll(path)
 
+	var (
+		keyMu       sync.Mutex
+		activeKeyId = "keyA"
+	)
+
 	key := make([]byte, 32)
 	cbs := SliceEncryptionCallbacks{
 		getActiveKeyIdCipher: func(_, _ string) ([]byte, string, string) {
-			return key, "keyA", CipherNameAES256GCM
+			keyMu.Lock()
+			defer keyMu.Unlock()
+			return key, activeKeyId, CipherNameAES256GCM
 		},
 		getKeyCipherById: func(_ string) ([]byte, string) { return key, CipherNameAES256GCM },
 		setInUseKeys:     func(_ KeyDataType, _ string) {},
@@ -371,30 +393,54 @@ func TestMemDBSliceDropKeysWithConcurrentRollback(t *testing.T) {
 		meta.Free()
 	}
 
-	// a committed snapshot is persisted to disk under keyA
-	info, err := slice.NewSnapshot(nil, true)
-	if err != nil {
-		t.Fatalf("NewSnapshot: %v", err)
-	}
-	snap, err := slice.OpenSnapshot(info, nil)
-	if err != nil {
-		t.Fatalf("OpenSnapshot: %v", err)
-	}
-
-	for i := 0; len(slice.getSnapshotDirs()) == 0; i++ {
-		if i == 300 {
-			t.Fatal("timed out waiting for a disk snapshot")
+	// two committed snapshots are persisted to disk under keyA
+	persist := func(want int) {
+		info, err := slice.NewSnapshot(nil, true)
+		if err != nil {
+			t.Fatalf("NewSnapshot: %v", err)
 		}
-		time.Sleep(1 * time.Second)
-	}
-	snap.Close()
+		snap, err := slice.OpenSnapshot(info, nil)
+		if err != nil {
+			t.Fatalf("OpenSnapshot: %v", err)
+		}
 
-	// The rollback target is the snapshot just persisted
+		// the next persist is skipped unless this one has fully finished:
+		// doPersistSnapshot CAS-guards on isPersistorActive
+		for i := 0; len(snapshotDirs(t, slice)) < want ||
+			atomic.LoadInt32(&slice.isPersistorActive) != 0; i++ {
+			if i == 300 {
+				t.Fatalf("timed out waiting for disk snapshot %d", want)
+			}
+			time.Sleep(1 * time.Second)
+		}
+		snap.Close()
+	}
+	persist(1)
+
+	for i := 500; i < 1000; i++ {
+		meta := NewMutationMeta()
+		meta.vbucket = Vbucket(0)
+		if err := slice.Insert([]byte(fmt.Sprintf("[\"key-%d\"]", i)),
+			[]byte(fmt.Sprintf("docid-%d", i)), nil, nil, nil, meta); err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		meta.Free()
+	}
+	persist(2)
+
+	// GetSnapshots lists newest first: roll back to the earlier snapshot, so the
+	// later one is purged by Rollback itself rather than by resetStores
 	infos, err := slice.GetSnapshots()
-	if err != nil || len(infos) == 0 {
+	if err != nil || len(infos) != 2 {
 		t.Fatalf("GetSnapshots: %v (n=%d)", err, len(infos))
 	}
-	target := infos[0]
+	laterSnap := infos[0].(*memdbSnapshotInfo).dataPath
+	target := infos[1]
+	targetPath := infos[1].(*memdbSnapshotInfo).dataPath
+
+	keyMu.Lock()
+	activeKeyId = "keyB"
+	keyMu.Unlock()
 
 	if err := slice.SetCurrentEncryptionKey(key, []byte("keyB"), CipherNameAES256GCM); err != nil {
 		t.Fatalf("SetCurrentEncryptionKey: %v", err)
@@ -456,18 +502,31 @@ func TestMemDBSliceDropKeysWithConcurrentRollback(t *testing.T) {
 		t.Fatal("Rollback did not install a new mainstore instance")
 	}
 
-	// the rollback target survives the cancelled rotation and still loads: the new
-	// instance cleans up whatever the rotation left behind, and a disk snapshot
-	// reads back uncommitted, so OpenSnapshot goes through loadSnapshot
+	// the later snapshot is purged and only the rollback target is left
+	if _, err := os.Stat(laterSnap); !os.IsNotExist(err) {
+		t.Fatalf("snapshot %v newer than the rollback target survived (stat err=%v)",
+			laterSnap, err)
+	}
+
+	if dirs := snapshotDirs(t, slice); len(dirs) != 1 || dirs[0] != targetPath {
+		t.Fatalf("expected only the rollback target %v to remain, got %v", targetPath, dirs)
+	}
+
+	// the target survives the cancelled rotation and still loads with the items it
+	// held: the new instance cleans up whatever the rotation left behind, and a disk
+	// snapshot reads back uncommitted, so OpenSnapshot goes through loadSnapshot
 	infos, err = slice.GetSnapshots()
 	if err != nil {
 		t.Fatalf("GetSnapshots after rollback: %v", err)
 	}
-	if len(infos) == 0 {
-		t.Fatal("no snapshot left after rollback")
+	if len(infos) != 1 {
+		t.Fatalf("expected one snapshot after rollback, got %v", len(infos))
 	}
 
 	sinfo := infos[0].(*memdbSnapshotInfo)
+	if sinfo.dataPath != targetPath {
+		t.Fatalf("expected snapshot %v after rollback, got %v", targetPath, sinfo.dataPath)
+	}
 
 	// A second DropKeys, this time on the instance the rollback installed, parked
 	// mid-rotation. loadSnapshot must stay out of the snapshot dir until it drains:
@@ -510,6 +569,7 @@ func TestMemDBSliceDropKeysWithConcurrentRollback(t *testing.T) {
 	}
 
 	// the parked rotation holds dropKeyMu, so loadSnapshot must not reach LoadFromDisk
+	var snap Snapshot
 	openCh := make(chan error, 1)
 	go func() {
 		var er error
@@ -536,6 +596,267 @@ func TestMemDBSliceDropKeysWithConcurrentRollback(t *testing.T) {
 	defer snap.Close()
 
 	if n := sinfo.MainSnap.Count(); n != 500 {
-		t.Fatalf("snapshot loaded %v items after rollback, expected 500", n)
+		t.Fatalf("rollback target loaded %v items, expected 500", n)
+	}
+}
+
+// setFileDescRLimit lowers RLIMIT_NOFILE below the descriptors the process already
+// holds, so the next open fails with EMFILE while existing ones keep working. The
+// returned func restores the limit: keep the window short, every goroutine in the
+// test binary shares it.
+//
+// plasma implements this only on linux; elsewhere it reports unsupported and the
+// test skips.
+func setFileDescRLimit(t *testing.T, soft uint64) func() {
+	t.Helper()
+
+	cur, max, err := plasma.GetFileDescRLimit()
+	if err != nil {
+		t.Skipf("file descriptor rlimit unsupported on this platform: %v", err)
+	}
+
+	if err := plasma.SetFileDescRLimit(soft, max); err != nil {
+		t.Skipf("set file descriptor rlimit: %v", err)
+	}
+
+	return func() { plasma.SetFileDescRLimit(cur, max) }
+}
+
+// TestMemDBSliceDropKeysUnreadableManifests verifies that DropKeys reports failure
+// when the snapshot list cannot be read with a retryable error, instead of treating
+// "no snapshots" as "every key dropped". filepath.Glob ignores filesystem errors
+// by contract, so the old code saw an empty list, rotated nothing and reported
+// success - after which the caller is free to purge a key the snapshots on disk
+// still carry.
+//
+// The injected failure is descriptor exhaustion, which is what makes this
+// reachable in production: a transient resource limit, not a damaged store.
+func TestMemDBSliceDropKeysUnreadableManifests(t *testing.T) {
+	path := filepath.Join(os.TempDir(), "mdbslice-unreadable-manifests")
+	os.RemoveAll(path)
+	defer os.RemoveAll(path)
+
+	var (
+		keyMu       sync.Mutex
+		activeKeyId = "keyA"
+	)
+
+	key := make([]byte, 32) // key material is irrelevant here, the key id is not
+	cbs := SliceEncryptionCallbacks{
+		getActiveKeyIdCipher: func(_, _ string) ([]byte, string, string) {
+			keyMu.Lock()
+			defer keyMu.Unlock()
+			return key, activeKeyId, CipherNameAES256GCM
+		},
+		getKeyCipherById: func(_ string) ([]byte, string) { return key, CipherNameAES256GCM },
+		setInUseKeys:     func(_ KeyDataType, _ string) {},
+	}
+
+	stats := &IndexStats{}
+	stats.Init()
+	cfg := common.SystemConfig.SectionConfig("indexer.", true)
+	cfg.SetValue("numSliceWriters", 1)
+
+	slice, err := NewMemDBSlice(path, SliceId(0), common.IndexDefn{}, common.IndexInstId(0),
+		common.PartitionId(0), false, true, 1, cfg, stats, 1024, cbs)
+	if err != nil {
+		t.Fatalf("NewMemDBSlice: %v", err)
+	}
+	defer slice.Close()
+
+	for i := 0; i < 200; i++ {
+		meta := NewMutationMeta()
+		meta.vbucket = Vbucket(0)
+		if err := slice.Insert([]byte(fmt.Sprintf("[\"key-%d\"]", i)),
+			[]byte(fmt.Sprintf("docid-%d", i)), nil, nil, nil, meta); err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		meta.Free()
+	}
+
+	info, err := slice.NewSnapshot(nil, true)
+	if err != nil {
+		t.Fatalf("NewSnapshot: %v", err)
+	}
+	snap, err := slice.OpenSnapshot(info, nil)
+	if err != nil {
+		t.Fatalf("OpenSnapshot: %v", err)
+	}
+	for i := 0; len(snapshotDirs(t, slice)) == 0 ||
+		atomic.LoadInt32(&slice.isPersistorActive) != 0; i++ {
+		if i == 6000 {
+			t.Fatal("timed out waiting for a disk snapshot")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	snap.Close()
+
+	// the snapshot list cannot be read while descriptors are exhausted.
+	// 3 leaves only stdin/stdout/stderr below the limit, so the next open fails
+	restore := setFileDescRLimit(t, 3)
+	defer func() {
+		restore()
+	}()
+
+	keyMu.Lock()
+	activeKeyId = "keyB"
+	keyMu.Unlock()
+
+	if err := slice.SetCurrentEncryptionKey(key, []byte("keyB"), CipherNameAES256GCM); err != nil {
+		t.Fatalf("SetCurrentEncryptionKey: %v", err)
+	}
+
+	_, dirsErr := slice.getSnapshotDirs()
+
+	dropCh := make(chan error, 1)
+	slice.DropKeys([][]byte{[]byte("keyA")}, dropCh)
+	var dropErr error
+	select {
+	case dropErr = <-dropCh:
+	case <-time.After(300 * time.Second):
+		t.Fatal("DropKeys did not report completion")
+	}
+
+	if dirsErr == nil {
+		t.Fatal("getSnapshotDirs reported no error while descriptors were exhausted")
+	}
+	if dropErr == nil {
+		t.Fatal("DropKeys reported success while the snapshot list was unreadable")
+	} else if !errors.Is(dropErr, memdb.ErrRetryDropKey) {
+		t.Fatalf("expected retryable drop key error :%v", dropErr)
+	} else {
+		t.Logf("(expected) %v", dropErr)
+	}
+}
+
+// TestMemDBSliceRollbackTargetWithConcurrentRemoveSnapshot verifies that Rollback refuses a target that
+// is no longer on disk *before* it removes anything.
+//
+// findRollbackSnapshot lists the snapshots and hands one to Rollback, which lists
+// them again; cleanupOldSnapshotFiles runs from the persistor goroutine and can
+// prune the target in between (waitPersist drains the mutation queue, not the
+// persistor). The removal loop stops at the target, so a target that is missing
+// from the second listing means nothing stops it: without the pre-check every
+// remaining snapshot is deleted and Rollback still reports success, after which
+// the caller restarts the stream from the target's timestamp against an empty
+// index.
+//
+// The assertion that matters is not that Rollback errors, it is that the other
+// snapshots are untouched -- that is what pins the check ahead of the loop.
+func TestMemDBSliceRollbackTargetWithConcurrentRemoveSnapshot(t *testing.T) {
+	path := filepath.Join(os.TempDir(), "mdbslice-rollback-target-removed")
+	os.RemoveAll(path)
+	defer os.RemoveAll(path)
+
+	key := make([]byte, 32)
+	cbs := SliceEncryptionCallbacks{
+		getActiveKeyIdCipher: func(_, _ string) ([]byte, string, string) {
+			return key, "keyA", CipherNameAES256GCM
+		},
+		getKeyCipherById: func(_ string) ([]byte, string) { return key, CipherNameAES256GCM },
+		setInUseKeys:     func(_ KeyDataType, _ string) {},
+	}
+
+	stats := &IndexStats{}
+	stats.Init()
+	cfg := common.SystemConfig.SectionConfig("indexer.", true)
+	cfg.SetValue("numSliceWriters", 1)
+
+	slice, err := NewMemDBSlice(path, SliceId(0), common.IndexDefn{}, common.IndexInstId(0),
+		common.PartitionId(0), false, true, 1, cfg, stats, 1024, cbs)
+	if err != nil {
+		t.Fatalf("NewMemDBSlice: %v", err)
+	}
+	defer slice.Close()
+
+	insert := func(from, to int) {
+		for i := from; i < to; i++ {
+			meta := NewMutationMeta()
+			meta.vbucket = Vbucket(0)
+			if err := slice.Insert([]byte(fmt.Sprintf("[\"key-%d\"]", i)),
+				[]byte(fmt.Sprintf("docid-%d", i)), nil, nil, nil, meta); err != nil {
+				t.Fatalf("Insert: %v", err)
+			}
+			meta.Free()
+		}
+	}
+
+	// a real TsVbuuid: with three snapshots on disk cleanupOldSnapshotFiles runs its
+	// pruning loop, which dereferences snapInfo.Timestamp()
+	seqno := uint64(0)
+	persist := func(want int) {
+		seqno += 100
+		ts := common.NewTsVbuuid("default", 1)
+		ts.Seqnos[0] = seqno
+		ts.Vbuuids[0] = 1
+
+		info, err := slice.NewSnapshot(ts, true)
+		if err != nil {
+			t.Fatalf("NewSnapshot: %v", err)
+		}
+		snap, err := slice.OpenSnapshot(info, nil)
+		if err != nil {
+			t.Fatalf("OpenSnapshot: %v", err)
+		}
+
+		// the next persist is skipped unless this one has fully finished:
+		// doPersistSnapshot CAS-guards on isPersistorActive
+		for i := 0; len(snapshotDirs(t, slice)) < want ||
+			atomic.LoadInt32(&slice.isPersistorActive) != 0; i++ {
+			if i == 300 {
+				t.Fatalf("timed out waiting for disk snapshot %d", want)
+			}
+			time.Sleep(1 * time.Second)
+		}
+		snap.Close()
+	}
+
+	// three snapshots, so the target below has two newer ones that a missing-target
+	// rollback would wrongly delete
+	insert(0, 500)
+	persist(1)
+	insert(500, 1000)
+	persist(2)
+	insert(1000, 1500)
+	persist(3)
+
+	// GetSnapshots lists newest first, so the last entry is the oldest: as the
+	// rollback target it is the one whose removal costs the most.
+	infos, err := slice.GetSnapshots()
+	if err != nil || len(infos) != 3 {
+		t.Fatalf("GetSnapshots: %v (n=%d)", err, len(infos))
+	}
+	target := infos[2]
+	targetPath := infos[2].(*memdbSnapshotInfo).dataPath
+
+	// stand in for cleanupOldSnapshotFiles pruning the target between the two
+	// listings: the whole directory goes, so the glob no longer reports it
+	if err := os.RemoveAll(targetPath); err != nil {
+		t.Fatalf("RemoveAll(%v): %v", targetPath, err)
+	}
+
+	store := slice.mainstore
+
+	err = slice.Rollback(target)
+	if err == nil {
+		t.Fatal("Rollback to a target that is no longer on disk reported success")
+	}
+	t.Logf("(expected) %v", err)
+
+	// the survivors must still be on disk: if the check ran after the removal
+	// loop these would already be gone
+	dirs := snapshotDirs(t, slice)
+	if len(dirs) != 2 {
+		t.Fatalf("expected the 2 remaining snapshots to survive a rejected rollback, got %v", dirs)
+	}
+	for _, d := range dirs {
+		if _, err := os.Stat(d); err != nil {
+			t.Fatalf("snapshot %v was removed: %v", d, err)
+		}
+	}
+
+	// bailing out before resetStores leaves the live instance in place
+	if slice.mainstore != store {
+		t.Fatal("a rejected rollback swapped the mainstore")
 	}
 }
