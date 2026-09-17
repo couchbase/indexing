@@ -39,6 +39,7 @@ var (
 	ErrInvalidRotationType      = errors.New("MemDB invalid rotation type")
 	ErrUnsupportedFileType      = errors.New("MemDB unsupported file type")
 	ErrKeyIdListIncomplete      = errors.New("MemDB keyId list incomplete due to snapshot keyId read errors in init")
+	ErrRetryDropKey             = errors.New("MemDB drop key retry")
 )
 
 type KeyCompare func([]byte, []byte) int

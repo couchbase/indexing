@@ -2273,6 +2273,8 @@ func (mdb *memdbSlice) GetKeyIdList() ([][]byte, error) {
 // using the current encryption key (set via SetCurrentEncryptionKey).
 // - The call can fail if there is concurrent snapshot removal.
 // - The call may also fail if there is another concurrent drop key
+// - The call will fail if drop key is same as the current key
+// - The caller should retry if memdb.ErrRetryDropKey is returned (TBD:GSI)
 //
 // Params:
 //   - keyIds: List of key IDs to be rotated/dropped.
@@ -2304,16 +2306,26 @@ func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 				}
 			}()
 
-			snapDirs := mdb.getSnapshotDirs()
-
 			store := mdb.mainstore
+
+			// fail attempt to drop current key
+			currKeyId, _ := store.GetCurrentKeyId()
+			for i := range kids {
+				if bytes.Equal(kids[i], currKeyId) {
+					err = fmt.Errorf("%w: cannot drop the current encryption key %s",
+						memdb.ErrInvalid, string(currKeyId))
+					return
+				}
+			}
+
+			snapDirs := mdb.getSnapshotDirs()
 			for i := range snapDirs {
 				if er := store.DropKeyIdsFromSnapshot(kids, snapDirs[i]); er != nil {
 					if errors.Is(er, memdb.ErrSnapshotBusy) {
 						continue
 					}
 
-					// the instance is being torn down
+					// the instance is being reset due to rollback
 					if errors.Is(er, context.Canceled) {
 						logging.Infof("memdbSlice:DropKeys IndexInstId %v PartitionId %v cancelled after %v of %v snapshots",
 							mdb.idxInstId, mdb.idxPartnId, i, len(snapDirs))
@@ -2330,11 +2342,18 @@ func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 						if rmErr := store.RemoveSnapshot(snapDirs[i]); rmErr != nil {
 							logging.Errorf("memdbSlice:DropKeys failed removing snapshot %v: %v", snapDirs[i], rmErr)
 						}
+						// override previous errors
 						err = er
 						// log error for notification
 					} else if err == nil {
 						err = er
 					}
+				}
+			}
+
+			if err == nil {
+				if store.AnyKeyIdsExist(kids) {
+					err = memdb.ErrRetryDropKey
 				}
 			}
 		}()

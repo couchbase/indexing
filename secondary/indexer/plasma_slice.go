@@ -1074,7 +1074,7 @@ func (s *plasmaSlice) SetCurrentEncryptionKey(masterEncryptionKey []byte, keyId 
 //     RestoreShardDone (shard rebalance) completion
 //   - Exits early if the instance closes during operation
 //   - No error if keyId is already absent.
-//   - plasma.ErrRetryDropKey means the caller should retry.
+//   - plasma.ErrRetryDropKey/ErrDropKeyBusy means the caller should retry.
 //
 // Params:
 //   - keyIds: List of key IDs to be rotated/dropped.

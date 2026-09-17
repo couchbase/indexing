@@ -426,7 +426,7 @@ func TestMemDBSliceDropKeysWithConcurrentRollback(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(300 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("timed out waiting for the key rotation to start")
 	}
 
@@ -474,6 +474,14 @@ func TestMemDBSliceDropKeysWithConcurrentRollback(t *testing.T) {
 	// the rotation renames every file it rewrites, so a reader that walks the dir
 	// alongside it can miss a file or read a half-swapped one.
 	store2 := slice.mainstore
+
+	// the instance the rollback installed restored its current key from
+	// getActiveKeyIdCipher, which hands back keyA: point it at keyB again, so the
+	// rotation below has somewhere to rotate to
+	if err := slice.SetCurrentEncryptionKey(key, []byte("keyB"), CipherNameAES256GCM); err != nil {
+		t.Fatalf("SetCurrentEncryptionKey after rollback: %v", err)
+	}
+
 	started2 := make(chan struct{})
 	release2 := make(chan struct{})
 	unpark2 := sync.OnceFunc(func() { close(release2) })
@@ -497,7 +505,7 @@ func TestMemDBSliceDropKeysWithConcurrentRollback(t *testing.T) {
 
 	select {
 	case <-started2:
-	case <-time.After(300 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("timed out waiting for the second key rotation to start")
 	}
 

@@ -397,7 +397,7 @@ func (m *MemDB) GetEncryptionKeyById(keyID []byte) []byte {
 		return key
 	}
 
-	return nil
+	return NullKeyId
 }
 
 // returns a copy of current encryption key ID and cipher
@@ -411,7 +411,7 @@ func (m *MemDB) GetCurrentKeyId() ([]byte, string) {
 		return keyId, gocbcrypto.CipherNameAES256GCM
 	}
 
-	return nil, gocbcrypto.CipherNameNone
+	return NullKeyId, gocbcrypto.CipherNameNone
 }
 
 // registers current keyId for a snapshot. It is called during snapshot creation
@@ -509,6 +509,33 @@ func (m *MemDB) GetActiveKeyIdList() ([][]byte, error) {
 	}
 
 	return result, nil
+}
+
+func (m *MemDB) AnyKeyIdsExist(keyIds [][]byte) bool {
+	if len(keyIds) == 0 {
+		return false
+	}
+
+	m.encMu.RLock()
+	defer m.encMu.RUnlock()
+
+	// partial keyId list, an unreadable snapshot may hold any of them
+	if len(m.snapKeyIdErrs) > 0 {
+		return true
+	}
+
+	for _, keyId := range keyIds {
+		if keyIdExists([][]byte{m.encKeyId}, keyId) {
+			return true
+		}
+		for _, snapKeyIds := range m.snapKeyIds {
+			if keyIdExists(snapKeyIds, keyId) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // a successful full read of a snapshot (LoadFromDisk) proves its keyIds are
