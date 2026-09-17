@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"math"
 	"os"
@@ -53,6 +52,11 @@ var (
 
 func isDataFile(fpath string) bool {
 	return strings.HasPrefix(filepath.Base(fpath), dataFilePrefix)
+}
+
+// snapshot is verifiably damaged; a retry can never succeed
+func IsDecryptionError(err error) bool {
+	return gocbcrypto.IsDecryptionError(err)
 }
 
 type RotationType int
@@ -480,7 +484,7 @@ func (m *MemDB) DeregisterSnapshot(snapDir string) {
 // If keyIds of some snapshots could not be read at init, the partial list is
 // returned with ErrKeyIdListIncomplete. The caller needs to then avoid
 // purging all the keys so that any missing keyIds due to transient errors
-// can be used when needed. IsCorruptKeyIdReadError can be used to
+// can be used when needed. IsDecryptionError can be used to
 // distinguish between transient and unrecoverable errors.
 func (m *MemDB) GetActiveKeyIdList() ([][]byte, error) {
 	m.encMu.RLock()
@@ -505,12 +509,6 @@ func (m *MemDB) GetActiveKeyIdList() ([][]byte, error) {
 	}
 
 	return result, nil
-}
-
-// snapshot is verifiably damaged; a retry can never succeed
-func IsCorruptKeyIdReadError(err error) bool {
-	return errors.Is(err, gocbcrypto.ErrBlkInvalidChecksum) ||
-		errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // a successful full read of a snapshot (LoadFromDisk) proves its keyIds are
@@ -978,7 +976,7 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 
 // decryption error
 func (v *keyRotationVisitor) isFatalError(err error) bool {
-	return gocbcrypto.IsDecryptionError(err)
+	return IsDecryptionError(err)
 }
 
 func (m *MemDB) RemoveSnapshot(snapDir string) error {
@@ -1254,9 +1252,6 @@ func ReadFileKeyId(filepath string, getKeyId func([]byte) []byte) ([]byte, error
 	rd, err := gocbcrypto.NewCryptFileReaderWithLabel(fd, getKeyId, KDFLabelCtx, gocbcrypto.ChunkSize, false, iowrap.CountDiskFailures)
 	if err != nil {
 		logging.Errorf("MemDB::ReadFileKeyId %s: %v", filepath, err)
-		if errors.Is(err, gocbcrypto.ErrCipherKeyLookup) {
-			return nil, ErrSnapshotKeyIdMissing
-		}
 		return nil, err
 	}
 	defer rd.Reset()

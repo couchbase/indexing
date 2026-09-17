@@ -33,7 +33,6 @@ var (
 	ErrMaxSnapshotsLimitReached = errors.New("MemDB Maximum snapshots limit reached")
 	ErrShutdown                 = errors.New("MemDB instance has been shutdown")
 	ErrCorruptSnapshot          = errors.New("MemDB snapshot checksum failed")
-	ErrSnapshotKeyIdMissing     = errors.New("MemDB snapshot keyId missing")
 	ErrSnapshotBusy             = errors.New("MemDB snapshot is busy either due to cleanup or key rotation")
 	ErrKeyRotationRestore       = errors.New("MemDB snapshot key rotation restore error")
 	ErrInvalid                  = errors.New("MemDB invalid arguments")

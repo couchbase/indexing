@@ -409,7 +409,7 @@ func (mdb *memdbSlice) initStores() error {
 		return fmt.Errorf("init memdb mainstore: %w", err)
 	}
 
-	// A corrupt keyId read error is not transient (see memdb.IsCorruptKeyIdReadError)
+	// A corrupt keyId read error is not transient (see memdb.IsDecryptionError)
 	// and such snapshots could be removedw here (memdb.SnapKeyIdReadErrors + RemoveSnapshot).
 	// For now let loadSnapshot fail on them and handle via the existing corruption path.
 
@@ -1449,9 +1449,6 @@ func (mdb *memdbSlice) getSnapshots() ([]SnapshotInfo, []string, error) {
 					bs, err = ReadEncryptedFile(f, mdb.mainstore.GetEncryptionKeyById, memdb.KDFLabelCtx, iowrap.CountDiskFailures)
 					// TBD: we never return error even before encryption changes; need to revisit
 					if err != nil && !errors.Is(err, fs.ErrNotExist) {
-						if errors.Is(err, ErrCipherKeyLookup) {
-							err = fmt.Errorf("%v: %w", memdb.ErrSnapshotKeyIdMissing, err)
-						}
 						logging.Errorf("MemDB::%v getSnapshots file:%v error:%v", mdb.Path, f, err)
 					}
 				}
@@ -1706,7 +1703,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 		return mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
 	}()
 	// key-material error is a corruption error
-	if err == memdb.ErrCorruptSnapshot || err == memdb.ErrSnapshotKeyIdMissing {
+	if errors.Is(err, memdb.ErrCorruptSnapshot) || memdb.IsDecryptionError(err) {
 		err2 := err
 		err = errStorageCorrupted
 		logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to load snapshot %v error(%v : %v).",
@@ -2326,7 +2323,7 @@ func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 						break
 					}
 
-					if strings.Contains(er.Error(), "fatal") {
+					if memdb.IsDecryptionError(er) {
 						// snapshot cannot be recovered, remove snapshot
 						logging.Errorf("memdbSlice:DropKeys IndexInstId %v PartitionId %v error %v, removing snapshot",
 							mdb.idxInstId, mdb.idxPartnId, er)

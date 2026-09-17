@@ -2640,7 +2640,7 @@ func testEncryptionKeyIdListIncomplete(t *testing.T, conf Config) {
 	assert.False(t, containsKeyId(keyIds, keyB), "keyB should be missing from the partial list")
 
 	for _, readErr := range db.SnapKeyIdReadErrors() {
-		assert.False(t, IsCorruptKeyIdReadError(readErr), "EACCES must classify as transient")
+		assert.False(t, IsDecryptionError(readErr), "EACCES must classify as transient")
 	}
 
 	_, statErr := os.Stat(snapPaths[1])
@@ -2693,7 +2693,7 @@ func testEncryptionKeyIdListCorruptSnapshot(t *testing.T, conf Config) {
 
 	readErrs := db.SnapKeyIdReadErrors()
 	assert.Len(t, readErrs, 1)
-	assert.True(t, IsCorruptKeyIdReadError(readErrs[snapPaths[1]]),
+	assert.True(t, IsDecryptionError(readErrs[snapPaths[1]]),
 		"checksum failure should classify as corrupt")
 
 	_, statErr := os.Stat(snapPaths[1])
@@ -2711,9 +2711,11 @@ func testEncryptionKeyIdListCorruptSnapshot(t *testing.T, conf Config) {
 	assert.NoError(t, statErr, "healthy snapshot must not be touched")
 }
 
-// a missing DEK (ErrSnapshotKeyIdMissing) is transient, not corruption: the snapshot
-// must not be removed, the list must report incomplete, and it must complete on
-// reopen once the key becomes available.
+// a missing DEK classifies as an unrecoverable keyId read
+// error: gocbcrypto wraps the lookup failure in its generic decrypt error, so a retry
+// with the same key set can never succeed. memdb still only records it -- removal is
+// the caller's decision -- so within memdb the list completes on reopen once the key
+// becomes available again.
 func testEncryptionKeyIdListKeyIdMissing(t *testing.T, conf Config) {
 	defer ValidateNoMemLeaks()
 	os.RemoveAll("db.dump")
@@ -2746,14 +2748,17 @@ func testEncryptionKeyIdListKeyIdMissing(t *testing.T, conf Config) {
 	assert.False(t, containsKeyId(keyIds, keyA))
 
 	for _, readErr := range db.SnapKeyIdReadErrors() {
-		assert.False(t, IsCorruptKeyIdReadError(readErr), "missing DEK must classify as transient")
+		assert.True(t, IsDecryptionError(readErr),
+			"missing DEK must classify as an unrecoverable keyId read error")
 	}
 
 	_, statErr := os.Stat(snapPaths[0])
-	assert.NoError(t, statErr, "snapshot with missing DEK must not be removed")
+	assert.NoError(t, statErr, "memdb must not remove the snapshot itself")
 	db.Close()
 
-	// key becomes available; reopen must complete the list
+	// key becomes available; reopen must complete the list. Note this recovery only
+	// holds because memdb keeps the snapshot: a slice-level init that removes
+	// snapshots with unrecoverable keyId errors would have discarded it by now.
 	keyALost.Store(false)
 
 	db, err = NewWithEncryptionConfig(conf, snapPaths)
