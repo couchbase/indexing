@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -858,5 +859,149 @@ func TestMemDBSliceRollbackTargetWithConcurrentRemoveSnapshot(t *testing.T) {
 	// bailing out before resetStores leaves the live instance in place
 	if slice.mainstore != store {
 		t.Fatal("a rejected rollback swapped the mainstore")
+	}
+}
+
+// TestMemDBSliceInitStoresRemovesCorruptSnapshot verifies that initStores drops the
+// snapshots whose keyIds are unreadable beyond repair
+func TestMemDBSliceInitStoresRemovesCorruptSnapshot(t *testing.T) {
+	path := filepath.Join(os.TempDir(), "mdbslice-corrupt-keyid")
+	os.RemoveAll(path)
+	defer os.RemoveAll(path)
+
+	key := make([]byte, 32) // key material is irrelevant here, the key id is not
+	cbs := SliceEncryptionCallbacks{
+		getActiveKeyIdCipher: func(_, _ string) ([]byte, string, string) {
+			return key, "keyA", CipherNameAES256GCM
+		},
+		getKeyCipherById: func(_ string) ([]byte, string) { return key, CipherNameAES256GCM },
+		setInUseKeys:     func(_ KeyDataType, _ string) {},
+	}
+
+	stats := &IndexStats{}
+	stats.Init()
+	cfg := common.SystemConfig.SectionConfig("indexer.", true)
+	cfg.SetValue("numSliceWriters", 1)
+
+	slice, err := NewMemDBSlice(path, SliceId(0), common.IndexDefn{}, common.IndexInstId(0),
+		common.PartitionId(0), false, true, 1, cfg, stats, 1024, cbs)
+	if err != nil {
+		t.Fatalf("NewMemDBSlice: %v", err)
+	}
+	defer slice.Close()
+
+	// two committed snapshots on disk
+	docs := 0
+	persist := func(want int) {
+		for i := 0; i < 200; i++ {
+			meta := NewMutationMeta()
+			meta.vbucket = Vbucket(0)
+			if err := slice.Insert([]byte(fmt.Sprintf("[\"key-%d\"]", docs)),
+				[]byte(fmt.Sprintf("docid-%d", docs)), nil, nil, nil, meta); err != nil {
+				t.Fatalf("Insert: %v", err)
+			}
+			meta.Free()
+			docs++
+		}
+
+		info, err := slice.NewSnapshot(nil, true)
+		if err != nil {
+			t.Fatalf("NewSnapshot: %v", err)
+		}
+		snap, err := slice.OpenSnapshot(info, nil)
+		if err != nil {
+			t.Fatalf("OpenSnapshot: %v", err)
+		}
+		// the next persist is skipped unless this one has fully finished:
+		// doPersistSnapshot CAS-guards on isPersistorActive
+		for i := 0; len(snapshotDirs(t, slice)) < want ||
+			atomic.LoadInt32(&slice.isPersistorActive) != 0; i++ {
+			if i == 6000 {
+				t.Fatalf("timed out waiting for disk snapshot %d", want)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		snap.Close()
+	}
+	persist(1)
+	persist(2)
+
+	dirs := snapshotDirs(t, slice)
+	if len(dirs) != 2 {
+		t.Fatalf("expected 2 disk snapshots, got %v", dirs)
+	}
+	corruptSnap, healthySnap := dirs[0], dirs[1]
+
+	// flip a byte inside the checksummed header of one of the corrupt snapshot's
+	// data files, so its keyId can never be read back
+	entries, err := os.ReadDir(filepath.Join(corruptSnap, "data"))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	target := ""
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), "shard-") {
+			target = filepath.Join(corruptSnap, "data", e.Name())
+			break
+		}
+	}
+	if target == "" {
+		t.Fatal("snapshot has no shard file to corrupt")
+	}
+
+	fd, err := os.OpenFile(target, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	buf := make([]byte, 1)
+	if _, err := fd.ReadAt(buf, 40); err != nil {
+		t.Fatalf("ReadAt: %v", err)
+	}
+	buf[0] ^= 0xFF
+	if _, err := fd.WriteAt(buf, 40); err != nil {
+		t.Fatalf("WriteAt: %v", err)
+	}
+	fd.Close()
+
+	if err := slice.resetStores(); err != nil {
+		t.Fatalf("resetStores: %v", err)
+	}
+
+	if _, err := os.Stat(corruptSnap); !os.IsNotExist(err) {
+		t.Fatalf("corrupt snapshot %v was not removed (stat err=%v)", corruptSnap, err)
+	}
+	if _, err := os.Stat(healthySnap); err != nil {
+		t.Fatalf("healthy snapshot %v was removed: %v", healthySnap, err)
+	}
+
+	// and the slice no longer offers the removed snapshot for recovery
+	if dirs = snapshotDirs(t, slice); len(dirs) != 1 || dirs[0] != healthySnap {
+		t.Fatalf("expected only the healthy snapshot %v to remain, got %v", healthySnap, dirs)
+	}
+
+	// the survivor is what recovery would pick, and it still loads with all its
+	// items: a disk snapshot reads back uncommitted, so OpenSnapshot goes through
+	// loadSnapshot rather than persisting it again
+	infos, err := slice.GetSnapshots()
+	if err != nil {
+		t.Fatalf("GetSnapshots: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("expected one snapshot info, got %v", len(infos))
+	}
+
+	sinfo := infos[0].(*memdbSnapshotInfo)
+	if sinfo.dataPath != healthySnap {
+		t.Fatalf("expected snapshot info for %v, got %v", healthySnap, sinfo.dataPath)
+	}
+
+	snap, err := slice.OpenSnapshot(infos[0], nil)
+	if err != nil {
+		t.Fatalf("OpenSnapshot(%v): %v", healthySnap, err)
+	}
+	defer snap.Close()
+
+	if n := sinfo.MainSnap.Count(); n != int64(docs) {
+		t.Fatalf("healthy snapshot loaded %v items, expected %v", n, docs)
 	}
 }

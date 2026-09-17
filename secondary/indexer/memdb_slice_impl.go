@@ -212,6 +212,9 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	if err != nil || err == nil && info.IsDir() {
 		iowrap.Os_Mkdir(path, 0777)
 		if _, err = iowrap.Os_Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return nil, errStoragePathNotFound // do not crash loop indexer
+			}
 			return nil, err
 		}
 	}
@@ -288,12 +291,13 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	}
 
 	// Mark in use key for encryption
+	// The GetKeyIdList() should never return error if initStores has succeeded
 	keys, err := mdb.GetKeyIdList()
 	if err != nil {
-		// keyids that encountered error during read make this list un-trustable, so
-		// do not return immedeately to allow slice to reconcile transient errors.
-		logging.Warnf("memdbSlice:NewMemDBSlice:GetKeyIdList Id %v IndexInstId %v "+
-			"incomplete: %v", sliceId, idxInstId, err)
+		logging.Errorf("memdbSlice:NewMemDBSlice Id %v IndexInstId %v "+
+			"error fetching keyIds: %v", sliceId, idxInstId, err)
+		mdb.closeStores()
+		return nil, err
 	}
 
 	for _, keyByte := range keys {
@@ -308,6 +312,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	// Array related initialization
 	_, mdb.isArrayDistinct, mdb.isArrayFlattened, mdb.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
 	if err != nil {
+		mdb.closeStores()
 		return nil, err
 	}
 
@@ -409,7 +414,8 @@ func (mdb *memdbSlice) initStores() error {
 
 	// on transient errors we should not under report snapshots;
 	// encryption keys can get purged for such snapshots
-	snapDirs, err := mdb.getSnapshotDirs()
+	var snapDirs []string
+	snapDirs, err = mdb.getSnapshotDirs()
 	if err != nil {
 		return fmt.Errorf("list snapshot dirs: %w", err)
 	}
@@ -420,8 +426,32 @@ func (mdb *memdbSlice) initStores() error {
 	}
 
 	// A corrupt keyId read error is not transient (see memdb.IsDecryptionError)
-	// and such snapshots could be removedw here (memdb.SnapKeyIdReadErrors + RemoveSnapshot).
-	// For now let loadSnapshot fail on them and handle via the existing corruption path.
+	// and such snapshots could be removed here
+	snapkeyIdErrs := mdb.mainstore.SnapKeyIdReadErrors()
+	for snapDir, kerr := range snapkeyIdErrs {
+		if kerr == nil { // sanity check
+			continue
+		}
+
+		logging.Errorf("MemDBSlice::initStores Slice Id %v, IndexInstId %v, PartitionId %v "+
+			"snapshot %v keyId read error: %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, snapDir, kerr)
+
+		if memdb.IsDecryptionError(kerr) {
+			if rmErr := mdb.mainstore.RemoveSnapshot(snapDir); rmErr != nil {
+				logging.Errorf("MemDBSlice::initStores Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"failed removing corrupt snapshot %v: on error:%v %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, snapDir, kerr, rmErr)
+				err = kerr
+				break // On initStores success all snapshots should be in healthy condition (based on discussion with GSI)
+			} // removal clears snapKeyIdErr
+		} else if err == nil {
+			err = kerr
+		}
+	}
+
+	if err != nil {
+		mdb.mainstore.Close()
+		return err
+	}
 
 	mdb.main = make([]*memdb.Writer, mdb.numWriters)
 	for i := 0; i < mdb.numWriters; i++ {
@@ -1506,7 +1536,7 @@ func (mdb *memdbSlice) getSnapshots() ([]SnapshotInfo, []string, []string, []str
 					bs, err = ReadEncryptedFile(f, mdb.mainstore.GetEncryptionKeyById, memdb.KDFLabelCtx, iowrap.CountDiskFailures)
 					// the manifest went away under us: benign race with cleanup
 					if errors.Is(err, fs.ErrNotExist) {
-						logging.Errorf("MemDB::%v getSnapshots file:%v error:%v", mdb.Path, f, err)
+						logging.Infof("MemDB::%v getSnapshots file:%v error:%v", mdb.Path, f, err)
 						continue
 					}
 
@@ -1591,7 +1621,9 @@ func (mdb *memdbSlice) resetStores() error {
 		}
 	}
 
+	// slice is unusable on error, indexer will anyway crash (handleStorageRollbackDone)
 	if err := mdb.initStores(); err != nil {
+		mdb.mainstore = nil
 		return err
 	}
 
@@ -1601,6 +1633,23 @@ func (mdb *memdbSlice) resetStores() error {
 
 	mdb.resetStats()
 	return nil
+}
+
+// releases everything initStores allocated.
+func (mdb *memdbSlice) closeStores() {
+	if mdb.mainstore != nil {
+		mdb.mainstore.Close()
+		mdb.mainstore = nil
+	}
+
+	for i := 0; i < cap(mdb.back); i++ {
+		if mdb.back[i] != nil {
+			mdb.back[i].Close()
+		}
+	}
+
+	mdb.main = nil
+	mdb.back = nil
 }
 
 func (mdb *memdbSlice) resetStats() {
@@ -1676,6 +1725,8 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 		}
 	}
 
+	// reset failure will lead to indexer crash. This ensures
+	// we do not operate on a nil mainstore
 	if err = mdb.resetStores(); err != nil {
 		return err
 	}
@@ -1720,12 +1771,19 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 		if r := recover(); r != nil || err != nil {
 			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v PartitionId %v failed to recover from the snapshot %v (err=%v,%v)",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo.dataPath, r, err)
-			if err != errStorageCorrupted {
-				mdb.mainstore.RemoveSnapshot(snapInfo.dataPath)
+			// On corruption, a failed resetStores below leaves slice without mainstore
+			if store := mdb.mainstore; store != nil {
+				store.RemoveSnapshot(snapInfo.dataPath)
+			}
+
+			// On corruption, a failed resetStores below, a subsequent loadSnapshot from
+			// OpenSnapshot would panic on the uninitialized store, so exit here instead.
+			// The slice should not be marked corrupted now as restart can heal the slice
+			// (similar to successive loadSnapshots attempts)
+			if err != errStorageCorrupted || mdb.mainstore == nil {
 				os.Exit(1)
 			} else {
 				// Persist error in a file. Next time indexer comes up, required cleanup will happen.
-				mdb.mainstore.RemoveSnapshot(snapInfo.dataPath)
 				msg := fmt.Sprintf("%v", errStorageCorrupted)
 				// error file is not encrypted as currently it does not contains any instance information
 				iowrap.Ioutil_WriteFile(filepath.Join(mdb.path, "error"), []byte(msg), 0755)
@@ -1866,6 +1924,8 @@ func (mdb *memdbSlice) RollbackToZero(initialBuild bool) error {
 		return err
 	}
 
+	// reset failure will lead to indexer crash. This ensures
+	// we do not operate on a nil mainstore
 	err := mdb.resetStores()
 
 	mdb.lastRollbackTs = nil
@@ -2253,7 +2313,9 @@ func tryDeletememdbSlice(mdb *memdbSlice) {
 
 func tryClosememdbSlice(mdb *memdbSlice) {
 	mdb.waitDropKeysForStoreReset()
-	mdb.mainstore.Close2(runtime.GOMAXPROCS(0))
+	if mdb.mainstore != nil {
+		mdb.mainstore.Close2(runtime.GOMAXPROCS(0))
+	}
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
 			mdb.back[i].Close()
