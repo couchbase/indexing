@@ -212,9 +212,6 @@ func NewEncryptionMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 
 	encryptionMgr.isRecoveryDone.Store(false)
 
-	//ENCRYPT_TODO: Remove persisted test keys when test-framework not required
-	//keyPersistPath = config["storage_dir"].String()
-
 	go encryptionMgr.cacheKeysForBootstrap()
 	go encryptionMgr.recoverInUseKeys()
 	go encryptionMgr.run()
@@ -262,8 +259,6 @@ func RegisterCallbacks(e *EncryptionMgr) error {
 		logging.Warnf("EncryptionMgr:RegisterCallbacks err:%v", err)
 		return err
 	}
-	//ENCRYPT_TODO: Remove persisted test keys when test-framework not required
-	//cbsTest = cbs
 }
 
 func (e *EncryptionMgr) setEnableTest() {
@@ -665,8 +660,6 @@ func (e *EncryptionMgr) handleConfigUpdate(cmd Message) {
 	e.setEnableTest()
 	e.setMaxDropKeyRetry()
 	e.setDropKeyRetryInterval()
-	//ENCRYPT_TODO: Remove persisted test keys when test-framework not required
-	//e.RegisterRestEndpoints()
 
 	e.supvCmdch <- &MsgSuccess{}
 }
@@ -934,9 +927,6 @@ func (e *EncryptionMgr) refreshAllBucketKeys(noLock bool) {
 
 func (e *EncryptionMgr) cacheKeysForBootstrap() {
 
-	//ENCRYPT_TODO: Remove persisted test keys when test-framework not required
-	//recoverPersistedKeys()
-
 	ctx := context.Background()
 	encrKeysInfo, err := cbauth.GetEncryptionKeysBlocking(ctx, MetadataKDT)
 	if err != nil {
@@ -1017,11 +1007,6 @@ func (e *EncryptionMgr) recoverInUseKeys() {
 	kdtKeysMap := <-respMapCh
 	allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
 
-	// ENCRYPT_TODO: Add other key data types later
-	//e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: KeyDataType{TypeName: "log", BucketUUID: ""}, respMapCh: respMapCh}
-	//kdtKeysMap = <-respMapCh
-	//allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
-
 	configKeysCh := make(chan *common.Optional[[]string])
 	e.supvMsgch <- &MsgClustMgrGetInuseKeys{respCh: configKeysCh}
 	configKeys, ok := (<-configKeysCh).Get()
@@ -1032,9 +1017,6 @@ func (e *EncryptionMgr) recoverInUseKeys() {
 	}
 	allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
 
-	//e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: KeyDataType{TypeName: "audit", BucketUUID: ""}, respMapCh: respMapCh}
-	//kdtKeysMap = <-respMapCh
-	//allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
 	e.supvMsgch <- &MsgEncryptionGetInuseKeys{keyDataType: LogdataKDT, respMapCh: respMapCh}
 	kdtKeysMap = <-respMapCh
 	allKdtKeys = mergeMap(kdtKeysMap, allKdtKeys)
@@ -1061,7 +1043,6 @@ func (e *EncryptionMgr) RegisterRestEndpoints() {
 // Get keyids which are being used by indexer components to encrypt data
 func (e *EncryptionMgr) getInUseKeysHandler(w http.ResponseWriter, r *http.Request) {
 
-	// ENCRYPT_TODO: Add params for specific keydatatype later.
 	valid := validateAuth(w, r)
 	if !valid {
 		return
@@ -1574,8 +1555,6 @@ func (e *EncryptionMgr) refreshKeysCallback(kdt KeyDataType) error {
 
 	logging.Infof("EncryptionMgr:refreshKeysCallback %v", logKDT(kdt))
 
-	// ENCRYPT_TODO: Enable refreshKeysCallback for other datatypes later when being used.
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -1658,8 +1637,6 @@ func (e *EncryptionMgr) dropKeysCallback(kdt KeyDataType, keyids []string) {
 
 	logging.Infof("EncryptionMgr:DropKeysCallback:Received for keydatatype:%v dropkeyids:%v",
 		logKDT(kdt), logKeyIDs(keyids...))
-
-	// ENCRYPT_TODO: Enable dropKeysCallback for other datatypes later when being used.
 
 	// Use latest key data from cbauth for dropKey of keydatatype
 	// If keys are not present, send error to cbauth using KeysDropComplete, otherwise it is expected to treat it as hard error.

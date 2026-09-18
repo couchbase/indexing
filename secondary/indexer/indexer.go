@@ -1940,8 +1940,6 @@ func (idx *indexer) handleEncryptionGetInUseKeys(msg Message) {
 	case *MsgClustMgrGetInuseKeys:
 		idx.sendMsgToClustMgr(msg)
 
-	// ENCRYPT_TODO: Handle below types later
-	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
 	default:
 		// ENCRYPT_TODO: Return error in this case
 		logging.Warnf("Indexer::handleEncryptionGetInUseKeys invalid type %T", e)
@@ -1998,8 +1996,6 @@ func (idx *indexer) handleEncryptionDropKeys(msg Message) {
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
-	// ENCRYPT_TODO: Handle below types later
-	// ENCRYPT_TODO: Add message handling for statsMgr, clusterMgrAgent
 	case "log":
 		encMgrRespCh := dropMsg.GetRespCh()
 
