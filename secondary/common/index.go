@@ -1013,6 +1013,9 @@ const (
 	INMEM_SNAP_OSO
 	DISK_SNAP_OSO
 	FORCE_COMMIT_MERGE
+	// Commit forced to create recovery points for bhive indexes only. Other
+	// indexes of the keyspace are not committed by it.
+	FORCE_COMMIT_BHIVE
 )
 
 func (s IndexSnapType) String() string {
@@ -1034,6 +1037,8 @@ func (s IndexSnapType) String() string {
 		return "DISK_SNAP_OSO"
 	case FORCE_COMMIT_MERGE:
 		return "FORCE_COMMIT_MERGE"
+	case FORCE_COMMIT_BHIVE:
+		return "FORCE_COMMIT_BHIVE"
 	default:
 		return "INVALID_SNAP_TYPE"
 	}

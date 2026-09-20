@@ -68,6 +68,7 @@ const (
 	TK_MERGE_STREAM
 	TK_MERGE_STREAM_ACK
 	TK_GET_KEYSPACE_HWT
+	TK_FORCE_COMMIT
 
 	//STORAGE_MANAGER
 	STORAGE_MGR_SHUTDOWN
@@ -1119,6 +1120,31 @@ func (m *MsgTKToggleFlush) GetKeyspaceId() string {
 
 func (m *MsgTKToggleFlush) GetResetPendingMerge() bool {
 	return m.resetPendingMerge
+}
+
+// TK_FORCE_COMMIT
+// Requests timekeeper to keep generating FORCE_COMMIT_BHIVE timestamps for the
+// keyspaces of a bucket which have a bhive index, even when no new mutations
+// are arriving, so that a bhive recovery point is created within a bounded time.
+// Used by the drop key flow which must wait for recovery points to be created.
+// The bucket is identified by its UUID and not by its name, as a bucket
+// recreated with the same name is a different bucket.
+type MsgTKForceCommit struct {
+	mType      MsgType
+	bucketUUID string
+	enable     bool
+}
+
+func (m *MsgTKForceCommit) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgTKForceCommit) GetBucketUUID() string {
+	return m.bucketUUID
+}
+
+func (m *MsgTKForceCommit) GetEnable() bool {
+	return m.enable
 }
 
 // CBQ_CREATE_INDEX_DDL
@@ -3899,6 +3925,8 @@ func (m MsgType) String() string {
 		return "TK_MERGE_STREAM_ACK"
 	case TK_GET_KEYSPACE_HWT:
 		return "TK_GET_KEYSPACE_HWT"
+	case TK_FORCE_COMMIT:
+		return "TK_FORCE_COMMIT"
 	case REPAIR_ABORT:
 		return "REPAIR_ABORT"
 	case POOL_CHANGE:

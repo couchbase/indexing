@@ -610,7 +610,8 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	if snapType == common.DISK_SNAP ||
 		snapType == common.DISK_SNAP_OSO {
 		needsCommit = true
-	} else if snapType == common.FORCE_COMMIT || snapType == common.FORCE_COMMIT_MERGE {
+	} else if snapType == common.FORCE_COMMIT || snapType == common.FORCE_COMMIT_MERGE ||
+		snapType == common.FORCE_COMMIT_BHIVE {
 		forceCommit = true
 	}
 
@@ -662,6 +663,23 @@ func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 	if idxInst.Defn.KeyspaceId(idxInst.Stream) != keyspaceId ||
 		idxInst.Stream != streamId ||
 		idxInst.State == common.INDEX_STATE_DELETED {
+		wg.Done()
+		return
+	}
+
+	//FORCE_COMMIT_BHIVE is only for new bhive recovery points. Other indexes of
+	//the keyspace keep their current snapshot, they are persisted by a regular
+	//disk snapshot as needsCommit is not cleared for this snap type.
+	if tsVbuuid.GetSnapType() == common.FORCE_COMMIT_BHIVE && !idxInst.Defn.IsBhive() {
+		//hasAllSB is for the stream, so it applies to this index even though it
+		//is not snapshotted. Timekeeper sends it only once.
+		if hasAllSB {
+			for _, partnInst := range indexPartnMap[idxInstId] {
+				for _, slice := range partnInst.Sc.GetAllSlices() {
+					slice.SetLastRollbackTs(nil)
+				}
+			}
+		}
 		wg.Done()
 		return
 	}
@@ -2993,7 +3011,8 @@ func (s *storageMgr) assertOnNonAlignedDiskCommit(streamId common.StreamId,
 	if (streamId == common.MAINT_STREAM) &&
 		(snapType == common.DISK_SNAP ||
 			snapType == common.FORCE_COMMIT ||
-			snapType == common.FORCE_COMMIT_MERGE) && (tsVbuuid.CheckSnapAligned() == false) {
+			snapType == common.FORCE_COMMIT_MERGE ||
+			snapType == common.FORCE_COMMIT_BHIVE) && (tsVbuuid.CheckSnapAligned() == false) {
 
 		logging.Fatalf("StorageMgr::handleCreateSnapshot Disk commit timestamp is not snapshot aligned. "+
 			"Stream: %v, KeyspaceId: %v, tsVbuuid: %v", streamId, keyspaceId, tsVbuuid)

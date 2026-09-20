@@ -59,6 +59,10 @@ type StreamState struct {
 	streamKeyspaceIdCollectionId    map[common.StreamId]KeyspaceIdCollectionId
 	streamKeyspaceIdPastMinMergeTs  map[common.StreamId]KeyspaceIdPastMinMergeTs
 
+	// time of the last FORCE_COMMIT_BHIVE. Kept apart from LastPersistTime as
+	// such a commit persists only the bhive indexes of the keyspace.
+	streamKeyspaceIdLastForceCommitTime map[common.StreamId]KeyspaceIdLastPersistTime
+
 	streamKeyspaceIdAsyncMap     map[common.StreamId]KeyspaceIdStreamAsyncMap
 	streamKeyspaceIdPendingMerge map[common.StreamId]KeyspaceIdPendingMerge
 
@@ -241,6 +245,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdRepairStopCh:            make(map[common.StreamId]KeyspaceIdRepairStopCh),
 		streamKeyspaceIdTimerStopCh:             make(map[common.StreamId]KeyspaceIdTimerStopCh),
 		streamKeyspaceIdLastPersistTime:         make(map[common.StreamId]KeyspaceIdLastPersistTime),
+		streamKeyspaceIdLastForceCommitTime:     make(map[common.StreamId]KeyspaceIdLastPersistTime),
 		streamKeyspaceIdSkippedInMemTs:          make(map[common.StreamId]KeyspaceIdSkippedInMemTs),
 		streamKeyspaceIdHasInMemSnap:            make(map[common.StreamId]KeyspaceIdHasInMemSnap),
 		streamKeyspaceIdLastSnapMarker:          make(map[common.StreamId]KeyspaceIdLastSnapMarker),
@@ -349,6 +354,8 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 
 	keyspaceIdLastPersistTime := make(KeyspaceIdLastPersistTime)
 	ss.streamKeyspaceIdLastPersistTime[streamId] = keyspaceIdLastPersistTime
+
+	ss.streamKeyspaceIdLastForceCommitTime[streamId] = make(KeyspaceIdLastPersistTime)
 
 	keyspaceIdSkippedInMemTs := make(KeyspaceIdSkippedInMemTs)
 	ss.streamKeyspaceIdSkippedInMemTs[streamId] = keyspaceIdSkippedInMemTs
@@ -465,6 +472,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdRepairStopCh[streamId][keyspaceId] = nil
 	ss.streamKeyspaceIdTimerStopCh[streamId][keyspaceId] = make(StopChannel)
 	ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
+	ss.streamKeyspaceIdLastForceCommitTime[streamId][keyspaceId] = time.Now()
 	ss.streamKeyspaceIdRestartTsMap[streamId][keyspaceId] = nil
 	ss.streamKeyspaceIdOpenTsMap[streamId][keyspaceId] = nil
 	ss.streamKeyspaceIdStartTimeMap[streamId][keyspaceId] = uint64(0)
@@ -532,6 +540,7 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdTimerStopCh[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdLastPersistTime[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdLastForceCommitTime[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdRestartTsMap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdOpenTsMap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdStartTimeMap[streamId], keyspaceId)
@@ -605,6 +614,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdRestartVbTsMap, streamId)
 	delete(ss.streamKeyspaceIdIndexCountMap, streamId)
 	delete(ss.streamKeyspaceIdLastPersistTime, streamId)
+	delete(ss.streamKeyspaceIdLastForceCommitTime, streamId)
 	delete(ss.streamKeyspaceIdStatus, streamId)
 	delete(ss.streamKeyspaceIdRestartTsMap, streamId)
 	delete(ss.streamKeyspaceIdOpenTsMap, streamId)
@@ -1521,9 +1531,36 @@ func (ss *StreamState) checkCommitOverdue(streamId common.StreamId, keyspaceId s
 	snapPersistInterval := ss.getPersistInterval()
 	persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 
+	//only commit if there is data flushed to memory which is not yet persisted
 	lastPersistTime := ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId]
+	return ss.checkCommitDue(streamId, keyspaceId, lastPersistTime, persistDuration, true)
+}
 
-	if time.Since(lastPersistTime) > persistDuration {
+// checkForcedCommitDue is same as checkCommitOverdue but does not require any
+// unpersisted data. It is used when a commit has to be made even for an idle
+// keyspace(e.g. drop key waiting for a recovery point). persistDuration is
+// passed in by the caller as the forced commit runs at its own cadence.
+func (ss *StreamState) checkForcedCommitDue(streamId common.StreamId, keyspaceId string,
+	persistDuration time.Duration) bool {
+
+	//a disk snapshot of either kind creates new bhive recovery points, so the
+	//interval is counted from whichever one happened last
+	lastCommitTime := ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId]
+	if t := ss.streamKeyspaceIdLastForceCommitTime[streamId][keyspaceId]; t.After(lastCommitTime) {
+		lastCommitTime = t
+	}
+	return ss.checkCommitDue(streamId, keyspaceId, lastCommitTime, persistDuration, false)
+}
+
+// checkCommitDue returns true if a commit can be issued for this keyspaceId
+// without a new stability TS i.e. lastCommitTime is older than persistDuration
+// and the keyspaceId is quiescent. If requireNeedsCommit is true, it additionally
+// requires the keyspaceId to have data which is flushed to memory but not yet
+// persisted.
+func (ss *StreamState) checkCommitDue(streamId common.StreamId, keyspaceId string,
+	lastCommitTime time.Time, persistDuration time.Duration, requireNeedsCommit bool) bool {
+
+	if time.Since(lastCommitTime) > persistDuration {
 
 		keyspaceIdFlushInProgressTsMap := ss.streamKeyspaceIdFlushInProgressTsMap[streamId]
 		keyspaceIdTsListMap := ss.streamKeyspaceIdTsListMap[streamId]
@@ -1535,8 +1572,8 @@ func (ss *StreamState) checkCommitOverdue(streamId common.StreamId, keyspaceId s
 		tsList := keyspaceIdTsListMap[keyspaceId]
 		if keyspaceIdFlushInProgressTsMap[keyspaceId] == nil &&
 			keyspaceIdFlushEnabledMap[keyspaceId] == true &&
-			tsList.Len() == 0 &&
-			keyspaceIdNeedsCommit[keyspaceId] == true {
+			tsList != nil && tsList.Len() == 0 &&
+			(!requireNeedsCommit || keyspaceIdNeedsCommit[keyspaceId] == true) {
 			return true
 		}
 	}
