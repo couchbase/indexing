@@ -2232,10 +2232,16 @@ func (tk *timekeeper) handleAbortRecovery(cmd Message) {
 
 func (tk *timekeeper) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
+
+	//tk.config, ss.config and maxTsQueueLen are read by the per keyspace timer
+	//goroutines(generateNewStabilityTS and below) which run concurrently with
+	//this handler. Those readers hold tk.lock, so the update takes it as well.
+	tk.lock.Lock()
 	tk.config = cfgUpdate.GetConfig()
 	tk.ss.UpdateConfig(tk.config)
 
 	tk.setMaxTsQueueLen()
+	tk.lock.Unlock()
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
