@@ -1347,6 +1347,197 @@ func testEncryptionDropKeyIdsCorruptSnapshot(t *testing.T, conf Config) {
 	assert.NoError(t, db.RemoveSnapshot(snapDir))
 }
 
+// verifies that a rotation which walks into a leftover backup from an interrupted
+// attempt restores the original and rotates it
+func testEncryptionDropKeyIdsWithStaleBackupFile(t *testing.T, conf Config) {
+	snapDir := "db.dump"
+	os.RemoveAll(snapDir)
+	conf.Path = snapDir
+	conf.UseDeltaInterleaving()
+
+	db, err := NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+
+	var wg sync.WaitGroup
+	n := 10000
+
+	wg.Add(1)
+	w := db.NewWriter()
+	doInsertSafe(w, &wg, n, false)
+	wg.Wait()
+
+	snap, _ := db.NewSnapshot()
+	snap.Open()
+	oldId, cipher, _ := db.RegisterSnapshotKeyId(snapDir)
+	assert.NoError(t, db.PreparePersistence(snapDir, snap, oldId, cipher))
+	snap.Close()
+	assert.NoError(t, db.StoreToDisk(snapDir, snap, runtime.GOMAXPROCS(0), oldId, cipher, nil))
+
+	// simulate a rotation interrupted between the two renames in
+	// rotateSinglefile: the original was moved to its backup but
+	// the re-encrypted temp rename and original file restore failed
+	// with EMFILE (too many files) or due to anti-virus scans (windows)
+	dataDir := filepath.Join(snapDir, "data")
+	entries, err := os.ReadDir(dataDir)
+	assert.NoError(t, err)
+
+	// a shard, not a checksums/files manifest: the walk skips those, so a rotation
+	// never leaves a backup of one behind
+	var origFile string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), "shard-") {
+			origFile = filepath.Join(dataDir, e.Name())
+			break
+		}
+	}
+	assert.NotEmpty(t, origFile, "snapshot must have at least one shard file")
+
+	bakFile := origFile + encrypt_bak_ext
+	assert.NoError(t, os.Rename(origFile, bakFile))
+
+	// rotate without reopening, so the warmup janitor does not get to the backup
+	// first and the rotation walk is the one that finds it
+	newId := make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
+	rand.New(rand.NewSource(1)).Read(newId)
+	newKey := db.GetEncryptionKeyById(newId)
+	assert.NoError(t, db.SetCurrentEncryptionKey(newKey, newId, gocbcrypto.CipherNameAES256GCM))
+
+	dropIds := [][]byte{append([]byte(nil), oldId...)}
+	assert.NoError(t, db.DropKeyIdsFromSnapshot(dropIds, snapDir))
+
+	// backup restored, not left behind or removed
+	assert.FileExists(t, origFile)
+	assert.NoFileExists(t, bakFile)
+
+	// and the restored file was rotated, so the dropped key is gone from the list
+	keyIds, err := db.getActiveKeyIdsFromSnapshot(snapDir)
+	assert.NoError(t, err)
+	assert.False(t, containsKeyId(keyIds, oldId), "restored file must not keep the dropped key")
+	assert.True(t, containsKeyId(keyIds, newId))
+
+	db.Close()
+
+	if t.Failed() {
+		return
+	}
+
+	// the restored file is still a usable part of the snapshot
+	db, err = NewWithEncryptionConfig(conf, []string{snapDir})
+	assert.NoError(t, err)
+	defer db.Close()
+
+	snap2, err := db.LoadFromDisk(snapDir, runtime.GOMAXPROCS(0), nil)
+	assert.NoError(t, err)
+	defer snap2.Close()
+	assert.Equal(t, int64(n), snap2.Count())
+}
+
+// There is a window between acquiring the directory guard and the drop key registration.
+// Therefore the previous fast path lookup may not see the ongoing rotation key for
+// snapshot concurrently being rotated.
+// DropKeyIds -> KeyID1, curr: keyIDX
+// KeyChange  -> keyIDX -> keyIDY
+// DropKeyIds -> KeyIDX, curr: keyIDY,  will not see this keyId and report dropped.
+func testEncryptionDropKeyIdsConcurrentWithKeyChange(t *testing.T, conf Config) {
+	snapDir := "db.dump"
+	os.RemoveAll(snapDir)
+	conf.Path = snapDir
+	conf.UseDeltaInterleaving()
+
+	db, err := NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+
+	var wg sync.WaitGroup
+	n := 10000
+
+	wg.Add(1)
+	w := db.NewWriter()
+	doInsertSafe(w, &wg, n, false)
+	wg.Wait()
+
+	// snapshot on keyId1
+	snap, _ := db.NewSnapshot()
+	snap.Open()
+	keyId1, cipher, _ := db.RegisterSnapshotKeyId(snapDir)
+	assert.NoError(t, db.PreparePersistence(snapDir, snap, keyId1, cipher))
+	snap.Close()
+	assert.NoError(t, db.StoreToDisk(snapDir, snap, runtime.GOMAXPROCS(0), keyId1, cipher, nil))
+
+	dropId1 := append([]byte(nil), keyId1...)
+	db.Close()
+
+	// reopen without preloading the snapshot dirs, so the key list cache starts cold
+	db, err = NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	keyIdX := make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
+	keyIdY := make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
+	r := rand.New(rand.NewSource(5))
+	r.Read(keyIdX)
+	r.Read(keyIdY)
+
+	// curr: keyIdX
+	assert.NoError(t, db.SetCurrentEncryptionKey(db.GetEncryptionKeyById(keyIdX), keyIdX,
+		gocbcrypto.CipherNameAES256GCM))
+
+	// park the rotation in the keyId1 lookup, so the first drop stays in flight
+	// holding the directory guard, with keyIdX registered and being written to files
+	started := make(chan struct{})
+	release := make(chan struct{})
+	unpark := sync.OnceFunc(func() { close(release) })
+	defer unpark()
+
+	var once sync.Once
+	origGetKey := db.GetKeyById
+	db.GetKeyById = func(id []byte) ([]byte, []byte, string) {
+		if bytes.Equal(id, dropId1) {
+			once.Do(func() { close(started) })
+			<-release
+		}
+		return origGetKey(id)
+	}
+
+	// DropKeyIds -> keyId1, curr: keyIdX
+	dropCh := make(chan error, 1)
+	go func() { dropCh <- db.DropKeyIdsFromSnapshot([][]byte{dropId1}, snapDir) }()
+
+	select {
+	case <-started:
+	case <-time.After(60 * time.Second):
+		t.Fatal("timed out waiting for the rotation to start")
+	}
+
+	// KeyChange -> keyIdX -> keyIdY
+	assert.NoError(t, db.SetCurrentEncryptionKey(db.GetEncryptionKeyById(keyIdY), keyIdY,
+		gocbcrypto.CipherNameAES256GCM))
+
+	// DropKeyIds -> keyIdX, curr: keyIdY. The rotation above is still writing files
+	// under keyIdX, so this must not report the key dropped.
+	assert.ErrorIs(t, db.DropKeyIdsFromSnapshot([][]byte{keyIdX}, snapDir), ErrSnapshotBusy,
+		"drop must not report success while a rotation to that key is in flight")
+
+	// same for a key the cached list has no record of: the fast path is what would
+	// skip here, and it must be read under the guard rather than ahead of it
+	assert.ErrorIs(t, db.DropKeyIdsFromSnapshot([][]byte{[]byte("no-such-key")}, snapDir),
+		ErrSnapshotBusy, "fast path must be read under dirGuard, not ahead of it")
+
+	unpark()
+
+	select {
+	case err := <-dropCh:
+		assert.NoError(t, err)
+	case <-time.After(60 * time.Second):
+		t.Fatal("the first drop did not complete")
+	}
+
+	keyIds, err := db.getActiveKeyIdsFromSnapshot(snapDir)
+	assert.NoError(t, err)
+	assert.False(t, containsKeyId(keyIds, dropId1))
+	assert.False(t, containsKeyId(keyIds, keyIdY))
+	assert.True(t, containsKeyId(keyIds, keyIdX))
+}
+
 // verifies that the key rotation janitor can be used to cleanup temporary and backup files.
 func testEncryptionCleanupDropKeyFiles(t *testing.T, conf Config) {
 	snapDir := "db.dump"
@@ -2234,6 +2425,14 @@ func TestEncryptionDropKeyIdsConcurrentManyInstances(t *testing.T) {
 
 func TestEncryptionDropKeyIdsCorruptSnapshot(t *testing.T) {
 	runTest(t, "TestEncryptionDropKeyIdsCorruptSnapshot", testEncryptionDropKeyIdsCorruptSnapshot, "encryption")
+}
+
+func TestEncryptionDropKeyIdsWithStaleBackupFile(t *testing.T) {
+	runTest(t, "TestEncryptionDropKeyIdsWithStaleBackupFile", testEncryptionDropKeyIdsWithStaleBackupFile, "encryption")
+}
+
+func TestEncryptionDropKeyIdsConcurrentWithKeyChange(t *testing.T) {
+	runTest(t, "TestEncryptionDropKeyIdsConcurrentWithKeyChange", testEncryptionDropKeyIdsConcurrentWithKeyChange, "encryption")
 }
 
 func TestEncryptionCleanupDropKeyFiles(t *testing.T) {

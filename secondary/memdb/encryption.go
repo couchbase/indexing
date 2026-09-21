@@ -195,8 +195,9 @@ func (m *MemDB) initEncryption(snapDirs []string) (err error) {
 		return err
 	}
 
-	if err2 := m.cleanupStaleDropKeyFilesFromSnapshot(); err2 != nil {
-		logging.Errorf("MemDB::%v cleanupStaleDropKeyFilesFromSnapshot error:%v", m.Path, err2)
+	if err = m.cleanupStaleDropKeyFilesFromSnapshot(); err != nil {
+		logging.Errorf("MemDB::%v cleanupStaleDropKeyFilesFromSnapshot error:%v", m.Path, err)
+		return err
 	}
 
 	// do not fail initialization if there is an error. memDbSlice openSnapshot error handling
@@ -617,10 +618,21 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 		return ErrInvalid
 	}
 
-	if keyIdList, err := m.getActiveKeyIdsFromSnapshot(snapDir); err == nil {
+	// cleanup could be in progress
+	g, err := m.dirGuard.TryAcquire(snapDir, m.encCtx)
+	if err != nil {
+		return err
+	}
+	defer m.dirGuard.Release(g)
+
+	// cache lookup under dirGuard in case of concurrent DropKeyIdsFromSnapshot
+	m.encMu.RLock()
+	cachedKeyIds, cached := m.snapKeyIds[snapDir]
+	m.encMu.RUnlock()
+	if cached {
 		hasDropKey := false
 		for _, keyId := range keyIds {
-			if keyIdExists(keyIdList, keyId) {
+			if keyIdExists(cachedKeyIds, keyId) {
 				hasDropKey = true
 				break
 			}
@@ -630,27 +642,20 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 		}
 	}
 
-	// cleanup could be in progress
-	g, err := m.dirGuard.TryAcquire(snapDir, m.encCtx)
-	if err != nil {
-		return err
-	}
-	defer m.dirGuard.Release(g)
-
 	// add current key
-	keyId, cipher, exists := m.RegisterSnapshotKeyId(snapDir)
+	currKeyId, cipher, exists := m.RegisterSnapshotKeyId(snapDir)
 
 	r := &keyRotationVisitor{
 		db:             m,
 		dropKeyIds:     keyIds,
 		candidateFiles: make([]string, 0),
-		dstKeyId:       keyId,
+		dstKeyId:       currKeyId,
 		cipher:         cipher,
 	}
 
 	if err = m.walkEncryptedFiles(snapDir, g.cancelCtx, r); err != nil {
 		if r.NumFilesRotated == 0 && !exists {
-			m.DeregisterSnapshotKeyId(snapDir, keyId) // remove current key if no files were encrypted with it
+			m.DeregisterSnapshotKeyId(snapDir, currKeyId) // remove current key if no files were encrypted with it
 		}
 		return err
 	}
@@ -658,6 +663,7 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 	for _, dropKey := range keyIds {
 		m.DeregisterSnapshotKeyId(snapDir, dropKey)
 	}
+
 	return nil
 }
 
@@ -665,8 +671,12 @@ func (v *keyRotationVisitor) visit(ctx context.Context, fpath string) error {
 	var fkeyId []byte
 
 	// clean up stale rotation files from previous attempts (if janitor fails cleanup)
-	if _, _, err := handleStaleRotationFile(fpath); err != nil {
+	if resf, tmp, err := handleStaleRotationFile(fpath); err != nil {
 		return err
+	} else if tmp > 0 {
+		return nil
+	} else if len(resf) > 0 {
+		fpath = resf
 	}
 
 	if ok, err := gocbcrypto.IsFileEncrypted(fpath); err != nil {
@@ -785,15 +795,7 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 		return err
 	}
 
-	if err := iowrap.Os_Remove(backup); err != nil && !os.IsNotExist(err) {
-		logging.Errorf("MemDB::rotateSingleFile remove backup %v failed: %v", backup, err)
-		return err
-	}
-
 	defer func() {
-		if err := iowrap.Os_Remove(backup); err != nil && !os.IsNotExist(err) {
-			logging.Warnf("MemDB::rotateSingleFile cleanup backup %v failed: %v", backup, err)
-		}
 		if err := iowrap.Os_Remove(tmpDst); err != nil && !os.IsNotExist(err) {
 			logging.Warnf("MemDB::rotateSingleFile cleanup tmp %v failed: %v", tmpDst, err)
 		}
@@ -874,9 +876,6 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 
 	// Rename original file to backup
 	if err = iowrap.Os_Rename(file, backup); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
 
@@ -884,25 +883,26 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 	if err = iowrap.Os_Rename(tmpDst, file); err != nil {
 		// Attempt failed, restore original file
 		if restoreErr := iowrap.Os_Rename(backup, file); restoreErr != nil {
-			// restore has failed. snapshot is in an inconsistent state.
-			// a) We hope it is resolved in next rotation as it may be due to a transient error.
-			// b) in case there is a prior restart, checksum will fail
-			// For now, we just log an error
+			// restore has failed due to a transient error. snapshot is in an inconsistent state.
+			// a) it should be either resolved in next DropKey rotation attempt.
+			// b) or in case of restart/rollback,  cleanupStaleDropKeyFiles during initStores should resolve
+			// c) if transient error is not resolved, warmup/rollback will also fail
 			if !os.IsNotExist(restoreErr) {
 				err = fmt.Errorf("%v:%v file:%v original err:%v",
 					ErrKeyRotationRestore, restoreErr, file, err)
 			}
 		}
 
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
+	} else {
+		if err = iowrap.Os_Remove(backup); err != nil {
+			logging.Errorf("MemDB::rotateSingleFile cleanup backup %v failed: %v", backup, err)
+		} // if old backup file continues to exist, DropKey should be treated as failed
 	}
 
 	atomic.AddUint64(&v.NumFilesRotated, 1)
 	atomic.AddUint64(&v.NumBytesRotated, bytesWritten)
-	return nil
+	return err
 }
 
 // decryption error
@@ -964,9 +964,12 @@ func (v *keyRotationJanitor) process(ctx context.Context) error {
 	}()
 
 	for _, f := range v.candidates {
-		var er error
-		restored, cleanup, er = handleStaleRotationFile(f)
-		if er != nil && !os.IsNotExist(er) {
+		if resf, tmp, er := handleStaleRotationFile(f); er == nil {
+			if len(resf) > 0 {
+				restored++
+			}
+			cleanup += tmp
+		} else if !os.IsNotExist(er) {
 			if err == nil {
 				err = er
 			}
@@ -979,28 +982,28 @@ func (v *keyRotationJanitor) process(ctx context.Context) error {
 
 // restores the original file from a backup if needed, or removes stale backup/temp files
 // from failed rotation attempt due to crash
-func handleStaleRotationFile(f string) (restored, cleanedUp int, err error) {
+func handleStaleRotationFile(f string) (restored string, cleanedUp int, err error) {
 	if strings.HasSuffix(f, encrypt_bak_ext) {
 		orig := strings.TrimSuffix(f, encrypt_bak_ext)
-		if _, er := iowrap.Os_Stat(orig); er != nil {
-			if os.IsNotExist(er) {
-				if er = iowrap.Os_Rename(f, orig); er == nil {
-					restored++
+		if _, statErr := iowrap.Os_Stat(orig); statErr != nil {
+			if os.IsNotExist(statErr) {
+				if err = iowrap.Os_Rename(f, orig); err == nil {
+					restored = orig
+					logging.Infof("MemDB::keyRotationJanitor: restored:%v", orig)
 				}
 			} else {
-				if er = iowrap.Os_Remove(f); er == nil {
-					cleanedUp++
-				}
+				err = statErr // deleting is unsafe unless orig is confirmed present.
 			}
 		} else {
-			er := iowrap.Os_Remove(f)
-			if er == nil {
+			if err = iowrap.Os_Remove(f); err == nil {
 				cleanedUp++
+				logging.Infof("MemDB::keyRotationJanitor: removing :%v", f)
 			}
 		}
 	} else if strings.HasSuffix(f, rencrypt_tmp_ext) {
-		if er := iowrap.Os_Remove(f); er == nil {
+		if err = iowrap.Os_Remove(f); err == nil {
 			cleanedUp++
+			logging.Infof("MemDB::keyRotationJanitor: cleaned:%v", f)
 		}
 	}
 	return

@@ -55,6 +55,133 @@ var METRICS_PREFIX = "index_"
 
 var PARTN_METRICS_PREFIX = METRICS_PREFIX + "partn_"
 
+// metricsHelpText mirrors secondary/docs/metrics_metadata.json, compiled in so
+// scrapes don't depend on that file at runtime. Keep both in sync by hand.
+var metricsHelpText = map[string]string{
+	"index_raw_data_size":                 "Encoded, uncompressed size of the index data, for this index",
+	"index_items_count":                   "The actual number of items present in the latest index snapshot, for this index",
+	"index_total_scan_duration":           "Total time taken by the scans requests, for this index",
+	"index_num_rows_scanned":              "Number of rows/index entries read during the index scans, for this index",
+	"index_num_rows_filtered":             "Number of rows skipped by an inline filter pushed down to storage during vector index scans, for this index",
+	"index_num_rows_reranked":             "Number of candidate rows re-ranked by exact distance after the initial approximate vector search, for this index",
+	"index_disk_size":                     "Total disk space taken up by this index, after compression. This includes index data files, checkpoints etc.",
+	"index_data_size":                     "The approximate size of the valid uncompressed index data, for this index",
+	"index_scan_bytes_read":               "Number of bytes read from the index storage during index scans, for this index",
+	"index_memory_used":                   "The memory used by this index",
+	"index_num_rows_returned":             "Number of rows/index entries returned as the scan result during index scans, for this index",
+	"index_state":                         "The current state of this index; CREATED: 0, READY: 1, INITIAL: 2, CATCHUP: 3, ACTIVE: 4, DELETED: 5, ERROR: 6, NIL: 7, SCHEDULED: 8, RECOVERED: 9. Index is usable only in ACTIVE state",
+	"index_num_docs_pending":              "Number of pending updates that are yet to be received by index service, for this index",
+	"index_num_docs_indexed":              "Number of document updates (of type insert, modify, delete) observed by this index",
+	"index_num_requests":                  "Number of scan requests received by the index service, for this index",
+	"index_num_docs_queued":               "Number of updates queued (but not yet processed) by index service, for this index",
+	"index_cache_hits":                    "The number of times the required index page for both scan and mutations is found in memory, for this index",
+	"index_cache_misses":                  "The number of times the required index page for both scan and mutations is NOT found in memory, for this index",
+	"index_scan_cache_hits":               "Number of times the required index page for serving scan request is found in memory, for this index",
+	"index_scan_cache_misses":             "Number of times the required index page for serving scan request is NOT found in memory, for this index",
+	"index_data_size_on_disk":             "The size of the valid compressed index data, for this index",
+	"index_log_space_on_disk":             "The size of the index data files - including garbage, for this index",
+	"index_recs_in_mem":                   "Number of index entries cached in memory, for this index",
+	"index_recs_on_disk":                  "Number of index entries stored on disk, which are not cached in memory, for this index",
+	"index_avg_item_size":                 "Average size of the indexed items, for this index",
+	"index_avg_scan_latency":              "Average latency observed by the index scans, for this index",
+	"index_frag_percent":                  "Percentage of invalid index data, for this index",
+	"index_avg_drain_rate":                "Average number of documents indexed per second, for this index",
+	"index_resident_percent":              "Ratio of records in memory to total records, for this index",
+	"index_disk_bytes":                    "Number of bytes read from and written to disk, including insert, get, and delete operations",
+	"index_num_items_flushed":             "Number of documents written from memory to index storage",
+	"index_codebook_mem_usage":            "Amount of memory used by codebook for this index, includes memory used for coarse codebook and quantization codebook",
+	"index_codebook_train_duration":       "Amount of time spent in training the codebook, for this index",
+	"index_avg_sparse_nnz":                "Average number of non-zero terms across all sparse vectors indexed by this index",
+	"index_partn_items_count":             "The actual number of items present in the latest index snapshot, for this partition",
+	"index_partn_is_diverging_replica":    "Set to '1' if the index partition has diverging replica item counts",
+	"index_partn_num_lost_replicas":       "Set to the number of lost replicas, if the index partition has any lost replicas",
+	"index_memory_quota":                  "Configured memory quota for the index service nodes",
+	"index_memory_used_total":             "Total memory used by the indexer process",
+	"index_num_indexes":                   "Total number of indexes, located on this node",
+	"index_num_bhive_dense_indexes":       "Total number of bhive indexes without sparse vector, located on this node",
+	"index_num_bhive_sparse_indexes":      "Total number of bhive indexes with sparse vector, located on this node",
+	"index_num_composite_dense_indexes":   "Total number of composite indexes without sparse vector, located on this node",
+	"index_num_composite_sparse_indexes":  "Total number of composite indexes with sparse vector, located on this node",
+	"index_num_storage_instances":         "Total number of storage instances, located on this node",
+	"index_avg_resident_percent":          "Average resident percent across all indexes, located on this node",
+	"index_avg_mutation_rate":             "Sum of mutation rates of all indexes, located on this node",
+	"index_total_drain_rate":              "Sum of drain rate of all indexes, located on this node",
+	"index_num_scan_reports_gen":          "Number of scan reports generated, on this node",
+	"index_num_scan_reports_undelivered":  "Number of scan reports generated but not delivered, on this node",
+	"index_avg_disk_bps":                  "Sum of disk bytes written per second, of all indexes, located on this node",
+	"index_total_data_size":               "Sum of data size of all indexes, located on this node",
+	"index_total_disk_size":               "Sum of disk size of all indexes, located on this node",
+	"index_memory_used_storage":           "Amount of memory used by underlying index storage, on this node",
+	"index_memory_total_storage":          "Amount of memory used by the index memory allocator, on this node",
+	"index_total_requests":                "Sum of number of requests received by all indexes, located on this node",
+	"index_total_rows_returned":           "Sum of number of rows returned during index scan across all indexes, located on this node",
+	"index_total_rows_scanned":            "Sum of number of rows scanned during index scans across all indexes, located on this node",
+	"index_total_rows_filtered":           "Sum of rows skipped by an inline filter pushed down to storage during vector index scans, across all indexes, located on this node",
+	"index_memory_rss":                    "Resident set size of the indexer process, running on this node",
+	"index_total_mutation_queue_size":     "Total number of index updates queued in the mutation queues, on this node",
+	"index_total_pending_scans":           "Sum of number of pending scans across all indexes, located on this node",
+	"index_heap_in_use":                   "Total heap memory in use by indexer process in the node",
+	"index_total_raw_data_size":           "Sum of encoded, uncompressed size of the index data across all indexes, located on this node",
+	"index_net_avg_scan_rate":             "Average index scan rate across all indexes, for this node",
+	"index_num_diverging_replica_indexes": "Number of index partitions with diverging replica item counts.",
+	"index_num_lost_replica_indexes":      "Number of index partitions with atleast one lost replica.",
+	"index_total_codebook_memory_usage":   "Sum of codebook memory usage across all vector indexes, located on this node",
+
+	// Aggregated storage (plasma/hvi) stats, emitted by populateAggregatedStorageMetrics
+	// in storage_stats_manager_enterprise.go.
+	"index_storage_current_quota":             "Plasma's internally active memory quota for this node. It is tuned by memtuner.",
+	"index_storage_heap_limit":                "Plasma's global heap limit for managed memory for this node",
+	"index_storage_memory_stats_size_page":    "Aggregated number of bytes of memory currently in use by Plasma for page records",
+	"index_storage_reclaim_pending_global":    "Aggregated number of bytes across all plasma instances which have been freed but not yet returned to OS",
+	"index_storage_num_pages":                 "Aggregated number of pages that are currently in use",
+	"index_storage_items_count":               "Aggregated number of items that are currently in the stores",
+	"index_storage_avg_item_size":             "Ratio of total item size and total records",
+	"index_storage_purges":                    "Aggregated number of times various pages are compacted due to the MVCCPurger being triggered",
+	"index_storage_lss_used_space":            "Total number of bytes used by data and recovery logs",
+	"index_storage_lss_fragmentation":         "The fraction of garbage data present in the logs",
+	"index_storage_lss_num_reads":             "Total number of times an LSS(both data and recovery) block is read from disk into memory",
+	"index_storage_lss_blk_read_bs":           "Total number of bytes that were read from disc into memory from the logs(both data and recovery)",
+	"index_storage_rlss_num_reads":            "Total number of times an LSS block was read into memory due to index scans",
+	"index_storage_lss_blk_rdr_reads_bs":      "Total number of bytes that were read from disc into memory from the logs(both data and recovery) for index scans",
+	"index_storage_lookup_num_reads":          "Total number of LSS lookups for looking up items from stores",
+	"index_storage_lookup_blk_reads_bs":       "Total number of bytes that were read from disc into memory for lookups",
+	"index_storage_bytes_written":             "Aggregated total of bytes written to the disc(data and recovery)",
+	"index_storage_bytes_incoming":            "Aggregated total of bytes that are added to the stores and intended to be written on disc",
+	"index_storage_resident_ratio":            "Ratio of cached records and total records",
+	"index_storage_compression_ratio":         "Ratio of cumulative number of page bytes compressed and cumulative number of page bytes after compression",
+	"index_storage_num_burst_visits":          "Aggregated total of pages visited during burst eviction",
+	"index_storage_num_periodic_visits":       "Aggregated total of pages visited during periodic eviction",
+	"index_storage_num_evicted":               "Aggregated total of the number of pages that were evicted and persisted to disc",
+	"index_storage_num_evictable":             "Aggregated total of the number of pages can be compressed",
+	"index_storage_cleaner_num_reads":         "Total of number of cleaner log reads (both data and recovery)",
+	"index_storage_cleaner_blk_read_bs":       "Total of number bytes read for cleaner log reads (both data and recovery)",
+	"index_storage_hvi_memory_used":           "Total memory used by HVI indexes",
+	"index_storage_hvi_buf_memused":           "Total Memory used by various reusable buffers",
+	"index_storage_hvi_num_reads":             "Total number of times a disk block is read into memory",
+	"index_storage_hvi_blk_read_bs":           "Total number of bytes that were read from disk into memory",
+	"index_storage_hvi_num_reads_get":         "Total number of times a disk block was read into memory due to index scans",
+	"index_storage_hvi_blk_reads_bs_get":      "Total number of bytes that were read from disk into memory for index scans",
+	"index_storage_hvi_num_reads_lookup":      "Total number of times a disk block was read into memory due to lookups",
+	"index_storage_hvi_blk_reads_bs_lookup":   "Total number of bytes that were read from disk into memory for lookups",
+	"index_storage_hvi_bytes_written":         "Total number of bytes that were written to disk",
+	"index_storage_hvi_bytes_incoming":        "Total number of bytes that were added to the stores and intended to be written to disk",
+	"index_storage_hvi_total_used_size":       "Total number of disk bytes used. This size is eligible for cleanups in subsequent compactions.",
+	"index_storage_hvi_total_disk_size":       "Total disk usage in bytes",
+	"index_storage_hvi_fragmentation":         "The fraction of garbage data present on disk",
+	"index_storage_hvi_resident_ratio":        "Ratio of cache mem used and cacheable size",
+	"index_storage_hvi_compacts":              "Total count of compaction operations performed",
+	"index_storage_hvi_compression_ratio_avg": "Ratio of data bytes to be compressed and data bytes after compression",
+}
+
+// metricsHelpLines holds each metric's precomputed "# HELP ..." line, built
+// once in init() below rather than reformatted on every scrape.
+var metricsHelpLines map[string]string
+
+// metricHelpLine returns the precomputed HELP line for a metric, or "" if none exists.
+func metricHelpLine(prefix, name string) string {
+	return metricsHelpLines[prefix+name]
+}
+
 // 0-2ms, 2ms-5ms, 5ms-10ms, 10ms-20ms, 20ms-30ms, 30ms-50ms, 50ms-100ms, 100ms-1000ms,
 // 1000ms-5000ms, 5000ms-10000ms, 10000ms-30000ms, 30000ms-60000ms, 60000ms-120000ms, 120000ms-Inf
 // 2 min coverage
@@ -66,6 +193,13 @@ var ErrNilResponse = errors.New("nil response")
 
 func init() {
 	uptime = time.Now()
+
+	metricsHelpLines = make(map[string]string, len(metricsHelpText))
+	for name, h := range metricsHelpText {
+		h = strings.ReplaceAll(h, `\`, `\\`)
+		h = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(h)
+		metricsHelpLines[name] = fmt.Sprintf("# HELP %v %v\n", name, h)
+	}
 }
 
 func prettyTimeToString(v int64) string {
@@ -2851,11 +2985,13 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	collectionLabels = fmt.Sprintf("scope=\"%v\", collection=\"%v\", ", scope, collection)
 
 	rawDataSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.rawDataSize.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "raw_data_size"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "raw_data_size"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "raw_data_size", s.bucket, collectionLabels, s.dispName, rawDataSize)
 	st = append(st, []byte(str)...)
 
 	var itemsCount int64
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "items_count"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "items_count"))...)
 	if s.useArrItemsCount {
 		itemsCount = s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.arrItemsCount.Value() })
@@ -2868,51 +3004,61 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	}
 
 	scanDuration := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanDuration.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "total_scan_duration"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "total_scan_duration"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "total_scan_duration", s.bucket, collectionLabels, s.dispName, scanDuration)
 	st = append(st, []byte(str)...)
 
 	numRowsScanned := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRowsScanned.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "num_rows_scanned"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "num_rows_scanned"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_rows_scanned", s.bucket, collectionLabels, s.dispName, numRowsScanned)
 	st = append(st, []byte(str)...)
 
 	numRowsFiltered := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRowsFiltered.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "num_rows_filtered"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "num_rows_filtered"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_rows_filtered", s.bucket, collectionLabels, s.dispName, numRowsFiltered)
 	st = append(st, []byte(str)...)
 
 	numRowsReranked := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRowsReranked.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "num_rows_reranked"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "num_rows_reranked"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_rows_reranked", s.bucket, collectionLabels, s.dispName, numRowsReranked)
 	st = append(st, []byte(str)...)
 
 	diskSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.diskSize.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "disk_size"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "disk_size"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "disk_size", s.bucket, collectionLabels, s.dispName, diskSize)
 	st = append(st, []byte(str)...)
 
 	dataSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.dataSize.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "data_size"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "data_size"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "data_size", s.bucket, collectionLabels, s.dispName, dataSize)
 	st = append(st, []byte(str)...)
 
 	scanBytesRead := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanBytesRead.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "scan_bytes_read"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "scan_bytes_read"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "scan_bytes_read", s.bucket, collectionLabels, s.dispName, scanBytesRead)
 	st = append(st, []byte(str)...)
 
 	memUsed := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.memUsed.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "memory_used"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "memory_used"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "memory_used", s.bucket, collectionLabels, s.dispName, memUsed)
 	st = append(st, []byte(str)...)
 
 	numRowsReturned := s.int64Stats(func(ss *IndexStats) int64 { return ss.numRowsReturned.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "num_rows_returned"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "num_rows_returned"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_rows_returned", s.bucket, collectionLabels, s.dispName, numRowsReturned)
 	st = append(st, []byte(str)...)
 
 	indexState := s.int64Stats(func(ss *IndexStats) int64 { return int64(ss.indexState.Value()) })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "state"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "state"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "state", s.bucket, collectionLabels, s.dispName, indexState)
 	st = append(st, []byte(str)...)
@@ -2921,105 +3067,126 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	if indexState == int64(common.INDEX_STATE_CREATED) {
 		numDocsPending = 0
 	}
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "num_docs_pending"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "num_docs_pending"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_docs_pending", s.bucket, collectionLabels, s.dispName, numDocsPending)
 	st = append(st, []byte(str)...)
 
 	numDocsIndexed := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numDocsIndexed.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "num_docs_indexed"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "num_docs_indexed"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_docs_indexed", s.bucket, collectionLabels, s.dispName, numDocsIndexed)
 	st = append(st, []byte(str)...)
 
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "num_requests"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "num_requests"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_requests", s.bucket, collectionLabels, s.dispName, s.numRequests.Value())
 	st = append(st, []byte(str)...)
 
 	numDocsQueued := s.int64Stats(func(ss *IndexStats) int64 { return ss.numDocsQueued.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "num_docs_queued"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "num_docs_queued"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_docs_queued", s.bucket, collectionLabels, s.dispName, numDocsQueued)
 	st = append(st, []byte(str)...)
 
 	cacheHits := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.cacheHits.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "cache_hits"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "cache_hits"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "cache_hits", s.bucket, collectionLabels, s.dispName, cacheHits)
 	st = append(st, []byte(str)...)
 
 	cacheMisses := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.cacheMisses.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "cache_misses"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "cache_misses"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "cache_misses", s.bucket, collectionLabels, s.dispName, cacheMisses)
 	st = append(st, []byte(str)...)
 
 	rCacheHits := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.rCacheHits.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "scan_cache_hits"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "scan_cache_hits"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "scan_cache_hits", s.bucket, collectionLabels, s.dispName, rCacheHits)
 	st = append(st, []byte(str)...)
 
 	rCacheMisses := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.rCacheMisses.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "scan_cache_misses"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "scan_cache_misses"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "scan_cache_misses", s.bucket, collectionLabels, s.dispName, rCacheMisses)
 	st = append(st, []byte(str)...)
 
 	dataSizeOnDisk := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.dataSizeOnDisk.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "data_size_on_disk"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "data_size_on_disk"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "data_size_on_disk", s.bucket, collectionLabels, s.dispName, dataSizeOnDisk)
 	st = append(st, []byte(str)...)
 
 	logSpaceOnDisk := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.logSpaceOnDisk.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "log_space_on_disk"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "log_space_on_disk"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "log_space_on_disk", s.bucket, collectionLabels, s.dispName, logSpaceOnDisk)
 	st = append(st, []byte(str)...)
 
 	numRecsInMem := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRecsInMem.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "recs_in_mem"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "recs_in_mem"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "recs_in_mem", s.bucket, collectionLabels, s.dispName, numRecsInMem)
 	st = append(st, []byte(str)...)
 
 	numRecsOnDisk := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRecsOnDisk.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "recs_on_disk"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "recs_on_disk"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "recs_on_disk", s.bucket, collectionLabels, s.dispName, numRecsOnDisk)
 	st = append(st, []byte(str)...)
 
 	avgItemSize := computeAvgItemSize(rawDataSize, itemsCount)
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "avg_item_size"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "avg_item_size"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "avg_item_size", s.bucket, collectionLabels, s.dispName, avgItemSize)
 	st = append(st, []byte(str)...)
 
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "avg_scan_latency"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "avg_scan_latency"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "avg_scan_latency", s.bucket, collectionLabels, s.dispName, s.avgScanLatency.Value())
 	st = append(st, []byte(str)...)
 
 	fragPercent := s.partnAvgInt64Stats(func(ss *IndexStats) int64 { return ss.fragPercent.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "frag_percent"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "frag_percent"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "frag_percent", s.bucket, collectionLabels, s.dispName, fragPercent)
 	st = append(st, []byte(str)...)
 
 	avgDrainRate := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.avgDrainRate.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "avg_drain_rate"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "avg_drain_rate"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "avg_drain_rate", s.bucket, collectionLabels, s.dispName, avgDrainRate)
 	st = append(st, []byte(str)...)
 
 	residentPercent := s.partnAvgInt64Stats(func(ss *IndexStats) int64 { return ss.residentPercent.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "resident_percent"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "resident_percent"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "resident_percent", s.bucket, collectionLabels, s.dispName, residentPercent)
 	st = append(st, []byte(str)...)
 
 	diskBytes := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.lastDiskBytes.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "disk_bytes"))...)
 	st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "disk_bytes"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "disk_bytes", s.bucket, collectionLabels, s.dispName, diskBytes)
 	st = append(st, []byte(str)...)
 
 	itemsFlushed := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numItemsFlushed.Value() })
+	st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "num_items_flushed"))...)
 	st = append(st, []byte(fmt.Sprintf(typeCounterFmtStr, METRICS_PREFIX, "num_items_flushed"))...)
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_items_flushed", s.bucket, collectionLabels, s.dispName, itemsFlushed)
 	st = append(st, []byte(str)...)
 
 	if s.isVectorIndex {
 		codebookSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.codebookSize.Value() })
+		st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "codebook_mem_usage"))...)
 		st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "codebook_mem_usage"))...)
 		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "codebook_mem_usage", s.bucket, collectionLabels, s.dispName, codebookSize)
 		st = append(st, []byte(str)...)
 
 		cbTrainDuration := s.int64Stats(func(ss *IndexStats) int64 { return ss.cbTrainDuration.Value() })
+		st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "codebook_train_duration"))...)
 		st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "codebook_train_duration"))...)
 		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "codebook_train_duration", s.bucket, collectionLabels, s.dispName, cbTrainDuration)
 		st = append(st, []byte(str)...)
@@ -3027,6 +3194,7 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 
 	if s.isSparseIndex {
 		avgSparseNNZ := s.computeAvgSparseNNZ()
+		st = append(st, []byte(metricHelpLine(METRICS_PREFIX, "avg_sparse_nnz"))...)
 		st = append(st, []byte(fmt.Sprintf(typeGaugeFmtStr, METRICS_PREFIX, "avg_sparse_nnz"))...)
 		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "avg_sparse_nnz", s.bucket, collectionLabels, s.dispName, avgSparseNNZ)
 		st = append(st, []byte(str)...)
@@ -3038,6 +3206,7 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 		partnTypeFmtStr := "# TYPE %v%v gauge\n"
 		for partnId, partnStat := range s.partitions {
 			var itemsCount int64
+			st = append(st, []byte(metricHelpLine(PARTN_METRICS_PREFIX, "items_count"))...)
 			st = append(st, []byte(fmt.Sprintf(partnTypeFmtStr, PARTN_METRICS_PREFIX, "items_count"))...)
 			if partnStat.useArrItemsCount {
 				itemsCount = partnStat.int64Stats(func(ss *IndexStats) int64 { return ss.arrItemsCount.Value() })
@@ -3086,6 +3255,7 @@ func (is *IndexerStats) populateIsDivergingReplicaStat(out []byte) []byte {
 		}
 
 		collectionLabels = fmt.Sprintf("scope=\"%v\", collection=\"%v\", ", scope, collection)
+		out = append(out, []byte(metricHelpLine(PARTN_METRICS_PREFIX, "is_diverging_replica"))...)
 		out = append(out, []byte(fmt.Sprintf(typeFmtStr, PARTN_METRICS_PREFIX, "is_diverging_replica"))...)
 		str = fmt.Sprintf(fmtStr, PARTN_METRICS_PREFIX, "is_diverging_replica", bucket, collectionLabels, index, partn, 1)
 		out = append(out, []byte(str)...)
@@ -3099,6 +3269,7 @@ func (is *IndexerStats) populateLostReplicaStat(out []byte) []byte {
 	var str, collectionLabels string
 	fmtStr := "%v%v{bucket=\"%v\", %vindex=\"%v\", partition=\"%v\"} %v\n"
 	typeFmtStr := "# TYPE %v%v gauge\n"
+
 	for indexName, val := range indexesWithLostReplicas {
 		bucket, scope, collection, index, partn, ok := parseIndexName(indexName)
 		if !ok {
@@ -3117,6 +3288,7 @@ func (is *IndexerStats) populateLostReplicaStat(out []byte) []byte {
 		}
 
 		collectionLabels = fmt.Sprintf("scope=\"%v\", collection=\"%v\", ", scope, collection)
+		out = append(out, []byte(metricHelpLine(PARTN_METRICS_PREFIX, "num_lost_replicas"))...)
 		out = append(out, []byte(fmt.Sprintf(typeFmtStr, PARTN_METRICS_PREFIX, "num_lost_replicas"))...)
 		str = fmt.Sprintf(fmtStr, PARTN_METRICS_PREFIX, "num_lost_replicas", bucket,
 			collectionLabels, index, partn, lostReplicaCount)
@@ -4018,97 +4190,128 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := make([]byte, 0, 2048)
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "memory_quota"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_quota gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_quota %v\n", METRICS_PREFIX, is.memoryQuota.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "memory_used_total"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_used_total gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_used_total %v\n", METRICS_PREFIX, is.memoryUsed.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "num_indexes"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_indexes gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_indexes %v\n", METRICS_PREFIX, is.numIndexes.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "num_bhive_dense_indexes"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_bhive_dense_indexes gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_bhive_dense_indexes %v\n", METRICS_PREFIX, is.numBhiveDenseIndexes.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "num_bhive_sparse_indexes"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_bhive_sparse_indexes gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_bhive_sparse_indexes %v\n", METRICS_PREFIX, is.numBhiveSparseIndexes.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "num_composite_dense_indexes"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_composite_dense_indexes gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_composite_dense_indexes %v\n", METRICS_PREFIX, is.numCompositeDenseIndexes.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "num_composite_sparse_indexes"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_composite_sparse_indexes gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_composite_sparse_indexes %v\n", METRICS_PREFIX, is.numCompositeSparseIndexes.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "num_storage_instances"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_storage_instances gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_storage_instances %v\n", METRICS_PREFIX, is.numStorageInstances.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "avg_resident_percent"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_resident_percent gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vavg_resident_percent %v\n", METRICS_PREFIX, is.avgResidentPercent.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "avg_mutation_rate"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_mutation_rate gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vavg_mutation_rate %v\n", METRICS_PREFIX, is.avgMutationRate.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "total_drain_rate"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_drain_rate gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_drain_rate %v\n", METRICS_PREFIX, is.avgDrainRate.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "num_scan_reports_gen"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_scan_reports_gen gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_scan_reports_gen %v\n", METRICS_PREFIX, is.numScanReportsGen.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "num_scan_reports_undelivered"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_scan_reports_undelivered gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_scan_reports_undelivered %v\n", METRICS_PREFIX, is.numScanReportsUndeliv.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "avg_disk_bps"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_disk_bps gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vavg_disk_bps %v\n", METRICS_PREFIX, is.avgDiskBps.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "total_data_size"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_data_size gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_data_size %v\n", METRICS_PREFIX, is.totalDataSize.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "total_disk_size"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_disk_size gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_disk_size %v\n", METRICS_PREFIX, is.totalDiskSize.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "memory_used_storage"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_used_storage gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_used_storage %v\n", METRICS_PREFIX, is.memoryUsedStorage.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "memory_total_storage"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_total_storage gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_total_storage %v\n", METRICS_PREFIX, is.memoryTotalStorage.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "total_requests"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_requests counter\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_requests %v\n", METRICS_PREFIX, is.TotalRequests.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "total_rows_returned"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_rows_returned counter\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_rows_returned %v\n", METRICS_PREFIX, is.TotalRowsReturned.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "total_rows_scanned"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_rows_scanned counter\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_rows_scanned %v\n", METRICS_PREFIX, is.TotalRowsScanned.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "total_rows_filtered"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_rows_filtered counter\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_rows_filtered %v\n", METRICS_PREFIX, is.TotalRowsFiltered.Value()))...)
 
 	is.memoryRss.Set(getRSS())
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "memory_rss"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_rss gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_rss %v\n", METRICS_PREFIX, is.memoryRss.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "total_mutation_queue_size"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_mutation_queue_size gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_mutation_queue_size %v\n", METRICS_PREFIX, is.totalMutationQueueSize.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "total_pending_scans"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_pending_scans counter\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_pending_scans %v\n", METRICS_PREFIX, is.totalPendingScans.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "heap_in_use"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vheap_in_use gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vheap_in_use %v\n", METRICS_PREFIX, is.heapInUse.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "total_raw_data_size"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_raw_data_size gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_raw_data_size %v\n", METRICS_PREFIX, is.totalRawDataSize.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "net_avg_scan_rate"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnet_avg_scan_rate gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnet_avg_scan_rate %v\n", METRICS_PREFIX, is.netAvgScanRate.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "num_diverging_replica_indexes"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_diverging_replica_indexes gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_diverging_replica_indexes %v\n", METRICS_PREFIX, is.numDivergingReplicaIndexes.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "num_lost_replica_indexes"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_lost_replica_indexes gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vnum_lost_replica_indexes %v\n", METRICS_PREFIX, is.numLostReplicaIndexes.Value()))...)
 
+	out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "total_codebook_memory_usage"))...)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_codebook_memory_usage gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_codebook_memory_usage %v\n", METRICS_PREFIX, is.totalCodebookMemUsage.Value()))...)
 
@@ -4116,15 +4319,19 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out = populateAggregatedStorageMetrics(out)
 
 	if common.IsServerlessDeployment() {
+		out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "memory_used_actual"))...)
 		out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_used_actual gauge\n", METRICS_PREFIX))...)
 		out = append(out, []byte(fmt.Sprintf("%vmemory_used_actual %v\n", METRICS_PREFIX, is.memoryUsedActual.Value()))...)
 
+		out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "units_quota"))...)
 		out = append(out, []byte(fmt.Sprintf("# TYPE %vunits_quota gauge\n", METRICS_PREFIX))...)
 		out = append(out, []byte(fmt.Sprintf("%vunits_quota %v\n", METRICS_PREFIX, is.unitsQuota.Value()))...)
 
+		out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "units_used_actual"))...)
 		out = append(out, []byte(fmt.Sprintf("# TYPE %vunits_used_actual gauge\n", METRICS_PREFIX))...)
 		out = append(out, []byte(fmt.Sprintf("%vunits_used_actual %v\n", METRICS_PREFIX, is.unitsUsedActual.Value()))...)
 
+		out = append(out, []byte(metricHelpLine(METRICS_PREFIX, "num_tenants"))...)
 		out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_tenants gauge\n", METRICS_PREFIX))...)
 		out = append(out, []byte(fmt.Sprintf("%vnum_tenants %v\n", METRICS_PREFIX, is.numTenants.Value()))...)
 	}

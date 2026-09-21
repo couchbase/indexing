@@ -210,6 +210,32 @@
         ],
         "notes": "As index service supports filters, limits and aggregations, index service may return only a subset of rows/entries that are being scanned."
     },
+    "index_num_rows_filtered": {
+        "type": "counter",
+        "help": "Number of rows skipped by an inline filter pushed down to storage during vector index scans, for this index",
+        "uiName": "Index Scan Rows Filtered",
+        "labels": [
+            "bucket",
+            "scope",
+            "collection",
+            "index"
+        ],
+        "added": "8.1.0",
+        "notes": "Valid only for vector indexes. num_rows_scanned + num_rows_filtered gives the total rows processed by the scan pipeline."
+    },
+    "index_num_rows_reranked": {
+        "type": "counter",
+        "help": "Number of candidate rows re-ranked by exact distance after the initial approximate vector search, for this index",
+        "uiName": "Index Scan Rows Reranked",
+        "labels": [
+            "bucket",
+            "scope",
+            "collection",
+            "index"
+        ],
+        "added": "8.1.0",
+        "notes": "Valid only for vector indexes."
+    },
     "index_raw_data_size": {
         "type": "gauge",
         "help": "Encoded, uncompressed size of the index data, for this index",
@@ -473,6 +499,17 @@
         "help": "Sum of drain rate of all indexes, located on this node",
         "added": "7.2.0"
     },
+    "index_num_scan_reports_gen": {
+        "type": "gauge",
+        "help": "Number of scan reports generated, on this node",
+        "added": "8.1.0"
+    },
+    "index_num_scan_reports_undelivered": {
+        "type": "gauge",
+        "help": "Number of scan reports generated but not delivered, on this node",
+        "added": "8.1.0",
+        "notes": "Incremented when the scan response, including its report, could not be written back to the client."
+    },
     "index_avg_disk_bps": {
         "type": "gauge",
         "help": "Sum of disk bytes written per second, of all indexes, located on this node",
@@ -518,6 +555,12 @@
         "type": "counter",
         "help": "Sum of number of rows scanned during index scans across all indexes, located on this node",
         "added": "7.2.0"
+    },
+    "index_total_rows_filtered": {
+        "type": "counter",
+        "help": "Sum of rows skipped by an inline filter pushed down to storage during vector index scans, across all indexes, located on this node",
+        "added": "8.1.0",
+        "notes": "Valid only for vector indexes."
     },
     "index_memory_rss": {
         "type": "gauge",
@@ -728,6 +771,13 @@
         "help": "Number of index partitions with atleast one lost replica.",
         "added": "8.1.0",
         "notes": "Valid only for replicated indexes."
+    },
+    "index_total_codebook_memory_usage": {
+        "type": "gauge",
+        "help": "Sum of codebook memory usage across all vector indexes, located on this node",
+        "unit": "bytes",
+        "added": "8.1.0",
+        "notes": "Valid only for vector indexes."
     },
     "index_storage_hvi_memory_used": {
         "type": "gauge",
