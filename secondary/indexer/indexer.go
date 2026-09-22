@@ -14079,9 +14079,9 @@ func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c
 		minCentroidsRequired = max(1<<vm.Quantizer.Nbits, nlist)
 	}
 
-	// If cluster version is 8.1 and user asked to wait for training documents to be availble
+	// If cluster version is 8.5 and user asked to wait for training documents to be availble
 	// we will retry training in background if possible
-	if common.GetClusterVersion() >= common.INDEXER_81_VERSION &&
+	if common.GetClusterVersion() >= common.INDEXER_85_VERSION &&
 		vm.WaitForTrainList() {
 
 		if vm.TrainList != 0 { // user specified train_list
@@ -15738,7 +15738,7 @@ func (idx *indexer) buildBhiveGraphIfMissing(inst common.IndexInst) {
 
 func (idx *indexer) pruneIndexInfo(sortedIndexInfo []*IndexInfo) []*IndexInfo {
 
-	// Only prune if the cluster version is greater or equal to 8.1, before that the
+	// Only prune if the cluster version is greater or equal to 8.5, before that the
 	// index state is not populated for the index instances.
 	if clusterVersion := common.GetClusterVersion(); clusterVersion <= c.INDEXER_80_VERSION {
 		return sortedIndexInfo
@@ -15996,9 +15996,9 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 				indexName, defnId, val, expectedPartnNodeId[defnId], numPartns, indexInfo.nodeId)
 		}
 
-		// if the cluster is fully upgraded to 8.1 then only check for replica loss as older
+		// if the cluster is fully upgraded to 8.5 then only check for replica loss as older
 		// nodes will not populate this field
-		if clusterVersion >= c.INDEXER_81_VERSION {
+		if clusterVersion >= c.INDEXER_85_VERSION {
 			if _, ok := indexDefnToPartns[defnId]; !ok {
 				indexDefnToPartns[defnId] = make(map[int][]*IndexInfo)
 			}
@@ -16035,7 +16035,7 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 				"drop token. Ignoring lost partition and replica check", defnId)
 
 			// remove the Indexes which are undergoing from lost replica
-			// check as well. For clusterVersion < INDEXER_81_VERSION, this is no-op
+			// check as well. For clusterVersion < INDEXER_85_VERSION, this is no-op
 			delete(indexDefnToPartns, defnId)
 			continue
 		}
@@ -16049,7 +16049,7 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 		}
 	}
 
-	if clusterVersion >= c.INDEXER_81_VERSION {
+	if clusterVersion >= c.INDEXER_85_VERSION {
 		idx.checkForLostReplicas(expectedInstReplicaMap, indexDefnToPartns, numActiveNodes)
 	}
 }
