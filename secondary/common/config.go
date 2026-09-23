@@ -5631,6 +5631,35 @@ func (config Config) GetIndexerNumCpuPrc() int {
 	return numCpuPrc
 }
 
+// Formulas of the SystemConfig defaults computed from GOMAXPROCS; TestCPUBasedConfigs keeps the two in sync.
+// Not included: indexer.plasma.minNumShard (recomputed by applySettings), indexer.numSliceWriters (fixed at
+// bootstrap from the cgroup limit), projector.maxCpuPercent (projector setting) and the indexer.settings.* ones
+// (POST /settings writes them all to metakv, so they always count as explicitly set).
+var cpuBasedConfigs = map[string]func(ncpu int) interface{}{
+	"indexer.numSnapshotWorkers":   func(ncpu int) interface{} { return ncpu * 10 },
+	"indexer.plasma.numReaders":    func(ncpu int) interface{} { return ncpu * 3 },
+	"indexer.bhive.numReaders":     func(ncpu int) interface{} { return ncpu * 3 },
+	"indexer.bhive.numInitBuilder": func(ncpu int) interface{} { return ncpu },
+	"indexer.bhive.numBuilder":     func(ncpu int) interface{} { return ncpu / 8 }, //nolint:mnd
+}
+
+// RecomputeCPUBasedConfigs computes the CPU based settings for ncpu, except the ones explicitly set. Call it after
+// setGlobalSettings, which sets GOMAXPROCS from the indexer CPU limit.
+func (config Config) RecomputeCPUBasedConfigs(ncpu int, explicit Config) {
+	recomputed := make(map[string]interface{})
+	for key, formula := range cpuBasedConfigs {
+		if _, ok := explicit[key]; ok {
+			continue
+		}
+		if cv, ok := config[key]; ok {
+			cv.Value = formula(ncpu)
+			config[key] = cv
+			recomputed[key] = cv.Value
+		}
+	}
+	logging.Infof("Config::RecomputeCPUBasedConfigs: %v CPUs, recomputed %v", ncpu, recomputed)
+}
+
 func (config Config) String() string {
 	return string(config.Json())
 }

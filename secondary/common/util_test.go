@@ -1,11 +1,15 @@
 package common
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -307,6 +311,103 @@ func TestServerVersion(t *testing.T) {
 	} {
 		if tcase.v != int(tcase.s.GetVersion()) {
 			t.Fatalf(verMismatchStr, tcase.v, tcase.s.GetVersion())
+		}
+	}
+}
+
+func TestRecomputeCPUBasedConfigs(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(0))
+
+	n0 := runtime.GOMAXPROCS(0)
+	settings := []byte(fmt.Sprintf(`{"indexer.bhive.numReaders": %v}`, n0*3))
+	config := SystemConfig.Clone()
+	if err := config.Update(settings); err != nil {
+		t.Fatal(err)
+	}
+	explicit, err := NewConfig(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(ncpu int) {
+		t.Helper()
+		if cv := config["indexer.bhive.numBuilder"]; cv.Value != ncpu/8 {
+			t.Errorf("GOMAXPROCS %v: numBuilder %v, want %v", ncpu, cv.Value, ncpu/8)
+		}
+		if cv := config["indexer.bhive.numReaders"]; cv.Value != n0*3 {
+			t.Errorf("GOMAXPROCS %v: explicitly set numReaders %v, want %v", ncpu, cv.Value, n0*3)
+		}
+	}
+	check(n0)
+
+	ncpu := SetNumCPUs((n0 + 8) * 100)
+	config.RecomputeCPUBasedConfigs(ncpu, explicit)
+	check(ncpu)
+}
+
+func TestCPUBasedConfigs(t *testing.T) {
+	if path := os.Getenv("SYSTEM_CONFIG_DUMP"); path != "" {
+		data, err := json.Marshal(SystemConfig.Map())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ioutil.WriteFile(path, data, 0644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(0))
+
+	// SystemConfig values as built by a process started with GOMAXPROCS ncpu.
+	systemConfigAt := func(ncpu int) map[string]json.RawMessage {
+		path := filepath.Join(t.TempDir(), "config.json")
+		cmd := exec.Command(os.Args[0], "-test.run=^TestCPUBasedConfigs$")
+		cmd.Env = append(os.Environ(), "SYSTEM_CONFIG_DUMP="+path, fmt.Sprintf("GOMAXPROCS=%v", ncpu))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		data, err := ioutil.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		values := make(map[string]json.RawMessage)
+		if err := json.Unmarshal(data, &values); err != nil {
+			t.Fatal(err)
+		}
+		return values
+	}
+
+	// The exclusions listed at cpuBasedConfigs.
+	skip := map[string]bool{
+		"indexer.plasma.minNumShard": true,
+		"indexer.numSliceWriters":    true,
+		"projector.maxCpuPercent":    true,
+	}
+	for key := range SystemConfig {
+		if strings.HasPrefix(key, "indexer.settings.") {
+			skip[key] = true
+		}
+	}
+	for _, n := range []int{3, 64} {
+		config := SystemConfig.Clone()
+		ncpu := SetNumCPUs(n * 100)
+		config.RecomputeCPUBasedConfigs(ncpu, nil)
+
+		want := systemConfigAt(ncpu)
+		for key, cv := range config {
+			got, _ := json.Marshal(cv.Value)
+			if skip[key] || bytes.Equal(got, want[key]) {
+				continue
+			}
+			if _, ok := cpuBasedConfigs[key]; ok {
+				t.Errorf("%v: formula gives %s at GOMAXPROCS %v, SystemConfig has %s", key, got, ncpu, want[key])
+			} else {
+				t.Errorf("%v changes with GOMAXPROCS but is not in cpuBasedConfigs", key)
+			}
+		}
+	}
+	for key, formula := range cpuBasedConfigs {
+		if got, want := reflect.TypeOf(formula(1)), reflect.TypeOf(SystemConfig[key].DefaultVal); got != want {
+			t.Errorf("%v: formula returns %v, default is %v", key, got, want)
 		}
 	}
 }

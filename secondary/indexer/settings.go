@@ -97,7 +97,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	logging.Infof("IndexerSettingsManager: Setting numSliceWriters to %v cgroup.max_cpu_percent: %v runtime.NumCPU: %v", numCPU, sigarNumCpuPrc, runtime.NumCPU()*100)
 
 	// This method will merge metakv indexer settings onto default settings.
-	config, err := common.GetSettingsConfig(config)
+	config, explicit, err := common.GetSettingsConfigWithExplicit(config)
 	if err != nil {
 		return &s, nil, &MsgError{
 			err: Error{
@@ -109,6 +109,8 @@ func NewSettingsManager(supvCmdch MsgChannel,
 
 	// Initialize the global config settings
 	s.setGlobalSettings(nil, config)
+	config.RecomputeCPUBasedConfigs(runtime.GOMAXPROCS(0), explicit)
+	s.config = config
 
 	go func() {
 		fn := func(r int, err error) error {
@@ -614,6 +616,15 @@ func (s *settingsManager) applySettings(path string, value []byte, rev interface
 		}
 		newConfig["indexer.plasma.minNumShard"] = value
 		logging.Infof("SettingsManager::applySettings Updating 'plasma.minNumShard' setting to: %v", value.Uint64())
+	}
+
+	// If the CPU based settings have not been explicitly updated, then compute them based on max_cpu_percent
+	if path == common.IndexingSettingsMetaPath {
+		explicit, err := common.NewConfig(value)
+		if err != nil {
+			return err
+		}
+		newConfig.RecomputeCPUBasedConfigs(runtime.GOMAXPROCS(0), explicit)
 	}
 
 	s.config = newConfig
