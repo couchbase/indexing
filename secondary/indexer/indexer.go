@@ -15954,7 +15954,7 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 
 	actualInstPartnMap := make(map[uint64]map[int]map[int]bool) // defnId -> replicaId -> partnId -> true
 	expectedInstPartnMap := make(map[uint64]int)                // defnId -> num_partitions
-	expectedInstReplicaMap := make(map[uint64]int)              // defnId -> num_replicas
+	mergedReplicaCount := make(map[uint64]common.Counter)       // defnId -> merged replica counter
 	indexDefnToPartns := make(map[uint64]map[int][]*IndexInfo)  // defnId -> partnID -> []replica
 	expectedPartnNodeId := make(map[uint64]string)              // defnId -> string
 	expectedReplicaNodeId := make(map[uint64]string)            // defnId -> string
@@ -15984,7 +15984,6 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 		replicaId := indexInfo.ReplicaID
 		partnId := indexInfo.PartitionID
 		numPartns := indexInfo.NumPartitions
-		numReplicas := indexInfo.NumReplica
 
 		if _, ok := actualInstPartnMap[defnId]; !ok {
 			actualInstPartnMap[defnId] = make(map[int]map[int]bool)
@@ -16014,13 +16013,21 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 				indexDefnToPartns[defnId][partnId] = append(indexDefnToPartns[defnId][partnId], indexInfo)
 			}
 
-			if val, ok := expectedInstReplicaMap[defnId]; !ok {
-				expectedInstReplicaMap[defnId] = numReplicas
-				expectedReplicaNodeId[defnId] = indexInfo.nodeId
-			} else if val != numReplicas {
+			// NumReplica2 is a convergent counter. Nodes reporting different
+			// Incr/Decr is normal - that is how the counter propagates after
+			// ALTER INDEX ... num_replica - and the merge of every node's copy
+			// is the current count.
+			prev := mergedReplicaCount[defnId]
+			merged, _, err := prev.MergeWith(indexInfo.NumReplica2)
+			if err != nil {
 				logging.Fatalf("Indexer::checkForLostPartitionsAndLostReplica Inconsistency in the number of replica reported for "+
-					"indexName: %v, defnId: %v. Prev. recorded replicas: %v on Node: %v, curr. recorded replicas: %v on Node: %v",
-					indexName, defnId, val, expectedReplicaNodeId[defnId], numReplicas, indexInfo.nodeId)
+					"indexName: %v, defnId: %v. Prev. recorded replicas: %v on Node: %v, curr. recorded replicas: %v on Node: %v. err: %v",
+					indexName, defnId, prev, expectedReplicaNodeId[defnId], indexInfo.NumReplica2, indexInfo.nodeId, err)
+			} else {
+				if !prev.IsValid() && merged.IsValid() {
+					expectedReplicaNodeId[defnId] = indexInfo.nodeId
+				}
+				mergedReplicaCount[defnId] = merged
 			}
 		}
 
@@ -16057,12 +16064,12 @@ func (idx *indexer) checkForLostPartitionsAndLostReplica(sortedIndexInfo []*Inde
 	}
 
 	if clusterVersion >= c.INDEXER_85_VERSION {
-		idx.checkForLostReplicas(expectedInstReplicaMap, indexDefnToPartns, numActiveNodes)
+		idx.checkForLostReplicas(mergedReplicaCount, indexDefnToPartns, numActiveNodes)
 	}
 }
 
 func (idx *indexer) checkForLostReplicas(
-	expectedInstReplicaMap map[uint64]int,
+	mergedReplicaCount map[uint64]common.Counter,
 	indexDefnToPartns map[uint64]map[int][]*IndexInfo,
 	numActiveNodes int) {
 
@@ -16080,11 +16087,22 @@ func (idx *indexer) checkForLostReplicas(
 				continue
 			}
 
-			// GetNumReplica() returns the number of replicas specified when
-			// the index was created, NOT including the original instance.
-			// add 1 to count all replica instances.
-			totalExpectedInstances := expectedInstReplicaMap[defnId] + 1
-			if len(replicaIndexInfo) == totalExpectedInstances {
+			// The counter holds the number of replicas, NOT including the
+			// original instance. Add 1 to count all replica instances.
+			// An invalid counter means no node reported one - i.e. nodes on a
+			// build that does not populate NumReplica2. Skip the defn rather
+			// than check against an unknown expectation.
+			counter := mergedReplicaCount[defnId]
+			numReplica, ok := counter.Value()
+			if !ok {
+				continue
+			}
+
+			totalExpectedInstances := int(numReplica) + 1
+			// More instances than expected is not a loss. The merged counter can be
+			// ahead of a replica drop, e.g. handleCommitDropReplica updates the
+			// counter even when posting the drop-instance token fails.
+			if len(replicaIndexInfo) >= totalExpectedInstances {
 				continue // expected instances are present for this partition
 			}
 			key := fmt.Sprintf("%v:%v", replicaIndexInfo[0].IndexName, partnId)
