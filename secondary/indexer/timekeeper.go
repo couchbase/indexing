@@ -2776,6 +2776,30 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 	initTsSeq = getSeqTsFromTsVbuuid(initFlushTs)
 	minMergeTsSeq := getSeqTsFromTsVbuuid(minMergeTs)
 
+	maintTsSeq = getSeqTsFromTsVbuuid(maintFlushTs)
+
+	// MAINT_STREAM must also have flushed past minMergeTs. Below minMergeTs the
+	// real instance did not own the partitions being merged in, so the projector
+	// sent this node UpsertDeletion (discarded by the flusher for immutable
+	// indexes) instead of Upsert, while Deletion is broadcast to every endpoint
+	// and gated only by the partition map. MAINT's queue below minMergeTs is
+	// therefore delete-only for those partitions. If merged while that range is
+	// still queued, a delete for a document that was later re-created removes the
+	// live row INIT indexed, and nothing in MAINT restores it until the workload
+	// rewrites the document. Requiring MAINT >= minMergeTs ensures that range was
+	// dequeued, and dropped at the partition-map miss, before the fold. The last
+	// completed flush is used, not the flush in progress: an in-progress flush
+	// may still be applying that range when the merge goes through.
+	maintLastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[common.MAINT_STREAM][bucket]
+	if maintLastFlushedTs == nil || !getSeqTsFromTsVbuuid(maintLastFlushedTs).GreaterThanEqual(minMergeTsSeq) {
+		if forceLog || logging.IsEnabled(logging.Verbose) {
+			logging.Infof("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, "+
+				"MAINT_STREAM has not flushed past minMergeTs. Skipping stream merge. "+
+				"maintLastFlushedTs %v, minMergeTs %v", streamId, keyspaceId, maintLastFlushedTs, minMergeTs)
+		}
+		return false, nil
+	}
+
 	//if INIT_STREAM has not caught upto minMergeTs
 	flushedPastMinMergeTs := tk.ss.streamKeyspaceIdPastMinMergeTs[streamId][keyspaceId]
 
@@ -2833,7 +2857,6 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 	tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
 	lenInitTs := tsList.Len()
 
-	maintTsSeq = getSeqTsFromTsVbuuid(maintFlushTs)
 	if initTsSeq.GreaterThanEqual(maintTsSeq) {
 		return true, initFlushTs
 	} else if lenInitTs == 0 && fetchKVSeq {
