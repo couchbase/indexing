@@ -357,7 +357,7 @@
     "index_avg_sparse_nnz": {
         "type": "gauge",
         "help": "Average number of non-zero terms across all sparse vectors indexed by this index",
-        "added": "8.1.0",
+        "added": "8.5.0",
         "labels": [
             "bucket",
             "scope",
@@ -406,7 +406,7 @@
     "index_partn_num_lost_replicas": {
         "type": "gauge",
         "help": "Set to the number of lost replicas, if the index partition has any lost replicas",
-        "added": "8.1.0",
+        "added": "8.5.0",
         "labels": [
             "bucket",
             "scope",
@@ -460,22 +460,22 @@
     "index_num_bhive_dense_indexes": {
         "type": "gauge",
         "help": "Total number of bhive indexes without sparse vector, located on this node",
-        "added": "8.1.0"
+        "added": "8.5.0"
     },
     "index_num_composite_dense_indexes": {
         "type": "gauge",
         "help": "Total number of composite indexes without sparse vector, located on this node",
-        "added": "8.1.0"
+        "added": "8.5.0"
     },
     "index_num_bhive_sparse_indexes": {
         "type": "gauge",
         "help": "Total number of bhive indexes with sparse vector, located on this node",
-        "added": "8.1.0"
+        "added": "8.5.0"
     },
     "index_num_composite_sparse_indexes": {
         "type": "gauge",
         "help": "Total number of composite indexes with sparse vector, located on this node",
-        "added": "8.1.0"
+        "added": "8.5.0"
     },
     "index_num_storage_instances": {
         "type": "gauge",
@@ -769,7 +769,7 @@
     "index_num_lost_replica_indexes": {
         "type": "gauge",
         "help": "Number of index partitions with atleast one lost replica.",
-        "added": "8.1.0",
+        "added": "8.5.0",
         "notes": "Valid only for replicated indexes."
     },
     "index_total_codebook_memory_usage": {

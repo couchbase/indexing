@@ -259,7 +259,7 @@ func (attr SecExprAttr) IsSparseVector() bool {
 
 // SecExprAttrsArray is a named slice type for SecExprAttr that provides bounds-safe access methods.
 // This is important for upgrade scenarios the SecExpressionsAttrs metadata field was introduced
-// later (e.g. non-sparse, non-vector indexes pre 8.1.0)
+// later (e.g. non-sparse, non-vector indexes pre 8.5.0)
 type SecExprAttrsArray []SecExprAttr
 
 // IsSparseAttrAtPos returns true only if the slice has been populated for the given key position

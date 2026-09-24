@@ -2487,7 +2487,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 	}
 
-	if isSparseVector && (version < c.INDEXER_81_VERSION || clusterVersion < c.INDEXER_81_VERSION) {
+	if isSparseVector && (version < c.INDEXER_85_VERSION || clusterVersion < c.INDEXER_85_VERSION) {
 		return nil,
 			errors.New("Fail to create sparse vector index. This option is enabled after cluster is fully upgraded and there is no failed node."),
 			false
@@ -2615,9 +2615,9 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		return nil, err, false
 	}
 
-	// Get train_list_wait parameter from plan and set it in vector metadata if cluster version is 8.1 or above
+	// Get train_list_wait parameter from plan and set it in vector metadata if cluster version is 8.5 or above
 	trainListWait := false
-	if clusterVersion >= c.INDEXER_81_VERSION {
+	if clusterVersion >= c.INDEXER_85_VERSION {
 		trainListWait, err = o.getTrainListWaitParam(plan)
 		if err != nil {
 			return nil, err, false

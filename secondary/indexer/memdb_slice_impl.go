@@ -1177,7 +1177,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 			manifest := filepath.Join(tmpdir, "manifest.json")
 			iowrap.Os_RemoveAll(tmpdir)
 
-			keyId, cipher, _ := store.RegisterSnapshotKeyId(dir)
+			keyId, cipher, _ := store.RegisterSnapshotCurrKeyId(dir)
 
 			// Prepare for persistence.
 			if err := store.PreparePersistence(tmpdir, s.info.MainSnap, keyId, cipher); err != nil {

@@ -102,16 +102,8 @@ type storageMgr struct {
 	// used to phase out the minQuotaThreshold over time
 	plasmaLastCreateTime, bhiveLastCreateTime time.Time
 
-	// diskSnapDoneMu protects diskSnapDoneChs
-	diskSnapDoneMu sync.Mutex
-	// diskSnapDoneChs holds per-(streamId, keyspaceId) channels that are
-	// replaced+closed each time a DISK_SNAP createSnapshotWorker completes.
-	// Callers block on a channel grabbed before the snap fires; the close
-	// unblocks them when that snap's OpenSnapshot calls are all done.
-	diskSnapDoneChs map[common.StreamId]map[string]chan struct{}
-
 	// shutdownCh is closed when storageMgr shuts down (STORAGE_MGR_SHUTDOWN).
-	// Used to unblock goroutines waiting on diskSnapDoneChs or persistDoneCh.
+	// Used to unblock goroutines waiting on persistDoneCh.
 	shutdownCh chan struct{}
 }
 
@@ -166,9 +158,8 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		wrkrCh:           make(chan Message, 100),
 		shardsInTransfer: make(map[common.ShardId][]chan bool),
 
-		quotaDistCh:     make(chan bool),
-		diskSnapDoneChs: make(map[common.StreamId]map[string]chan struct{}),
-		shutdownCh:      make(chan struct{}),
+		quotaDistCh: make(chan bool),
+		shutdownCh:  make(chan struct{}),
 	}
 	s.indexInstMap.Init()
 	s.indexPartnMap.Init()
@@ -247,7 +238,7 @@ loop:
 					// shutdown storage mem tuner
 					s.signalStorageTuner(true)
 
-					// unblock any goroutines waiting on diskSnapDoneChs or persistDoneCh
+					// unblock any goroutines waiting on persistDoneCh
 					close(s.shutdownCh)
 
 					s.supvCmdch <- &MsgSuccess{}
@@ -605,58 +596,6 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 }
 
-// getDiskSnapDoneCh returns the current pending channel for (streamId, keyspaceId).
-// If none exists one is created. Callers must grab this BEFORE the disk_snap fires
-// so that the subsequent signalDiskSnapDone closes the channel they are holding.
-func (s *storageMgr) getDiskSnapDoneCh(streamId common.StreamId, keyspaceId string) chan struct{} {
-	s.diskSnapDoneMu.Lock()
-	defer s.diskSnapDoneMu.Unlock()
-
-	if s.diskSnapDoneChs[streamId] == nil {
-		s.diskSnapDoneChs[streamId] = make(map[string]chan struct{})
-	}
-	ch, ok := s.diskSnapDoneChs[streamId][keyspaceId]
-	if !ok {
-		ch = make(chan struct{})
-		s.diskSnapDoneChs[streamId][keyspaceId] = ch
-	}
-	logging.Infof("StorageMgr::getDiskSnapDoneCh returned channel isNew:%v %v keyspace:%v", !ok, streamId, keyspaceId)
-	return ch
-}
-
-// signalDiskSnapDone closes the current channel for (streamId, keyspaceId) —
-// unblocking any goroutines waiting on it — and installs a fresh channel for
-// the next waiter.  Called after wg.Wait() in createSnapshotWorker for DISK_SNAP.
-func (s *storageMgr) signalDiskSnapDone(streamId common.StreamId, keyspaceId string) {
-	s.diskSnapDoneMu.Lock()
-	defer s.diskSnapDoneMu.Unlock()
-
-	if s.diskSnapDoneChs[streamId] == nil {
-		s.diskSnapDoneChs[streamId] = make(map[string]chan struct{})
-	}
-	old := s.diskSnapDoneChs[streamId][keyspaceId]
-	// Fresh channel for the next caller
-	s.diskSnapDoneChs[streamId][keyspaceId] = make(chan struct{})
-	if old != nil {
-		logging.Infof("StorageMgr::signalDiskSnapDone closing channel for %v keyspace %v", streamId, keyspaceId)
-		close(old)
-	}
-}
-
-// closeDiskSnapDoneCh closes and removes the channel for (streamId, keyspaceId),
-// unblocking any goroutine waiting on it.  Called when a keyspace is permanently
-// removed so waiters in handleEncryptionDropKey do not block indefinitely.
-func (s *storageMgr) closeDiskSnapDoneCh(streamId common.StreamId, keyspaceId string) {
-	s.diskSnapDoneMu.Lock()
-	defer s.diskSnapDoneMu.Unlock()
-	if m := s.diskSnapDoneChs[streamId]; m != nil {
-		if ch, ok := m[keyspaceId]; ok {
-			delete(m, keyspaceId)
-			close(ch)
-		}
-	}
-}
-
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId string,
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
@@ -689,12 +628,6 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	}
 
 	wg.Wait()
-
-	// Signal any goroutines waiting for a RP
-	// to complete handleEncryptionDropKey.
-	if needsCommit || forceCommit {
-		s.signalDiskSnapDone(streamId, keyspaceId)
-	}
 
 	keyspaceStats := s.stats.GetKeyspaceStats(streamId, keyspaceId)
 	end := time.Now().UnixNano()
@@ -1588,18 +1521,6 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	indexSnapMap := s.indexSnapMap.Clone()
 
 	streamKeyspaceIdInstList := getStreamKeyspaceIdInstListFromInstMap(indexInstMap)
-
-	// Close diskSnapDoneCh for any (stream, keyspace) pairs that have disappeared,
-	// so that goroutines in handleEncryptionDropKey do not block indefinitely.
-	oldStreamKeyspaceIdInstList := s.streamKeyspaceIdInstList.Get()
-	for streamId, oldKsMap := range oldStreamKeyspaceIdInstList {
-		for keyspaceId := range oldKsMap {
-			if newKsMap, ok := streamKeyspaceIdInstList[streamId]; !ok || len(newKsMap[keyspaceId]) == 0 {
-				logging.Infof("StorageMgr::handleUpdateIndexInstMap closing diskSnapDoneCh for stream %v keyspace %v", streamId, keyspaceId)
-				s.closeDiskSnapDoneCh(streamId, keyspaceId)
-			}
-		}
-	}
 
 	s.streamKeyspaceIdInstList.Set(streamKeyspaceIdInstList)
 

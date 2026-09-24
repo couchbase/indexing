@@ -241,7 +241,7 @@ func (w *protoResponseWriter) Done(
 		ReadUnits: proto.Uint64(readUnits),
 	}
 
-	if clientVersion >= common.INDEXER_81_VERSION {
+	if clientVersion >= common.INDEXER_85_VERSION {
 		res.SrvrScanReport = packageReport(srvrScanReport)
 		go logScanReport(srvrScanReport, false)
 	}
