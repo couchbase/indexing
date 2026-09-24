@@ -9913,6 +9913,13 @@ func (idx *indexer) initFromPersistedState() error {
 		if len(inst.Pc.GetAllPartitions()) == 0 {
 			logging.Infof("initFromPersistedState Empty partitions are observed for inst: %v, changing RState to Active", inst.InstId)
 			inst.RState = c.REBAL_ACTIVE
+
+			if inst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+				logging.Infof("initFromPersistedState Resetting training phase from %v to %v for empty inst: %v",
+					inst.TrainingPhase, common.TRAINING_NOT_STARTED, inst.InstId)
+				inst.TrainingPhase = common.TRAINING_NOT_STARTED
+			}
+
 			idx.indexInstMap[inst.InstId] = inst
 			continue
 		}
