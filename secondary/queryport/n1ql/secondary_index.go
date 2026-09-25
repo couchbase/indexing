@@ -3101,6 +3101,8 @@ func n1qlindexvectortogsi(indexVector *datastore.IndexVector) *qclient.IndexVect
 		Probes:      indexVector.Probes,
 		TopNScan:    indexVector.TopNScan,
 		Rerank:      indexVector.ReRank,
+
+		SparseTopNTerms: indexVector.SparseTopNTerms,
 	}
 
 	if indexVector.QueryVector != nil {

@@ -518,12 +518,6 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	cfg.MaxSeeds = slice.sysconf["bhive.vanama.maxSeeds"].Int()
 	cfg.SparseExpansionSeeds = slice.sysconf["bhive.vanama.sparse.expansionSeeds"].Int()
 	cfg.SparseSeedTrimMassFraction = float32(slice.sysconf["bhive.vanama.sparse.seedTrimMassFraction"].Float64())
-	// One knob for query NNZ: the same setting the scan-request layer
-	// already prunes the sparse query with (TruncateConciseTopN in
-	// scan_request.go) before quantizing it for bhive — so bhive's
-	// internal prune is a consistent backstop, a no-op on queries that
-	// arrived through that path.
-	cfg.QueryPruneMaxDims = slice.sysconf["vector.sparse.maxQueryNNZ"].Int()
 	cfg.EnableInvertedIndex = slice.sysconf["bhive.invertedIndex.enable"].Bool()
 	cfg.InvertedIndexMaxPerDim = slice.sysconf["bhive.invertedIndex.maxPerDim"].Int()
 	cfg.InvertedIndexBlockSize = slice.sysconf["bhive.invertedIndex.blockSize"].Int()

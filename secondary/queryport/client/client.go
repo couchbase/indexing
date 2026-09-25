@@ -161,6 +161,7 @@ type IndexVector struct {
 	Probes            int                  // nprobes
 	TopNScan          int                  // TopNScan for Bhive Index, Override default only when  > 0
 	Rerank            bool                 // Enable reranking by using actual vector
+	SparseTopNTerms   int                  // Sparse query terms kept (top-N by |value|), Override default only when > 0
 }
 
 const (
