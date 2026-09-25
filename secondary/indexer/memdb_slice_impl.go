@@ -409,7 +409,7 @@ func (mdb *memdbSlice) initStores() error {
 		return fmt.Errorf("init memdb mainstore: %w", err)
 	}
 
-	// A corrupt keyId read error is not transient (see memdb.IsCorruptKeyIdReadError)
+	// A corrupt keyId read error is not transient (see memdb.IsDecryptionError)
 	// and such snapshots could be removedw here (memdb.SnapKeyIdReadErrors + RemoveSnapshot).
 	// For now let loadSnapshot fail on them and handle via the existing corruption path.
 
@@ -1449,9 +1449,6 @@ func (mdb *memdbSlice) getSnapshots() ([]SnapshotInfo, []string, error) {
 					bs, err = ReadEncryptedFile(f, mdb.mainstore.GetEncryptionKeyById, memdb.KDFLabelCtx, iowrap.CountDiskFailures)
 					// TBD: we never return error even before encryption changes; need to revisit
 					if err != nil && !errors.Is(err, fs.ErrNotExist) {
-						if errors.Is(err, ErrCipherKeyLookup) {
-							err = fmt.Errorf("%v: %w", memdb.ErrSnapshotKeyIdMissing, err)
-						}
 						logging.Errorf("MemDB::%v getSnapshots file:%v error:%v", mdb.Path, f, err)
 					}
 				}
@@ -1481,10 +1478,18 @@ func (mdb *memdbSlice) GetCommittedCount() uint64 {
 }
 
 func (mdb *memdbSlice) resetStores() error {
+	mdb.waitDropKeysForStoreReset()
+
+	// prevent slice concurrent DropKeys attempt on new instance being initialized
+	mdb.pauseDropKeys()
+	defer mdb.resumeDropKeys()
+
 	// This is blocking call if snap refcounts != 0
-	go mdb.mainstore.Close2(runtime.GOMAXPROCS(0))
+	store := mdb.mainstore
+	go store.Close2(runtime.GOMAXPROCS(0))
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
+			// writes are quiesced and main writers will be reset in initStores
 			mdb.back[i].Close()
 		}
 	}
@@ -1537,6 +1542,9 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	}
 
 	target := info.(*memdbSnapshotInfo)
+
+	// stops drop key
+	mdb.waitDropKeysForStoreReset()
 
 	// Remove all the disk snapshots which were created after rollback snapshot
 	snapInfos, err := mdb.GetSnapshots()
@@ -1687,9 +1695,15 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 	}
 
 	var snap *memdb.Snapshot
-	snap, err = mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
+	snap, err = func() (*memdb.Snapshot, error) {
+		// ensure there is no concurrent DropKeys rotating files in the snapshot being read
+		mdb.pauseDropKeys()
+		defer mdb.resumeDropKeys()
+
+		return mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
+	}()
 	// key-material error is a corruption error
-	if err == memdb.ErrCorruptSnapshot || err == memdb.ErrSnapshotKeyIdMissing {
+	if errors.Is(err, memdb.ErrCorruptSnapshot) || memdb.IsDecryptionError(err) {
 		err2 := err
 		err = errStorageCorrupted
 		logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to load snapshot %v error(%v : %v).",
@@ -1731,6 +1745,8 @@ func (mdb *memdbSlice) RollbackToZero(initialBuild bool) error {
 	//in the slice buffer. Timekeeper will make sure there
 	//are no flush workers before calling rollback.
 	mdb.waitPersist()
+
+	mdb.waitDropKeysForStoreReset()
 
 	// perform cleanup before resetStores so that old encrypted snapshots keys are not loaded.
 	mdb.cleanupAllOldSnapshotFiles()
@@ -2121,6 +2137,7 @@ func tryDeletememdbSlice(mdb *memdbSlice) {
 }
 
 func tryClosememdbSlice(mdb *memdbSlice) {
+	mdb.waitDropKeysForStoreReset()
 	mdb.mainstore.Close2(runtime.GOMAXPROCS(0))
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
@@ -2256,6 +2273,8 @@ func (mdb *memdbSlice) GetKeyIdList() ([][]byte, error) {
 // using the current encryption key (set via SetCurrentEncryptionKey).
 // - The call can fail if there is concurrent snapshot removal.
 // - The call may also fail if there is another concurrent drop key
+// - The call will fail if drop key is same as the current key
+// - The caller should retry if memdb.ErrRetryDropKey is returned (TBD:GSI)
 //
 // Params:
 //   - keyIds: List of key IDs to be rotated/dropped.
@@ -2269,35 +2288,61 @@ func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 		copy(kids[i], keyIds[i])
 	}
 
-	// protect concurrent dropKey with different target keyIds
-	mdb.dropKeyMu.Lock()
-	defer mdb.dropKeyMu.Unlock()
-
 	if mdb.CheckAndIncrRef() {
 		go func() {
 			var err error
 
+			// a) protect concurrent dropKey with different target keyIds
+			// b) ensures there is no concurrent rollback else DropKeys
+			// could be working on an old instance or half-baked new instance
+			mdb.dropKeyMu.Lock()
+
 			defer func() {
+				// unlock before DecrRef, which can trigger slice close
+				mdb.dropKeyMu.Unlock()
 				mdb.DecrRef()
 				if doneCh != nil {
 					doneCh <- err
 				}
 			}()
 
+			store := mdb.mainstore
+
+			// fail attempt to drop current key
+			currKeyId, _ := store.GetCurrentKeyId()
+			for i := range kids {
+				if bytes.Equal(kids[i], currKeyId) {
+					err = fmt.Errorf("%w: cannot drop the current encryption key %s",
+						memdb.ErrInvalid, string(currKeyId))
+					return
+				}
+			}
+
 			snapDirs := mdb.getSnapshotDirs()
 			for i := range snapDirs {
-				if er := mdb.mainstore.DropKeyIdsFromSnapshot(kids, snapDirs[i]); er != nil {
+				if er := store.DropKeyIdsFromSnapshot(kids, snapDirs[i]); er != nil {
 					if errors.Is(er, memdb.ErrSnapshotBusy) {
 						continue
 					}
 
-					if strings.Contains(er.Error(), "fatal") {
+					// the instance is being reset due to rollback
+					if errors.Is(er, context.Canceled) {
+						logging.Infof("memdbSlice:DropKeys IndexInstId %v PartitionId %v cancelled after %v of %v snapshots",
+							mdb.idxInstId, mdb.idxPartnId, i, len(snapDirs))
+						if err == nil {
+							err = er
+						}
+						break
+					}
+
+					if memdb.IsDecryptionError(er) {
 						// snapshot cannot be recovered, remove snapshot
 						logging.Errorf("memdbSlice:DropKeys IndexInstId %v PartitionId %v error %v, removing snapshot",
 							mdb.idxInstId, mdb.idxPartnId, er)
-						if rmErr := mdb.mainstore.RemoveSnapshot(snapDirs[i]); rmErr != nil {
+						if rmErr := store.RemoveSnapshot(snapDirs[i]); rmErr != nil {
 							logging.Errorf("memdbSlice:DropKeys failed removing snapshot %v: %v", snapDirs[i], rmErr)
 						}
+						// override previous errors
 						err = er
 						// log error for notification
 					} else if err == nil {
@@ -2305,8 +2350,34 @@ func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 					}
 				}
 			}
+
+			if err == nil {
+				if store.AnyKeyIdsExist(kids) {
+					err = memdb.ErrRetryDropKey
+				}
+			}
 		}()
+	} else if doneCh != nil {
+		doneCh <- memdb.ErrShutdown
 	}
+}
+
+// cancel and wait for cancelled drop key rotations to drain
+// this should be called only for a closing instance
+func (mdb *memdbSlice) waitDropKeysForStoreReset() {
+	if mdb.mainstore != nil {
+		mdb.mainstore.CancelDropKeyIds()
+	}
+	mdb.pauseDropKeys()
+	mdb.resumeDropKeys()
+}
+
+func (mdb *memdbSlice) pauseDropKeys() {
+	mdb.dropKeyMu.Lock()
+}
+
+func (mdb *memdbSlice) resumeDropKeys() {
+	mdb.dropKeyMu.Unlock()
 }
 
 // ///////////////////////////

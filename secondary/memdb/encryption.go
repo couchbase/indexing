@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"math"
 	"os"
@@ -53,6 +52,11 @@ var (
 
 func isDataFile(fpath string) bool {
 	return strings.HasPrefix(filepath.Base(fpath), dataFilePrefix)
+}
+
+// snapshot is verifiably damaged; a retry can never succeed
+func IsDecryptionError(err error) bool {
+	return gocbcrypto.IsDecryptionError(err)
 }
 
 type RotationType int
@@ -251,7 +255,11 @@ func (m *MemDB) restoreCurrentEncryptionKey() error {
 	return nil
 }
 
-func (m *MemDB) stopEncryption() {
+// this should be called only for a closing instance
+func (m *MemDB) CancelDropKeyIds() {
+	m.encMu.Lock()
+	defer m.encMu.Unlock()
+
 	if m.cancelCtx != nil {
 		m.cancelCtx()
 		m.cancelCtx = nil
@@ -389,7 +397,7 @@ func (m *MemDB) GetEncryptionKeyById(keyID []byte) []byte {
 		return key
 	}
 
-	return nil
+	return NullKeyId
 }
 
 // returns a copy of current encryption key ID and cipher
@@ -403,7 +411,7 @@ func (m *MemDB) GetCurrentKeyId() ([]byte, string) {
 		return keyId, gocbcrypto.CipherNameAES256GCM
 	}
 
-	return nil, gocbcrypto.CipherNameNone
+	return NullKeyId, gocbcrypto.CipherNameNone
 }
 
 // registers current keyId for a snapshot. It is called during snapshot creation
@@ -476,7 +484,7 @@ func (m *MemDB) DeregisterSnapshot(snapDir string) {
 // If keyIds of some snapshots could not be read at init, the partial list is
 // returned with ErrKeyIdListIncomplete. The caller needs to then avoid
 // purging all the keys so that any missing keyIds due to transient errors
-// can be used when needed. IsCorruptKeyIdReadError can be used to
+// can be used when needed. IsDecryptionError can be used to
 // distinguish between transient and unrecoverable errors.
 func (m *MemDB) GetActiveKeyIdList() ([][]byte, error) {
 	m.encMu.RLock()
@@ -503,10 +511,31 @@ func (m *MemDB) GetActiveKeyIdList() ([][]byte, error) {
 	return result, nil
 }
 
-// snapshot is verifiably damaged; a retry can never succeed
-func IsCorruptKeyIdReadError(err error) bool {
-	return errors.Is(err, gocbcrypto.ErrBlkInvalidChecksum) ||
-		errors.Is(err, io.ErrUnexpectedEOF)
+func (m *MemDB) AnyKeyIdsExist(keyIds [][]byte) bool {
+	if len(keyIds) == 0 {
+		return false
+	}
+
+	m.encMu.RLock()
+	defer m.encMu.RUnlock()
+
+	// partial keyId list, an unreadable snapshot may hold any of them
+	if len(m.snapKeyIdErrs) > 0 {
+		return true
+	}
+
+	for _, keyId := range keyIds {
+		if keyIdExists([][]byte{m.encKeyId}, keyId) {
+			return true
+		}
+		for _, snapKeyIds := range m.snapKeyIds {
+			if keyIdExists(snapKeyIds, keyId) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // a successful full read of a snapshot (LoadFromDisk) proves its keyIds are
@@ -974,7 +1003,7 @@ func (v *keyRotationVisitor) rotateSingleFile(ctx context.Context, file string, 
 
 // decryption error
 func (v *keyRotationVisitor) isFatalError(err error) bool {
-	return gocbcrypto.IsDecryptionError(err)
+	return IsDecryptionError(err)
 }
 
 func (m *MemDB) RemoveSnapshot(snapDir string) error {
@@ -1250,9 +1279,6 @@ func ReadFileKeyId(filepath string, getKeyId func([]byte) []byte) ([]byte, error
 	rd, err := gocbcrypto.NewCryptFileReaderWithLabel(fd, getKeyId, KDFLabelCtx, gocbcrypto.ChunkSize, false, iowrap.CountDiskFailures)
 	if err != nil {
 		logging.Errorf("MemDB::ReadFileKeyId %s: %v", filepath, err)
-		if errors.Is(err, gocbcrypto.ErrCipherKeyLookup) {
-			return nil, ErrSnapshotKeyIdMissing
-		}
 		return nil, err
 	}
 	defer rd.Reset()
@@ -1347,6 +1373,7 @@ func (g *dirOpGuard) Acquire(dir string, ctx context.Context) *dirOpCtx {
 		if dCtx, _ := g.TryAcquire(dir, ctx); dCtx != nil {
 			return dCtx
 		}
+
 		g.cancel(dir) // blocks until current op yields
 	}
 }
