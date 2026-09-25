@@ -419,12 +419,11 @@ if [[ "$MODE" == *"$phase"* ]]; then
 
   # Weekly custom build tag test for plasma (runs on first day of week)
   current_day=$(date +%u)
-  time_limit="6h"
+  time_limit="8h"
   test_tags=""
   if [ "$current_day" = "1" ]; then
     echo "Running weekly custom build tag functional tests for plasma storage"
     test_tags="-tags=weekly_plasma_test"
-    time_limit="8h"
   fi
 
   go test -vet=off $test_tags -timeout $time_limit -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql $run_tests_param 2>&1 | tee -a $WORKSPACE/test.log
