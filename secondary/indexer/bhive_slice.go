@@ -805,7 +805,8 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 	}
 
 	slice.persistFullVector = mCfg.PersistFullVector
-	slice.vectorPruneMaxDims = slice.sysconf["bhive.vector.pruneMaxDims"].Int()
+	slice.vectorPruneMaxDims = slice.idxDefn.VectorMeta.GetSparseMaxTerms(
+		slice.sysconf["bhive.vector.pruneMaxDims"].Int())
 
 	return err
 }
@@ -931,10 +932,13 @@ func (mdb *bhiveSlice) UpdateConfig(cfg common.Config) {
 	mCfg := mdb.setupMainstoreConfig()
 	bCfg := mdb.setupBackstoreConfig()
 
-	// pruning applies to vectors ingested after the change (each doc's
-	// back-entry SHA is over its pruned vector, so a mid-life change
-	// re-indexes a doc on its next mutation rather than mixing silently)
-	mdb.vectorPruneMaxDims = cfg["bhive.vector.pruneMaxDims"].Int()
+	// Pruning applies to vectors ingested after the change (each doc's
+	// back-entry SHA is over its pruned vector, so a mid-life config change
+	// re-indexes a doc on its next mutation rather than mixing silently).
+	// An index created WITH sparse_max_terms keeps its own cap and ignores
+	// the config value.
+	mdb.vectorPruneMaxDims = mdb.idxDefn.VectorMeta.GetSparseMaxTerms(
+		cfg["bhive.vector.pruneMaxDims"].Int())
 
 	mdb.mainstore.UpdateConfig(&mCfg)
 	mdb.backstore.UpdateConfig(&bCfg)

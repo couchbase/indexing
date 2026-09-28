@@ -1261,6 +1261,12 @@ type VectorMetadata struct {
 	Quantizer *VectorQuantizer `json:"quantizer,omitempty"`
 
 	SparseJLDimension int `json:"sparseJLDimension,omitempty"`
+
+	// SparseMaxTerms caps the number of non-zero dims stored per sparse
+	// document vector for this index (top-N by |value|). 0 means unset:
+	// fall back to indexer.vector.sparse.maxNNZ (composite) or
+	// indexer.bhive.vector.pruneMaxDims (bhive).
+	SparseMaxTerms int `json:"sparseMaxTerms,omitempty"`
 }
 
 func (v *VectorMetadata) Clone() *VectorMetadata {
@@ -1279,6 +1285,7 @@ func (v *VectorMetadata) Clone() *VectorMetadata {
 		TrainListWait:     v.TrainListWait,
 		Quantizer:         v.Quantizer.Clone(),
 		SparseJLDimension: v.SparseJLDimension,
+		SparseMaxTerms:    v.SparseMaxTerms,
 	}
 
 	return newMeta
@@ -1308,6 +1315,12 @@ func (v *VectorMetadata) IsEquivalent(u *VectorMetadata) bool {
 		return false
 	}
 
+	// Data pruning changes what is stored, so indexes with different
+	// per-index caps are not equivalent (0 = config default).
+	if v.SparseMaxTerms != u.SparseMaxTerms {
+		return false
+	}
+
 	return v.Quantizer.IsEquivalent(u.Quantizer)
 }
 
@@ -1319,6 +1332,15 @@ func (v *VectorMetadata) GetSparseJLDimension() int {
 		return DEFAULT_SPARSEJL_DIM
 	}
 	return v.SparseJLDimension
+}
+
+// GetSparseMaxTerms returns the per-index cap on stored sparse dims when the
+// index definition sets one, otherwise defaultVal (the indexer config value).
+func (v *VectorMetadata) GetSparseMaxTerms(defaultVal int) int {
+	if v == nil || v.SparseMaxTerms <= 0 {
+		return defaultVal
+	}
+	return v.SparseMaxTerms
 }
 
 func (v *VectorMetadata) WaitForTrainList() bool {

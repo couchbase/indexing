@@ -2411,7 +2411,8 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 				mdb.quantizedCodeBuf[workerId])
 		} else {
 			mdb.confLock.RLock()
-			maxNNZ := mdb.sysconf["vector.sparse.maxNNZ"].Int()
+			// Per-index WITH sparse_max_terms overrides the indexer-wide default.
+			maxNNZ := mdb.idxDefn.VectorMeta.GetSparseMaxTerms(mdb.sysconf["vector.sparse.maxNNZ"].Int())
 			minAbsWeight := float32(mdb.sysconf["vector.sparse.minAbsWeight"].Float64())
 			quantizeStorage := mdb.sysconf["vector.sparse.quantizeStorage"].Bool()
 			mdb.confLock.RUnlock()

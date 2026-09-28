@@ -224,7 +224,8 @@ var REQUEST_CHANNEL_COUNT = 1000
 
 var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr",
 	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio",
-	"dimension", "similarity", "description", "scan_nprobes", "train_list", "persist_full_vector", "train_list_wait", "sparsejl_dim"}
+	"dimension", "similarity", "description", "scan_nprobes", "train_list", "persist_full_vector",
+	"train_list_wait", "sparsejl_dim", "sparse_max_terms"}
 
 var ErrWaitScheduleTimeout = fmt.Errorf("Timeout in checking for schedule create token.")
 
@@ -2692,6 +2693,11 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			return nil, err, false
 		}
 
+		sparseMaxTerms, err := o.getSparseMaxTerms(plan, isSparseVector)
+		if err != nil {
+			return nil, err, false
+		}
+
 		idxDefn.VectorMeta = &c.VectorMetadata{
 			IsCompositeIndex:  isCompositeVectorIndex,
 			IsBhive:           isBhive,
@@ -2703,6 +2709,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			PersistFullVector: persistFullVector, // set to true only for BHIVE and Dense vector
 			TrainListWait:     trainListWait,
 			SparseJLDimension: sparseJLDimension,
+			SparseMaxTerms:    sparseMaxTerms,
 		}
 	}
 
@@ -3629,8 +3636,19 @@ func (o *MetadataProvider) getTrainlistParam(plan map[string]interface{}, isVect
 }
 
 func (o *MetadataProvider) getSparseJLDimension(plan map[string]interface{}, isSparseVector bool) (int, error) {
-	keyword := "sparsejl_dim"
+	return o.getSparsePositiveIntParam(plan, "sparsejl_dim", isSparseVector)
+}
 
+// getSparseMaxTerms parses the optional "sparse_max_terms" WITH parameter: the
+// per-index cap on dims stored per sparse document vector. 0 (unset)
+// means the indexer config default applies.
+func (o *MetadataProvider) getSparseMaxTerms(plan map[string]interface{}, isSparseVector bool) (int, error) {
+	return o.getSparsePositiveIntParam(plan, "sparse_max_terms", isSparseVector)
+}
+
+// getSparsePositiveIntParam parses an optional positive integer WITH parameter
+// that is only valid for sparse vector indexes. Returns 0 when absent.
+func (o *MetadataProvider) getSparsePositiveIntParam(plan map[string]interface{}, keyword string, isSparseVector bool) (int, error) {
 	if !isSparseVector {
 		if _, ok := plan[keyword]; ok {
 			return 0, fmt.Errorf("Fail to create index. '%v' parameter is expected only in sparse vector indexes. Observed it for non-sparse vector index", keyword)

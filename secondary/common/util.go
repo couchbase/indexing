@@ -954,6 +954,11 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 			withExpr += fmt.Sprintf(", \"sparsejl_dim\":%v", def.VectorMeta.SparseJLDimension)
 		}
 
+		// Add sparse_max_terms for sparse vector indexes if explicitly set (>0)
+		if def.HasSparseVector() && def.VectorMeta.SparseMaxTerms > 0 {
+			withExpr += fmt.Sprintf(", \"sparse_max_terms\":%v", def.VectorMeta.SparseMaxTerms)
+		}
+
 		if def.VectorMeta.Nprobes > 1 {
 			if len(withExpr) != 0 {
 				withExpr += ","

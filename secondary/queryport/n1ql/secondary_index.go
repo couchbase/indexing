@@ -1089,11 +1089,12 @@ type secondaryIndex struct {
 	numCentroids         int
 	numPartition         int
 
-	isBhive           bool
-	rerankFactor      int
-	persistFullVector bool // Only for BHIVE indexes
-	vectorSparseJLDim int  // SparseJL reduced dimension for sparse vector indexes
-	include           expression.Expressions
+	isBhive              bool
+	rerankFactor         int
+	persistFullVector    bool // Only for BHIVE indexes
+	vectorSparseJLDim    int  // SparseJL reduced dimension for sparse vector indexes
+	vectorSparseMaxTerms int  // Per-index cap on stored dims for sparse vector indexes (0 = config default)
+	include              expression.Expressions
 
 	secExprsAttrs c.SecExprAttrsArray
 }
@@ -1205,6 +1206,7 @@ func newSecondaryIndexFromMetaData(
 		// Set sparseJL dimension for sparse vector indexes
 		if si.isVectorSparse {
 			si.vectorSparseJLDim = indexDefn.VectorMeta.SparseJLDimension
+			si.vectorSparseMaxTerms = indexDefn.VectorMeta.SparseMaxTerms
 		}
 
 		if len(indexDefn.Include) > 0 {
@@ -1325,6 +1327,9 @@ func (si *secondaryIndex) With() map[string]interface{} {
 			// For sparse vector indexes, include sparsejl_dim if explicitly set (>0)
 			if si.vectorSparseJLDim > 0 {
 				withClause["sparsejl_dim"] = si.vectorSparseJLDim
+			}
+			if si.vectorSparseMaxTerms > 0 {
+				withClause["sparse_max_terms"] = si.vectorSparseMaxTerms
 			}
 		}
 		withClause["scan_nprobes"] = si.nprobes
