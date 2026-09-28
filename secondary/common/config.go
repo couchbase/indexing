@@ -3331,6 +3331,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.moi.encryption.dropkey_maxcpu": ConfigValue{
+		float64(0.25),
+		"ratio based on GOMAXPROCS to determine number of concurrent dropkey file rotations",
+		float64(0.25),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.storage_mode": ConfigValue{
 		"",
 		"Storage Type e.g. forestdb, memory_optimized",

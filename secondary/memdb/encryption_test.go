@@ -2367,7 +2367,7 @@ func testEncryptionUnsupportedCipher(t *testing.T, conf Config) {
 }
 
 func testEncryptionLoadSnapshotDecryptionError(t *testing.T, conf Config) {
-	t.Skip("skipping due to MB-70620")
+	//t.Skip("skipping due to MB-70620")
 
 	snapDir := "db.dump"
 	os.RemoveAll(snapDir)
@@ -2539,8 +2539,8 @@ func TestEncryptionUnsupportedCipher(t *testing.T) {
 	runTest(t, "TestEncryptionUnsupportedCipher", testEncryptionUnsupportedCipher, "encryption")
 }
 
-func TestEncryptionLoadFromDiskDecryptionError(t *testing.T) {
-	runTest(t, "TestEncryptionLoadFromDiskDecryptionError", testEncryptionLoadSnapshotDecryptionError, "encryption")
+func TestEncryptionLoadSnapshotDecryptionError(t *testing.T) {
+	runTest(t, "TestEncryptionLoadSnapshotDecryptionError", testEncryptionLoadSnapshotDecryptionError, "encryption")
 }
 
 // creates two persisted snapshots encrypted with two different keys and closes the db.

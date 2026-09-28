@@ -391,6 +391,7 @@ func (mdb *memdbSlice) initStores() error {
 	useMemMgmt := mdb.sysconf["moi.useMemMgmt"].Bool()
 	useDeltaInterleaving := mdb.sysconf["moi.useDeltaInterleaving"].Bool()
 	ioConcurrency := mdb.sysconf["moi.persistence.io_concurrency"].Float64()
+	maxDropKeyCpus := mdb.sysconf["moi.encryption.dropkey_maxcpu"].Float64()
 	mdb.confLock.RUnlock()
 
 	cfg := memdb.DefaultConfig()
@@ -409,6 +410,7 @@ func (mdb *memdbSlice) initStores() error {
 
 	// GSI place holder for encryption callback setup
 	cfg.SetEncryption(mdb.GetEncryptionKeyByIdCb, EncryptionChunkSize)
+	cfg.SetDropKeyConcurrency(maxDropKeyCpus)
 
 	cfg.Path = mdb.path
 
@@ -2260,6 +2262,7 @@ func (mdb *memdbSlice) UpdateConfig(cfg common.Config) {
 	mdb.exposeItemCopy = cfg["moi.exposeItemCopy"].Bool()
 	mdb.mainstore.SetExposeItemCopy(mdb.exposeItemCopy)
 	mdb.mainstore.SetIOConcurrency(cfg["moi.persistence.io_concurrency"].Float64())
+	mdb.mainstore.SetDropKeyConcurrency(cfg["moi.encryption.dropkey_maxcpu"].Float64())
 
 	if keySizeConfigUpdated(cfg, oldCfg) {
 		for i := 0; i < len(mdb.keySzConfChanged); i++ {
