@@ -211,6 +211,12 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	info, err := iowrap.Os_Stat(path)
 	if err != nil || err == nil && info.IsDir() {
 		iowrap.Os_Mkdir(path, 0777)
+		if _, err = iowrap.Os_Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return nil, errStoragePathNotFound // do not crash loop indexer
+			}
+			return nil, err
+		}
 	}
 
 	mdb := &memdbSlice{}
@@ -285,12 +291,13 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	}
 
 	// Mark in use key for encryption
+	// The GetKeyIdList() should never return error if initStores has succeeded
 	keys, err := mdb.GetKeyIdList()
 	if err != nil {
-		// keyids that encountered error during read make this list un-trustable, so
-		// do not return immedeately to allow slice to reconcile transient errors.
-		logging.Warnf("memdbSlice:NewMemDBSlice:GetKeyIdList Id %v IndexInstId %v "+
-			"incomplete: %v", sliceId, idxInstId, err)
+		logging.Errorf("memdbSlice:NewMemDBSlice Id %v IndexInstId %v "+
+			"error fetching keyIds: %v", sliceId, idxInstId, err)
+		mdb.closeStores()
+		return nil, err
 	}
 
 	for _, keyByte := range keys {
@@ -305,6 +312,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	// Array related initialization
 	_, mdb.isArrayDistinct, mdb.isArrayFlattened, mdb.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
 	if err != nil {
+		mdb.closeStores()
 		return nil, err
 	}
 
@@ -404,14 +412,46 @@ func (mdb *memdbSlice) initStores() error {
 
 	cfg.Path = mdb.path
 
-	mdb.mainstore, err = memdb.NewWithEncryptionConfig(cfg, mdb.getSnapshotDirs())
+	// on transient errors we should not under report snapshots;
+	// encryption keys can get purged for such snapshots
+	var snapDirs []string
+	snapDirs, err = mdb.getSnapshotDirs()
+	if err != nil {
+		return fmt.Errorf("list snapshot dirs: %w", err)
+	}
+
+	mdb.mainstore, err = memdb.NewWithEncryptionConfig(cfg, snapDirs)
 	if err != nil {
 		return fmt.Errorf("init memdb mainstore: %w", err)
 	}
 
 	// A corrupt keyId read error is not transient (see memdb.IsDecryptionError)
-	// and such snapshots could be removedw here (memdb.SnapKeyIdReadErrors + RemoveSnapshot).
-	// For now let loadSnapshot fail on them and handle via the existing corruption path.
+	// and such snapshots could be removed here
+	snapkeyIdErrs := mdb.mainstore.SnapKeyIdReadErrors()
+	for snapDir, kerr := range snapkeyIdErrs {
+		if kerr == nil { // sanity check
+			continue
+		}
+
+		logging.Errorf("MemDBSlice::initStores Slice Id %v, IndexInstId %v, PartitionId %v "+
+			"snapshot %v keyId read error: %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, snapDir, kerr)
+
+		if memdb.IsDecryptionError(kerr) {
+			if rmErr := mdb.mainstore.RemoveSnapshot(snapDir); rmErr != nil {
+				logging.Errorf("MemDBSlice::initStores Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"failed removing corrupt snapshot %v: on error:%v %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, snapDir, kerr, rmErr)
+				err = kerr
+				break // On initStores success all snapshots should be in healthy condition (based on discussion with GSI)
+			} // removal clears snapKeyIdErr
+		} else if err == nil {
+			err = kerr
+		}
+	}
+
+	if err != nil {
+		mdb.mainstore.Close()
+		return err
+	}
 
 	mdb.main = make([]*memdb.Writer, mdb.numWriters)
 	for i := 0; i < mdb.numWriters; i++ {
@@ -1332,7 +1372,14 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotIn
 		maxDiskSnaps = 1
 	}
 
-	infos, manifests, _ := mdb.getSnapshots()
+	infos, manifests, failed, corrupted, err := mdb.getSnapshots()
+	if err != nil {
+		// logging only, the cleanup api is best effot
+		logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+			"error reading all snapshot manifests, read %v failed %v corrupted %v error%v",
+			mdb.id, mdb.idxInstId, mdb.idxPartnId, len(manifests), len(failed), len(corrupted), err)
+	}
+
 	numDiskSnapshots := len(manifests)
 	var snapTs Timestamp
 	var file string
@@ -1376,18 +1423,30 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotIn
 			})
 		}
 	}
-	mdb.idxStats.numDiskSnapshots.Set(int64(numDiskSnapshots))
+
+	// unreadable snapshots are counted because they still occupy disk
+	mdb.idxStats.numDiskSnapshots.Set(int64(numDiskSnapshots + len(failed) + len(corrupted)))
 }
 
-func (mdb *memdbSlice) cleanupAllOldSnapshotFiles() {
-	manifests := mdb.getSnapshotManifests()
+func (mdb *memdbSlice) cleanupAllOldSnapshotFiles() error {
+	manifests, err := mdb.getSnapshotManifests()
+	if err != nil {
+		return err
+	}
+
+	var retErr error
 	for _, m := range manifests {
 		dir := filepath.Dir(m)
 		logging.Infof("MemDBSlice Removing disk snapshot %v", dir)
 		if err := mdb.mainstore.RemoveSnapshot(dir); err != nil {
 			logging.Errorf("MemDBSlice Removing disk snapshot %v error %v", dir, err)
+			if retErr == nil {
+				retErr = err
+			}
 		}
 	}
+
+	return retErr
 }
 
 func (mdb *memdbSlice) diskSize() int64 {
@@ -1401,7 +1460,13 @@ func (mdb *memdbSlice) diskSize() int64 {
 	return sz
 }
 
-func (mdb *memdbSlice) getSnapshotManifests() []string {
+func (mdb *memdbSlice) getSnapshotManifests() ([]string, error) {
+	// Glob ignores all fs errors (like EACCESS, EMFILE); sanity check if dirents are readable
+	if _, err := iowrap.Os_ReadDir(mdb.path); err != nil {
+		err = fmt.Errorf("unable to read snapshot manifests error:%w", err)
+		return nil, err
+	}
+
 	var files []string
 	pattern := "*/manifest.json"
 	all, _ := filepath.Glob(filepath.Join(mdb.path, pattern))
@@ -1411,32 +1476,54 @@ func (mdb *memdbSlice) getSnapshotManifests() []string {
 		}
 	}
 	sort.Strings(files)
-	return files
+	return files, nil
 }
 
-func (mdb *memdbSlice) getSnapshotDirs() []string {
-	manifests := mdb.getSnapshotManifests()
+func (mdb *memdbSlice) getSnapshotDirs() ([]string, error) {
+	manifests, err := mdb.getSnapshotManifests()
+	if err != nil {
+		return nil, err
+	}
+
 	dirs := make([]string, 0, len(manifests))
 	for _, f := range manifests {
 		dirs = append(dirs, filepath.Dir(f))
 	}
-	return dirs
+	return dirs, nil
 }
 
 // Returns snapshot info list in reverse sorted order
+// On error:
+// a) returns valid error (previously always nil) on failing to reading ANY snapshot manifests.
+// It can also report errStorageCorrupted if all (encrypted) snapshots are corrupted (keyId read error)
+// b.1) storage manager/indexer callers currently panic() on any GetSnapshots error
+// b.2) on Rollback, handleStorageRollbackDone eventually crashes the indexer;
+// Upon warmup, corrupted encrypted snapshots if any will be removed by initEncryption.
+// So the slice continues to remain usable.
+// c) As we support return list of failed and corrupted snapshot paths, there is a scope of
+// improving error handling(e.g. in Rollback, target snapshot could still be healthy for Rollback) TBD:GSI
 func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	var infos []SnapshotInfo
 	var err error
 
-	infos, _, err = mdb.getSnapshots()
+	infos, _, _, _, err = mdb.getSnapshots()
 	return infos, err
 }
 
-func (mdb *memdbSlice) getSnapshots() ([]SnapshotInfo, []string, error) {
+// a) getSnapshots returns the snapshot infos with their manifest paths, in reverse
+// sorted order.
+// b) It returns list of healthy, failed (transient errors) and corrupted snapshots
+// c) Marking the slice corrupted is left to loadSnapshot, the only path that clears the marker.
+func (mdb *memdbSlice) getSnapshots() ([]SnapshotInfo, []string, []string, []string, error) {
 	var infos []SnapshotInfo
-	var outfiles []string
+	var outfiles, failed, corrupted []string
+	var retErr error
 
-	files := mdb.getSnapshotManifests()
+	files, err := mdb.getSnapshotManifests()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
 	for i := len(files) - 1; i >= 0; i-- {
 		f := files[i]
 		info := &memdbSnapshotInfo{dataPath: filepath.Dir(f)}
@@ -1447,23 +1534,63 @@ func (mdb *memdbSlice) getSnapshots() ([]SnapshotInfo, []string, error) {
 			if err == nil {
 				if IsBytesEncrypted(bs) {
 					bs, err = ReadEncryptedFile(f, mdb.mainstore.GetEncryptionKeyById, memdb.KDFLabelCtx, iowrap.CountDiskFailures)
-					// TBD: we never return error even before encryption changes; need to revisit
-					if err != nil && !errors.Is(err, fs.ErrNotExist) {
-						logging.Errorf("MemDB::%v getSnapshots file:%v error:%v", mdb.Path, f, err)
+					// the manifest went away under us: benign race with cleanup
+					if errors.Is(err, fs.ErrNotExist) {
+						logging.Infof("MemDB::%v getSnapshots file:%v error:%v", mdb.Path, f, err)
+						continue
+					}
+
+					if err != nil {
+						if memdb.IsDecryptionError(err) {
+							corrupted = append(corrupted, info.dataPath)
+							retErr = err // overide transient errors
+						} else {
+							failed = append(failed, info.dataPath)
+						}
 					}
 				}
+			} else {
+				failed = append(failed, info.dataPath)
 			}
 
 			if err == nil {
 				if err = json.Unmarshal(bs, info); err == nil {
 					infos = append(infos, info)
 					outfiles = append(outfiles, f)
+				} else {
+					corrupted = append(corrupted, info.dataPath)
+					retErr = err
 				}
 			}
+
+			// Any manifest error that could not be read (transient or corrupt) is
+			// reported rather than skipped: callers (DropKeys) would otherwise
+			// treat a partial list as complete and leave a snapshot that still
+			// holds keys which has been purged.
+			if err != nil {
+				if retErr == nil {
+					retErr = err
+				}
+				logging.Errorf("MemDB::%v getSnapshots read file:%v error:%v", mdb.Path, f, err)
+			}
+
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			failed = append(failed, info.dataPath)
+			if retErr == nil {
+				retErr = err
+			}
+			logging.Errorf("MemDB::%v getSnapshots file:%v error:%v", mdb.Path, f, err)
 		}
 	}
 
-	return infos, outfiles, nil
+	if len(corrupted) > 0 {
+		// all snapshots corrupted
+		if len(failed) == 0 && len(infos) == 0 {
+			retErr = errStorageCorrupted
+		}
+	}
+
+	return infos, outfiles, failed, corrupted, retErr
 }
 
 func (mdb *memdbSlice) setCommittedCount() {
@@ -1494,7 +1621,9 @@ func (mdb *memdbSlice) resetStores() error {
 		}
 	}
 
+	// slice is unusable on error, indexer will anyway crash (handleStorageRollbackDone)
 	if err := mdb.initStores(); err != nil {
+		mdb.mainstore = nil
 		return err
 	}
 
@@ -1504,6 +1633,23 @@ func (mdb *memdbSlice) resetStores() error {
 
 	mdb.resetStats()
 	return nil
+}
+
+// releases everything initStores allocated.
+func (mdb *memdbSlice) closeStores() {
+	if mdb.mainstore != nil {
+		mdb.mainstore.Close()
+		mdb.mainstore = nil
+	}
+
+	for i := 0; i < cap(mdb.back); i++ {
+		if mdb.back[i] != nil {
+			mdb.back[i].Close()
+		}
+	}
+
+	mdb.main = nil
+	mdb.back = nil
 }
 
 func (mdb *memdbSlice) resetStats() {
@@ -1547,9 +1693,25 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	mdb.waitDropKeysForStoreReset()
 
 	// Remove all the disk snapshots which were created after rollback snapshot
+	// (refer comments in GetSnapshots for error handling)
 	snapInfos, err := mdb.GetSnapshots()
 	if err != nil {
 		return err
+	}
+
+	// snapInfos should include the target (concurrent RemoveSnapshot may cleanup the target)
+	// else we may endup cleaning up all possible snapshots
+	found := false
+	for _, snapInfo := range snapInfos {
+		if snapInfo.(*memdbSnapshotInfo).dataPath == target.dataPath {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("rollback target snapshot %v not found, snapInfos:%v",
+			target.dataPath, len(snapInfos))
 	}
 
 	for _, snapInfo := range snapInfos {
@@ -1563,6 +1725,8 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 		}
 	}
 
+	// reset failure will lead to indexer crash. This ensures
+	// we do not operate on a nil mainstore
 	if err = mdb.resetStores(); err != nil {
 		return err
 	}
@@ -1607,12 +1771,19 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 		if r := recover(); r != nil || err != nil {
 			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v PartitionId %v failed to recover from the snapshot %v (err=%v,%v)",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo.dataPath, r, err)
-			if err != errStorageCorrupted {
-				mdb.mainstore.RemoveSnapshot(snapInfo.dataPath)
+			// On corruption, a failed resetStores below leaves slice without mainstore
+			if store := mdb.mainstore; store != nil {
+				store.RemoveSnapshot(snapInfo.dataPath)
+			}
+
+			// On corruption, a failed resetStores below, a subsequent loadSnapshot from
+			// OpenSnapshot would panic on the uninitialized store, so exit here instead.
+			// The slice should not be marked corrupted now as restart can heal the slice
+			// (similar to successive loadSnapshots attempts)
+			if err != errStorageCorrupted || mdb.mainstore == nil {
 				os.Exit(1)
 			} else {
 				// Persist error in a file. Next time indexer comes up, required cleanup will happen.
-				mdb.mainstore.RemoveSnapshot(snapInfo.dataPath)
 				msg := fmt.Sprintf("%v", errStorageCorrupted)
 				// error file is not encrypted as currently it does not contains any instance information
 				iowrap.Ioutil_WriteFile(filepath.Join(mdb.path, "error"), []byte(msg), 0755)
@@ -1749,8 +1920,12 @@ func (mdb *memdbSlice) RollbackToZero(initialBuild bool) error {
 	mdb.waitDropKeysForStoreReset()
 
 	// perform cleanup before resetStores so that old encrypted snapshots keys are not loaded.
-	mdb.cleanupAllOldSnapshotFiles()
+	if err := mdb.cleanupAllOldSnapshotFiles(); err != nil {
+		return err
+	}
 
+	// reset failure will lead to indexer crash. This ensures
+	// we do not operate on a nil mainstore
 	err := mdb.resetStores()
 
 	mdb.lastRollbackTs = nil
@@ -2138,7 +2313,9 @@ func tryDeletememdbSlice(mdb *memdbSlice) {
 
 func tryClosememdbSlice(mdb *memdbSlice) {
 	mdb.waitDropKeysForStoreReset()
-	mdb.mainstore.Close2(runtime.GOMAXPROCS(0))
+	if mdb.mainstore != nil {
+		mdb.mainstore.Close2(runtime.GOMAXPROCS(0))
+	}
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
 			mdb.back[i].Close()
@@ -2307,7 +2484,6 @@ func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 			}()
 
 			store := mdb.mainstore
-
 			// fail attempt to drop current key
 			currKeyId, _ := store.GetCurrentKeyId()
 			for i := range kids {
@@ -2318,7 +2494,14 @@ func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 				}
 			}
 
-			snapDirs := mdb.getSnapshotDirs()
+			snapDirs, er := mdb.getSnapshotDirs()
+			if er != nil {
+				logging.Errorf("memdbSlice:DropKeys IndexInstId %v PartitionId %v drop keys error %v",
+					mdb.idxInstId, mdb.idxPartnId, er)
+				err = memdb.ErrRetryDropKey
+				return
+			}
+
 			for i := range snapDirs {
 				if er := store.DropKeyIdsFromSnapshot(kids, snapDirs[i]); er != nil {
 					if errors.Is(er, memdb.ErrSnapshotBusy) {

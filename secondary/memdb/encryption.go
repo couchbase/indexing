@@ -1138,7 +1138,10 @@ func (m *MemDB) GetEncryptionStatsCached() (EncryptionStats, error) {
 	}
 
 	status := StatusEncrypted
-	if len(snapkeyIds) == 0 || (len(snapkeyIds) == 1 && emptyKey) {
+	// if no snapshot persisted it is inaccurate to report any status e.g. on encrypted bucket flush
+	if len(snapkeyIds) == 0 {
+		status = ""
+	} else if len(snapkeyIds) == 1 && emptyKey {
 		status = StatusNotEncrypted
 	}
 
@@ -1183,7 +1186,9 @@ func (m *MemDB) GetEncryptionStatsFromDisk() (EncryptionStats, error) {
 	}
 
 	v.Status = StatusEncrypted
-	if len(v.keyId) > 0 {
+	if v.numFiles == 0 {
+		v.Status = ""
+	} else if len(v.keyId) > 0 {
 		if pending := v.numFilesPendingRencrypt + v.numFilesPendingEncrypt; pending > 0 {
 			if v.numFilesPendingRencrypt == 0 {
 				v.Status = StatusNotEncrypted // offline upgrade/recovery or encryption enabled

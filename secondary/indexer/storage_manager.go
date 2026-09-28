@@ -3536,7 +3536,7 @@ type IndexInfo struct {
 	IsArrayIndex  bool              `json:"isArrayIndex"`  // Some validations happen only for non-array indexes
 	ItemsCount    uint64            `json:"itemsCount"`    // total number of items in the snapshot at the recorded timestamp
 	NumPartitions int               `json:"numPartitions"` // maximum number of partitions defined for this index
-	NumReplica    int               `json:"numReplica,omitempty"`
+	NumReplica2   common.Counter    `json:"numReplica2"`   // convergent replica counter from this node's metadata repo, merged across nodes by the lost-replica check
 	IndexState    common.IndexState `json:"indexState,omitempty"`
 	NoSnapshot    bool              `json:"noSnapshot,omitempty"` // set when the instance exists and is healthy but has not yet created any slice snapshot
 
@@ -3589,6 +3589,11 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 	}
 
 	go func() {
+
+		// Replica counts cannot come from indexInstMap: IndexInst.Defn is a
+		// by-value snapshot taken when the instance was created and is never
+		// updated. Read this node's counters from the metadata repository.
+		replicaCounts := getLocalReplicaCounters()
 
 		// serialise on statsLock so that rollback and snapshot access
 		// do not happen simultaneously
@@ -3649,7 +3654,7 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 							PartitionID:  int(partnId),
 							Bucket:       indexInst.Defn.Bucket,
 							IsArrayIndex: indexInst.Defn.IsArrayIndex,
-							NumReplica:   indexInst.Defn.GetNumReplica(),
+							NumReplica2:  replicaCounts[uint64(indexInst.Defn.DefnId)],
 							IndexState:   indexInst.State,
 							NoSnapshot:   true,
 						}
@@ -3697,7 +3702,7 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 							Bucket:       indexInst.Defn.Bucket,
 							IsArrayIndex: indexInst.Defn.IsArrayIndex,
 							ItemsCount:   count,
-							NumReplica:   indexInst.Defn.GetNumReplica(),
+							NumReplica2:  replicaCounts[uint64(indexInst.Defn.DefnId)],
 							IndexState:   indexInst.State,
 						}
 
@@ -3720,6 +3725,41 @@ func (s *storageMgr) handleGetTimestampedItemsCount(cmd Message) {
 
 		respCh <- out
 	}()
+}
+
+// getLocalReplicaCounters returns defnId -> NumReplica2 as recorded in this
+// node's metadata repository. The counter is convergent, so this node's copy
+// may lag another node's; the caller of /stats/timestampedCounts merges the
+// copies from every node to arrive at the current value.
+func getLocalReplicaCounters() map[uint64]common.Counter {
+	out := make(map[uint64]common.Counter)
+
+	mgr := handlerContext.mgr
+	if mgr == nil {
+		return out
+	}
+
+	iter, err := mgr.NewIndexDefnIterator()
+	if err != nil {
+		logging.Warnf("storageMgr::getLocalReplicaCounters Error opening metadata iterator, err: %v", err)
+		return out
+	}
+	defer iter.Close()
+
+	for {
+		_, defn, err := iter.Next()
+		if err != nil { // iterator exhausted
+			break
+		}
+
+		counter := defn.NumReplica2
+		if !counter.IsValid() {
+			counter.InitializeCounter(defn.NumReplica)
+		}
+		out[uint64(defn.DefnId)] = counter
+	}
+
+	return out
 }
 
 func (s *storageMgr) handleEncryptionGetInUseKeys(msg Message) {
