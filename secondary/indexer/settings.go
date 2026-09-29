@@ -922,6 +922,15 @@ func validateSettings(value []byte, current common.Config, internal bool) error 
 		}
 	}
 
+	if val, ok := newConfig["indexer.timekeeper.forceCommitInterval"]; ok {
+		if interval := val.Uint64(); interval < MIN_FORCE_COMMIT_INTERVAL ||
+			interval > MAX_FORCE_COMMIT_INTERVAL {
+			return fmt.Errorf("Setting timekeeper.forceCommitInterval should be in the "+
+				"range [%v, %v] milliseconds", MIN_FORCE_COMMIT_INTERVAL,
+				MAX_FORCE_COMMIT_INTERVAL)
+		}
+	}
+
 	if val, ok := newConfig["indexer.settings.max_seckey_size"]; ok {
 		if val.Int() <= 0 {
 			return errors.New("Setting should be an integer greater than 0")

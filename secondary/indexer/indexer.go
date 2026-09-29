@@ -1524,7 +1524,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 		idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId] = true
 
-		if ts.GetSnapType() == common.FORCE_COMMIT {
+		if ts.GetSnapType() == common.FORCE_COMMIT ||
+			ts.GetSnapType() == common.FORCE_COMMIT_BHIVE {
 			idx.storageMgrCmdCh <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
 				streamId:   streamId,
 				keyspaceId: keyspaceId,
@@ -1543,6 +1544,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 			<-idx.mutMgrCmdCh
 		}
+
+	case TK_FORCE_COMMIT:
+		//fwd the message to timekeeper
+		idx.tkCmdCh <- msg
+		<-idx.tkCmdCh
 
 	case MUT_MGR_ABORT_PERSIST:
 

@@ -65,6 +65,18 @@ type timekeeper struct {
 	//maintains bucket->bucketStateEnum mapping for pause state
 	bucketPauseState map[string]bucketStateEnum
 
+	//bucketUUIDs for which a commit has to be forced even if no new mutations
+	//are arriving. Keyed by bucket UUID and not bucket name, as a bucket
+	//recreated with the same name is a different bucket and must not inherit a
+	//pending request. Protected by tk.lock.
+	forceCommitBuckets map[string]bool
+
+	//stream -> keyspaceIds which get forced commits, derived from
+	//forceCommitBuckets and the index inst map. It is recomputed whenever either
+	//of them changes so that generateNewStabilityTS, which runs every timer
+	//tick, does not have to scan the index inst map. Protected by tk.lock.
+	forceCommitKeyspaces map[common.StreamId]map[string]bool
+
 	maxTsQueueLen       int //max ts queue len per stream(not per keyspace)
 	currInitTsQueueLen  int //sum of ts queue for all the keyspaces in init stream
 	currMaintTsQueueLen int //sum of ts queue for all the keyspaces in maint stream
@@ -84,6 +96,13 @@ type InitialBuildInfo struct {
 // together for repair message
 const REPAIR_BATCH_TIMEOUT = 1000
 const KV_RETRY_INTERVAL = 5000
+
+// acceptable range in milliseconds for timekeeper.forceCommitInterval. A value
+// below the minimum creates disk snapshots too frequently for an idle keyspace.
+// A value above the maximum makes forced commits pointless, as the persist
+// interval would create the snapshot anyway.
+const MIN_FORCE_COMMIT_INTERVAL = 120000 // 2 minutes
+const MAX_FORCE_COMMIT_INTERVAL = 600000 // 10 minutes
 
 //const REPAIR_RETRY_INTERVAL = 5000
 //const REPAIR_RETRY_BEFORE_SHUTDOWN = 5
@@ -107,6 +126,9 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel, config common.Co
 		cinfoProvider:     cip,
 		cinfoProviderLock: cipLock,
 		bucketPauseState:  make(map[string]bucketStateEnum),
+
+		forceCommitBuckets:   make(map[string]bool),
+		forceCommitKeyspaces: make(map[common.StreamId]map[string]bool),
 	}
 
 	tk.indexInstMap.Init()
@@ -218,6 +240,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 
 	case TK_GET_KEYSPACE_HWT:
 		tk.handleGetKeyspaceHWT(cmd)
+
+	case TK_FORCE_COMMIT:
+		tk.handleForceCommit(cmd)
 
 	case INDEXER_INIT_PREP_RECOVERY:
 		tk.handleInitPrepRecovery(cmd)
@@ -971,6 +996,76 @@ func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 	}
 
 	tk.supvCmdch <- &MsgSuccess{}
+}
+
+// handleForceCommit enables/disables forced commits for a bucket. While enabled,
+// a FORCE_COMMIT_BHIVE is generated for every quiescent keyspace of the bucket
+// which has a bhive index, at timekeeper.forceCommitInterval cadence, so that
+// bhive recovery points are created even if no new mutations are arriving.
+func (tk *timekeeper) handleForceCommit(cmd Message) {
+
+	bucketUUID := cmd.(*MsgTKForceCommit).GetBucketUUID()
+	enable := cmd.(*MsgTKForceCommit).GetEnable()
+
+	tk.lock.Lock()
+	if enable {
+		tk.forceCommitBuckets[bucketUUID] = true
+	} else {
+		delete(tk.forceCommitBuckets, bucketUUID)
+	}
+	tk.refreshForceCommitKeyspaces()
+	forceCommitKeyspaces := fmt.Sprintf("%v", tk.forceCommitKeyspaces)
+	tk.lock.Unlock()
+
+	logging.Infof("Timekeeper::handleForceCommit bucketUUID: %v enable: %v keyspaces: %v",
+		bucketUUID, enable, forceCommitKeyspaces)
+
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
+// isForceCommitEnabled returns true if forced commits have been requested for
+// the bucket this keyspaceId belongs to and the keyspaceId has a bhive index.
+// Caller must hold tk.lock.
+func (tk *timekeeper) isForceCommitEnabled(streamId common.StreamId, keyspaceId string) bool {
+	return tk.forceCommitKeyspaces[streamId][keyspaceId]
+}
+
+// refreshForceCommitKeyspaces recomputes forceCommitKeyspaces from
+// forceCommitBuckets and the index inst map. Only a keyspaceId with a bhive
+// index of one of those buckets gets forced commits. The request is tracked by
+// bucket UUID, so the UUID of every index is taken from the index inst map.
+// Caller must hold tk.lock.
+func (tk *timekeeper) refreshForceCommitKeyspaces() {
+
+	keyspaces := make(map[common.StreamId]map[string]bool)
+
+	//forced commits are requested only for the duration of a drop key, so
+	//there is nothing to scan in the common case
+	if len(tk.forceCommitBuckets) != 0 {
+		for _, indexInst := range tk.indexInstMap.Get() {
+			//Only a MAINT_STREAM keyspace can get a forced commit. An index in
+			//CREATED state is not built yet, an index in NIL_STREAM has no timer
+			//and an INIT_STREAM keyspace is excluded by hasInitStateIndex. The
+			//merge to MAINT_STREAM distributes the index inst map, which adds the
+			//keyspace here.
+			if indexInst.State == common.INDEX_STATE_DELETED ||
+				indexInst.State == common.INDEX_STATE_CREATED ||
+				indexInst.Stream == common.INIT_STREAM ||
+				indexInst.Stream == common.NIL_STREAM ||
+				!indexInst.Defn.IsBhive() ||
+				!tk.forceCommitBuckets[indexInst.Defn.BucketUUID] {
+				continue
+			}
+
+			streamId := indexInst.Stream
+			if keyspaces[streamId] == nil {
+				keyspaces[streamId] = make(map[string]bool)
+			}
+			keyspaces[streamId][indexInst.Defn.KeyspaceId(streamId)] = true
+		}
+	}
+
+	tk.forceCommitKeyspaces = keyspaces
 }
 
 func (tk *timekeeper) handleFlushStateChange(cmd Message) {
@@ -3085,12 +3180,43 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	// Is it overdue to persist a snapshot for this streamId and keyspaceId? This path skips the
 	// mutation manager flush that is usually the first step and instead triggers just the snapshot
 	// creation which normally follows that, since no mutations have arrived to trigger a snapshot.
-	if !tk.hasInitStateIndex(streamId, keyspaceId) && tk.ss.checkCommitOverdue(streamId, keyspaceId) {
-		tsVbuuid := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId].Copy()
-		if tsVbuuid.IsSnapAligned() {
-			logging.Infof("Timekeeper:: %v %v Forcing Overdue Commit", streamId, keyspaceId)
-			tsVbuuid.SetSnapType(common.FORCE_COMMIT)
-			tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
+	//
+	// checkCommitOverdue only fires when there is data flushed to memory which is not yet
+	// persisted. A requestor which needs a recovery point(e.g. drop key) can additionally ask
+	// for a commit to be forced even when everything is already persisted, as otherwise an idle
+	// keyspace would never create one.
+	if !tk.hasInitStateIndex(streamId, keyspaceId) {
+		forced := false
+		commitDue := tk.ss.checkCommitOverdue(streamId, keyspaceId)
+		if !commitDue && tk.isForceCommitEnabled(streamId, keyspaceId) {
+			forceCommitInterval := time.Duration(tk.getForceCommitInterval()) * time.Millisecond
+			commitDue = tk.ss.checkForcedCommitDue(streamId, keyspaceId, forceCommitInterval)
+			forced = commitDue
+		}
+
+		// lastFlushedTs can be nil if nothing was ever flushed for this keyspaceId.
+		// There is nothing to commit in that case. A disk commit has to be snap
+		// aligned, which is checked before the copy as the copy is only needed
+		// if the commit is sent.
+		if lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]; commitDue &&
+			lastFlushedTs != nil && lastFlushedTs.IsSnapAligned() {
+
+			// A forced commit is only needed for new bhive recovery points,
+			// so it commits only the bhive indexes of the keyspace. Other
+			// indexes are not persisted by it, hence LastPersistTime is left
+			// alone and it is tracked on its own clock.
+			snapType := common.FORCE_COMMIT
+			if forced {
+				snapType = common.FORCE_COMMIT_BHIVE
+				tk.ss.streamKeyspaceIdLastForceCommitTime[streamId][keyspaceId] = time.Now()
+			} else {
+				tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
+			}
+			logging.Infof("Timekeeper:: %v %v Forcing Overdue Commit SnapType %v",
+				streamId, keyspaceId, snapType)
+
+			tsVbuuid := lastFlushedTs.Copy()
+			tsVbuuid.SetSnapType(snapType)
 			tk.sendNewStabilityTS(&TsListElem{ts: tsVbuuid}, keyspaceId, streamId)
 		}
 	}
@@ -3221,7 +3347,8 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 
 	var changeVec []bool
 	var countVec []uint64
-	if flushTs.GetSnapType() != common.FORCE_COMMIT {
+	if flushTs.GetSnapType() != common.FORCE_COMMIT &&
+		flushTs.GetSnapType() != common.FORCE_COMMIT_BHIVE {
 		var noChange bool
 		changeVec, noChange, countVec = tk.ss.computeTsChangeVec(streamId, keyspaceId, tsElem)
 
@@ -3285,7 +3412,8 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 	go func() {
 		//check for throttles here
 		if tk.meteringMgr != nil {
-			if flushTs.GetSnapType() != common.FORCE_COMMIT {
+			if flushTs.GetSnapType() != common.FORCE_COMMIT &&
+				flushTs.GetSnapType() != common.FORCE_COMMIT_BHIVE {
 
 				bucketName, _, _ := SplitKeyspaceId(keyspaceId)
 				_, throttleLatency, err := tk.meteringMgr.CheckQuotaAndSleep(bucketName, "", true, 0, nil)
@@ -4455,6 +4583,13 @@ func (tk *timekeeper) handleUpdateIndexInstMap(cmd Message) {
 
 	tk.stats.Set(req.GetStatsObject())
 	tk.indexInstMap.Set(common.CopyIndexInstMap(indexInstMap))
+
+	//the keyspaces which get forced commits may have changed. When no forced
+	//commit is requested, the disable in handleForceCommit has already left
+	//forceCommitKeyspaces empty, so there is nothing to recompute.
+	if len(tk.forceCommitBuckets) != 0 {
+		tk.refreshForceCommitKeyspaces()
+	}
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
@@ -5292,6 +5427,17 @@ func (tk *timekeeper) getPersistInterval() uint64 {
 	}
 
 }
+
+// getForceCommitInterval returns the minimum gap between two forced commits of
+// a keyspace. It is deliberately independent of the persist interval, as that
+// can be as high as 10 minutes while the requestor of a forced commit needs the
+// disk snapshot within a bounded time.
+func (tk *timekeeper) getForceCommitInterval() uint64 {
+	//validateSettings restricts this to [MIN_FORCE_COMMIT_INTERVAL,
+	//MAX_FORCE_COMMIT_INTERVAL]
+	return tk.config["timekeeper.forceCommitInterval"].Uint64()
+}
+
 func (tk *timekeeper) getPersistIntervalInitBuild() uint64 {
 
 	if common.GetStorageMode() == common.FORESTDB {
@@ -5320,6 +5466,9 @@ func (tk *timekeeper) setNeedsCommit(streamId common.StreamId,
 		tk.ss.streamKeyspaceIdNeedsCommitMap[streamId][keyspaceId] = true
 	case common.DISK_SNAP, common.FORCE_COMMIT:
 		tk.ss.streamKeyspaceIdNeedsCommitMap[streamId][keyspaceId] = false
+	case common.FORCE_COMMIT_BHIVE:
+		//only bhive indexes are committed, other indexes may still have data
+		//which is not yet persisted. Leave needsCommit as it is.
 	}
 
 }

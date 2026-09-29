@@ -610,7 +610,8 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	if snapType == common.DISK_SNAP ||
 		snapType == common.DISK_SNAP_OSO {
 		needsCommit = true
-	} else if snapType == common.FORCE_COMMIT || snapType == common.FORCE_COMMIT_MERGE {
+	} else if snapType == common.FORCE_COMMIT || snapType == common.FORCE_COMMIT_MERGE ||
+		snapType == common.FORCE_COMMIT_BHIVE {
 		forceCommit = true
 	}
 
@@ -662,6 +663,23 @@ func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 	if idxInst.Defn.KeyspaceId(idxInst.Stream) != keyspaceId ||
 		idxInst.Stream != streamId ||
 		idxInst.State == common.INDEX_STATE_DELETED {
+		wg.Done()
+		return
+	}
+
+	//FORCE_COMMIT_BHIVE is only for new bhive recovery points. Other indexes of
+	//the keyspace keep their current snapshot, they are persisted by a regular
+	//disk snapshot as needsCommit is not cleared for this snap type.
+	if tsVbuuid.GetSnapType() == common.FORCE_COMMIT_BHIVE && !idxInst.Defn.IsBhive() {
+		//hasAllSB is for the stream, so it applies to this index even though it
+		//is not snapshotted. Timekeeper sends it only once.
+		if hasAllSB {
+			for _, partnInst := range indexPartnMap[idxInstId] {
+				for _, slice := range partnInst.Sc.GetAllSlices() {
+					slice.SetLastRollbackTs(nil)
+				}
+			}
+		}
 		wg.Done()
 		return
 	}
@@ -2993,7 +3011,8 @@ func (s *storageMgr) assertOnNonAlignedDiskCommit(streamId common.StreamId,
 	if (streamId == common.MAINT_STREAM) &&
 		(snapType == common.DISK_SNAP ||
 			snapType == common.FORCE_COMMIT ||
-			snapType == common.FORCE_COMMIT_MERGE) && (tsVbuuid.CheckSnapAligned() == false) {
+			snapType == common.FORCE_COMMIT_MERGE ||
+			snapType == common.FORCE_COMMIT_BHIVE) && (tsVbuuid.CheckSnapAligned() == false) {
 
 		logging.Fatalf("StorageMgr::handleCreateSnapshot Disk commit timestamp is not snapshot aligned. "+
 			"Stream: %v, KeyspaceId: %v, tsVbuuid: %v", streamId, keyspaceId, tsVbuuid)
@@ -3944,6 +3963,19 @@ func (s *storageMgr) handleEncryptionUpdateKey(cmd Message) {
 	}()
 }
 
+// setForceCommit asks timekeeper to start/stop forcing commits for a bucket.
+// This is needed when a recovery point has to be created within a bounded time
+// for a bucket which may not be receiving any mutations.
+func (s *storageMgr) setForceCommit(bucketUUID string, enable bool) {
+
+	logging.Infof("StorageMgr::setForceCommit bucketUUID:%v enable:%v", bucketUUID, enable)
+	s.supvRespch <- &MsgTKForceCommit{
+		mType:      TK_FORCE_COMMIT,
+		bucketUUID: bucketUUID,
+		enable:     enable,
+	}
+}
+
 func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 
 	s.supvCmdch <- &MsgSuccess{}
@@ -4149,56 +4181,87 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 		if hasBhive && retryCount == 0 && bhiveErrRetryDropKey == ErrRetryDropKey {
 			logging.Infof("StorageMgr::handleEncryptionDropKey waiting for 3 RP creations "+
 				"post DropKeys for %v", kdt)
-			for i := 0; i < 3; i++ {
-				// Re-read maps — topology may have changed since DropKeys completed.
-				indexInstMap = s.indexInstMap.Get()
-				indexPartnMap = s.indexPartnMap.Get()
 
-				// Subscribe to the next RP completion for every bhive slice.
-				// SubscribeNextPersistDone is safe without a prior disk-snap wait:
-				// persistorLock guarantees persistDoneCh=nil and isPersistorActive=false
-				// are set together, so any channel created here is either closed by the
-				// in-progress RP or picked up and closed by the next doPersistSnapshot.
-				var postDropWaits []persistWait
-				for instId, inst := range indexInstMap {
-					if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
-						continue
-					}
-					partnMap, ok := indexPartnMap[instId]
-					if !ok {
-						continue
-					}
-					for _, partnInst := range partnMap {
-						for _, slice := range partnInst.Sc.GetAllSlices() {
-							if slice.SliceType() == SliceTypeBhive {
-								postDropWaits = append(postDropWaits, persistWait{
-									persistCh:  slice.SubscribeNextPersistDone(),
-									rollbackCh: slice.GetRollbackNotifyCh(),
-									instId:     instId,
-									partnId:    slice.IndexPartnId(),
-								})
+			// A keyspace which is not receiving any mutations does not create a
+			// disk snapshot, and hence no recovery point, on its own. Ask
+			// timekeeper to force commits for this bucket so that the wait
+			// below is bounded.
+			//
+			// The wait is done in a closure so that forced commits are disabled
+			// before respCh is written to. EncryptionMgr dispatches the next
+			// drop key for this bucket as soon as it reads respCh, and that one
+			// enables forced commits again - disabling after the write could
+			// undo the enable done by the next drop key.
+			waitErr := func() error {
+				s.setForceCommit(kdt.BucketUUID, true)
+				defer s.setForceCommit(kdt.BucketUUID, false)
+
+				for i := 0; i < 3; i++ {
+					// Re-read maps — topology may have changed since DropKeys completed.
+					indexInstMap = s.indexInstMap.Get()
+					indexPartnMap = s.indexPartnMap.Get()
+
+					// Subscribe to the next RP completion for every bhive slice.
+					// SubscribeNextPersistDone is safe without a prior disk-snap wait:
+					// persistorLock guarantees persistDoneCh=nil and isPersistorActive=false
+					// are set together, so any channel created here is either closed by the
+					// in-progress RP or picked up and closed by the next doPersistSnapshot.
+					var postDropWaits []persistWait
+					for instId, inst := range indexInstMap {
+						if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED {
+							continue
+						}
+						// An index which is not in any stream does not flush, so it
+						// creates no recovery point while it stays there. It is either
+						// created with defer_build and possibly never built, or reset on
+						// rollback to zero and waiting for its rebuild. Neither has data
+						// encrypted with the dropped key, as it was never built or its
+						// stores were reset. Waiting for it would block the drop key
+						// until it is built or dropped. A reset index is picked up by a
+						// later iteration once its rebuild puts it back in a stream.
+						if inst.Stream == common.NIL_STREAM {
+							continue
+						}
+						partnMap, ok := indexPartnMap[instId]
+						if !ok {
+							continue
+						}
+						for _, partnInst := range partnMap {
+							for _, slice := range partnInst.Sc.GetAllSlices() {
+								if slice.SliceType() == SliceTypeBhive {
+									postDropWaits = append(postDropWaits, persistWait{
+										persistCh:  slice.SubscribeNextPersistDone(),
+										rollbackCh: slice.GetRollbackNotifyCh(),
+										instId:     instId,
+										partnId:    slice.IndexPartnId(),
+									})
+								}
 							}
 						}
 					}
-				}
-				for _, pw := range postDropWaits {
-					select {
-					case <-pw.persistCh:
-					case <-pw.rollbackCh:
-						logging.Warnf("StorageMgr::handleEncryptionDropKey aborting post-DropKeys persist wait: "+
-							"slice rollback instId:%v partnId:%v", pw.instId, pw.partnId)
-						respCh <- ErrIndexRollback
-						return
-					case <-s.shutdownCh:
-						logging.Warnf("StorageMgr::handleEncryptionDropKey aborting post-DropKeys persist wait: "+
-							"storageMgr shutting down instId:%v partnId:%v", pw.instId, pw.partnId)
-						respCh <- ErrStorageMgrStopping
-						return
+					for _, pw := range postDropWaits {
+						select {
+						case <-pw.persistCh:
+						case <-pw.rollbackCh:
+							logging.Warnf("StorageMgr::handleEncryptionDropKey aborting post-DropKeys persist wait: "+
+								"slice rollback instId:%v partnId:%v", pw.instId, pw.partnId)
+							return ErrIndexRollback
+						case <-s.shutdownCh:
+							logging.Warnf("StorageMgr::handleEncryptionDropKey aborting post-DropKeys persist wait: "+
+								"storageMgr shutting down instId:%v partnId:%v", pw.instId, pw.partnId)
+							return ErrStorageMgrStopping
+						}
 					}
-				}
 
-				logging.Infof("StorageMgr::handleEncryptionDropKey post-DropKeys RP creation "+
-					"%v/3 complete for %v", i+1, kdt)
+					logging.Infof("StorageMgr::handleEncryptionDropKey post-DropKeys RP creation "+
+						"%v/3 complete for %v", i+1, kdt)
+				}
+				return nil
+			}()
+
+			if waitErr != nil {
+				respCh <- waitErr
+				return
 			}
 		}
 		if plasmaErrRetryDropKey == ErrRetryDropKey || bhiveErrRetryDropKey == ErrRetryDropKey {

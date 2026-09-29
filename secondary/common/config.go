@@ -2842,6 +2842,17 @@ var SystemConfig = Config{
 		true,  // mutable
 		false, // case-insensitive
 	},
+	"indexer.timekeeper.forceCommitInterval": ConfigValue{
+		uint64(300000), // 5 minutes
+		"Minimum interval (in milliseconds) between two forced commits of a keyspace. " +
+			"A forced commit creates a disk snapshot for a keyspace which is not receiving " +
+			"any mutations, and is requested for a bounded duration by a component which " +
+			"needs a recovery point(e.g. drop key). The persisted snapshot interval is not " +
+			"used for this as it can be as high as 10 minutes.",
+		uint64(300000),
+		true,  // mutable
+		false, // case-insensitive
+	},
 	"indexer.timekeeper.maintStream.forcedDelay": ConfigValue{
 		uint64(0),
 		"Forced delay (in milliseconds) to add before sending MsgTKStabilityTS for MAINT_STREAM. " +
