@@ -45,16 +45,26 @@ const (
 )
 
 func GetSettingsConfig(cfg Config) (Config, error) {
-	var newConfig Config
+	config, _, err := GetSettingsConfigWithExplicit(cfg)
+	return config, err
+}
+
+// GetSettingsConfigWithExplicit also returns the settings explicitly set in metakv.
+func GetSettingsConfigWithExplicit(cfg Config) (Config, Config, error) {
+	var newConfig, explicit Config
 	if security.IsToolsConfigUsed() {
-		return cfg, nil
+		return cfg, nil, nil
 	}
 	fn := func(r int, err error) error {
 		newConfig = cfg.Clone()
+		explicit = nil
 		current, _, err := metakv.Get(IndexingSettingsMetaPath)
 		if err == nil {
 			if len(current) > 0 {
 				newConfig.Update(current)
+				if explicit, err = NewConfig(current); err != nil {
+					logging.Errorf("GetSettingsConfig() failed to parse settings: %v", err)
+				}
 			}
 		} else {
 			logging.Errorf("GetSettingsConfig() failed: %v", err)
@@ -88,7 +98,7 @@ func GetSettingsConfig(cfg Config) (Config, error) {
 
 	rh := NewRetryHelper(int(maxMetaKVRetries), time.Second*3, 1, fn)
 	err := rh.Run()
-	return newConfig, err
+	return newConfig, explicit, err
 }
 
 func SetupSettingsNotifier(callb func(Config), cancelCh chan struct{}) {
