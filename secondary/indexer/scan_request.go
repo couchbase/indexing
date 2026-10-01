@@ -131,8 +131,10 @@ type ScanRequest struct {
 	User             string // For read metering
 	SkipReadMetering bool
 
-	nprobes      int
-	topNScan     int
+	nprobes         int
+	topNScan        int
+	sparseTopNTerms int
+
 	vectorPos    int
 	isVectorScan bool
 	isBhiveScan  bool
@@ -690,6 +692,17 @@ func (r *ScanRequest) setVectorIndexParams(ivec *protobuf.IndexVector) {
 	// Currently set to value from query and can be 0 its reset in setVectorIndexParamsFromDefn
 	r.nprobes = int(ivec.GetProbes())
 	r.topNScan = int(ivec.GetTopNScan())
+	r.sparseTopNTerms = int(ivec.GetSparseTopNTerms())
+}
+
+// sparseQueryPruneLimit returns the number of sparse query terms to keep for
+// this scan: the per-query value sent by the client when > 0, otherwise the
+// indexer.vector.sparse.maxQueryNNZ config default. 0 disables pruning.
+func (r *ScanRequest) sparseQueryPruneLimit(cfg common.Config) int {
+	if r.sparseTopNTerms > 0 {
+		return r.sparseTopNTerms
+	}
+	return cfg["vector.sparse.maxQueryNNZ"].Int()
 }
 
 // setVectorIndexParamsFromDefn will set vectorPos in ScanRequest and should be called after getting indexn instance
@@ -865,7 +878,7 @@ func (r *ScanRequest) getNearestCentroids() error {
 		// and Two-Step SPLADE (2024), top-N query pruning gives ~2x scan
 		// speedup at <2% effectiveness drop on SPLADE workloads.
 		cfg := r.sco.config.Load()
-		maxQueryNNZ := cfg["vector.sparse.maxQueryNNZ"].Int()
+		maxQueryNNZ := r.sparseQueryPruneLimit(cfg)
 		if maxQueryNNZ > 0 {
 			origNNZ := r.sparseQueryVector.NNZ()
 			if pruned, ok := common.TruncateConciseTopN([]float32(r.sparseQueryVector), maxQueryNNZ, nil); ok {

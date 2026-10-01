@@ -26,6 +26,7 @@ message IndexVector {
     required int32 probes        = 3;
     required int32 topNScan      = 4;
     required bool  rerank        = 5;
+    optional int32 sparseTopNTerms = 6;
 }
 
 message IndexKeyOrder {

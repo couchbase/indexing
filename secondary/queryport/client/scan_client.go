@@ -1229,6 +1229,9 @@ func (c *GsiScanClient) Scan(
 			TopNScan:    proto.Int32(int32(indexVector.TopNScan)),
 			Rerank:      proto.Bool(indexVector.Rerank),
 		}
+		if indexVector.SparseTopNTerms > 0 {
+			protoIndexVector.SparseTopNTerms = proto.Int32(int32(indexVector.SparseTopNTerms))
+		}
 		if indexVector.QuerySparseVector != nil {
 			// Encode QuerySparseVector in concise format: [float32(N), float32(idx0), ..., float32(idxN-1), val0, ..., valN-1]
 			// N and indices are stored as plain float32 casts of their integer values.

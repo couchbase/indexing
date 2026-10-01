@@ -1089,6 +1089,9 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 					if defn.VectorMeta.SparseJLDimension > 0 {
 						withObj["sparsejl_dim"] = defn.VectorMeta.SparseJLDimension
 					}
+					if defn.VectorMeta.SparseMaxTerms > 0 {
+						withObj["sparse_max_terms"] = defn.VectorMeta.SparseMaxTerms
+					}
 				}
 				if defn.VectorMeta.TrainList > 0 {
 					withObj["trainList"] = defn.VectorMeta.TrainList
