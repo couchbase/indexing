@@ -326,7 +326,8 @@ func (m *MemDB) CancelDropKeyIds() {
 }
 
 // unencrypted -> encrypted
-func (m *MemDB) encryptFileByItem(ctx context.Context, src, dst string, keyId []byte, cipher string) (uint64, error) {
+// err is a named result so the deferred writer close sees every failed return
+func (m *MemDB) encryptFileByItem(ctx context.Context, src, dst string, keyId []byte, cipher string) (_ uint64, err error) {
 	if ctx == nil || len(src) == 0 || len(dst) == 0 {
 		return 0, gocbcrypto.ErrInvalidArgs
 	}
