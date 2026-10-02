@@ -409,7 +409,7 @@ func (mdb *memdbSlice) initStores() error {
 	cfg.SetKeyComparator(byteItemCompare)
 
 	// GSI place holder for encryption callback setup
-	cfg.SetEncryption(mdb.GetEncryptionKeyByIdCb, EncryptionChunkSize)
+	cfg.SetEncryption(mdb.GetEncryptionKeyByIdCb, memdb.DefaultEncryptChunkSize)
 	cfg.SetDropKeyConcurrency(maxDropKeyCpus)
 
 	cfg.Path = mdb.path
@@ -1276,7 +1276,9 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 				moiWriterSemaphoreLk.RUnlock()
 			}()
 
+			t1 := time.Now()
 			err := store.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, keyId, cipher, nil)
+			storeDur := time.Since(t1)
 			if err == nil {
 				// Add details to snapshot info
 				s.info.Version = SNAPSHOT_META_VERSION_MOI_1
@@ -1312,7 +1314,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot, logOncePerBucket *syn
 			if err == nil {
 				dur := time.Since(t0)
 				logging.Infof("MemDBSlice Slice Id %v, Threads %d, IndexInstId %v, PartitionId %v created ondisk"+
-					" snapshot %v. Took %v", mdb.id, concurrency, mdb.idxInstId, mdb.idxPartnId, dir, dur)
+					" snapshot %v. Took %v StoreToDisk %v", mdb.id, concurrency, mdb.idxInstId, mdb.idxPartnId, dir, dur, storeDur)
 				mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
 			} else {
 				logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v failed to"+

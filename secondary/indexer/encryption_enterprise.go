@@ -17,7 +17,6 @@ const (
 	CipherNameAES256GCM = gocbcrypto.CipherNameAES256GCM
 )
 
-var EncryptionChunkSize = gocbcrypto.ChunkSize
 var ErrCipherKeyLookup = gocbcrypto.ErrCipherKeyLookup
 var ErrRetryDropKey = plasma.ErrRetryDropKey
 

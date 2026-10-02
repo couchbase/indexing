@@ -454,7 +454,7 @@ func (cfg *Config) SetEncryption(getKeyId GetKeyByIdCb, chunkSz uint32) {
 	cfg.GetKeyById = getKeyId
 	cfg.encryptChunkSize = chunkSz
 	if chunkSz == 0 {
-		cfg.encryptChunkSize = gocbcrypto.ChunkSize
+		cfg.encryptChunkSize = DefaultEncryptChunkSize
 	}
 }
 
@@ -469,7 +469,7 @@ func (cfg *Config) SetTestEncryption() {
 			outKeyId = keyId
 		}
 		return
-	}, gocbcrypto.ChunkSize)
+	}, DefaultEncryptChunkSize)
 }
 
 func (cfg *Config) SetFileType(t FileType) error {

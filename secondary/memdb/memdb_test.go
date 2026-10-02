@@ -233,6 +233,35 @@ func doUpdate(db *MemDB, wg *sync.WaitGroup, w *Writer, start, end int, version 
 	}
 }
 
+// returns an item of itemSz(i) bytes (min 8): the value of i at version, padded
+// with a pattern. nil itemSz gives the same 8 byte items as doUpdate.
+func makeSizedItem(i, version int, itemSz func(int) int) []byte {
+	val := uint64(i) + uint64(version)*10000000
+	sz := 8
+	if itemSz != nil {
+		sz = max(itemSz(i), 8)
+	}
+	buf := make([]byte, sz)
+	binary.BigEndian.PutUint64(buf, val)
+	for j := 8; j < sz; j++ {
+		buf[j] = byte(val) + byte(j)
+	}
+	return buf
+}
+
+// doUpdate with items sized by itemSz
+func doUpdateSized(wg *sync.WaitGroup, w *Writer, start, end int, version int, itemSz func(int) int) {
+	defer wg.Done()
+	for ; start < end; start++ {
+		if version > 1 {
+			if !w.Delete(makeSizedItem(start, version-1, itemSz)) {
+				panic("delete failed")
+			}
+		}
+		w.Put(makeSizedItem(start, version, itemSz))
+	}
+}
+
 func testInsertPerf(t *testing.T, testConf Config) {
 	var wg sync.WaitGroup
 	db := NewWithConfig(testConf)

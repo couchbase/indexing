@@ -15,7 +15,6 @@ const (
 	CipherNameAES256GCM = "AES-256-GCM"
 )
 
-var EncryptionChunkSize = uint32(32 * 1024)
 var ErrCipherKeyLookup = errors.New("cipher key lookup failed")
 var ErrRetryDropKey = errors.New("drop key retry")
 
