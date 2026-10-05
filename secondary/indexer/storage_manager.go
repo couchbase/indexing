@@ -4142,9 +4142,9 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 
 		// Check if at least one bhive/plasma slice returns ErrRetryDropKey
 		// For bhive ErrRetryDropKey, RP creation steps are required :MB-71944
-		// For plasma ErrRetryDropKey, only retries of slice.DropKey are required.
+		// For plasma/memdb ErrRetryDropKey, only retries of slice.DropKey are required.
 		var bhiveErrRetryDropKey error
-		var plasmaErrRetryDropKey error
+		var dropKeyRetryErr error
 		var errMu sync.Mutex
 
 		//Storage encryption
@@ -4212,9 +4212,9 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 									defer errMu.Unlock()
 									if slice.SliceType() == SliceTypeBhive {
 										bhiveErrRetryDropKey = ErrRetryDropKey
-									} else if slice.SliceType() == SliceTypePlasma {
-										plasmaErrRetryDropKey = ErrRetryDropKey
-									}	
+									} else if slice.SliceType() == SliceTypePlasma || slice.SliceType() == SliceTypeMemdb {
+										dropKeyRetryErr = ErrRetryDropKey
+									}
 								}()
 							} else {
 								select {
@@ -4350,9 +4350,9 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 						"%v/%v complete for %v", i+1, numRPWaits, kdt)
 
 					// The RPs holding the dropped key may already be gone. If no
-					// bhive slice needs more of them, stop forcing RPs. A plasma
+					// bhive slice needs more of them, stop forcing RPs. A plasma/memdb
 					// ErrRetryDropKey from the first DropKeys stays as it is, as
-					// plasma completes on the regular drop key retries.
+					// plasma/memdb complete on the regular drop key retries.
 					bhiveRetry, err := s.retryDropKeys(kdt, dropKeyIdsBytes)
 					if err != nil {
 						return err
@@ -4373,7 +4373,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 				return
 			}
 		}
-		if plasmaErrRetryDropKey == ErrRetryDropKey || bhiveErrRetryDropKey == ErrRetryDropKey {
+		if dropKeyRetryErr == ErrRetryDropKey || bhiveErrRetryDropKey == ErrRetryDropKey {
 			logging.Warnf("StorageMgr::handleEncryptionDropKey slice returned ErrRetryDropKey %v", kdt)
 			respCh <- ErrRetryDropKey
 			return

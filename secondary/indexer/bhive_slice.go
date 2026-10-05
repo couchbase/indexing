@@ -3407,6 +3407,10 @@ func (mdb *bhiveSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 	go func() {
 		var err error
 		defer func() {
+
+			if errors.Is(err, plasma.ErrRetryDropKey) || errors.Is(err, plasma.ErrDropKeyBusy) {
+				err = ErrRetryDropKey
+			}
 			if doneCh != nil {
 				doneCh <- err
 			}
