@@ -25,7 +25,9 @@ const (
 func MetakvGet(path string, v interface{}) (bool, error) {
 	raw, _, err := metakv.Get(path)
 	if err != nil {
-		logging.Fatalf("MetakvGet: Failed to fetch %s from metakv: %s", path, err.Error())
+		// Caller handles the error and failures can be transient (e.g. a
+		// node leaving the cluster), so log at Info rather than Fatal.
+		logging.Infof("MetakvGet: Failed to fetch %s from metakv: %s", path, err.Error())
 	}
 
 	if raw == nil {

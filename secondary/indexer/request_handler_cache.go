@@ -538,7 +538,7 @@ func (rhc *requestHandlerCache) readFile(filepath string, kdfLabel []byte) ([]by
 		return data
 	}
 
-	content, err := ReadEncryptedFile(filepath, getKey, nil, nil)
+	content, err := ReadEncryptedFile(filepath, getKey, kdfLabel, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ReadEncryptedFile %v: %w", filepath, err)
 	}
