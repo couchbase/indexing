@@ -2387,7 +2387,6 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 				// For training related errors, update error in instance meta and
 				// return the error to caller. "builder" will use this error
 				// information to skip retry of index build
-
 				m.setScheduleFlagAndUpdateErr(defn, *inst, false, true, build_err.Error())
 				errList = append(errList, errors.New(fmt.Sprintf("Index %v fails to build for reason: %v", defn.Name, build_err)))
 			} else {
@@ -4146,14 +4145,20 @@ func (m *LifecycleMgr) findNumValidProxy(bucket, scope, collection string,
 
 // canRetryBuildError determines whether a particular build error can be retried.
 // Index builds are never retried in rebalance as Rebalancer would never learn their fates.
+// The exception is a retryable train list size error, which heals on its own once enough
+// documents arrive and which rebalance proceeds past regardless, so it is always retried.
 func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error, isRebalOrResume bool) bool {
 
-	if inst == nil || isRebalOrResume || inst.RState != uint32(common.REBAL_ACTIVE) {
+	if inst == nil {
 		return false
 	}
 
 	if common.IsRetryableTrainListSizeError(err.Error()) {
 		return true
+	}
+
+	if isRebalOrResume || inst.RState != uint32(common.REBAL_ACTIVE) {
+		return false
 	}
 
 	if common.IsVectorTrainingError(err.Error()) {

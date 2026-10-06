@@ -18,13 +18,16 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/couchbase/gocbcrypto"
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
+	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -38,6 +41,8 @@ const (
 	StatusEncrypted     = "encrypted"
 	StatusNotEncrypted  = "not_encrypted"
 	StatusPartEncrypted = "partially_encrypted"
+
+	defaultDropKeyConcurrency = float64(0.25)
 )
 
 var (
@@ -48,7 +53,19 @@ var (
 
 	// use empty slice for unencrypted files
 	NullKeyId = []byte{}
+
+	// limit number of concurrent files during key rotation
+	gDropKeySem         *semaphore.Weighted
+	gDropKeySemLk       sync.Mutex
+	gDropKeySemCap      int
+	gDropKeyConcurrency int
 )
+
+func init() {
+	gDropKeySemCap = runtime.NumCPU()
+	gDropKeySem = semaphore.NewWeighted(int64(gDropKeySemCap))
+	gDropKeyConcurrency = gDropKeySemCap
+}
 
 func isDataFile(fpath string) bool {
 	return strings.HasPrefix(filepath.Base(fpath), dataFilePrefix)
@@ -183,6 +200,48 @@ func DefaultCbCryptoConfig() gocbcrypto.Config {
 	return cfg
 }
 
+// a) On nodes with GOMAXPROCS < NumCPU, gDropKeySemCap oversubscribes.
+// The function should be called to update concurrency based on current GOMAXPROCS
+// b) may block on global drop-key semaphore if there are ongoing drop key operations
+func updateDropKeyConcurrency(maxCpu float64) (err error) {
+	gDropKeySemLk.Lock()
+	defer gDropKeySemLk.Unlock()
+
+	// timeout if config update is blocked due to concurrent rotation
+	var cfgTimeo = 5 * time.Second
+
+	to := max(int(maxCpu*float64(runtime.GOMAXPROCS(-1))), 1)
+	if to > gDropKeySemCap {
+		to = gDropKeySemCap
+	}
+
+	if to == gDropKeyConcurrency {
+		return
+	}
+
+	if to < gDropKeyConcurrency {
+		ctx, cancel := context.WithTimeout(context.Background(), cfgTimeo)
+		defer cancel()
+
+		for to < gDropKeyConcurrency {
+			err = gDropKeySem.Acquire(ctx, 1)
+			if err != nil {
+				logging.Warnf("MemDB dropkey concurrency update %v -> %v failed: %v",
+					gDropKeyConcurrency, to, err)
+				return
+			}
+			gDropKeyConcurrency--
+		}
+
+	} else {
+		gDropKeySem.Release(int64(to - gDropKeyConcurrency))
+		gDropKeyConcurrency = to
+	}
+
+	logging.Infof("MemDB dropkey concurrency: %v", to)
+	return
+}
+
 func (m *MemDB) NewEncryptionContext(keyId []byte, cipher string) (gocbcrypto.EncryptionContext, error) {
 	if cipher == gocbcrypto.CipherNameAES256GCM {
 		if len(keyId) == 0 {
@@ -267,7 +326,8 @@ func (m *MemDB) CancelDropKeyIds() {
 }
 
 // unencrypted -> encrypted
-func (m *MemDB) encryptFileByItem(ctx context.Context, src, dst string, keyId []byte, cipher string) (uint64, error) {
+// err is a named result so the deferred writer close sees every failed return
+func (m *MemDB) encryptFileByItem(ctx context.Context, src, dst string, keyId []byte, cipher string) (_ uint64, err error) {
 	if ctx == nil || len(src) == 0 || len(dst) == 0 {
 		return 0, gocbcrypto.ErrInvalidArgs
 	}
@@ -689,6 +749,10 @@ func (m *MemDB) DropKeyIdsFromSnapshot(keyIds [][]byte, snapDir string) error {
 	if len(keyIds) == 0 {
 		return ErrInvalid
 	}
+
+	// apply config change before acquiring dirGuard. A shrink may block
+	// on concurrent in-flight rotations and must not hold up snapshot cleanup
+	updateDropKeyConcurrency(m.getDropKeyConcurrency())
 
 	// make sure the snapshot keys are readable
 	err := m.clearSnapKeyIdReadErr(snapDir)

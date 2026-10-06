@@ -24,7 +24,6 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb/skiplist"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
-	"golang.org/x/sync/semaphore"
 )
 
 var version = 1
@@ -87,12 +86,10 @@ var (
 	dbInstancesCount         int64
 	gWriteBarrier            *writeBarrier
 	gWriteBarrierInitializer sync.Once
-	gDropKeySem              *semaphore.Weighted // limit number of concurrent files during key rotation
 )
 
 func init() {
 	dbInstances = skiplist.New()
-	gDropKeySem = semaphore.NewWeighted(int64(runtime.GOMAXPROCS(0)))
 }
 
 func CompareMemDB(this unsafe.Pointer, that unsafe.Pointer) int {
@@ -108,6 +105,7 @@ func DefaultConfig() Config {
 	cfg.SetFileType(RawdbFile)
 	cfg.useMemoryMgmt = false
 	cfg.refreshRate = defaultRefreshRate
+	cfg.SetDropKeyConcurrency(defaultDropKeyConcurrency)
 	return cfg
 }
 
@@ -426,8 +424,9 @@ type Config struct {
 	ioConcurrency float64
 
 	// encryption at rest
-	GetKeyById       GetKeyByIdCb // it should be thread safe
-	encryptChunkSize uint32
+	GetKeyById         GetKeyByIdCb // it should be thread safe
+	encryptChunkSize   uint32
+	dropKeyConcurrency uint64 // float64 bits, accessed atomically
 }
 
 func (cfg *Config) SetKeyComparator(cmp KeyCompare) {
@@ -439,6 +438,16 @@ func (cfg *Config) SetKeyComparator(cmp KeyCompare) {
 
 func (cfg *Config) SetIOConcurrency(c float64) {
 	cfg.ioConcurrency = c
+}
+
+func (cfg *Config) SetDropKeyConcurrency(maxDropKeyConcurrency float64) {
+	if maxDropKeyConcurrency > 0 {
+		atomic.StoreUint64(&cfg.dropKeyConcurrency, math.Float64bits(maxDropKeyConcurrency))
+	}
+}
+
+func (cfg *Config) getDropKeyConcurrency() float64 {
+	return math.Float64frombits(atomic.LoadUint64(&cfg.dropKeyConcurrency))
 }
 
 func (cfg *Config) SetEncryption(getKeyId GetKeyByIdCb, chunkSz uint32) {
