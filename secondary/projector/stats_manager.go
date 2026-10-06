@@ -683,14 +683,14 @@ func (sm *statsManager) setupLogStatsLogger() error {
 		return nil
 	}
 
-	sm.logStatsHandler = common.NewLogStatsFileHandler(sm.getLogStatsKey, sm.getKeyCipherByID)
+	numfiles := config["projector.statsLogFcount"].Int()
+	sm.logStatsHandler = common.NewLogStatsFileHandler(sm.getLogStatsKey, sm.getKeyCipherByID, numfiles)
 
 	filename := config["projector.statsLogFname"].String()
 	common.CleanupStaleStatsLogTempFiles(logDir, filename)
 
 	filefullpath := filepath.Join(logDir, filename)
 
-	numfiles := config["projector.statsLogFcount"].Int()
 	sizelimit := config["projector.statsLogFsize"].Int()
 
 	var err error

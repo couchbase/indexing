@@ -3856,6 +3856,7 @@ func NewStatsManager(supvCmdch MsgChannel,
 	s.logStatsHandler = common.NewLogStatsFileHandler(
 		s.encCallbacks.getLogStatsKey,
 		s.encCallbacks.getKeyCipherById,
+		config["statsLogFcount"].Int(),
 	)
 
 	go s.run()

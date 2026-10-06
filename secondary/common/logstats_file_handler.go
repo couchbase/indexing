@@ -59,19 +59,44 @@ type LogStatsFileHandler struct {
 	refreshMu sync.Mutex
 	// current active + all rotated
 	inUseIDs atomic.Pointer[[]string]
+	// numFiles given to logstats; Open uses it to rotate an active file aside
+	numFiles int
 }
+
+// key of the active stats log is not available, e.g. deleted by ns_server.
+var errStatsLogKeyUnavailable = errors.New("key is unavailable")
 
 func NewLogStatsFileHandler(
 	getKey func() (keyID string, key []byte),
 	getKeyByID func(keyID string) ([]byte, string),
+	numFiles int,
 ) *LogStatsFileHandler {
-	return &LogStatsFileHandler{getKey: getKey, getKeyByID: getKeyByID}
+	return &LogStatsFileHandler{getKey: getKey, getKeyByID: getKeyByID, numFiles: numFiles}
 }
 
 // DisableCompression is a no-op needed to satisfy interface contract
 func (h *LogStatsFileHandler) DisableCompression() {}
 
+// Open resumes the active file. An active file whose key is unavailable, e.g.
+// deleted by ns_server, is rotated aside unread and a fresh active file is started.
 func (h *LogStatsFileHandler) Open(fileName string) (logstats.SyncWriteCloser, int, error) {
+	w, sz, err := h.openActive(fileName)
+	if err == nil || !errors.Is(err, errStatsLogKeyUnavailable) {
+		h.RefreshKeyIdList(fileName)
+		return w, sz, err
+	}
+	if !h.mu.TryLock() {
+		// Called from skipRotate: a key operation owns the files, do not move them.
+		h.RefreshKeyIdList(fileName)
+		return nil, 0, err
+	}
+	defer h.mu.Unlock()
+	logging.Warnf("LogStatsFileHandler::Open rotating unreadable active log aside to %v.1, starting a new one err:%v",
+		fileName, err)
+	return h.rotateLocked(fileName, h.numFiles)
+}
+
+func (h *LogStatsFileHandler) openActive(fileName string) (logstats.SyncWriteCloser, int, error) {
 	if err := os.MkdirAll(filepath.Dir(fileName), 0o755); err != nil {
 		return nil, 0, err
 	}
@@ -84,7 +109,8 @@ func (h *LogStatsFileHandler) Open(fileName string) (logstats.SyncWriteCloser, i
 			keyBytes, _ = h.getKeyByID(keyID)
 		}
 		if len(keyBytes) == 0 {
-			return nil, 0, fmt.Errorf("LogStatsFileHandler.Open: active log encrypted with key %q but key is unavailable", keyID)
+			return nil, 0, fmt.Errorf("LogStatsFileHandler.Open: active log encrypted with key %q: %w",
+				keyID, errStatsLogKeyUnavailable)
 		}
 		f, err := os.OpenFile(fileName, os.O_RDWR, 0o644)
 		if err != nil {
@@ -100,7 +126,6 @@ func (h *LogStatsFileHandler) Open(fileName string) (logstats.SyncWriteCloser, i
 			f.Close()
 			return nil, 0, err
 		}
-		h.RefreshKeyIdList(fileName)
 		return &encryptedStatsWriter{f: f, w: w}, int(fi.Size()), nil
 	}
 	f, err := os.OpenFile(fileName, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -112,7 +137,6 @@ func (h *LogStatsFileHandler) Open(fileName string) (logstats.SyncWriteCloser, i
 		f.Close()
 		return nil, 0, err
 	}
-	h.RefreshKeyIdList(fileName)
 	return f, int(fi.Size()), nil
 }
 
@@ -124,6 +148,10 @@ func (h *LogStatsFileHandler) Rotate(fileName string, numFiles int) (logstats.Sy
 		return h.skipRotate(fileName)
 	}
 	defer h.mu.Unlock()
+	return h.rotateLocked(fileName, numFiles)
+}
+
+func (h *LogStatsFileHandler) rotateLocked(fileName string, numFiles int) (logstats.SyncWriteCloser, int, error) {
 	// Deferred so every exit path leaves the cache describing what is on disk.
 	defer h.RefreshKeyIdList(fileName)
 
