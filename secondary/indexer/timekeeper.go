@@ -719,15 +719,21 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 	}
 
 	if fts, ok := keyspaceIdFlushInProgressTsMap[keyspaceId]; ok {
-		//store the last flushed TS
-		keyspaceIdLastFlushedTsMap[keyspaceId] = fts
-		if fts != nil {
-			tk.ss.updateLastMutationVbuuid(streamId, keyspaceId, fts)
-		}
+		// A FORCE_COMMIT_BHIVE TS is a copy of the last flushed TS that
+		// snapshots only bhive indexes, and nothing is flushed for it. Keep the
+		// stored snap type (e.g. NO_SNAP) so the INMEM_SNAP decision for the
+		// other indexes is not lost, and leave the mutation state as it is.
+		if fts == nil || fts.GetSnapType() != common.FORCE_COMMIT_BHIVE {
+			//store the last flushed TS
+			keyspaceIdLastFlushedTsMap[keyspaceId] = fts
+			if fts != nil {
+				tk.ss.updateLastMutationVbuuid(streamId, keyspaceId, fts)
+			}
 
-		// check if each flush time is snap aligned. If so, make a copy.
-		if fts != nil && fts.IsSnapAligned() {
-			tk.ss.streamKeyspaceIdLastSnapAlignFlushedTsMap[streamId][keyspaceId] = fts.Copy()
+			// check if each flush time is snap aligned. If so, make a copy.
+			if fts != nil && fts.IsSnapAligned() {
+				tk.ss.streamKeyspaceIdLastSnapAlignFlushedTsMap[streamId][keyspaceId] = fts.Copy()
+			}
 		}
 
 		//update internal map to reflect flush is done
@@ -3206,16 +3212,12 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 		// lastFlushedTs can be nil if nothing was ever flushed for this keyspaceId.
 		// A disk commit has to be snap aligned, as on MAINT_STREAM and in CATCHUP the
 		// mutations arrive in deduplicated DCP snapshots. An initial build need not
-		// be, same as the init build disk snapshot. A commit taken with an open OSO
-		// snapshot is not a valid resume point, as OSO sends mutations in key order,
-		// so it waits for the OSO snapshot to close.
+		// be, same as the init build disk snapshot. With an open OSO snapshot,
+		// storage manager persists the commit as DISK_SNAP_OSO.
 		lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
 		canCommit := lastFlushedTs != nil && lastFlushedTs.IsSnapAligned()
 		if tk.hasInitStateIndexNoCatchup(streamId, keyspaceId) {
 			canCommit = lastFlushedTs != nil
-		}
-		if canCommit && lastFlushedTs.HasOpenOSOSnap() {
-			canCommit = false
 		}
 
 		if canCommit {
