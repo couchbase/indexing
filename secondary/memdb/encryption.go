@@ -43,6 +43,13 @@ const (
 	StatusPartEncrypted = "partially_encrypted"
 
 	defaultDropKeyConcurrency = float64(0.25)
+
+	// a) encryption buffer size for readers/writers.
+	// b) For 4K, native go encrypt (~700ns) is 1.5x faster than cgo openssl.
+	// Also 4K keeps it inline with deltaFlushThreshold for delta files
+	// c) encryption blocks are self-describing, so files written with variable
+	// chunk size (e.g. 32K by gocbcrypto file apis) remain readable.
+	DefaultEncryptChunkSize = uint32(4 * 1024)
 )
 
 var (
@@ -1345,14 +1352,13 @@ func ReadFileKeyId(filepath string, getKeyId func([]byte) []byte) ([]byte, error
 		}
 	}()
 
-	rd, err := gocbcrypto.NewCryptFileReaderWithLabel(fd, getKeyId, KDFLabelCtx, gocbcrypto.ChunkSize, false, iowrap.CountDiskFailures)
+	keyId, err := gocbcrypto.ReadKeyId(fd, getKeyId, iowrap.CountDiskFailures)
 	if err != nil {
 		logging.Errorf("MemDB::ReadFileKeyId %s: %v", filepath, err)
 		return nil, err
 	}
-	defer rd.Reset()
 
-	return rd.GetCtx().KeyID(), nil
+	return keyId, nil
 }
 
 // key compare helper

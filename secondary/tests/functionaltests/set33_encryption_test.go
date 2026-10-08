@@ -43,7 +43,11 @@ func GetFileEncryptionKeyId(filepath string) (string, error) {
 		return "", err
 	}
 
-	idLen := bs[27]
+	idLen := int(bs[27])
+	if 28+idLen > len(bs) {
+		return "", fmt.Errorf("file %v has invalid key id length %v in header, "+
+			"it is most likely not encrypted", filepath, idLen)
+	}
 	keyId := bs[28 : 28+idLen]
 	return string(keyId), nil
 }
@@ -3076,5 +3080,399 @@ func TestStatsLogInUseKeysAfterIndexerRestart(t *testing.T) {
 				"in-use set; recovery forgot it. on disk=%v reported=%v",
 				k, keySetToSlice(stillOnDisk), reported)
 		}
+	}
+}
+
+// getNumCommits returns the num_commits stat for an index. num_commits is
+// incremented once per snapshot that is committed to disk, so it goes up by one
+// for every recovery point created for a bhive index.
+func getNumCommits(t *testing.T, indexName, bucketName string) int64 {
+	stats := secondaryindex.GetIndexStats(indexName, bucketName,
+		clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	statKey := bucketName + ":" + indexName + ":num_commits"
+	val, ok := stats[statKey]
+	if !ok {
+		t.Fatalf("stat %v not found for index %v", statKey, indexName)
+	}
+
+	numCommits, ok := val.(float64)
+	if !ok {
+		t.Fatalf("stat %v has unexpected type %T", statKey, val)
+	}
+	return int64(numCommits)
+}
+
+// bhiveKeyHeaders holds the number of bhive files found per encryption key id,
+// counted separately for the live data files and for the files of the recovery
+// points. The recovery points are the ones the drop key flow waits to be
+// recreated, so they are the interesting half after a drop.
+type bhiveKeyHeaders struct {
+	data     map[string]int
+	recovery map[string]int
+}
+
+// logBhiveKeyHeaders walks the bhive files of an index and logs the encryption
+// key id present in each file header. Unlike verifyBhiveEncryption the recovery
+// directories are walked as well, so that a caller can assert that a dropped
+// key is gone from the recovery points and not only from the live data.
+func logBhiveKeyHeaders(indexDir, label string, t *testing.T) bhiveKeyHeaders {
+
+	dirsToCheck := []string{
+		filepath.Join(indexDir, "mainIndex"),
+		filepath.Join(indexDir, "docIndex"),
+	}
+
+	headers := bhiveKeyHeaders{
+		data:     make(map[string]int),
+		recovery: make(map[string]int),
+	}
+
+	for _, dir := range dirsToCheck {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+
+		// Walk recurses into <dir>/recovery, so the recovery points are covered
+		// without listing them separately and without counting a file twice.
+		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			if matched, _ := filepath.Match("log.*.data", filepath.Base(path)); !matched {
+				return nil
+			}
+
+			// An unencrypted file has no key id header, reading one out of it
+			// gives a garbage length. Counted under "" as elsewhere in this file.
+			encrypted, err := IsFileEncrypted(path)
+			if err != nil {
+				t.Errorf("Error checking if %v is encrypted: %v", path, err)
+				return nil
+			}
+
+			keyId := ""
+			if encrypted {
+				keyId, err = GetFileEncryptionKeyId(path)
+				if err != nil {
+					t.Errorf("Error reading key header of %v: %v", path, err)
+					return nil
+				}
+			}
+
+			fileType := "data"
+			if strings.Contains(path, string(os.PathSeparator)+"recovery"+string(os.PathSeparator)) {
+				fileType = "recovery"
+				headers.recovery[keyId]++
+			} else {
+				headers.data[keyId]++
+			}
+
+			if encrypted {
+				log.Printf("%v: %v file %v header keyId %q", label, fileType, path, keyId)
+			} else {
+				log.Printf("%v: %v file %v is NOT encrypted", label, fileType, path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Errorf("Error walking directory %v: %v", dir, err)
+		}
+	}
+
+	log.Printf("%v: key header summary(keyId -> num files) data %v recovery %v",
+		label, headers.data, headers.recovery)
+	return headers
+}
+
+// findFilesWithKey returns the bhive files, live data and recovery points both,
+// whose contents mention keyId anywhere. logBhiveKeyHeaders only reads the key
+// the file is encrypted with, this is the stronger check that no trace of a
+// dropped key is left behind in any record.
+//
+// A file which is not encrypted cannot be holding the dropped key, and the
+// content match is a plain substring search which could hit the key id by
+// chance in plaintext, so such files are counted as having no trace.
+func findFilesWithKey(indexDir, keyId string, t *testing.T) []string {
+
+	dirsToCheck := []string{
+		filepath.Join(indexDir, "mainIndex"),
+		filepath.Join(indexDir, "docIndex"),
+	}
+
+	var found []string
+	for _, dir := range dirsToCheck {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+
+		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			if matched, _ := filepath.Match("log.*.data", filepath.Base(path)); !matched {
+				return nil
+			}
+
+			encrypted, err := IsFileEncrypted(path)
+			if err != nil {
+				t.Errorf("Error checking if %v is encrypted: %v", path, err)
+				return nil
+			}
+			if !encrypted {
+				log.Printf("File %v is not encrypted, no trace of key %v", path, keyId)
+				return nil
+			}
+
+			hasKey, err := FileHasKey(path, keyId)
+			if err != nil {
+				t.Errorf("Error checking if %v has key %v: %v", path, keyId, err)
+				return nil
+			}
+			if hasKey {
+				found = append(found, path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Errorf("Error walking directory %v: %v", dir, err)
+		}
+	}
+	return found
+}
+
+// TestIndexEncryptionBhiveDropKeyIdleBucket verifies that a drop key completes
+// for a bucket with a bhive index which is not receiving any mutations.
+//
+// After DropKeys, storage manager waits for 3 successive recovery points per
+// bhive slice so that the recovery points holding the dropped key are cleaned
+// up. A keyspace with no incoming mutations does not generate a stability TS
+// and hence creates no disk snapshot(and no recovery point) on its own, so this
+// wait used to never finish. Timekeeper now forces a commit for such a keyspace
+// every indexer.timekeeper.forceCommitInterval while the drop key is waiting.
+//
+// The test sets the forced commit interval to its minimum of 2 minutes and the
+// persisted snapshot interval well beyond the test duration, so every recovery
+// point observed here can only have come from a forced commit.
+func TestIndexEncryptionBhiveDropKeyIdleBucket(t *testing.T) {
+
+	skipIfNotPlasma(t)
+
+	const forceCommitInterval = 2 * time.Minute // MIN_FORCE_COMMIT_INTERVAL
+	const numRPsAwaited = 3                     // RPs storage manager waits for post DropKeys
+	const persistInterval = 600000              // 10 minutes, must outlast the test
+
+	// numRPsAwaited forced commits take numRPsAwaited*forceCommitInterval as the
+	// first one is due one interval after the last persist. 15 seconds of slack
+	// is allowed on top for the drop key to reach storage manager and for the
+	// stats of the last commit to be published.
+	const rpWaitTimeout = numRPsAwaited*forceCommitInterval + 15*time.Second
+
+	// time allowed for the rotated out key to expire and be dropped
+	const dekDropWait = 45 * time.Second
+
+	// settle time after the last recovery point, so that its cleanup of the
+	// older recovery points is on disk before the files are checked
+	const postRPSettle = 40 * time.Second
+
+	bucketName := "default"
+	nodeKv := 0
+	nodeIndex := 1
+	idx1 := "idx_bhive_idle_dropkey"
+
+	kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(2 * time.Second)
+
+	vectorSetup(t, bucketName, "", "", numDocs)
+
+	addBucketEncryptionKey(nodeKv, bucketName, "key1", 30)
+	keyUpdatedTime := time.Now()
+
+	resp, err := getAllEncryptionKeys(nodeIndex)
+	FailTestIfError(err, "Error in getAllEncryptionKeys", t)
+
+	keyId := 0
+	for _, keymap := range resp {
+		usageIfc, ok := keymap["usage"].([]interface{})
+		if !ok {
+			t.Fatalf("Failed to get usage: %v", keymap["usage"])
+		}
+
+		var usage []string
+		for _, u := range usageIfc {
+			if str, ok := u.(string); ok {
+				usage = append(usage, str)
+			}
+		}
+		if hasBucketEncryptionUsage(bucketName, usage) {
+			keyId = max(keyId, int(math.Round(keymap["id"].(float64))))
+		}
+	}
+	keyIdStr := strconv.Itoa(keyId)
+	err = updateBucketEncryptionKey(bucketName, nodeIndex, keyIdStr)
+	FailTestIfError(err, "Error in updateBucketEncryptionKey", t)
+
+	defer func() {
+		err := updateBucketEncryptionKey(bucketName, nodeIndex, "-1")
+		tc.HandleError(err, "Error in reverting bucket encryption key")
+
+		e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+		tc.HandleError(e, "Error in DropAllSecondaryIndexes")
+
+		kvutility.DeleteBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+		time.Sleep(2 * time.Second)
+
+		err = deleteBucketEncryptionKey(nodeIndex, keyIdStr)
+		tc.HandleError(err, "Error in deleteBucketEncryptionKey")
+	}()
+
+	node := clusterconfig.Nodes[nodeIndex]
+	stmt := fmt.Sprintf("CREATE VECTOR INDEX "+idx1+
+		" ON default(sift VECTOR)"+
+		" WITH { \"dimension\":128, \"description\": \"IVF,SQ8\", \"similarity\":\"L2_SQUARED\", \"nodes\":[\"%v\"], \"defer_build\":true};", node)
+	err = createWithDeferAndBuild(idx1, bucketName, "", "", stmt, defaultIndexActiveTimeout*2)
+	FailTestIfError(err, "Error in creating "+idx1, t)
+
+	// From here on no more documents are loaded, so the keyspace is idle.
+
+	// The persist interval has to outlast the test so that a recovery point can
+	// only come from a forced commit. For plasma/bhive the moi key is the one
+	// which is read, indexer.settings.persisted_snapshot.interval is not mapped
+	// to it.
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.moi.interval",
+		float64(persistInterval), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	FailTestIfError(err, "Error in setting persisted_snapshot.moi.interval", t)
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.timekeeper.forceCommitInterval",
+		float64(forceCommitInterval/time.Millisecond), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	FailTestIfError(err, "Error in setting timekeeper.forceCommitInterval", t)
+
+	defer func() {
+		err := secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.moi.interval",
+			float64(600000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Error in reverting persisted_snapshot.moi.interval")
+
+		err = secondaryindex.ChangeIndexerSettings("indexer.timekeeper.forceCommitInterval",
+			float64(300000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Error in reverting timekeeper.forceCommitInterval")
+	}()
+
+	// Let the snapshots of the build settle before taking the baseline.
+	time.Sleep(60 * time.Second)
+
+	// Encryption was enabled before the index was created, so everything the
+	// build wrote has to be encrypted with the in use key.
+	bucketUUID, err := c.GetBucketUUID(kvaddress, bucketName)
+	FailTestIfError(err, "Failed to get bucket UUID", t)
+
+	storageDir := getIndexStorageDirOnNode(clusterconfig.Nodes[nodeIndex], t)
+	indexDir, err := getDirWithPrefix(filepath.Join(storageDir, "@bhive", bucketUUID+"_"))
+	FailTestIfError(err, "Failed to get index directory", t)
+	log.Printf("%v: index directory %v", t.Name(), indexDir)
+
+	ekeyIds, err := getInUseKeyIds(nodeIndex, "service_bucket", bucketUUID)
+	FailTestIfError(err, "Failed to get in use key ids", t)
+
+	keyBeforeDrop, err := filterNonEmptyKeyId(ekeyIds)
+	FailTestIfError(err, "Failed to filter non empty key id", t)
+	log.Printf("%v: index built with in use key %q", t.Name(), keyBeforeDrop)
+
+	if !verifyBhiveEncryption(indexDir, keyBeforeDrop, t) {
+		t.Fatalf("Bhive index data is NOT encrypted with key %v after the build",
+			keyBeforeDrop)
+	}
+
+	baseline := getNumCommits(t, idx1, bucketName)
+	log.Printf("%v: num_commits after build is %v", t.Name(), baseline)
+
+	// Control check - with no drop key in progress an idle keyspace must not
+	// commit at all. Anything committed here would make the counts below
+	// meaningless.
+	time.Sleep(forceCommitInterval + 30*time.Second)
+	idleCommits := getNumCommits(t, idx1, bucketName)
+	if idleCommits != baseline {
+		t.Fatalf("Idle keyspace committed without a drop key in progress. "+
+			"num_commits went from %v to %v", baseline, idleCommits)
+	}
+	log.Printf("%v: num_commits still %v after an idle interval", t.Name(), idleCommits)
+
+	// Drop the DEK the index data is encrypted with. Rotate first as the active
+	// key cannot be dropped, then expire the rotated out key.
+	diffInSeconds := int(time.Since(keyUpdatedTime).Seconds())
+	setBypassEncrCfgRestrictions(nodeKv)
+	setDekRotationInterval(bucketName, nodeKv, diffInSeconds+5)
+	setDekLifetime(bucketName, nodeKv, diffInSeconds+20)
+
+	defer func() {
+		setDekRotationInterval(bucketName, nodeKv, 86400)
+		setDekLifetime(bucketName, nodeKv, 86400)
+	}()
+
+	// Give the rotated out key time to expire so that the drop key is issued to
+	// the indexer. rpWaitTimeout below covers only the recovery point wait and
+	// not this, so it is waited out separately.
+	log.Printf("%v: waiting %v for the dropped key to reach the indexer",
+		t.Name(), dekDropWait)
+	time.Sleep(dekDropWait)
+
+	dropKeyStart := time.Now()
+	deadline := dropKeyStart.Add(rpWaitTimeout)
+	log.Printf("%v: waiting up to %v for %v recovery points at %v intervals",
+		t.Name(), rpWaitTimeout, numRPsAwaited, forceCommitInterval)
+
+	// Every forced commit creates one recovery point per bhive slice, so
+	// num_commits has to go up by numRPsAwaited.
+	lastCommits := baseline
+	lastCommitTime := dropKeyStart
+
+	for lastCommits-baseline < numRPsAwaited && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Second)
+
+		currCommits := getNumCommits(t, idx1, bucketName)
+		if currCommits == lastCommits {
+			continue
+		}
+
+		log.Printf("%v: num_commits %v -> %v after %v", t.Name(), lastCommits,
+			currCommits, time.Since(lastCommitTime).Round(time.Second))
+		lastCommits = currCommits
+		lastCommitTime = time.Now()
+	}
+
+	numForced := lastCommits - baseline
+	elapsed := time.Since(dropKeyStart).Round(time.Second)
+
+	if numForced < numRPsAwaited {
+		t.Fatalf("Only %v of %v recovery points created in %v after dropKey. An idle "+
+			"keyspace is not being forced to commit, dropKey would wait indefinitely.",
+			numForced, numRPsAwaited, elapsed)
+	}
+
+	log.Printf("%v: %v recovery points created in %v after dropKey", t.Name(),
+		numForced, elapsed)
+
+	time.Sleep(postRPSettle)
+
+	// The forced commits re-encrypted the data with the new key and gave
+	// cleanupOldRecoveryPoints the 3 rounds it needs to purge the recovery
+	// points holding the dropped key. Log what every file is encrypted with now
+	// and require that nothing mentions the dropped key any more, in the live
+	// data or in the recovery points.
+	logBhiveKeyHeaders(indexDir, "after drop", t)
+
+	if leftOver := findFilesWithKey(indexDir, keyBeforeDrop, t); len(leftOver) != 0 {
+		t.Errorf("Dropped key %v is still present in %v bhive files after %v recovery "+
+			"points: %v", keyBeforeDrop, len(leftOver), numForced, leftOver)
+	} else {
+		log.Printf("%v: no trace of the dropped key %v is left in %v", t.Name(),
+			keyBeforeDrop, indexDir)
 	}
 }

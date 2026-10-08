@@ -1043,14 +1043,15 @@ func (tk *timekeeper) refreshForceCommitKeyspaces() {
 	//there is nothing to scan in the common case
 	if len(tk.forceCommitBuckets) != 0 {
 		for _, indexInst := range tk.indexInstMap.Get() {
-			//Only a MAINT_STREAM keyspace can get a forced commit. An index in
-			//CREATED state is not built yet, an index in NIL_STREAM has no timer
-			//and an INIT_STREAM keyspace is excluded by hasInitStateIndex. The
-			//merge to MAINT_STREAM distributes the index inst map, which adds the
-			//keyspace here.
+			//Only a keyspace in a stream can get a forced commit. An index in
+			//CREATED state is not built yet and an index in NIL_STREAM has no
+			//timer. A change of stream, e.g. the merge to MAINT_STREAM,
+			//distributes the index inst map, which updates the keyspace here.
+			//For a drop key on the slice of such an index, e.g. with
+			//defer_build:true, handleEncryptionDropKey updates its active key
+			//with SetCurrentEncryptionKey, so it needs no recovery point.
 			if indexInst.State == common.INDEX_STATE_DELETED ||
 				indexInst.State == common.INDEX_STATE_CREATED ||
-				indexInst.Stream == common.INIT_STREAM ||
 				indexInst.Stream == common.NIL_STREAM ||
 				!indexInst.Defn.IsBhive() ||
 				!tk.forceCommitBuckets[indexInst.Defn.BucketUUID] {
@@ -3185,21 +3186,39 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	// persisted. A requestor which needs a recovery point(e.g. drop key) can additionally ask
 	// for a commit to be forced even when everything is already persisted, as otherwise an idle
 	// keyspace would never create one.
-	if !tk.hasInitStateIndex(streamId, keyspaceId) {
-		forced := false
-		commitDue := tk.ss.checkCommitOverdue(streamId, keyspaceId)
-		if !commitDue && tk.isForceCommitEnabled(streamId, keyspaceId) {
-			forceCommitInterval := time.Duration(tk.getForceCommitInterval()) * time.Millisecond
-			commitDue = tk.ss.checkForcedCommitDue(streamId, keyspaceId, forceCommitInterval)
-			forced = commitDue
+	initBuild := tk.hasInitStateIndex(streamId, keyspaceId)
+
+	// The overdue commit is never issued for an initial build, which has its own
+	// persist interval. A forced commit is, as a bhive index in INIT_STREAM can
+	// hold a recovery point which a drop key is waiting for.
+	forced := false
+	commitDue := false
+	if !initBuild {
+		commitDue = tk.ss.checkCommitOverdue(streamId, keyspaceId)
+	}
+	if !commitDue && tk.isForceCommitEnabled(streamId, keyspaceId) {
+		forceCommitInterval := time.Duration(tk.getForceCommitInterval()) * time.Millisecond
+		commitDue = tk.ss.checkForcedCommitDue(streamId, keyspaceId, forceCommitInterval)
+		forced = commitDue
+	}
+
+	if commitDue {
+		// lastFlushedTs can be nil if nothing was ever flushed for this keyspaceId.
+		// A disk commit has to be snap aligned, as on MAINT_STREAM and in CATCHUP the
+		// mutations arrive in deduplicated DCP snapshots. An initial build need not
+		// be, same as the init build disk snapshot. A commit taken with an open OSO
+		// snapshot is not a valid resume point, as OSO sends mutations in key order,
+		// so it waits for the OSO snapshot to close.
+		lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
+		canCommit := lastFlushedTs != nil && lastFlushedTs.IsSnapAligned()
+		if tk.hasInitStateIndexNoCatchup(streamId, keyspaceId) {
+			canCommit = lastFlushedTs != nil
+		}
+		if canCommit && lastFlushedTs.HasOpenOSOSnap() {
+			canCommit = false
 		}
 
-		// lastFlushedTs can be nil if nothing was ever flushed for this keyspaceId.
-		// There is nothing to commit in that case. A disk commit has to be snap
-		// aligned, which is checked before the copy as the copy is only needed
-		// if the commit is sent.
-		if lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]; commitDue &&
-			lastFlushedTs != nil && lastFlushedTs.IsSnapAligned() {
+		if canCommit {
 
 			// A forced commit is only needed for new bhive recovery points,
 			// so it commits only the bhive indexes of the keyspace. Other
@@ -3342,13 +3361,20 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 			"Stream: %v TS: %v", keyspaceId, streamId, flushTs)
 	})
 
-	tk.mayBeMakeSnapAligned(streamId, keyspaceId, flushTs)
-	tk.ensureMonotonicTs(streamId, keyspaceId, tsElem)
+	// A forced commit re-commits lastFlushedTs. Nothing is flushed for it, so it
+	// must not be aligned to mutations which are not flushed, and it cannot be
+	// smaller than lastFlushedTs. It also has no change to compute or to meter.
+	forced := flushTs.GetSnapType() == common.FORCE_COMMIT ||
+		flushTs.GetSnapType() == common.FORCE_COMMIT_BHIVE
+
+	if !forced {
+		tk.mayBeMakeSnapAligned(streamId, keyspaceId, flushTs)
+		tk.ensureMonotonicTs(streamId, keyspaceId, tsElem)
+	}
 
 	var changeVec []bool
 	var countVec []uint64
-	if flushTs.GetSnapType() != common.FORCE_COMMIT &&
-		flushTs.GetSnapType() != common.FORCE_COMMIT_BHIVE {
+	if !forced {
 		var noChange bool
 		changeVec, noChange, countVec = tk.ss.computeTsChangeVec(streamId, keyspaceId, tsElem)
 
@@ -3412,8 +3438,7 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 	go func() {
 		//check for throttles here
 		if tk.meteringMgr != nil {
-			if flushTs.GetSnapType() != common.FORCE_COMMIT &&
-				flushTs.GetSnapType() != common.FORCE_COMMIT_BHIVE {
+			if !forced {
 
 				bucketName, _, _ := SplitKeyspaceId(keyspaceId)
 				_, throttleLatency, err := tk.meteringMgr.CheckQuotaAndSleep(bucketName, "", true, 0, nil)

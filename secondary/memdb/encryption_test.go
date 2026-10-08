@@ -3,6 +3,7 @@ package memdb
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -20,6 +21,70 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/stretchr/testify/assert"
 )
+
+// returns a data file of the snapshot
+func findShardFile(t *testing.T, snapDir string) string {
+	var target string
+	err := filepath.Walk(snapDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && target == "" && isDataFile(path) {
+			target = path
+		}
+		return nil
+	})
+	assert.NoError(t, err)
+	assert.NotEmpty(t, target, "no shard data file found under %v", snapDir)
+	return target
+}
+
+// creates two persisted snapshots encrypted with two different keys and closes the db.
+// snap:0 is encrypted with keyA (the default test key), snap:1 with keyB.
+func setupTwoKeySnapshots(t *testing.T, conf Config) (snapPaths []string, keyA, keyB []byte) {
+	conf.Path = "db.dump"
+	db, err := NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+
+	n := 10000
+	var wg sync.WaitGroup
+	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+		wg.Add(1)
+		w := db.NewWriter()
+		go doInsertSafe(w, &wg, n/runtime.GOMAXPROCS(0), true)
+	}
+	wg.Wait()
+
+	curKeyId, _ := db.GetCurrentKeyId()
+	assert.NotEmpty(t, curKeyId)
+	keyA = append([]byte(nil), curKeyId...)
+
+	persist := func(idx int) string {
+		snap, err2 := db.NewSnapshot()
+		assert.NoError(t, err2)
+		snapPath := filepath.Join(db.Path, fmt.Sprintf("snap:%v", idx))
+		snap.Open()
+		keyId, cipher, _ := db.RegisterSnapshotCurrKeyId(snapPath)
+		err2 = db.PreparePersistence(snapPath, snap, keyId, cipher)
+		assert.NoError(t, err2)
+		err2 = db.StoreToDisk(snapPath, snap, 8, keyId, cipher, nil)
+		assert.NoError(t, err2)
+		snap.Close()
+		return snapPath
+	}
+
+	snapPaths = append(snapPaths, persist(0))
+
+	keyB = []byte("mb70872-test-key-B-01234")
+	masterKey, _, _ := db.GetKeyById(keyB)
+	err = db.SetCurrentEncryptionKey(masterKey, keyB, gocbcrypto.CipherNameAES256GCM)
+	assert.NoError(t, err)
+
+	snapPaths = append(snapPaths, persist(1))
+
+	db.Close()
+	return
+}
 
 // verifies that the dir op guard can be used to cancel long-running operations.
 func testDirOpGuardWithCancel(t *testing.T, conf Config) {
@@ -1413,8 +1478,8 @@ func testEncryptionDropKeyIdsWithStaleBackupFile(t *testing.T, conf Config) {
 	// and the restored file was rotated, so the dropped key is gone from the list
 	keyIds, err := db.getActiveKeyIdsFromSnapshot(snapDir)
 	assert.NoError(t, err)
-	assert.False(t, containsKeyId(keyIds, oldId), "restored file must not keep the dropped key")
-	assert.True(t, containsKeyId(keyIds, newId))
+	assert.False(t, keyIdExists(keyIds, oldId), "restored file must not keep the dropped key")
+	assert.True(t, keyIdExists(keyIds, newId))
 
 	db.Close()
 
@@ -1534,9 +1599,9 @@ func testEncryptionDropKeyIdsConcurrentWithKeyChange(t *testing.T, conf Config) 
 
 	keyIds, err := db.getActiveKeyIdsFromSnapshot(snapDir)
 	assert.NoError(t, err)
-	assert.False(t, containsKeyId(keyIds, dropId1))
-	assert.False(t, containsKeyId(keyIds, keyIdY))
-	assert.True(t, containsKeyId(keyIds, keyIdX))
+	assert.False(t, keyIdExists(keyIds, dropId1))
+	assert.False(t, keyIdExists(keyIds, keyIdY))
+	assert.True(t, keyIdExists(keyIds, keyIdX))
 }
 
 // A caller that is about to tear the instance down (rollback) relies on
@@ -1614,8 +1679,175 @@ func testEncryptionDropKeyIdsCancel(t *testing.T, conf Config) {
 	// ineligible for purge
 	keyIds, err := db.getActiveKeyIdsFromSnapshot(snapDir)
 	assert.NoError(t, err)
-	assert.True(t, containsKeyId(keyIds, dropId),
+	assert.True(t, keyIdExists(keyIds, dropId),
 		"cancelled drop must leave the dropped key in the active list")
+}
+
+// persists a snapshot with delta files using writeChunkSz, drops the snapshot key with
+// writeChunkSz configured and verifies recovery with loadChunkSz restores every item
+// from the rotated shard and delta files
+func testEncryptionDropKeyIdsAndLoadSnapshotVariableChunkSize(t *testing.T, conf Config, writeChunkSz, loadChunkSz uint32,
+	n int, itemSz func(int) int) {
+	snapDir := "db.dump"
+	os.RemoveAll(snapDir)
+	conf.Path = snapDir
+	conf.UseDeltaInterleaving()
+
+	r := rand.New(rand.NewSource(0))
+	oldKey := make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
+	oldId := make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
+	newKey := make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
+	newId := make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
+	r.Read(oldKey)
+	r.Read(oldId)
+	r.Read(newKey)
+	r.Read(newId)
+
+	currKey, currId := oldKey, oldId
+	getKeyById := func(id []byte) ([]byte, []byte, string) {
+		switch {
+		case id == nil:
+			return currKey, currId, gocbcrypto.CipherNameAES256GCM
+		case bytes.Equal(id, oldId):
+			return oldKey, oldId, gocbcrypto.CipherNameAES256GCM
+		case bytes.Equal(id, newId):
+			return newKey, newId, gocbcrypto.CipherNameAES256GCM
+		}
+		return nil, nil, gocbcrypto.CipherNameNone
+	}
+
+	// Step 1: persist with oldId while mutations run, so delta files are written
+	conf.SetEncryption(getKeyById, writeChunkSz)
+	db, err := NewWithEncryptionConfig(conf, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, writeChunkSz, db.encryptChunkSize)
+	keyId, cipher := db.GetCurrentKeyId()
+	assert.True(t, bytes.Equal(keyId, oldId))
+
+	var writers []*Writer
+	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+		writers = append(writers, db.NewWriter())
+	}
+
+	chunk := n / runtime.GOMAXPROCS(0)
+	version := 0
+
+	doMutate := func() *Snapshot {
+		var wg sync.WaitGroup
+		version++
+		for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+			wg.Add(1)
+			start := i * chunk
+			go doUpdateSized(&wg, writers[i], start, start+chunk, version, itemSz)
+		}
+		wg.Wait()
+
+		snap, _ := db.NewSnapshot()
+		return snap
+	}
+
+	var snap, snapw *Snapshot
+	for x := 0; x < 2; x++ {
+		if snap != nil {
+			snap.Close()
+		}
+		snap = doMutate()
+	}
+	snapVersion := version
+	n = CountItems(snap)
+
+	waiter := make(chan bool)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for x := 0; x < 10; x++ {
+			if snapw != nil {
+				snapw.Close()
+			}
+			snapw = doMutate()
+			if x == 0 {
+				close(waiter)
+			}
+		}
+	}()
+
+	callb := func(itm *ItemEntry) {
+		<-waiter
+	}
+
+	assert.NoError(t, db.PreparePersistence(snapDir, snap, keyId, cipher))
+	assert.NoError(t, db.StoreToDisk(snapDir, snap, 8, keyId, cipher, callb))
+	wg.Wait()
+	snap.Close()
+	snapw.Close()
+	db.Close()
+
+	deltaFiles, err := filepath.Glob(filepath.Join(snapDir, "delta", "*"))
+	assert.NoError(t, err)
+	assert.NotEmpty(t, deltaFiles, "snapshot must have delta files")
+
+	if t.Failed() {
+		return
+	}
+
+	// Step 2:
+	t.Log("reopen and drop oldId, re-encrypting shard and delta files with newId")
+	conf.SetEncryption(getKeyById, writeChunkSz)
+	db, err = NewWithEncryptionConfig(conf, []string{snapDir})
+	assert.NoError(t, err)
+
+	assert.NoError(t, db.SetCurrentEncryptionKey(newKey, newId, gocbcrypto.CipherNameAES256GCM))
+	assert.NoError(t, db.DropKeyIdsFromSnapshot([][]byte{append([]byte(nil), oldId...)}, snapDir))
+	t.Log(db.encSts.String())
+	assert.Greater(t, db.encSts.NumFilesRotated, uint64(0))
+	assert.Equal(t, uint64(0), db.encSts.NumFilesErrEncrypt+
+		db.encSts.NumFilesErrRencrypt+db.encSts.NumFilesErrDecrypt)
+
+	keyIds, err := db.getActiveKeyIdsFromSnapshot(snapDir)
+	assert.NoError(t, err)
+	assert.False(t, keyIdExists(keyIds, oldId), "dropped key must not remain in snapshot")
+	assert.True(t, keyIdExists(keyIds, newId))
+	db.Close()
+
+	if t.Failed() {
+		return
+	}
+
+	// Step 3:
+	t.Log("recover from the rotated snapshot")
+	currKey, currId = newKey, newId
+	conf.SetEncryption(getKeyById, loadChunkSz)
+	db, err = NewWithEncryptionConfig(conf, []string{snapDir})
+	assert.NoError(t, err)
+	assert.Equal(t, loadChunkSz, db.encryptChunkSize)
+	defer db.Close()
+
+	snap2, err := db.LoadFromDisk(snapDir, 8, nil)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer snap2.Close()
+	t.Log("recovery done")
+
+	assert.Greater(t, db.DeltaRestored, uint64(0), "delta files must be restored")
+	assert.Equal(t, n, CountItems(snap2))
+	assert.Equal(t, int64(n), snap2.Count())
+
+	itr := snap2.NewIterator()
+	defer itr.Close()
+	i := 0
+	for itr.SeekFirst(); itr.Valid(); itr.Next() {
+		exp := makeSizedItem(i, snapVersion, itemSz)
+		if got := itr.Get(); !bytes.Equal(got, exp) {
+			t.Errorf("item %d: expected %d bytes (value %d), got %d bytes (value %d)", i,
+				len(exp), binary.BigEndian.Uint64(exp), len(got), binary.BigEndian.Uint64(got))
+			break
+		}
+		i++
+	}
+	assert.Equal(t, n, i)
 }
 
 // verifies that the key rotation janitor can be used to cleanup temporary and backup files.
@@ -2367,8 +2599,6 @@ func testEncryptionUnsupportedCipher(t *testing.T, conf Config) {
 }
 
 func testEncryptionLoadSnapshotDecryptionError(t *testing.T, conf Config) {
-	//t.Skip("skipping due to MB-70620")
-
 	snapDir := "db.dump"
 	os.RemoveAll(snapDir)
 	conf.Path = snapDir
@@ -2421,6 +2651,207 @@ func testEncryptionLoadSnapshotDecryptionError(t *testing.T, conf Config) {
 	snap, err = db.LoadFromDisk(snapDir, runtime.GOMAXPROCS(0), nil)
 	assert.Error(t, err)
 	assert.NoError(t, db.RemoveSnapshot(snapDir))
+}
+
+// a transient error (EACCES) reading one snapshot's keyIds must surface as
+// ErrKeyIdListIncomplete instead of a silent partial list, and the list must
+// complete on reopen once the error clears.
+func testEncryptionKeyIdListIncomplete(t *testing.T, conf Config) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based fault injection is ineffective when running as root")
+	}
+	defer ValidateNoMemLeaks()
+	os.RemoveAll("db.dump")
+
+	snapPaths, keyA, keyB := setupTwoKeySnapshots(t, conf)
+	if t.Failed() {
+		return
+	}
+
+	// snap:1 holds the only files encrypted with keyB (keyA is also the current key)
+	target := findShardFile(t, snapPaths[1])
+	assert.NoError(t, os.Chmod(target, 0000))
+	defer os.Chmod(target, 0644)
+
+	db, err := NewWithEncryptionConfig(conf, snapPaths) // init tolerates keyId read errors
+	assert.NoError(t, err)
+
+	keyIds, err := db.GetActiveKeyIdList()
+	assert.ErrorIs(t, err, ErrKeyIdListIncomplete,
+		"unreadable snapshot must not yield a silently partial key list")
+	assert.True(t, keyIdExists(keyIds, keyA))
+	assert.False(t, keyIdExists(keyIds, keyB), "keyB should be missing from the partial list")
+
+	for _, readErr := range db.SnapKeyIdReadErrors() {
+		assert.False(t, IsDecryptionError(readErr), "EACCES must classify as transient")
+	}
+
+	_, statErr := os.Stat(snapPaths[1])
+	assert.NoError(t, statErr, "snapshot with a transient error must not be removed")
+	db.Close()
+
+	// clear the transient error; reopen must complete the list
+	assert.NoError(t, os.Chmod(target, 0644))
+
+	db, err = NewWithEncryptionConfig(conf, snapPaths)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	keyIds, err = db.GetActiveKeyIdList()
+	assert.NoError(t, err)
+	assert.True(t, keyIdExists(keyIds, keyA))
+	assert.True(t, keyIdExists(keyIds, keyB))
+}
+
+// a corrupt header checksum is recorded and classified so the caller can remove
+// the snapshot if it chooses to; removal completes the key list.
+func testEncryptionKeyIdListCorruptSnapshot(t *testing.T, conf Config) {
+	defer ValidateNoMemLeaks()
+	os.RemoveAll("db.dump")
+
+	snapPaths, keyA, keyB := setupTwoKeySnapshots(t, conf)
+	if t.Failed() {
+		return
+	}
+
+	// flip a byte inside the checksummed header region of a snap:1 data file
+	target := findShardFile(t, snapPaths[1])
+	fd, err := os.OpenFile(target, os.O_RDWR, 0644)
+	assert.NoError(t, err)
+	buf := make([]byte, 1)
+	_, err = fd.ReadAt(buf, 40)
+	assert.NoError(t, err)
+	buf[0] ^= 0xFF
+	_, err = fd.WriteAt(buf, 40)
+	assert.NoError(t, err)
+	fd.Close()
+
+	db, err := NewWithEncryptionConfig(conf, snapPaths)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	keyIds, err := db.GetActiveKeyIdList()
+	assert.ErrorIs(t, err, ErrKeyIdListIncomplete)
+	assert.False(t, keyIdExists(keyIds, keyB))
+
+	readErrs := db.SnapKeyIdReadErrors()
+	assert.Len(t, readErrs, 1)
+	assert.True(t, IsDecryptionError(readErrs[snapPaths[1]]),
+		"checksum failure should classify as corrupt")
+
+	_, statErr := os.Stat(snapPaths[1])
+	assert.NoError(t, statErr, "memdb must not remove the snapshot itself")
+
+	// the caller removes the corrupt snapshot; the list completes without it
+	assert.NoError(t, db.RemoveSnapshot(snapPaths[1]))
+
+	keyIds, err = db.GetActiveKeyIdList()
+	assert.NoError(t, err)
+	assert.True(t, keyIdExists(keyIds, keyA))
+	assert.False(t, keyIdExists(keyIds, keyB), "removed snapshot's key should not be listed")
+
+	_, statErr = os.Stat(snapPaths[0])
+	assert.NoError(t, statErr, "healthy snapshot must not be touched")
+}
+
+// a missing DEK classifies as an unrecoverable keyId read
+// error: gocbcrypto wraps the lookup failure in its generic decrypt error, so a retry
+// with the same key set can never succeed. memdb still only records it -- removal is
+// the caller's decision -- so within memdb the list completes on reopen once the key
+// becomes available again.
+func testEncryptionKeyIdListKeyIdMissing(t *testing.T, conf Config) {
+	defer ValidateNoMemLeaks()
+	os.RemoveAll("db.dump")
+
+	snapPaths, keyA, keyB := setupTwoKeySnapshots(t, conf)
+	if t.Failed() {
+		return
+	}
+
+	// reopen with keyB current and keyA temporarily unavailable:
+	// keyA is then only discoverable from snap:0 headers, which cannot be read
+	var keyALost atomic.Bool
+	keyALost.Store(true)
+	conf.GetKeyById = func(id []byte) ([]byte, []byte, string) {
+		masterKey := make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
+		if id == nil {
+			return masterKey, keyB, gocbcrypto.CipherNameAES256GCM
+		}
+		if bytes.Equal(id, keyA) && keyALost.Load() {
+			return nil, id, gocbcrypto.CipherNameAES256GCM
+		}
+		return masterKey, id, gocbcrypto.CipherNameAES256GCM
+	}
+
+	db, err := NewWithEncryptionConfig(conf, snapPaths)
+	assert.NoError(t, err)
+
+	keyIds, err := db.GetActiveKeyIdList()
+	assert.ErrorIs(t, err, ErrKeyIdListIncomplete)
+	assert.False(t, keyIdExists(keyIds, keyA))
+
+	for _, readErr := range db.SnapKeyIdReadErrors() {
+		assert.True(t, IsDecryptionError(readErr),
+			"missing DEK must classify as an unrecoverable keyId read error")
+	}
+
+	_, statErr := os.Stat(snapPaths[0])
+	assert.NoError(t, statErr, "memdb must not remove the snapshot itself")
+	db.Close()
+
+	// key becomes available; reopen must complete the list. Note this recovery only
+	// holds because memdb keeps the snapshot: a slice-level init that removes
+	// snapshots with unrecoverable keyId errors would have discarded it by now.
+	keyALost.Store(false)
+
+	db, err = NewWithEncryptionConfig(conf, snapPaths)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	keyIds, err = db.GetActiveKeyIdList()
+	assert.NoError(t, err)
+	assert.True(t, keyIdExists(keyIds, keyA))
+	assert.True(t, keyIdExists(keyIds, keyB))
+}
+
+// a successful LoadFromDisk of a snapshot proves its keyIds are readable; it must
+// clear the recorded keyId read error and complete the list without a reopen.
+func testEncryptionKeyIdListHealedByLoad(t *testing.T, conf Config) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based fault injection is ineffective when running as root")
+	}
+	defer ValidateNoMemLeaks()
+	os.RemoveAll("db.dump")
+
+	snapPaths, keyA, keyB := setupTwoKeySnapshots(t, conf)
+	if t.Failed() {
+		return
+	}
+
+	target := findShardFile(t, snapPaths[1])
+	assert.NoError(t, os.Chmod(target, 0000))
+	defer os.Chmod(target, 0644)
+
+	db, err := NewWithEncryptionConfig(conf, snapPaths)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.GetActiveKeyIdList()
+	assert.ErrorIs(t, err, ErrKeyIdListIncomplete)
+
+	// error clears and the snapshot is loaded; the load must clear the recorded error
+	assert.NoError(t, os.Chmod(target, 0644))
+
+	snap, err := db.LoadFromDisk(snapPaths[1], 4, nil)
+	assert.NoError(t, err)
+	if snap != nil {
+		snap.Close()
+	}
+
+	keyIds, err := db.GetActiveKeyIdList()
+	assert.NoError(t, err)
+	assert.True(t, keyIdExists(keyIds, keyA))
+	assert.True(t, keyIdExists(keyIds, keyB))
 }
 
 func TestDirOpGuardWithCancel(t *testing.T) {
@@ -2519,6 +2950,29 @@ func TestEncryptionDropKeyIdsCancel(t *testing.T) {
 	runTest(t, "TestEncryptionDropKeyIdsCancel", testEncryptionDropKeyIdsCancel, "encryption")
 }
 
+func TestEncryptionDropKeyIdsAndLoadSnapshotVariableChunkSize(t *testing.T) {
+	t.Run("DefaultChunkSize", func(t *testing.T) {
+		runTest(t, "TestEncryptionDropKeyIdsAndLoadSnapshotVariableChunkSize/DefaultChunkSize", func(t *testing.T, conf Config) {
+			testEncryptionDropKeyIdsAndLoadSnapshotVariableChunkSize(t, conf, DefaultEncryptChunkSize, DefaultEncryptChunkSize, 1000000, nil)
+		}, "encryption")
+	})
+
+	t.Run("32KChunkSize", func(t *testing.T) {
+		runTest(t, "TestEncryptionDropKeyIdsAndLoadSnapshotVariableChunkSize/32KChunkSize", func(t *testing.T, conf Config) {
+			testEncryptionDropKeyIdsAndLoadSnapshotVariableChunkSize(t, conf, gocbcrypto.ChunkSize, DefaultEncryptChunkSize, 1000000, nil)
+		}, "encryption")
+	})
+
+	t.Run("DefaultChunkSizeMixedKeys", func(t *testing.T) {
+		sizes := []int{8, 100, 4090, 4091, 4092, 4093, 4096, 4100, 9000, 32764, 32768, 32772, 41000}
+		itemSz := func(i int) int { return sizes[i%len(sizes)] }
+		n := 4000
+		runTest(t, "TestEncryptionDropKeyIdsAndLoadSnapshotVariableChunkSize/DefaultChunkSizeMixedKeys", func(t *testing.T, conf Config) {
+			testEncryptionDropKeyIdsAndLoadSnapshotVariableChunkSize(t, conf, DefaultEncryptChunkSize, DefaultEncryptChunkSize, n, itemSz)
+		}, "encryption")
+	})
+}
+
 func TestEncryptionCleanupDropKeyFiles(t *testing.T) {
 	runTest(t, "TestEncryptionCleanupDropKeyFiles", testEncryptionCleanupDropKeyFiles, "encryption")
 }
@@ -2543,234 +2997,6 @@ func TestEncryptionLoadSnapshotDecryptionError(t *testing.T) {
 	runTest(t, "TestEncryptionLoadSnapshotDecryptionError", testEncryptionLoadSnapshotDecryptionError, "encryption")
 }
 
-// creates two persisted snapshots encrypted with two different keys and closes the db.
-// snap:0 is encrypted with keyA (the default test key), snap:1 with keyB.
-func setupTwoKeySnapshots(t *testing.T, conf Config) (snapPaths []string, keyA, keyB []byte) {
-	conf.Path = "db.dump"
-	db, err := NewWithEncryptionConfig(conf, nil)
-	assert.NoError(t, err)
-
-	n := 10000
-	var wg sync.WaitGroup
-	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
-		wg.Add(1)
-		w := db.NewWriter()
-		go doInsertSafe(w, &wg, n/runtime.GOMAXPROCS(0), true)
-	}
-	wg.Wait()
-
-	curKeyId, _ := db.GetCurrentKeyId()
-	assert.NotEmpty(t, curKeyId)
-	keyA = append([]byte(nil), curKeyId...)
-
-	persist := func(idx int) string {
-		snap, err2 := db.NewSnapshot()
-		assert.NoError(t, err2)
-		snapPath := filepath.Join(db.Path, fmt.Sprintf("snap:%v", idx))
-		snap.Open()
-		keyId, cipher, _ := db.RegisterSnapshotCurrKeyId(snapPath)
-		err2 = db.PreparePersistence(snapPath, snap, keyId, cipher)
-		assert.NoError(t, err2)
-		err2 = db.StoreToDisk(snapPath, snap, 8, keyId, cipher, nil)
-		assert.NoError(t, err2)
-		snap.Close()
-		return snapPath
-	}
-
-	snapPaths = append(snapPaths, persist(0))
-
-	keyB = []byte("mb70872-test-key-B-01234")
-	masterKey, _, _ := db.GetKeyById(keyB)
-	err = db.SetCurrentEncryptionKey(masterKey, keyB, gocbcrypto.CipherNameAES256GCM)
-	assert.NoError(t, err)
-
-	snapPaths = append(snapPaths, persist(1))
-
-	db.Close()
-	return
-}
-
-// returns a data file of the snapshot
-func findShardFile(t *testing.T, snapDir string) string {
-	var target string
-	filepath.Walk(snapDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() && target == "" && isDataFile(path) {
-			target = path
-		}
-		return nil
-	})
-	assert.NotEmpty(t, target, "no shard data file found under %v", snapDir)
-	return target
-}
-
-func containsKeyId(keyIds [][]byte, keyId []byte) bool {
-	return keyIdExists(keyIds, keyId)
-}
-
-// a transient error (EACCES) reading one snapshot's keyIds must surface as
-// ErrKeyIdListIncomplete instead of a silent partial list, and the list must
-// complete on reopen once the error clears.
-func testEncryptionKeyIdListIncomplete(t *testing.T, conf Config) {
-	if os.Geteuid() == 0 {
-		t.Skip("chmod-based fault injection is ineffective when running as root")
-	}
-	defer ValidateNoMemLeaks()
-	os.RemoveAll("db.dump")
-
-	snapPaths, keyA, keyB := setupTwoKeySnapshots(t, conf)
-	if t.Failed() {
-		return
-	}
-
-	// snap:1 holds the only files encrypted with keyB (keyA is also the current key)
-	target := findShardFile(t, snapPaths[1])
-	assert.NoError(t, os.Chmod(target, 0000))
-	defer os.Chmod(target, 0644)
-
-	db, err := NewWithEncryptionConfig(conf, snapPaths) // init tolerates keyId read errors
-	assert.NoError(t, err)
-
-	keyIds, err := db.GetActiveKeyIdList()
-	assert.ErrorIs(t, err, ErrKeyIdListIncomplete,
-		"unreadable snapshot must not yield a silently partial key list")
-	assert.True(t, containsKeyId(keyIds, keyA))
-	assert.False(t, containsKeyId(keyIds, keyB), "keyB should be missing from the partial list")
-
-	for _, readErr := range db.SnapKeyIdReadErrors() {
-		assert.False(t, IsDecryptionError(readErr), "EACCES must classify as transient")
-	}
-
-	_, statErr := os.Stat(snapPaths[1])
-	assert.NoError(t, statErr, "snapshot with a transient error must not be removed")
-	db.Close()
-
-	// clear the transient error; reopen must complete the list
-	assert.NoError(t, os.Chmod(target, 0644))
-
-	db, err = NewWithEncryptionConfig(conf, snapPaths)
-	assert.NoError(t, err)
-	defer db.Close()
-
-	keyIds, err = db.GetActiveKeyIdList()
-	assert.NoError(t, err)
-	assert.True(t, containsKeyId(keyIds, keyA))
-	assert.True(t, containsKeyId(keyIds, keyB))
-}
-
-// a corrupt header checksum is recorded and classified so the caller can remove
-// the snapshot if it chooses to; removal completes the key list.
-func testEncryptionKeyIdListCorruptSnapshot(t *testing.T, conf Config) {
-	defer ValidateNoMemLeaks()
-	os.RemoveAll("db.dump")
-
-	snapPaths, keyA, keyB := setupTwoKeySnapshots(t, conf)
-	if t.Failed() {
-		return
-	}
-
-	// flip a byte inside the checksummed header region of a snap:1 data file
-	target := findShardFile(t, snapPaths[1])
-	fd, err := os.OpenFile(target, os.O_RDWR, 0644)
-	assert.NoError(t, err)
-	buf := make([]byte, 1)
-	_, err = fd.ReadAt(buf, 40)
-	assert.NoError(t, err)
-	buf[0] ^= 0xFF
-	_, err = fd.WriteAt(buf, 40)
-	assert.NoError(t, err)
-	fd.Close()
-
-	db, err := NewWithEncryptionConfig(conf, snapPaths)
-	assert.NoError(t, err)
-	defer db.Close()
-
-	keyIds, err := db.GetActiveKeyIdList()
-	assert.ErrorIs(t, err, ErrKeyIdListIncomplete)
-	assert.False(t, containsKeyId(keyIds, keyB))
-
-	readErrs := db.SnapKeyIdReadErrors()
-	assert.Len(t, readErrs, 1)
-	assert.True(t, IsDecryptionError(readErrs[snapPaths[1]]),
-		"checksum failure should classify as corrupt")
-
-	_, statErr := os.Stat(snapPaths[1])
-	assert.NoError(t, statErr, "memdb must not remove the snapshot itself")
-
-	// the caller removes the corrupt snapshot; the list completes without it
-	assert.NoError(t, db.RemoveSnapshot(snapPaths[1]))
-
-	keyIds, err = db.GetActiveKeyIdList()
-	assert.NoError(t, err)
-	assert.True(t, containsKeyId(keyIds, keyA))
-	assert.False(t, containsKeyId(keyIds, keyB), "removed snapshot's key should not be listed")
-
-	_, statErr = os.Stat(snapPaths[0])
-	assert.NoError(t, statErr, "healthy snapshot must not be touched")
-}
-
-// a missing DEK classifies as an unrecoverable keyId read
-// error: gocbcrypto wraps the lookup failure in its generic decrypt error, so a retry
-// with the same key set can never succeed. memdb still only records it -- removal is
-// the caller's decision -- so within memdb the list completes on reopen once the key
-// becomes available again.
-func testEncryptionKeyIdListKeyIdMissing(t *testing.T, conf Config) {
-	defer ValidateNoMemLeaks()
-	os.RemoveAll("db.dump")
-
-	snapPaths, keyA, keyB := setupTwoKeySnapshots(t, conf)
-	if t.Failed() {
-		return
-	}
-
-	// reopen with keyB current and keyA temporarily unavailable:
-	// keyA is then only discoverable from snap:0 headers, which cannot be read
-	var keyALost atomic.Bool
-	keyALost.Store(true)
-	conf.GetKeyById = func(id []byte) ([]byte, []byte, string) {
-		masterKey := make([]byte, gocbcrypto.AES_256_GCM_KEY_SZ)
-		if id == nil {
-			return masterKey, keyB, gocbcrypto.CipherNameAES256GCM
-		}
-		if bytes.Equal(id, keyA) && keyALost.Load() {
-			return nil, id, gocbcrypto.CipherNameAES256GCM
-		}
-		return masterKey, id, gocbcrypto.CipherNameAES256GCM
-	}
-
-	db, err := NewWithEncryptionConfig(conf, snapPaths)
-	assert.NoError(t, err)
-
-	keyIds, err := db.GetActiveKeyIdList()
-	assert.ErrorIs(t, err, ErrKeyIdListIncomplete)
-	assert.False(t, containsKeyId(keyIds, keyA))
-
-	for _, readErr := range db.SnapKeyIdReadErrors() {
-		assert.True(t, IsDecryptionError(readErr),
-			"missing DEK must classify as an unrecoverable keyId read error")
-	}
-
-	_, statErr := os.Stat(snapPaths[0])
-	assert.NoError(t, statErr, "memdb must not remove the snapshot itself")
-	db.Close()
-
-	// key becomes available; reopen must complete the list. Note this recovery only
-	// holds because memdb keeps the snapshot: a slice-level init that removes
-	// snapshots with unrecoverable keyId errors would have discarded it by now.
-	keyALost.Store(false)
-
-	db, err = NewWithEncryptionConfig(conf, snapPaths)
-	assert.NoError(t, err)
-	defer db.Close()
-
-	keyIds, err = db.GetActiveKeyIdList()
-	assert.NoError(t, err)
-	assert.True(t, containsKeyId(keyIds, keyA))
-	assert.True(t, containsKeyId(keyIds, keyB))
-}
-
 func TestEncryptionKeyIdListIncomplete(t *testing.T) {
 	runTest(t, "TestEncryptionKeyIdListIncomplete", testEncryptionKeyIdListIncomplete, "encryption")
 }
@@ -2781,46 +3007,6 @@ func TestEncryptionKeyIdListCorruptSnapshot(t *testing.T) {
 
 func TestEncryptionKeyIdListKeyIdMissing(t *testing.T) {
 	runTest(t, "TestEncryptionKeyIdListKeyIdMissing", testEncryptionKeyIdListKeyIdMissing, "encryption")
-}
-
-// a successful LoadFromDisk of a snapshot proves its keyIds are readable; it must
-// clear the recorded keyId read error and complete the list without a reopen.
-func testEncryptionKeyIdListHealedByLoad(t *testing.T, conf Config) {
-	if os.Geteuid() == 0 {
-		t.Skip("chmod-based fault injection is ineffective when running as root")
-	}
-	defer ValidateNoMemLeaks()
-	os.RemoveAll("db.dump")
-
-	snapPaths, keyA, keyB := setupTwoKeySnapshots(t, conf)
-	if t.Failed() {
-		return
-	}
-
-	target := findShardFile(t, snapPaths[1])
-	assert.NoError(t, os.Chmod(target, 0000))
-	defer os.Chmod(target, 0644)
-
-	db, err := NewWithEncryptionConfig(conf, snapPaths)
-	assert.NoError(t, err)
-	defer db.Close()
-
-	_, err = db.GetActiveKeyIdList()
-	assert.ErrorIs(t, err, ErrKeyIdListIncomplete)
-
-	// error clears and the snapshot is loaded; the load must clear the recorded error
-	assert.NoError(t, os.Chmod(target, 0644))
-
-	snap, err := db.LoadFromDisk(snapPaths[1], 4, nil)
-	assert.NoError(t, err)
-	if snap != nil {
-		snap.Close()
-	}
-
-	keyIds, err := db.GetActiveKeyIdList()
-	assert.NoError(t, err)
-	assert.True(t, containsKeyId(keyIds, keyA))
-	assert.True(t, containsKeyId(keyIds, keyB))
 }
 
 func TestEncryptionKeyIdListHealedByLoad(t *testing.T) {
