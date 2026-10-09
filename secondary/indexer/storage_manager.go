@@ -615,13 +615,26 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 		forceCommit = true
 	}
 
+	//A forced commit taken while an OSO snapshot is open is not a valid resume
+	//point, as OSO sends the mutations in key order and not in seqno order.
+	//Persist it as DISK_SNAP_OSO, so that recovery rolls back to 0 instead of
+	//resuming from it and cleanup keeps only one such recovery point.
+	//tsVbuuid is the copy made for this worker in handleCreateSnapshot, and
+	//its snap type is not read after this point, so it is changed in place.
+	if snapType == common.FORCE_COMMIT_BHIVE && tsVbuuid.HasOpenOSOSnap() {
+		tsVbuuid.SetSnapType(common.DISK_SNAP_OSO)
+	}
+
+	//FORCE_COMMIT_BHIVE commits only the bhive indexes of the keyspace
+	bhiveOnly := snapType == common.FORCE_COMMIT_BHIVE
+
 	var wg sync.WaitGroup
 	wg.Add(len(instIdList))
 	for _, instListPerWorker := range instsPerWorker {
 		go func(instList []common.IndexInstId) {
 			for _, idxInstId := range instList {
 				s.createSnapshotForIndex(streamId, keyspaceId, indexInstMap,
-					indexPartnMap, indexSnapMap, idxInstId, tsVbuuid,
+					indexPartnMap, indexSnapMap, idxInstId, tsVbuuid, bhiveOnly,
 					stats, hasAllSB, flushWasAborted, needsCommit, forceCommit,
 					&wg, startTime, logOncePerBucket)
 			}
@@ -653,8 +666,8 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 	keyspaceId string, indexInstMap common.IndexInstMap,
 	indexPartnMap IndexPartnMap, indexSnapMap IndexSnapMap,
-	idxInstId common.IndexInstId, tsVbuuid *common.TsVbuuid, stats *IndexerStats,
-	hasAllSB bool, flushWasAborted bool, needsCommit bool,
+	idxInstId common.IndexInstId, tsVbuuid *common.TsVbuuid, bhiveOnly bool,
+	stats *IndexerStats, hasAllSB bool, flushWasAborted bool, needsCommit bool,
 	forceCommit bool, wg *sync.WaitGroup, startTime int64,
 	logOncePerBucket *sync.Once) {
 
@@ -670,7 +683,7 @@ func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 	//FORCE_COMMIT_BHIVE is only for new bhive recovery points. Other indexes of
 	//the keyspace keep their current snapshot, they are persisted by a regular
 	//disk snapshot as needsCommit is not cleared for this snap type.
-	if tsVbuuid.GetSnapType() == common.FORCE_COMMIT_BHIVE && !idxInst.Defn.IsBhive() {
+	if bhiveOnly && !idxInst.Defn.IsBhive() {
 		//hasAllSB is for the stream, so it applies to this index even though it
 		//is not snapshotted. Timekeeper sends it only once.
 		if hasAllSB {
@@ -3976,6 +3989,76 @@ func (s *storageMgr) setForceCommit(bucketUUID string, enable bool) {
 	}
 }
 
+// retryDropKeys calls DropKeys again on every bhive slice of the bucket and
+// returns whether any of them still returns ErrRetryDropKey. Only bhive needs
+// new recovery points to complete a drop key; plasma completes on plain
+// DropKeys retries. For a slice which is done, the in use keys are updated as
+// in handleEncryptionDropKey.
+func (s *storageMgr) retryDropKeys(kdt KeyDataType,
+	dropKeyIdsBytes [][]byte) (bhiveRetry bool, err error) {
+
+	indexInstMap := s.indexInstMap.Get()
+	indexPartnMap := s.indexPartnMap.Get()
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex //protects bhiveRetry and err, set by concurrent DropKeys
+
+	for instId, inst := range indexInstMap {
+		if inst.Defn.BucketUUID != kdt.BucketUUID || inst.State == common.INDEX_STATE_DELETED ||
+			common.GetStorageMode() == common.FORESTDB {
+			continue
+		}
+		for _, partnInst := range indexPartnMap[instId] {
+			for _, slice := range partnInst.Sc.GetAllSlices() {
+				if slice.SliceType() != SliceTypeBhive {
+					continue
+				}
+
+				wg.Add(1)
+				go func(instId common.IndexInstId, slice Slice) {
+					defer wg.Done()
+
+					respChSlice := make(chan error, 1)
+					slice.DropKeys(dropKeyIdsBytes, respChSlice)
+					errResp := <-respChSlice
+
+					if errResp == ErrRetryDropKey {
+						mu.Lock()
+						bhiveRetry = true
+						mu.Unlock()
+						return
+					} else if errResp != nil {
+						logging.Errorf("StorageMgr::retryDropKeys DropKeys for instId:%v partnId:%v err:%v",
+							instId, slice.IndexPartnId(), errResp)
+						mu.Lock()
+						if err == nil {
+							err = errResp
+						}
+						mu.Unlock()
+						return
+					}
+
+					keys, errGet := slice.GetKeyIdList()
+					if errGet != nil {
+						logging.Errorf("StorageMgr::retryDropKeys GetKeyIdList after drop for instId:%v "+
+							"partnId:%v err:%v", instId, slice.IndexPartnId(), errGet)
+					} else if len(keys) > 0 {
+						for _, key := range keys {
+							slice.SetInUseKeys(kdt, string(key))
+						}
+					} else {
+						// "" key in use indicates unencrypted data if encryption is disabled.
+						slice.SetInUseKeys(kdt, "")
+					}
+				}(instId, slice)
+			}
+		}
+	}
+	wg.Wait()
+
+	return bhiveRetry, err
+}
+
 func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 
 	s.supvCmdch <- &MsgSuccess{}
@@ -4030,6 +4113,8 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 		}
 	}
 
+	maxDiskSnaps := s.config["recovery.max_disksnaps"].Int()
+
 	go func() {
 		// For each bhive slice, subscribe to be notified when the current or
 		// next CreateRecoveryPoint2 completes.  SubscribeNextPersistDone is
@@ -4057,9 +4142,9 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 
 		// Check if at least one bhive/plasma slice returns ErrRetryDropKey
 		// For bhive ErrRetryDropKey, RP creation steps are required :MB-71944
-		// For plasma ErrRetryDropKey, only retries of slice.DropKey are required.
+		// For plasma/memdb ErrRetryDropKey, only retries of slice.DropKey are required.
 		var bhiveErrRetryDropKey error
-		var plasmaErrRetryDropKey error
+		var dropKeyRetryErr error
 		var errMu sync.Mutex
 
 		//Storage encryption
@@ -4127,9 +4212,9 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 									defer errMu.Unlock()
 									if slice.SliceType() == SliceTypeBhive {
 										bhiveErrRetryDropKey = ErrRetryDropKey
-									} else if slice.SliceType() == SliceTypePlasma {
-										plasmaErrRetryDropKey = ErrRetryDropKey
-									}	
+									} else if slice.SliceType() == SliceTypePlasma || slice.SliceType() == SliceTypeMemdb {
+										dropKeyRetryErr = ErrRetryDropKey
+									}
 								}()
 							} else {
 								select {
@@ -4170,17 +4255,25 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 
 		// After DropKeys, bhive data has been re-encrypted with the new key but
 		// old recovery points (still referencing the dropped key) remain on disk
-		// until cleaned up by cleanupOldRecoveryPoints.  Wait for TWO successive
+		// until cleaned up by cleanupOldRecoveryPoints. Wait for successive
 		// CreateRecoveryPoint2 completions per bhive slice so that
-		// cleanupOldRecoveryPoints has had two chances to purge the stale RPs.
+		// cleanupOldRecoveryPoints gets the chance to purge the stale RPs.
 		// We track completion at the slice level (via SubscribeNextPersistDone)
 		// rather than at the (stream, keyspace) level so that a stream transition
-		// (e.g. INIT_STREAM → MAINT_STREAM between the two iterations) does not
-		// result in only one effective RP per slice.
-		// Only then it is safe to assume dropKey complete if next DropKeys doesn't return ErrRetryDropKey
+		// (e.g. INIT_STREAM → MAINT_STREAM between the iterations) does not
+		// result in fewer effective RPs per slice.
+		//
+		// A slice can hold more than max_rollbacks RPs, e.g. while a KV replica
+		// is behind or a rollback is not yet confirmed, but never more than
+		// max_disksnaps. So wait for one RP more than max_disksnaps, which
+		// pushes out every RP present at DropKeys, and one more as
+		// SubscribeNextPersistDone returns the persist in progress, whose
+		// snapshot was taken before DropKeys. After every RP DropKeys is
+		// retried, and the wait ends as soon as no slice returns ErrRetryDropKey.
 		if hasBhive && retryCount == 0 && bhiveErrRetryDropKey == ErrRetryDropKey {
-			logging.Infof("StorageMgr::handleEncryptionDropKey waiting for 3 RP creations "+
-				"post DropKeys for %v", kdt)
+			numRPWaits := maxDiskSnaps + 2
+			logging.Infof("StorageMgr::handleEncryptionDropKey waiting for up to %v RP creations "+
+				"post DropKeys for %v", numRPWaits, kdt)
 
 			// A keyspace which is not receiving any mutations does not create a
 			// disk snapshot, and hence no recovery point, on its own. Ask
@@ -4196,7 +4289,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 				s.setForceCommit(kdt.BucketUUID, true)
 				defer s.setForceCommit(kdt.BucketUUID, false)
 
-				for i := 0; i < 3; i++ {
+				for i := 0; i < numRPWaits; i++ {
 					// Re-read maps — topology may have changed since DropKeys completed.
 					indexInstMap = s.indexInstMap.Get()
 					indexPartnMap = s.indexPartnMap.Get()
@@ -4254,7 +4347,23 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 					}
 
 					logging.Infof("StorageMgr::handleEncryptionDropKey post-DropKeys RP creation "+
-						"%v/3 complete for %v", i+1, kdt)
+						"%v/%v complete for %v", i+1, numRPWaits, kdt)
+
+					// The RPs holding the dropped key may already be gone. If no
+					// bhive slice needs more of them, stop forcing RPs. A plasma/memdb
+					// ErrRetryDropKey from the first DropKeys stays as it is, as
+					// plasma/memdb complete on the regular drop key retries.
+					bhiveRetry, err := s.retryDropKeys(kdt, dropKeyIdsBytes)
+					if err != nil {
+						return err
+					}
+					if !bhiveRetry {
+						//every bhive slice is done, clear the retry so the drop key can complete
+						bhiveErrRetryDropKey = nil
+						logging.Infof("StorageMgr::handleEncryptionDropKey no bhive slice returns "+
+							"ErrRetryDropKey after %v RP creations for %v", i+1, kdt)
+						return nil
+					}
 				}
 				return nil
 			}()
@@ -4264,7 +4373,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 				return
 			}
 		}
-		if plasmaErrRetryDropKey == ErrRetryDropKey || bhiveErrRetryDropKey == ErrRetryDropKey {
+		if dropKeyRetryErr == ErrRetryDropKey || bhiveErrRetryDropKey == ErrRetryDropKey {
 			logging.Warnf("StorageMgr::handleEncryptionDropKey slice returned ErrRetryDropKey %v", kdt)
 			respCh <- ErrRetryDropKey
 			return

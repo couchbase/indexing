@@ -15,7 +15,9 @@ import (
 //	No encryption is applied in community builds.
 type LogStatsFileHandler struct{}
 
-func NewLogStatsFileHandler(_ func() (keyID string, key []byte), _ func(string) ([]byte, string)) *LogStatsFileHandler {
+func NewLogStatsFileHandler(
+	_ func() (keyID string, key []byte), _ func(string) ([]byte, string), _ int,
+) *LogStatsFileHandler {
 	return &LogStatsFileHandler{}
 }
 

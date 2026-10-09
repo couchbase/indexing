@@ -2,7 +2,6 @@ package indexer
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/plasma"
 	"golang.org/x/sync/semaphore"
 )
@@ -723,7 +721,7 @@ func TestMemDBSliceDropKeysUnreadableManifests(t *testing.T) {
 	}
 	if dropErr == nil {
 		t.Fatal("DropKeys reported success while the snapshot list was unreadable")
-	} else if !errors.Is(dropErr, memdb.ErrRetryDropKey) {
+	} else if dropErr != ErrRetryDropKey {
 		t.Fatalf("expected retryable drop key error :%v", dropErr)
 	} else {
 		t.Logf("(expected) %v", dropErr)

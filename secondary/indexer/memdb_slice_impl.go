@@ -2456,7 +2456,7 @@ func (mdb *memdbSlice) GetKeyIdList() ([][]byte, error) {
 // - The call can fail if there is concurrent snapshot removal.
 // - The call may also fail if there is another concurrent drop key
 // - The call will fail if drop key is same as the current key
-// - The caller should retry if memdb.ErrRetryDropKey is returned (TBD:GSI)
+// - The caller should retry if ErrRetryDropKey is returned
 //
 // Params:
 //   - keyIds: List of key IDs to be rotated/dropped.
@@ -2483,12 +2483,21 @@ func (mdb *memdbSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 				// unlock before DecrRef, which can trigger slice close
 				mdb.dropKeyMu.Unlock()
 				mdb.DecrRef()
+				// storage manager recognises only the indexer level retry error
+				if errors.Is(err, memdb.ErrRetryDropKey) {
+					err = ErrRetryDropKey
+				}
 				if doneCh != nil {
 					doneCh <- err
 				}
 			}()
 
 			store := mdb.mainstore
+			if store == nil { // failed resetStores
+				err = memdb.ErrShutdown
+				return
+			}
+
 			// fail attempt to drop current key
 			currKeyId, _ := store.GetCurrentKeyId()
 			for i := range kids {

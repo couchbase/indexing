@@ -1074,7 +1074,7 @@ func (s *plasmaSlice) SetCurrentEncryptionKey(masterEncryptionKey []byte, keyId 
 //     RestoreShardDone (shard rebalance) completion
 //   - Exits early if the instance closes during operation
 //   - No error if keyId is already absent.
-//   - plasma.ErrRetryDropKey/ErrDropKeyBusy means the caller should retry.
+//   - ErrRetryDropKey (also returned for plasma.ErrDropKeyBusy) means the caller should retry.
 //
 // Params:
 //   - keyIds: List of key IDs to be rotated/dropped.
@@ -1089,6 +1089,10 @@ func (s *plasmaSlice) DropKeys(keyIds [][]byte, doneCh chan error) {
 	go func() {
 		var err error
 		defer func() {
+			// storage manager compares with ==, so map wrapped retryable errors
+			if errors.Is(err, plasma.ErrRetryDropKey) || errors.Is(err, plasma.ErrDropKeyBusy) {
+				err = ErrRetryDropKey
+			}
 			if doneCh != nil {
 				doneCh <- err
 			}
