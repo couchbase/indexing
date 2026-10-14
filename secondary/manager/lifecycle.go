@@ -2695,6 +2695,20 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 		m.builder.notifych <- defn
 	}
 
+	// Non-vector instances that were batched with vector instances for training move from IN_PROGRESS
+	// to NOT_STARTED (not COMPLETED) when training finishes, so they never match the check above.
+	// Send them to the builder too, so that if the build the indexer issues after training fails with
+	// a transient error (e.g. Build Already In Progress), they are retried like the vector instances.
+	// change.State is NIL for the training-done update, which excludes the update that moves an
+	// instance to INITIAL when it is built separately. The builder skips an index that has no instance
+	// in READY state, so this is a no-op if the build after training has already started.
+	if trainingPhase == common.TRAINING_IN_PROGRESS &&
+		change.TrainingPhase == common.TRAINING_NOT_STARTED &&
+		common.IndexState(change.State) == common.INDEX_STATE_NIL &&
+		!defn.IsVectorIndex {
+		m.builder.notifych <- defn
+	}
+
 	return nil
 }
 
