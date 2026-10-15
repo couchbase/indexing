@@ -60,6 +60,14 @@ func updateConfig(value []byte, config c.Config) {
 	// metadataClient refers 'servicesNotifierRetryTm'
 	// but ClientSettings refers 'queryport.client.servicesNotifierRetryTm'
 	config.Update(newConfig.Json())
+
+	// The planner reads its settings through GetSettingsConfig, which returns
+	// its input, SystemConfig, unchanged in tools mode. Apply the fetched
+	// settings to SystemConfig as well, so that it plans with the same
+	// settings as the client.
+	for key, value := range newConfig {
+		c.SystemConfig[key] = value
+	}
 }
 
 func usage(fset *flag.FlagSet) {
