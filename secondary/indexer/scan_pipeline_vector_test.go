@@ -18,6 +18,7 @@ import (
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport/client"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
+	"github.com/couchbase/query/expression"
 	n1ql "github.com/couchbase/query/value"
 	"github.com/golang/protobuf/proto"
 )
@@ -712,5 +713,116 @@ func TestVectorPipelineMergeOperator(t *testing.T) {
 			false, 0, 0, true))
 		testFunc(nil, false, false, false, true)
 		logging.Infof("gCount: %v", gCount)
+	})
+}
+
+func newInlineFilterTestWorker(t *testing.T, include []string, indexKeyNames []string,
+	filter string, codeSize int) *ScanWorker {
+
+	expr, err := compileN1QLExpression(filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := &ScanRequest{
+		isBhiveScan:      true,
+		cklen:            1,
+		allexprlen:       1 + len(include),
+		indexKeyNames:    indexKeyNames,
+		inlineFilterExpr: expr,
+	}
+	r.IndexInst.Defn.SecExprs = []string{"`sift`"}
+	r.IndexInst.Defn.Include = include
+
+	cv := n1ql.NewScopeValue(make(map[string]interface{}), nil)
+	w := &ScanWorker{
+		r:                    r,
+		currJob:              &ScanJob{},
+		codeSize:             codeSize,
+		cv:                   cv,
+		av:                   n1ql.NewAnnotatedValue(cv),
+		exprContext:          expression.NewIndexContext(),
+		svPool:               n1ql.NewStringValuePoolForIndex(len(include) + 1),
+		includeColumnLen:     len(include),
+		includeColumnExplode: make([]bool, len(include)),
+		includeColumnDecode:  make([]bool, len(include)),
+		includeColumncktemp:  make([][]byte, len(include)),
+		includeColumndktemp:  make(n1ql.Values, len(include)),
+	}
+	for i := range include {
+		if indexKeyNames[1+i] != "" {
+			w.includeColumnExplode[i] = true
+			w.includeColumnDecode[i] = true
+			w.explodeUpto = i
+		}
+	}
+	return w
+}
+
+func checkInlineFilter(t *testing.T, w *ScanWorker, meta []byte, docid string, expected bool) {
+	ok, err := w.inlineFilterCb(meta, []byte(docid))
+	if err != nil {
+		t.Fatalf("inline filter failed for %v: %v", docid, err)
+	}
+	if ok != expected {
+		t.Fatalf("inline filter returned %v for %v, expected %v", ok, docid, expected)
+	}
+}
+
+// TestScanWorkerInlineFilterNoIncludeColumns covers an inline filter that
+// references only meta().id on a bhive index without include columns. The
+// stored meta then ends at the quantized code, so there is nothing to explode.
+func TestScanWorkerInlineFilterNoIncludeColumns(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	codeSize := 4
+	w := newInlineFilterTestWorker(t, nil, []string{"", "(meta(`d`).`id`)"},
+		"(\"\" < _index_key ((meta(`d`).`id`)))", codeSize)
+
+	meta := make([]byte, codeSize) // quantized code only, no include column
+	checkInlineFilter(t, w, meta, "0_1871", true)
+}
+
+// TestScanWorkerInlineFilterEmptyIncludeColumn covers rows of an index with
+// include columns that were stored without include column bytes by older
+// projectors when the leading include key was missing. Such rows must be
+// evaluated with the include columns as MISSING, not rejected, and must not
+// see the include values of the previously filtered row.
+func TestScanWorkerInlineFilterEmptyIncludeColumn(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	codeSize := 4
+	include := []string{"`brand`"}
+
+	encoded, err := jsonEncoder.Encode([]byte(`["Nike"]`), make([]byte, 0, 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	withInclude := append(make([]byte, codeSize), encoded...)
+	withoutInclude := make([]byte, codeSize)
+
+	t.Run("metaIdFilter", func(t *testing.T) {
+		w := newInlineFilterTestWorker(t, include, []string{"", "", "(meta(`d`).`id`)"},
+			"(\"\" < _index_key ((meta(`d`).`id`)))", codeSize)
+
+		checkInlineFilter(t, w, withInclude, "doc1", true)
+		checkInlineFilter(t, w, withoutInclude, "doc2", true)
+	})
+
+	t.Run("includeFilter", func(t *testing.T) {
+		w := newInlineFilterTestWorker(t, include, []string{"", "(`d`.`brand`)", ""},
+			"(_index_key ((`d`.`brand`)) = \"Nike\")", codeSize)
+
+		checkInlineFilter(t, w, withInclude, "doc1", true)
+		checkInlineFilter(t, w, withoutInclude, "doc2", false)
+		checkInlineFilter(t, w, withInclude, "doc3", true)
+	})
+
+	t.Run("includeIsMissing", func(t *testing.T) {
+		w := newInlineFilterTestWorker(t, include, []string{"", "(`d`.`brand`)", ""},
+			"(_index_key ((`d`.`brand`)) is missing)", codeSize)
+
+		checkInlineFilter(t, w, withInclude, "doc1", false)
+		checkInlineFilter(t, w, withoutInclude, "doc2", true)
 	})
 }

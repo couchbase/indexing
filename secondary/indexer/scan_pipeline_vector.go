@@ -867,7 +867,13 @@ func (w *ScanWorker) setCoverForIncludeExprs(docid []byte, explodedIncludeValues
 	for i := cklen; i < metalen; i++ {
 		index := i - cklen
 		if w.r.indexKeyNames != nil && w.r.indexKeyNames[i] != "" {
-			w.av.SetCover(w.r.indexKeyNames[i], explodedIncludeValues[index])
+			// No exploded values when the row has no include column, set
+			// MISSING to also clear the value set by the previous row
+			val := n1qlval.MISSING_VALUE
+			if index < len(explodedIncludeValues) {
+				val = explodedIncludeValues[index]
+			}
+			w.av.SetCover(w.r.indexKeyNames[i], val)
 		}
 	}
 
@@ -892,18 +898,25 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 
 	includeColumn := meta[w.codeSize:]
 
-	w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(includeColumn))
+	// Include column is empty when the index has no include columns or for
+	// rows written by older projectors when the leading include key was
+	// missing. Skip exploding, include covers evaluate as MISSING.
+	var explodedIncludeValues n1qlval.Values
+	var err error
+	if len(includeColumn) > 0 {
+		w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(includeColumn))
 
-	_, explodedIncludeValues, err := jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf,
-		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, w.explodeUpto, w.svPool)
-	if err != nil {
-		if err == collatejson.ErrorOutputLen {
-			w.includeColumnBuf = make([]byte, 0, len(includeColumn)*3)
-			_, explodedIncludeValues, err = jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf,
-				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, w.explodeUpto, w.svPool)
-		}
+		_, explodedIncludeValues, err = jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf,
+			w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, w.explodeUpto, w.svPool)
 		if err != nil {
-			return false, err
+			if err == collatejson.ErrorOutputLen {
+				w.includeColumnBuf = make([]byte, 0, len(includeColumn)*3)
+				_, explodedIncludeValues, err = jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf,
+					w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, w.explodeUpto, w.svPool)
+			}
+			if err != nil {
+				return false, err
+			}
 		}
 	}
 
