@@ -1046,6 +1046,25 @@ func (codec *Codec) code2n1qlpooled(code, text []byte, decode bool, pos int, svP
 	}
 }
 
+// DecodeN1QLValuePooled decodes one encoded array element, as exploded by
+// ExplodeArray5, into a n1ql value allocated from svPool for position pos.
+func (codec *Codec) DecodeN1QLValuePooled(code, text []byte, pos int,
+	svPool *n1ql.StringValuePoolForIndex) (val n1ql.Value, err error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			if strings.Contains(fmt.Sprint(r), "slice bounds out of range") {
+				err = ErrorOutputLen
+			} else {
+				err = fmt.Errorf("%v", r)
+			}
+		}
+	}()
+
+	val, _, err = codec.code2n1qlpooled(code, text, true, pos, svPool)
+	return val, err
+}
+
 // DecodeN1QLValues takes collatejson encoded data as input, and returns
 // the rows in n1ql.Values format, as required by n1ql.
 // Note: Caller is responsible for providing sufficiently sized buffer
