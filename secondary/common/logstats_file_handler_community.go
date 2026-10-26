@@ -3,11 +3,15 @@
 package common
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
 	"github.com/couchbase/logstats/logstats"
 )
+
+// not a valid cbcrypto header (too small, or magic bytes mismatch).
+var ErrCBCryptoHeader = errors.New("not valid cbcrypto header")
 
 // LogStatsFileHandler is the community stub. It delegates to the standard
 // logstats open/rotate logic
@@ -52,6 +56,10 @@ func GetStatsLogFileKeyID(_ string) (string, error) {
 }
 
 func IsStatsLogActiveFileEncrypted(_ string) bool {
+	return false
+}
+
+func StatsLogEncryptionSupported() bool {
 	return false
 }
 
