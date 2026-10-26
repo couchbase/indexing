@@ -137,7 +137,8 @@ func NewEncryptionMgr(config c.Config) (*EncryptionMgr, error) {
 		return nil, fmt.Errorf("EncryptionMgr: RegisterEncryptionKeysCallbacks: %w", err)
 	}
 
-	if c.GetBuildMode() == c.ENTERPRISE {
+	// Build tag check, as SetBuildMode is not called in the projector.
+	if c.StatsLogEncryptionSupported() {
 		<-e.seedCh
 	}
 

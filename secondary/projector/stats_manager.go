@@ -2,6 +2,7 @@ package projector
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -242,6 +243,8 @@ func NewStatsManager(
 	logging.Infof("StatsManager: eval stats logging threshold set to: %v microseconds", atomic.LoadInt64(&sm.evalStatLoggingThreshold))
 
 	sm.config.Store(config)
+
+	sm.initLogStatsKey()
 
 	err := sm.setupLogStatsLogger()
 	if err != nil {
@@ -702,8 +705,63 @@ func (sm *statsManager) setupLogStatsLogger() error {
 		common.STAT_LOG_TS_FORMAT, // tsFormat
 		sm.logStatsHandler,        // fileHandler
 	)
+	if err != nil {
+		return err
+	}
 
-	return err
+	// Open resumes the active file with its own key, or plaintext. Rotate
+	// unless it is on the key seeded by initLogStatsKey ("" when encryption
+	// is disabled), as UpdateKey with that same key does not rotate and
+	// DropKey only re-encrypts or decrypts rotated files. An empty key is
+	// also returned on fetch errors, so act only when the log key info is
+	// cached.
+	if common.StatsLogEncryptionSupported() && sm.encMgr != nil {
+		if _, cached := sm.encMgr.cache.GetActiveKey(LogdataKDT); cached {
+			keyID, _ := sm.getLogStatsKey()
+			// fileKeyID is "" for a plaintext or missing file
+			fileKeyID, fileErr := common.GetStatsLogFileKeyID(filefullpath)
+			if fileKeyID != keyID {
+				// The file keeps its key, or stays plaintext, after it is
+				// rotated aside, until DropKey re-encrypts or decrypts it.
+				if fileErr == nil && fileKeyID != "" {
+					sm.encMgr.SetInUseKeys(fileKeyID)
+				} else if errors.Is(fileErr, common.ErrCBCryptoHeader) {
+					sm.encMgr.SetInUseKeys("")
+				}
+				if err := sm.statLogger.ForceRotate(); err != nil {
+					logging.Errorf("statsManager:setupLogStatsLogger ForceRotate err:%v", err)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// initLogStatsKey seeds the stats log key with the active "log" key, so that
+// no stats are written in plaintext on restart before UpdateKey is processed.
+// Projector never sets the build mode, and ns_server pushes no keys in
+// community edition, where GetActiveKeyIdCipher would block forever.
+func (sm *statsManager) initLogStatsKey() {
+	if !common.StatsLogEncryptionSupported() || sm.encMgr == nil {
+		return
+	}
+
+	key, keyID, _ := sm.encMgr.GetActiveKeyIdCipher()
+	if keyID == "" {
+		logging.Infof("statsManager:initLogStatsKey encryption disabled for %v",
+			LogdataKDT.TypeName)
+		return
+	}
+
+	sm.logStatsKeyMu.Lock()
+	sm.logStatsKeyID = keyID
+	sm.logStatsKey = key
+	sm.logStatsKeyMu.Unlock()
+
+	sm.encMgr.SetInUseKeys(keyID)
+
+	logging.Infof("statsManager:initLogStatsKey keyId=%v", keyID)
 }
 
 func AccumulateJson(wrkr []interface{}) map[string]interface{} {
