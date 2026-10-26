@@ -1556,7 +1556,7 @@ func (w *ScanWorker) setCoverForIncludeExprs(docid []byte, explodedIncludeValues
 		}
 	}
 
-	if len(w.r.indexKeyNames) >= metalen && w.r.indexKeyNames[metalen] != "" {
+	if len(w.r.indexKeyNames) > metalen && w.r.indexKeyNames[metalen] != "" {
 		w.av.SetCover(w.r.indexKeyNames[metalen], w.svPool.Get(metalen-cklen, conversions.ByteSliceToString(docid)))
 	}
 }
