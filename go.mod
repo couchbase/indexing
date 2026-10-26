@@ -38,6 +38,8 @@ replace github.com/couchbase/regulator => ../regulator
 
 replace github.com/couchbase/gocbcrypto => ../gocbcrypto
 
+replace github.com/couchbase/logstats => ../logstats
+
 replace github.com/couchbase/gocoverage => ../../../../../gocoverage
 
 require (
