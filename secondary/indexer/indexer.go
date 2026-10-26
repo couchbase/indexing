@@ -599,8 +599,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 	idx.statsMgr, res = NewStatsManager(idx.statsMgrCmdCh, idx.wrkrRecvCh, idx.config,
 		StatsEncryptionCallbacks{
-			getKeyCipherById: idx.encryptionMgr.getKeyCipherById,
-			setInUseKeys:     idx.encryptionMgr.SetInUseKeys,
+			getKeyCipherById:     idx.encryptionMgr.getKeyCipherById,
+			setInUseKeys:         idx.encryptionMgr.SetInUseKeys,
+			getActiveKeyIdCipher: idx.encryptionMgr.getActiveKeyIdCipher,
 		})
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer statsMgr Init Error %+v", res)
@@ -623,8 +624,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	handlerContext.rhc.SetEncryptionCallbacks(CacheEncryptionCallbacks{
-		getKeyCipherById: idx.encryptionMgr.getKeyCipherById,
-		setInUseKeys:     idx.encryptionMgr.SetInUseKeys,
+		getKeyCipherById:     idx.encryptionMgr.getKeyCipherById,
+		setInUseKeys:         idx.encryptionMgr.SetInUseKeys,
+		getActiveKeyIdCipher: idx.encryptionMgr.getActiveKeyIdCipher,
 	})
 
 	// Start internal version monitor only after starting http server.

@@ -37,8 +37,9 @@ var (
 
 // encryption-related callbacks from EncryptionMgr.
 type CacheEncryptionCallbacks struct {
-	getKeyCipherById func(keyId string) ([]byte, string)
-	setInUseKeys     func(kdt KeyDataType, key string)
+	getKeyCipherById     func(keyId string) ([]byte, string)
+	setInUseKeys         func(kdt KeyDataType, key string)
+	getActiveKeyIdCipher func(typename, bucketUUID string) ([]byte, string, string)
 }
 
 // requestHandlerCache is a singleton child of requestHandlerContext and serves as its cache. This
@@ -464,6 +465,8 @@ func (rhc *requestHandlerCache) runPersistor() {
 		return
 	}
 
+	rhc.initEncryptionCtx()
+
 	// On startup, populate the memory caches from the disk caches. This is the only place disk
 	// cache contents are read back into the memory caches.
 	rhc.populateMetaMemCacheFromDisk()
@@ -575,7 +578,12 @@ func (rhc *requestHandlerCache) populateMetaMemCacheFromDisk() {
 				continue
 			}
 			if encCtx != nil {
-				rhc.metaEncCtx = encCtx
+				rhc.setFileKeyInUse(encCtx)
+				logging.Infof("%v Set in-use key %v of file %v", method,
+					string(encCtx.KeyID()), filepath)
+				if rhc.metaEncCtx == nil {
+					rhc.metaEncCtx = encCtx
+				}
 			}
 
 			localMeta := new(manager.LocalIndexMetadata)
@@ -620,7 +628,12 @@ func (rhc *requestHandlerCache) populateStatsMemCacheFromDisk() {
 				continue
 			}
 			if encCtx != nil {
-				rhc.statsEncCtx = encCtx
+				rhc.setFileKeyInUse(encCtx)
+				logging.Infof("%v Set in-use key %v of file %v", method,
+					string(encCtx.KeyID()), filepath)
+				if rhc.statsEncCtx == nil {
+					rhc.statsEncCtx = encCtx
+				}
 			}
 
 			stats := new(common.Statistics)
@@ -660,6 +673,57 @@ func (rhc *requestHandlerCache) buildEncryptionContextForKey(
 		return nil, fmt.Errorf("requestHandlerCache::buildEncryptionContextForKey: %w", err)
 	}
 	return ctx, nil
+}
+
+// initEncryptionCtx seeds the write contexts with the active "log" key before any cache
+// file is written, so that writes on restart are not plaintext until UpdateKey is
+// processed (which can be aborted during bootstrap).
+func (rhc *requestHandlerCache) initEncryptionCtx() {
+	const method = "requestHandlerCache::initEncryptionCtx"
+
+	if common.GetBuildMode() != common.ENTERPRISE ||
+		rhc.encCallbacks.getActiveKeyIdCipher == nil {
+		return
+	}
+
+	key, keyID, cipher := rhc.encCallbacks.getActiveKeyIdCipher(
+		LogdataKDT.TypeName, LogdataKDT.BucketUUID)
+	if keyID == "" {
+		logging.Infof("%v encryption disabled for %v", method, logKDT(LogdataKDT))
+		return
+	}
+	earkey := EaRKey{Id: keyID, Key: key, Cipher: cipher}
+
+	metaCtx, err := rhc.createEncryptionContext(earkey, cacheMetaKDFLabel)
+	if err != nil {
+		logging.Errorf("%v meta context: %v", method, err)
+		return
+	}
+	statsCtx, err := rhc.createEncryptionContext(earkey, cacheStatsKDFLabel)
+	if err != nil {
+		logging.Errorf("%v stats context: %v", method, err)
+		return
+	}
+
+	rhc.metaEncCtx = metaCtx
+	rhc.statsEncCtx = statsCtx
+	rhc.reportKeyInUse = func() error {
+		if rhc.encCallbacks.setInUseKeys == nil {
+			return nil
+		}
+		rhc.encCallbacks.setInUseKeys(LogdataKDT, keyID)
+		return nil
+	}
+
+	logging.Infof("%v key:%v", method, keyID)
+}
+
+// setFileKeyInUse reports the key of a file on disk in use, as the write context can be on a
+// newer key. It stays in use until drop key re-encrypts the file.
+func (rhc *requestHandlerCache) setFileKeyInUse(encCtx EncryptionCtx) {
+	if rhc.encCallbacks.setInUseKeys != nil {
+		rhc.encCallbacks.setInUseKeys(LogdataKDT, string(encCtx.KeyID()))
+	}
 }
 
 // HandleEncryptionUpdateKey enqueues an encryption context update onto workCh so it is

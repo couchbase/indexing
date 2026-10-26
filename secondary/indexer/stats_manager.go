@@ -3791,9 +3791,10 @@ func (l *statLogger) writeMetadataStats() {
 // statsManager manages both indexer and index stats. Indexer creates a singleton at boot.
 // StatsEncryptionCallbacks holds encryption-related callbacks from EncryptionMgr.
 type StatsEncryptionCallbacks struct {
-	getKeyCipherById func(keyId string) ([]byte, string)
-	setInUseKeys     func(kdt cbauth.KeyDataType, key string)
-	getLogStatsKey   func() (keyID string, key []byte)
+	getKeyCipherById     func(keyId string) ([]byte, string)
+	setInUseKeys         func(kdt cbauth.KeyDataType, key string)
+	getLogStatsKey       func() (keyID string, key []byte)
+	getActiveKeyIdCipher func(typename, bucketUUID string) ([]byte, string, string)
 }
 
 type statsManager struct {
@@ -3859,10 +3860,62 @@ func NewStatsManager(supvCmdch MsgChannel,
 		config["statsLogFcount"].Int(),
 	)
 
+	s.initEncryptionCtx()
+
 	go s.run()
 	go s.runStatsDumpLogger()
 	StartCpuCollector()
 	return s, &MsgSuccess{}
+}
+
+// initEncryptionCtx seeds the write contexts of the persisted stats file and
+// the stats log with the active "log" key, so that no data is written in
+// plaintext on restart before UpdateKey is processed (which can be aborted
+// during bootstrap).
+func (s *statsManager) initEncryptionCtx() {
+	if common.GetBuildMode() != common.ENTERPRISE ||
+		s.encCallbacks.getActiveKeyIdCipher == nil {
+		return
+	}
+
+	key, keyID, cipher := s.encCallbacks.getActiveKeyIdCipher(
+		LogdataKDT.TypeName, LogdataKDT.BucketUUID)
+	if keyID == "" {
+		logging.Infof("StatsManager::initEncryptionCtx encryption disabled for %v",
+			logKDT(LogdataKDT))
+		return
+	}
+	// The stats log needs only the key, so set it even if the persisted stats
+	// context below cannot be created; an empty key here means encryption is
+	// disabled.
+	s.logStatsKeyMu.Lock()
+	s.logStatsKeyID = keyID
+	s.logStatsKey = key
+	s.logStatsKeyMu.Unlock()
+
+	if s.encCallbacks.setInUseKeys != nil {
+		s.encCallbacks.setInUseKeys(LogdataKDT, keyID)
+	}
+
+	earkey := cbauthimpl.EaRKey{Id: keyID, Key: key, Cipher: cipher}
+	ctx, err := s.createEncryptionContext(earkey)
+	if err != nil {
+		logging.Errorf("StatsManager::initEncryptionCtx key:%v err:%v", keyID, err)
+		return
+	}
+
+	if fp, ok := s.statsPersister.(*FlatFileStatsPersister); ok {
+		fp.encCtx = ctx
+		fp.reportKeyInUse = func() error {
+			if s.encCallbacks.setInUseKeys == nil {
+				return nil
+			}
+			s.encCallbacks.setInUseKeys(LogdataKDT, keyID)
+			return nil
+		}
+	}
+
+	logging.Infof("StatsManager::initEncryptionCtx key:%v", keyID)
 }
 
 func (s *statsManager) SetMeteringMgr(meteringMgr *MeteringThrottlingMgr) {
@@ -5353,6 +5406,31 @@ func (s *statsManager) tryEnableStatsLog() (bool, logstats.LogStats) {
 			logging.Infof("Error in NewDedupeLogStatsWithFileHandler %v. Disabling stats logging.", err)
 			return false, nil
 		}
+		// Open resumes the active file with its own key, or plaintext. Rotate
+		// unless it is on the key seeded by initEncryptionCtx ("" when
+		// encryption is disabled, as getActiveKeyIdCipher panics on fetch
+		// errors), as UpdateKey with that same key does not rotate and
+		// DropKey only re-encrypts or decrypts rotated files.
+		if common.GetBuildMode() == common.ENTERPRISE &&
+			s.encCallbacks.getActiveKeyIdCipher != nil {
+			keyID, _ := s.getLogStatsKey()
+			// fileKeyID is "" for a plaintext or missing file
+			fileKeyID, fileErr := common.GetStatsLogFileKeyID(fpath)
+			if fileKeyID != keyID {
+				// The file keeps its key, or stays plaintext, after it is
+				// rotated aside, until DropKey re-encrypts or decrypts it.
+				if s.encCallbacks.setInUseKeys != nil {
+					if fileErr == nil && fileKeyID != "" {
+						s.encCallbacks.setInUseKeys(LogdataKDT, fileKeyID)
+					} else if errors.Is(fileErr, common.ErrCBCryptoHeader) {
+						s.encCallbacks.setInUseKeys(LogdataKDT, "")
+					}
+				}
+				if err := sLogger.ForceRotate(); err != nil {
+					logging.Errorf("StatsManager::tryEnableStatsLog ForceRotate err:%v", err)
+				}
+			}
+		}
 		return true, sLogger
 	}
 
@@ -5862,15 +5940,11 @@ func (fp *FlatFileStatsPersister) ReadPersistedStats(
 
 	var content []byte
 	var err error
-	// Reset the encryption context to nil before reading.
-	// This is safe because ReadPersistedStats is only called
-	// once, at startup , before the indexer is fully up
-	// and before any key rotation messages
-	// (UpdateKey / DropKey) can arrive. So fp.encCtx cannot have
-	// been set to a valid key yet.
-	// If the file is encrypted, fp.encCtx is restored below after
-	// successful decryption so future writes stay encrypted.
-	fp.encCtx = nil
+	// ReadPersistedStats is only called once, at startup, before any
+	// UpdateKey / DropKey can arrive. So fp.encCtx is either nil or the
+	// active key seeded by initEncryptionCtx, which is kept for future
+	// writes. Without a seeded context, the context of an encrypted file
+	// is restored below so future writes stay encrypted.
 
 	isEncrypted, encErr := IsFileEncrypted(fp.filePath)
 	switch {
@@ -5917,16 +5991,29 @@ func (fp *FlatFileStatsPersister) ReadPersistedStats(
 			if !getKeyCalled || len(resolvedKeyData) == 0 || resolvedCipher == "" {
 				return nil, errKeyContextNotRestored
 			}
-			if err := fp.setEncryptionContextForKey(
-				resolvedKeyID, resolvedKeyData, resolvedCipher,
-			); err != nil {
-				return nil, fmt.Errorf(
-					"ReadPersistedStats: unable to restore encryption context: %w", err,
-				)
+			// With getActiveKeyIdCipher, initEncryptionCtx has already set
+			// fp.encCtx to the active key, or left it nil when encryption is
+			// disabled; restore the file's key only without it.
+			if fp.encCtx == nil && encCallbacks.getActiveKeyIdCipher == nil {
+				if err := fp.setEncryptionContextForKey(
+					resolvedKeyID, resolvedKeyData, resolvedCipher,
+				); err != nil {
+					return nil, fmt.Errorf(
+						"ReadPersistedStats: unable to restore encryption context: %w", err,
+					)
+				}
+			} else if encCallbacks.setInUseKeys != nil {
+				// The file stays on its key until the next write with the
+				// seeded context (plaintext when encryption is disabled),
+				// which happens only after bootstrap.
+				encCallbacks.setInUseKeys(LogdataKDT, resolvedKeyID)
+				logging.Infof("FlatFileStatsPersister::ReadPersistedStats Set in-use key %v of file %v",
+					resolvedKeyID, fp.filePath)
 			}
 		}
 	default:
-		logging.Infof("FlatFileStatsPersister::ReadPersistedStats file is plaintext, encCtx stays nil")
+		logging.Infof("FlatFileStatsPersister::ReadPersistedStats file is plaintext, encCtx=%v",
+			fp.encCtx != nil)
 		content, err = iowrap.Ioutil_ReadFile(fp.filePath)
 	}
 
