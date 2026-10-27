@@ -5774,6 +5774,10 @@ type FlatFileStatsPersister struct {
 
 	config map[string]interface{}
 
+	// mu serializes the persister goroutine and the stats manager key update and
+	// drop handlers. It is taken before EncryptionMgr.muid (reportKeyInUse calls
+	// SetInUseKeys with mu held), never after.
+	mu             sync.Mutex
 	encCtx         EncryptionCtx // nil = plaintext mode; set = encrypt writes
 	reportKeyInUse func() error  // called after each encrypted write; nil in plaintext mode
 }
@@ -5792,6 +5796,8 @@ func NewFlatFilePersister(dir string, chunksz int, fileName, newFileName string)
 	return &fp
 }
 
+// setEncryptionContextForKey sets the encryption context for future writes.
+// Caller must hold fp.mu.
 func (fp *FlatFileStatsPersister) setEncryptionContextForKey(
 	keyID string, keyData []byte, cipher string,
 ) error {
@@ -5813,9 +5819,13 @@ func (fp *FlatFileStatsPersister) PersistStats(statsMap map[string]interface{}) 
 	}
 	// Improvement: Implement chunking for large file sizes
 	if content != nil {
-		logging.Infof("FlatFileStatsPersister::PersistStats encCtx=%v path=%v", fp.encCtx != nil, fp.newFilePath)
-		if fp.encCtx != nil {
-			err := WriteEncryptedFile(fp.newFilePath, content, statsFileMode, fp.encCtx, nil)
+		fp.mu.Lock()
+		defer fp.mu.Unlock()
+
+		encCtx := fp.encCtx
+		logging.Infof("FlatFileStatsPersister::PersistStats encCtx=%v path=%v", encCtx != nil, fp.newFilePath)
+		if encCtx != nil {
+			err := WriteEncryptedFile(fp.newFilePath, content, statsFileMode, encCtx, nil)
 			if err != nil {
 				return fmt.Errorf("FlatFileStatsPersister::PersistStats encrypted write: %w", err)
 			}
@@ -5846,6 +5856,9 @@ func (fp *FlatFileStatsPersister) PersistStats(statsMap map[string]interface{}) 
 
 func (fp *FlatFileStatsPersister) ReadPersistedStats(
 	encCallbacks *StatsEncryptionCallbacks) (map[string]interface{}, error) {
+
+	fp.mu.Lock()
+	defer fp.mu.Unlock()
 
 	var content []byte
 	var err error
@@ -5959,6 +5972,9 @@ func (fp *FlatFileStatsPersister) GetConfig(key string) interface{} {
 }
 
 func (fp *FlatFileStatsPersister) Close() error {
+	fp.mu.Lock()
+	defer fp.mu.Unlock()
+
 	if err := iowrap.Os_RemoveAll(fp.filePath); err != nil {
 		return err
 	}
@@ -6081,9 +6097,11 @@ func (s *statsManager) handleGetInUseKeys(cmd Message) {
 			result[kdt] = append(result[kdt], k)
 		}
 	}
+	fp.mu.Lock()
 	if fp.encCtx != nil {
 		add(string(fp.encCtx.KeyID()))
 	}
+	fp.mu.Unlock()
 
 	for _, id := range s.inUseLogStatsKeys() {
 		add(id)
@@ -6141,8 +6159,9 @@ func (s *statsManager) handleEncryptionUpdateKey(cmd Message) {
 		respCh <- err
 		return
 	}
-	fp.encCtx = ctx
 	kdt := msg.GetKeyDataType()
+	fp.mu.Lock()
+	fp.encCtx = ctx
 	if ctx == nil {
 		fp.reportKeyInUse = func() error {
 			if s.encCallbacks.setInUseKeys == nil {
@@ -6160,6 +6179,7 @@ func (s *statsManager) handleEncryptionUpdateKey(cmd Message) {
 			return nil
 		}
 	}
+	fp.mu.Unlock()
 
 	s.logStatsKeyMu.Lock()
 	keyChanged := earkey.Id != s.logStatsKeyID
@@ -6174,7 +6194,7 @@ func (s *statsManager) handleEncryptionUpdateKey(cmd Message) {
 		common.ForceRotateStatsLog()
 	}
 
-	logging.Infof("StatsManager::handleEncryptionUpdateKey key:%v encCtx_set=%v", earkey.Id, fp.encCtx != nil)
+	logging.Infof("StatsManager::handleEncryptionUpdateKey key:%v encCtx_set=%v", earkey.Id, ctx != nil)
 	respCh <- nil
 }
 
@@ -6207,24 +6227,31 @@ func (s *statsManager) handleEncryptionDropKey(cmd Message) {
 	if emptyDropKeys {
 		dropKeyIds = []string{""}
 	}
-	switch {
-	case activeEarKey.Id != "" && emptyDropKeys:
-		// Scenario 1: Encrypt currently unencrypted data with activeKey.
-		// Treat both an empty drop-key list and empty-string as
-		// "encrypt the existing plaintext file with the current active key".
-		persistErr = s.encryptAndPersistStats(fp, activeEarKey, kdt)
-	case activeEarKey.Id == "" && len(dropKeyIds) > 0:
-		// Scenario 2: Decrypt back to plaintext
-		persistErr = s.decryptAndPersistStats(fp, kdt)
-	case activeEarKey.Id != "" && len(dropKeyIds) > 0:
-		// Scenario 3: Re-encrypt from old key(s) to new key.
-		isEncrypted, checkErr := IsFileEncrypted(fp.filePath)
-		if checkErr == nil && !isEncrypted {
+	func() {
+		// Held across the whole rewrite so the persister cannot write or
+		// rename the stats file in between.
+		fp.mu.Lock()
+		defer fp.mu.Unlock()
+
+		switch {
+		case activeEarKey.Id != "" && emptyDropKeys:
+			// Scenario 1: Encrypt currently unencrypted data with activeKey.
+			// Treat both an empty drop-key list and empty-string as
+			// "encrypt the existing plaintext file with the current active key".
 			persistErr = s.encryptAndPersistStats(fp, activeEarKey, kdt)
-		} else {
-			persistErr = s.reencryptAndPersistStats(fp, activeEarKey, kdt)
+		case activeEarKey.Id == "" && len(dropKeyIds) > 0:
+			// Scenario 2: Decrypt back to plaintext
+			persistErr = s.decryptAndPersistStats(fp, kdt)
+		case activeEarKey.Id != "" && len(dropKeyIds) > 0:
+			// Scenario 3: Re-encrypt from old key(s) to new key.
+			isEncrypted, checkErr := IsFileEncrypted(fp.filePath)
+			if checkErr == nil && !isEncrypted {
+				persistErr = s.encryptAndPersistStats(fp, activeEarKey, kdt)
+			} else {
+				persistErr = s.reencryptAndPersistStats(fp, activeEarKey, kdt)
+			}
 		}
-	}
+	}()
 
 	if persistErr != nil {
 		logging.Errorf("StatsManager::handleEncryptionDropKey persistedStats error: %v", persistErr)
@@ -6280,6 +6307,7 @@ func (s *statsManager) handleEncryptionDropKey(cmd Message) {
 }
 
 // encryptAndPersistStats encrypts an existing plaintext stats file with the given key.
+// Caller must hold fp.mu.
 func (s *statsManager) encryptAndPersistStats(fp *FlatFileStatsPersister,
 	activeKey cbauthimpl.EaRKey, kdt cbauth.KeyDataType) error {
 
@@ -6340,6 +6368,8 @@ func (s *statsManager) encryptAndPersistStats(fp *FlatFileStatsPersister,
 	return nil
 }
 
+// decryptAndPersistStats decrypts the stats file back to plaintext.
+// Caller must hold fp.mu.
 func (s *statsManager) decryptAndPersistStats(fp *FlatFileStatsPersister, kdt cbauth.KeyDataType) error {
 	switchToPlaintextMode := func() {
 		fp.encCtx = nil
@@ -6382,6 +6412,7 @@ func (s *statsManager) decryptAndPersistStats(fp *FlatFileStatsPersister, kdt cb
 }
 
 // reencryptAndPersistStats re-encrypts the stats file from old key to new key.
+// Caller must hold fp.mu.
 func (s *statsManager) reencryptAndPersistStats(fp *FlatFileStatsPersister,
 	activeKey cbauthimpl.EaRKey, kdt cbauth.KeyDataType) error {
 
