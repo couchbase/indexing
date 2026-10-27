@@ -1672,7 +1672,8 @@ func (b *metadataClient) updateIndexerList(discardExisting, refreshServiceMap bo
 	defer b.topoChangeLock.Unlock()
 
 	// populate indexers' adminport and queryport
-	adminports, activeNode, failedNode, unhealthyNode, newNode, err := getIndexerAdminports(cinfo)
+	adminports, activeNode, failedNode, unhealthyNode, newNode, err :=
+		getIndexerAdminports(cinfo, b.settings.UseClusterMembershipOnly())
 	if err != nil {
 		return err
 	}
@@ -2146,8 +2147,9 @@ func (b *metadataClient) updateStats(stats map[common.IndexInstId]map[common.Par
 	}
 }
 
-// return adminports for all known indexers.
-func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, int, int, error) {
+// return adminports for all known indexers.  With membershipOnly, index nodes
+// that ns_server reports unhealthy are returned too.
+func getIndexerAdminports(cinfo *common.ClusterInfoCache, membershipOnly bool) ([]string, int, int, int, int, error) {
 	iAdminports := make([]string, 0)
 	unhealthyNodes := 0
 	for _, node := range cinfo.GetNodeIdsByServiceType("indexAdmin") {
@@ -2156,19 +2158,27 @@ func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, i
 			return nil, 0, 0, 0, 0, err
 		}
 		logging.Verbosef("node %v status: %q", node, status)
-		if status == "healthy" || status == "active" || status == "warmup" {
+		healthy := status == "healthy" || status == "active" || status == "warmup"
+		if !healthy {
+			unhealthyNodes++
+			logging.Warnf("node %v status: %q", node, status)
+		}
+		// ns_server reports a node unhealthy whenever its distribution link
+		// drops, including the brief drop on a certificate reload, and leaving
+		// a node out of this list unwatches it and removes its indexes from
+		// query plans.  With membershipOnly, such a node stays in the list
+		// until it is failed over or removed; until then scans to it fail and
+		// are retried on other replicas.
+		if healthy || membershipOnly {
 			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin", true)
 			if err != nil {
 				return nil, 0, 0, 0, 0, err
 			}
 			iAdminports = append(iAdminports, adminport)
-		} else {
-			unhealthyNodes++
-			logging.Warnf("node %v status: %q", node, status)
 		}
 	}
 
-	return iAdminports, // active, healthy indexer node with known ports
+	return iAdminports, // indexer nodes to watch
 		len(cinfo.GetActiveIndexerNodes()), // all active indexer node (known ports + unknown ports + unhealthy node)
 		len(cinfo.GetFailedIndexerNodes()), // failover indexer node
 		unhealthyNodes, // active, unhealthy indexer node with known ports
@@ -2266,7 +2276,7 @@ func (b *metadataClient) watchClusterChanges() {
 			}
 			UpdateClusterCompat(cinfo.Nodes())
 
-			_, _, _, unhealthyNode, _, err := getIndexerAdminports(cinfo)
+			_, _, _, unhealthyNode, _, err := getIndexerAdminports(cinfo, b.settings.UseClusterMembershipOnly())
 			if err != nil {
 				logging.Errorf("updateIndexerList(): %v\n", err)
 				selfRestart()
