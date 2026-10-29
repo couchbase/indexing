@@ -1636,6 +1636,11 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 	case bool:
 		return evalValue.Actual().(bool), nil
 	default:
+		// A WHERE term on a bare column evaluates to the column value,
+		// which qualifies the row by its truth value as in the query engine
+		if evalValue.Truth() {
+			return true, nil
+		}
 		w.currJob.rowsFiltered++
 		return false, nil
 	}
