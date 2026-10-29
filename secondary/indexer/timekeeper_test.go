@@ -183,3 +183,51 @@ func TestCheckFlushTsValidForMergeMaintPastMinMergeTs(t *testing.T) {
 }
 
 func uint64Ptr(v uint64) *uint64 { return &v }
+
+// An aborted flush done for a keyspace already cleaned up from the stream must be
+// ignored; processFlushAbort calls tsList.Init() unguarded and panicked on nil.
+// Reachable now that storage manager answers flushes of an instance-less keyspace.
+func TestHandleFlushDoneAbortedForCleanedUpKeyspace(t *testing.T) {
+	const keyspaceId = "default"
+	const streamId = common.MAINT_STREAM
+
+	ss := &StreamState{
+		streamKeyspaceIdStatus:               map[common.StreamId]KeyspaceIdStatus{streamId: {}},
+		streamKeyspaceIdLastFlushedTsMap:     map[common.StreamId]KeyspaceIdLastFlushedTsMap{streamId: {}},
+		streamKeyspaceIdFlushInProgressTsMap: map[common.StreamId]KeyspaceIdFlushInProgressTsMap{streamId: {}},
+		streamKeyspaceIdFlushDone:            map[common.StreamId]KeyspaceIdFlushDone{streamId: {}},
+		streamKeyspaceIdTsListMap:            map[common.StreamId]KeyspaceIdTsListMap{streamId: {}},
+		streamKeyspaceIdFlushEnabledMap:      map[common.StreamId]KeyspaceIdFlushEnabledMap{streamId: {}},
+		streamKeyspaceIdForceRecovery:        map[common.StreamId]KeyspaceIdForceRecovery{streamId: {}},
+	}
+	tk := &timekeeper{
+		supvCmdch:  make(MsgChannel, 1),
+		supvRespch: make(MsgChannel, 1),
+		ss:         ss,
+	}
+
+	cmd := &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE, streamId: streamId,
+		keyspaceId: keyspaceId, ts: common.NewTsVbuuid(keyspaceId, mergeGateNumVb), aborted: true}
+
+	tk.handleFlushDone(cmd) // must not panic
+
+	select {
+	case m := <-tk.supvCmdch:
+		if m.GetMsgType() != MSG_SUCCESS {
+			t.Fatalf("expected MSG_SUCCESS on supvCmdch, got %v", m.GetMsgType())
+		}
+	default:
+		t.Fatalf("timekeeper did not reply on supvCmdch, indexer would block")
+	}
+	if _, ok := ss.streamKeyspaceIdFlushEnabledMap[streamId][keyspaceId]; ok {
+		t.Errorf("abort for a cleaned-up keyspace must not recreate its flush-enabled state")
+	}
+	if _, ok := ss.streamKeyspaceIdForceRecovery[streamId][keyspaceId]; ok {
+		t.Errorf("abort for a cleaned-up keyspace must not force recovery")
+	}
+	select {
+	case m := <-tk.supvRespch:
+		t.Errorf("unexpected recovery message %v for a cleaned-up keyspace", m.GetMsgType())
+	default:
+	}
+}

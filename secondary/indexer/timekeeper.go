@@ -714,6 +714,13 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 	}
 
 	if flushWasAborted {
+		if _, ok := keyspaceIdFlushInProgressTsMap[keyspaceId]; !ok {
+			//keyspace already cleaned up from the stream; nothing to abort.
+			logging.Warnf("Timekeeper::handleFlushDone Ignore Flush Abort for Stream %v "+
+				"KeyspaceId %v. KeyspaceId Info Not Found", streamId, keyspaceId)
+			tk.supvCmdch <- &MsgSuccess{}
+			return
+		}
 		tk.processFlushAbort(streamId, keyspaceId)
 		return
 	}
