@@ -44,6 +44,8 @@ type ClientSettings struct {
 	allowScheduleCreate  uint32
 	listSchedIndexes     uint32
 
+	useClusterMembershipOnly uint32
+
 	allowScheduleCreateRebal uint32
 	waitForScheduledIndex    uint32
 
@@ -311,6 +313,13 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.listSchedIndexes, 1)
 	}
 
+	useClusterMembershipOnly, ok := config["queryport.client.useClusterMembershipOnly"]
+	if ok && useClusterMembershipOnly.Bool() {
+		atomic.StoreUint32(&s.useClusterMembershipOnly, 1)
+	} else {
+		atomic.StoreUint32(&s.useClusterMembershipOnly, 0)
+	}
+
 	waitForScheduledIndex, ok := config["queryport.client.waitForScheduledIndex"]
 	if ok {
 		if waitForScheduledIndex.Bool() {
@@ -552,6 +561,10 @@ func (s *ClientSettings) AllowScheduleCreate() bool {
 
 func (s *ClientSettings) ListSchedIndexes() bool {
 	return atomic.LoadUint32(&s.listSchedIndexes) == 1
+}
+
+func (s *ClientSettings) UseClusterMembershipOnly() bool {
+	return atomic.LoadUint32(&s.useClusterMembershipOnly) == 1
 }
 
 func (s *ClientSettings) AllowScheduleCreateRebal() bool {

@@ -2068,6 +2068,13 @@ func (si *secondaryIndex6) RerankFactor() int32 {
 	}
 }
 
+// ClusterVersionGECheck reports whether the ns_server cluster compatibility
+// version, as last observed by this process, is at least release major.minor.
+// It is false until the first observation.
+func (si *secondaryIndex6) ClusterVersionGECheck(major, minor uint32) bool {
+	return qclient.GetClusterCompat() >= qclient.ReleaseCompat(major, minor)
+}
+
 // Scan6 implements Index6 interface
 func (si *secondaryIndex6) Scan6(
 	requestId string,

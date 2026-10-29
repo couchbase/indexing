@@ -22,12 +22,16 @@ import (
 	"github.com/couchbase/indexing/secondary/security"
 
 	common "github.com/couchbase/indexing/secondary/common"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 
 	mclient "github.com/couchbase/indexing/secondary/manager/client"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 )
 
 var SCHED_TOKEN_CHECK_INTERVAL = 5000 // Milliseconds
+
+// Raw ns_server clusterCompatibility (major*65536 + minor).
+var rawClusterCompat int64
 
 type metadataClient struct {
 	cluster  string
@@ -1646,6 +1650,7 @@ func (b *metadataClient) updateIndexerList(discardExisting, refreshServiceMap bo
 	if err := cinfo.FetchNodesAndSvsInfoWithLock(); err != nil {
 		return err
 	}
+	UpdateClusterCompat(cinfo.Nodes())
 
 	// UpdateIndexerList is synchronous, except for async callback from WatchMetadata() -- when indexer is
 	// not responding fast enough.
@@ -1667,7 +1672,8 @@ func (b *metadataClient) updateIndexerList(discardExisting, refreshServiceMap bo
 	defer b.topoChangeLock.Unlock()
 
 	// populate indexers' adminport and queryport
-	adminports, activeNode, failedNode, unhealthyNode, newNode, err := getIndexerAdminports(cinfo)
+	adminports, activeNode, failedNode, unhealthyNode, newNode, err :=
+		getIndexerAdminports(cinfo, b.settings.UseClusterMembershipOnly())
 	if err != nil {
 		return err
 	}
@@ -2141,8 +2147,9 @@ func (b *metadataClient) updateStats(stats map[common.IndexInstId]map[common.Par
 	}
 }
 
-// return adminports for all known indexers.
-func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, int, int, error) {
+// return adminports for all known indexers.  With membershipOnly, index nodes
+// that ns_server reports unhealthy are returned too.
+func getIndexerAdminports(cinfo *common.ClusterInfoCache, membershipOnly bool) ([]string, int, int, int, int, error) {
 	iAdminports := make([]string, 0)
 	unhealthyNodes := 0
 	for _, node := range cinfo.GetNodeIdsByServiceType("indexAdmin") {
@@ -2151,19 +2158,27 @@ func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, i
 			return nil, 0, 0, 0, 0, err
 		}
 		logging.Verbosef("node %v status: %q", node, status)
-		if status == "healthy" || status == "active" || status == "warmup" {
+		healthy := status == "healthy" || status == "active" || status == "warmup"
+		if !healthy {
+			unhealthyNodes++
+			logging.Warnf("node %v status: %q", node, status)
+		}
+		// ns_server reports a node unhealthy whenever its distribution link
+		// drops, including the brief drop on a certificate reload, and leaving
+		// a node out of this list unwatches it and removes its indexes from
+		// query plans.  With membershipOnly, such a node stays in the list
+		// until it is failed over or removed; until then scans to it fail and
+		// are retried on other replicas.
+		if healthy || membershipOnly {
 			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin", true)
 			if err != nil {
 				return nil, 0, 0, 0, 0, err
 			}
 			iAdminports = append(iAdminports, adminport)
-		} else {
-			unhealthyNodes++
-			logging.Warnf("node %v status: %q", node, status)
 		}
 	}
 
-	return iAdminports, // active, healthy indexer node with known ports
+	return iAdminports, // indexer nodes to watch
 		len(cinfo.GetActiveIndexerNodes()), // all active indexer node (known ports + unknown ports + unhealthy node)
 		len(cinfo.GetFailedIndexerNodes()), // failover indexer node
 		unhealthyNodes, // active, unhealthy indexer node with known ports
@@ -2259,8 +2274,9 @@ func (b *metadataClient) watchClusterChanges() {
 				selfRestart()
 				return
 			}
+			UpdateClusterCompat(cinfo.Nodes())
 
-			_, _, _, unhealthyNode, _, err := getIndexerAdminports(cinfo)
+			_, _, _, unhealthyNode, _, err := getIndexerAdminports(cinfo, b.settings.UseClusterMembershipOnly())
 			if err != nil {
 				logging.Errorf("updateIndexerList(): %v\n", err)
 				selfRestart()
@@ -2284,6 +2300,34 @@ func (b *metadataClient) watchClusterChanges() {
 			return
 		}
 	}
+}
+
+// ReleaseCompat encodes server release major.minor the way ns_server encodes
+// clusterCompatibility.
+func ReleaseCompat(major, minor uint32) int64 {
+	return int64(major)*65536 + int64(minor)
+}
+
+// UpdateClusterCompat records the lowest clusterCompatibility of the nodes.
+// Compat mode never goes back, so an older value is ignored. Refreshes can
+// run concurrently; a lost update only under-reports until the next refresh.
+func UpdateClusterCompat(nodes []couchbase.Node) {
+	compat := int64(math.MaxInt64)
+	for _, node := range nodes {
+		if int64(node.ClusterCompatibility) < compat {
+			compat = int64(node.ClusterCompatibility)
+		}
+	}
+
+	if compat != math.MaxInt64 && compat > atomic.LoadInt64(&rawClusterCompat) {
+		atomic.StoreInt64(&rawClusterCompat, compat)
+	}
+}
+
+// GetClusterCompat returns the ns_server cluster compatibility version last
+// seen by UpdateClusterCompat, 0 if none seen yet.
+func GetClusterCompat() int64 {
+	return atomic.LoadInt64(&rawClusterCompat)
 }
 
 func postWithAuth(url string, bodyType string, body io.Reader, timeout time.Duration) (*http.Response, error) {

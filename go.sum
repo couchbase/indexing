@@ -66,8 +66,6 @@ github.com/couchbase/goforestdb v0.0.0-20161215171854-0b501227de0e h1:xRaK/0Xonv
 github.com/couchbase/goforestdb v0.0.0-20161215171854-0b501227de0e/go.mod h1:QrrCwm7zmrkx0PXqGue29VBMbBo3DAQ3oAGamrrUAkQ=
 github.com/couchbase/goprotostellar v1.0.6-0.20260407143512-d7af25156dcc h1:wQfvYGOutMCo9be0xnHtM1FqnwKcmPVGRPx6xXw5wOo=
 github.com/couchbase/goprotostellar v1.0.6-0.20260407143512-d7af25156dcc/go.mod h1:X58ot5FRqlBTBkwG/oI4klunpu4MApjGktheqeRWQw0=
-github.com/couchbase/logstats v1.1.1 h1:mI0yMYud42CwJdTdkxRHk0NwobMHNAGv5s2azEMnCG0=
-github.com/couchbase/logstats v1.1.1/go.mod h1:S+drFV9YF6dSqFaj54vmsNqe3xvelFwz7EVw0vPSfR4=
 github.com/couchbase/tools-common/cloud/v8 v8.1.4 h1:+TzKykVvCtXNOiPZKwvWcVas4bBSbTGQwVLu8GerR5w=
 github.com/couchbase/tools-common/cloud/v8 v8.1.4/go.mod h1:5wEMtM4rX92Zl9ylQKEJFgmYNUyFVoWzXCvo31YNO+U=
 github.com/couchbase/tools-common/couchbase/v4 v4.1.0 h1:sMqMeqMyfdp0aWts81g7mezkuW/2ytk31d+bxbvnF4Q=

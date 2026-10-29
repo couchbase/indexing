@@ -849,6 +849,16 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"queryport.client.useClusterMembershipOnly": ConfigValue{
+		false,
+		"When true, queryport client decides which index nodes to watch from cluster " +
+			"membership only: a node is dropped when it is failed over or removed, whatever " +
+			"ns_server reports as its status. When false, a node is also dropped while " +
+			"ns_server does not report it healthy.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"queryport.client.restRequestTimeout": ConfigValue{
 		120, // value
 		"timeout, in seconds, is timeout for REST calls in GetWithCbauth Function of Index Planner.", //help

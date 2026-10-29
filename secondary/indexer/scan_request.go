@@ -1860,8 +1860,9 @@ func (r *ScanRequest) makeIncludeColumnFilters(protoScans []*protobuf.Scan) (s [
 		return nil, nil
 	}
 
-	// Array of Filters
-	var filters []Filter
+	// Array of Filters, empty rather than nil when every scan is skipped so
+	// that no row qualifies instead of the spans being ignored
+	filters := []Filter{}
 	var l, h IndexKey
 
 	for _, protoScan := range protoScans {
@@ -1870,6 +1871,11 @@ func (r *ScanRequest) makeIncludeColumnFilters(protoScans []*protobuf.Scan) (s [
 		// inline filter expression
 		if len(protoScan.Filters) == 0 || r.areFiltersNil(protoScan) {
 			return nil, nil
+		}
+
+		if len(protoScan.Filters) > len(r.IndexInst.Defn.Include) {
+			return nil, fmt.Errorf("There are more ranges (%v) than number of include columns (%v)",
+				len(protoScan.Filters), len(r.IndexInst.Defn.Include))
 		}
 
 		var compFilters []CompositeElementFilter

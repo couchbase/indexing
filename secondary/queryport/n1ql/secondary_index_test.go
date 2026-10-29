@@ -2,6 +2,9 @@ package n1ql
 
 import (
 	"testing"
+
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
 )
 
 func TestIndexConfig(t *testing.T) {
@@ -64,5 +67,29 @@ func validateConf(t *testing.T, preconf, postconf map[string]interface{}) {
 
 	if preconf[gConfigKeyTmpSpaceLimit] != postconf[gConfigKeyTmpSpaceLimit] {
 		t.Errorf("config mismatch %v %v", preconf, postconf)
+	}
+}
+
+func TestClusterVersionGECheck(t *testing.T) {
+	si := &secondaryIndex6{}
+	if si.ClusterVersionGECheck(7, 0) {
+		t.Fatalf("check passed before the cluster compat version was observed")
+	}
+
+	qclient.UpdateClusterCompat([]couchbase.Node{{ClusterCompatibility: 8*65536 + 5}})
+	tests := []struct {
+		major, minor uint32
+		want         bool
+	}{
+		{7, 6, true},
+		{8, 0, true},
+		{8, 5, true},
+		{8, 6, false},
+		{9, 0, false},
+	}
+	for _, tt := range tests {
+		if got := si.ClusterVersionGECheck(tt.major, tt.minor); got != tt.want {
+			t.Errorf("ClusterVersionGECheck(%d, %d) on compat 8.5 = %v, want %v", tt.major, tt.minor, got, tt.want)
+		}
 	}
 }

@@ -317,14 +317,7 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	}
 	w.fvecs = make([]float32, 0, fvecsDim)
 
-	for i := len(r.IndexInst.Defn.SecExprs); i < len(r.IndexInst.Defn.SecExprs)+len(r.IndexInst.Defn.Include); i++ {
-		index := i - len(r.IndexInst.Defn.SecExprs)
-		if r.indexKeyNames != nil && r.indexKeyNames[i] != "" {
-			w.includeColumnExplode[index] = true
-			w.includeColumnDecode[index] = true
-			w.explodeUpto = index
-		}
-	}
+	w.setIncludeColumnExplode()
 
 	//Use local heap for limit pushdown case. Each scan worker maintains
 	//its own local heap as only limit(topK) number of rows are required to be
@@ -543,9 +536,7 @@ func (w *ScanWorker) Scanner() {
 			lowBytes := bhiveCentroidId(append([]byte(nil), scan.Low.Bytes()...))
 			highBytes := bhiveCentroidId(append([]byte(nil), scan.High.Bytes()...))
 
-			if w.r.includeColumnFilters != nil {
-				err = snap.Range2(ctx, lowBytes, highBytes, scan.Incl, w.r.Limit, w.r.topNScan, handler, fincb, w.inlineFilterCb2)
-			} else if w.r.inlineFilterExpr != nil {
+			if w.r.includeColumnFilters != nil || w.r.inlineFilterExpr != nil {
 				err = snap.Range2(ctx, lowBytes, highBytes, scan.Incl, w.r.Limit, w.r.topNScan, handler, fincb, w.inlineFilterCb)
 			} else {
 				err = snap.Range2(ctx, lowBytes, highBytes, scan.Incl, w.r.Limit, w.r.topNScan, handler, fincb, nil)
@@ -1525,6 +1516,31 @@ func resizeIncludeColumnBuf(buf []byte, capacity int) []byte {
 	return buf
 }
 
+// setIncludeColumnExplode marks the include columns to explode for the
+// include column spans and the ones to also decode for the inline filter.
+func (w *ScanWorker) setIncludeColumnExplode() {
+	r := w.r
+	for i := len(r.IndexInst.Defn.SecExprs); i < len(r.IndexInst.Defn.SecExprs)+len(r.IndexInst.Defn.Include); i++ {
+		index := i - len(r.IndexInst.Defn.SecExprs)
+		if r.indexKeyNames != nil && r.indexKeyNames[i] != "" {
+			w.includeColumnExplode[index] = true
+			w.includeColumnDecode[index] = true
+			w.explodeUpto = index
+		}
+	}
+
+	// Spans compare the encoded include columns, so explode those positions
+	// even when the inline filter does not reference them
+	for _, f := range r.includeColumnFilters {
+		for i := range f.CompositeFilters {
+			w.includeColumnExplode[i] = true
+			if i > w.explodeUpto {
+				w.explodeUpto = i
+			}
+		}
+	}
+}
+
 func (w *ScanWorker) setCoverForIncludeExprs(docid []byte, explodedIncludeValues n1qlval.Values) {
 	cklen, metalen := w.r.cklen, w.r.allexprlen
 	for i := cklen; i < metalen; i++ {
@@ -1540,11 +1556,17 @@ func (w *ScanWorker) setCoverForIncludeExprs(docid []byte, explodedIncludeValues
 		}
 	}
 
-	if len(w.r.indexKeyNames) >= metalen && w.r.indexKeyNames[metalen] != "" {
+	if len(w.r.indexKeyNames) > metalen && w.r.indexKeyNames[metalen] != "" {
 		w.av.SetCover(w.r.indexKeyNames[metalen], w.svPool.Get(metalen-cklen, conversions.ByteSliceToString(docid)))
 	}
 }
 
+// inlineFilterCb filters a bhive row on its include columns and docid. The
+// include column spans are applied first on the encoded include columns,
+// and the inline filter expression is evaluated only for the rows that
+// pass them, decoding just the include columns it references. Query sends
+// both when the spans alone do not represent the predicate.
+//
 // "meta" is the decoded version of the "rawMeta" given by iterator
 // includeColumn fields will be extraced from the decoded meta
 func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
@@ -1570,29 +1592,44 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 		includeColumn = meta[w.codeSize:]
 	}
 
+	hasSpans := w.r.includeColumnFilters != nil
+
 	// Include column is empty when the index has no include columns or for
 	// rows written by older projectors when the leading include key was
-	// missing. Skip exploding, include covers evaluate as MISSING.
-	var explodedIncludeValues n1qlval.Values
+	// missing. Such a row matches no include column span, and without spans
+	// it is not exploded: the covers evaluate as MISSING.
+	if hasSpans && len(includeColumn) == 0 {
+		w.currJob.rowsFiltered++
+		return false, nil
+	}
+
+	var compositeKeys [][]byte
+	var includeValues n1qlval.Values
 	var err error
 	if len(includeColumn) > 0 {
-		w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(includeColumn))
-
-		_, explodedIncludeValues, err = jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf,
-			w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, w.explodeUpto, w.svPool)
+		// Decode while exploding only when there are no spans to apply first
+		compositeKeys, includeValues, err = w.explodeIncludeColumn(includeColumn, !hasSpans)
 		if err != nil {
-			if err == collatejson.ErrorOutputLen {
-				w.includeColumnBuf = make([]byte, 0, len(includeColumn)*3)
-				_, explodedIncludeValues, err = jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf,
-					w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, w.includeColumnDecode, w.explodeUpto, w.svPool)
-			}
-			if err != nil {
-				return false, err
-			}
+			return false, err
 		}
 	}
 
-	w.setCoverForIncludeExprs(docid, explodedIncludeValues)
+	if hasSpans && !w.matchIncludeColumnSpans(compositeKeys) {
+		w.currJob.rowsFiltered++
+		return false, nil
+	}
+
+	if w.r.inlineFilterExpr == nil {
+		return true, nil
+	}
+
+	if hasSpans && len(includeColumn) > 0 {
+		if includeValues, err = w.decodeIncludeColumns(compositeKeys); err != nil {
+			return false, err
+		}
+	}
+
+	w.setCoverForIncludeExprs(docid, includeValues)
 
 	evalValue, _, err := w.r.inlineFilterExpr.EvaluateForIndex(w.av, w.exprContext)
 	switch evalValue.Actual().(type) {
@@ -1604,62 +1641,58 @@ func (w *ScanWorker) inlineFilterCb(meta []byte, docid []byte) (bool, error) {
 	}
 }
 
-func (w *ScanWorker) inlineFilterCb2(meta []byte, docid []byte) (bool, error) {
-
-	// Dont wait till row is added to the batch when stopCh is closed.
-	// This is to avoid blocking the scan pipeline when stopCh is closed.
-	if (w.currJob.rowsFiltered+w.currJob.rowsScanned)%SCAN_SHUTDOWN_ERROR_BATCHSIZE == 0 && w.workerStopped() {
-		return false, ErrScanWorkerStopped
-	}
-
-	if !w.r.isBhiveScan {
-		return false, errors.New("Include column filtering is only supported with BHIVE indexes")
-	}
-
-	var includeColumn []byte
-	if w.r.IsSparseVectorIndexScan() {
-		vecSize := w.sparseVectorSizeFromMeta(meta)
-		includeColumn = meta[vecSize:]
-	} else {
-		includeColumn = meta[w.codeSize:]
-	}
+// explodeIncludeColumn explodes the encoded include column array into the
+// encoded keys of the columns marked in includeColumnExplode and, when
+// decode is set, into the n1ql values of the columns marked in
+// includeColumnDecode.
+func (w *ScanWorker) explodeIncludeColumn(includeColumn []byte, decode bool) ([][]byte, n1qlval.Values, error) {
 	w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(includeColumn))
+	keys, vals, err := w.explodeIncludeColumnOnce(includeColumn, decode)
+	if err == collatejson.ErrorOutputLen {
+		w.includeColumnBuf = make([]byte, 0, len(includeColumn)*3)
+		keys, vals, err = w.explodeIncludeColumnOnce(includeColumn, decode)
+	}
+	return keys, vals, err
+}
 
-	compositeKeys, _, err := jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
-		w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, nil, w.explodeUpto)
-	if err != nil {
+func (w *ScanWorker) explodeIncludeColumnOnce(includeColumn []byte, decode bool) ([][]byte, n1qlval.Values, error) {
+	var decodePos []bool
+	if decode {
+		decodePos = w.includeColumnDecode
+	}
+	return jsonEncoder.ExplodeArray5(includeColumn, w.includeColumnBuf, w.includeColumncktemp,
+		w.includeColumndktemp, w.includeColumnExplode, decodePos, w.explodeUpto, w.svPool)
+}
+
+// decodeIncludeColumns decodes the exploded include columns the inline
+// filter references, for a row that passed the include column spans.
+func (w *ScanWorker) decodeIncludeColumns(compositeKeys [][]byte) (n1qlval.Values, error) {
+	for i, decode := range w.includeColumnDecode {
+		if !decode {
+			continue
+		}
+		val, err := jsonEncoder.DecodeN1QLValuePooled(compositeKeys[i], w.includeColumnBuf, i, w.svPool)
 		if err == collatejson.ErrorOutputLen {
-			w.includeColumnBuf = make([]byte, 0, len(includeColumn)*3)
-			compositeKeys, _, err = jsonEncoder.ExplodeArray3(includeColumn, w.includeColumnBuf,
-				w.includeColumncktemp, w.includeColumndktemp, w.includeColumnExplode, nil, w.explodeUpto)
+			w.includeColumnBuf = resizeIncludeColumnBuf(w.includeColumnBuf, len(compositeKeys[i])*3)
+			val, err = jsonEncoder.DecodeN1QLValuePooled(compositeKeys[i], w.includeColumnBuf, i, w.svPool)
 		}
 		if err != nil {
-			return false, err
+			return nil, err
 		}
+		w.includeColumndktemp[i] = val
 	}
+	return w.includeColumndktemp, nil
+}
 
-	// Iterate over each scan for include columns.
-	// Even if the row qualifies one scan, return "true"
-	// Return false only if the row does not qualify all scans
+// matchIncludeColumnSpans returns true when the exploded include columns
+// qualify any of the include column spans.
+func (w *ScanWorker) matchIncludeColumnSpans(compositeKeys [][]byte) bool {
 	for _, inclScan := range w.r.includeColumnFilters {
-		rowMatched := true
-		compositeFilter := inclScan.CompositeFilters
-
-		if len(compositeFilter) > w.includeColumnLen {
-			// There cannot be more ranges than number of composite keys
-			err = errors.New("There are more ranges than number of composite elements in the index")
-			return false, err
-		}
-		rowMatched = applyFilter(compositeKeys, compositeFilter)
-		if rowMatched {
-			return true, nil
+		if applyFilter(compositeKeys, inclScan.CompositeFilters) {
+			return true
 		}
 	}
-
-	w.currJob.rowsFiltered++
-
-	// Row did not qualify any of the scans. Return false
-	return false, nil
+	return false
 }
 
 func (w *ScanWorker) bhiveIteratorCallback(entry, value []byte) error {
