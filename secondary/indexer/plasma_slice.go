@@ -1157,7 +1157,7 @@ func encryptCodebookByChunk(codebookPath, tmpEncryptionPath string, eCtx Encrypt
 	reader := bytes.NewReader(content)
 	buffer := make([]byte, chunkSize)
 
-	fd, err := os.OpenFile(tmpEncryptionPath, os.O_WRONLY|os.O_CREATE, 0755)
+	fd, err := os.OpenFile(tmpEncryptionPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
 	if err != nil {
 		logging.Errorf("encryptCodebook Error observed on opening file err:%v", err)
 		return err
@@ -1322,7 +1322,7 @@ func (mdb *plasmaSlice) SetCodebookEncryptionKey(key []byte, keyId string, ciphe
 			return err
 		}
 
-		err = common.WriteFileWithSync(tmpEncryptionPath, content, 0755)
+		err = writeTempFileWithSync(tmpEncryptionPath, content, 0755)
 		if err != nil {
 			logging.Errorf("plasmaSlice:SetCodebookEncryptionKey Error observed when writing file to path: %v, err: %v", codebookPath, err)
 			err2 := os.Remove(tmpEncryptionPath)
@@ -1522,7 +1522,7 @@ func (mdb *plasmaSlice) DropCodebookEncryptionKey(dropkeyIds []string, activeEar
 			return err
 		}
 
-		err = common.WriteFileWithSync(tmpEncryptionPath, content, 0755)
+		err = writeTempFileWithSync(tmpEncryptionPath, content, 0755)
 		if err != nil {
 			logging.Errorf("plasmaSlice:DropCodebookEncryptionKey WriteFileWithSync error observed path: %v, err: %v", codebookPath, err)
 			err2 := os.Remove(tmpEncryptionPath)
@@ -6696,17 +6696,41 @@ func resizeSparseJLBuf(sparseJLBuf []float32, dimension int, doResize bool) []fl
 	return sparseJLBuf
 }
 
+// removeDecryptedCodebook removes the plaintext copy of an encrypted codebook
+// left by decryptCodebookByChunk, e.g. by a crash before it was removed.
+func removeDecryptedCodebook(codebookFilePath string) {
+	decryptedFile := codebookFilePath + ".decrypt"
+	if err := os.Remove(decryptedFile); err != nil && !os.IsNotExist(err) {
+		logging.Errorf("removeDecryptedCodebook: Error observed while removing decrypted file for path: %v, err: %v", decryptedFile, err)
+	}
+}
+
+// removeStaleCodebookFiles removes the files a crash can leave next to the
+// codebook: its plaintext copy, and the .tmp of an interrupted codebook key
+// operation. A removal is logged, as it shows such a crash happened.
+func removeStaleCodebookFiles(codebookFilePath string) {
+	for _, f := range []string{codebookFilePath + ".decrypt", codebookFilePath + ".tmp"} {
+		if err := os.Remove(f); err == nil {
+			logging.Infof("removeStaleCodebookFiles: Removed stale file %v", f)
+		} else if !os.IsNotExist(err) {
+			logging.Errorf("removeStaleCodebookFiles: Error observed while removing file for path: %v, err: %v", f, err)
+		}
+	}
+}
+
 func decryptCodebookByChunk(newFilePath string, getKeyById func(keyid []byte) []byte, codebookKDFLabelCtx []byte) ([]byte, error) {
 	decryptedFile := newFilePath + ".decrypt"
 	//Store decrypted codebook to content
 	_, err := DecryptFileByChunk(context.Background(), newFilePath, decryptedFile, getKeyById, codebookKDFLabelCtx, nil)
 	if err != nil {
 		logging.Errorf("decryptCodebookByChunk: Error observed while DecryptFileByChunk for path: %v, err: %v", newFilePath, err)
+		removeDecryptedCodebook(newFilePath)
 		return []byte{}, errCodebookCorrupted
 	}
 	content, err := os.ReadFile(decryptedFile)
 	if err != nil {
 		logging.Errorf("decryptCodebookByChunk: Error observed while reading from disk for path: %v, err: %v", decryptedFile, err)
+		removeDecryptedCodebook(newFilePath)
 		return []byte{}, errCodebookCorrupted
 	}
 	err = os.Remove(decryptedFile)
@@ -6720,6 +6744,7 @@ func decryptCodebookByChunk(newFilePath string, getKeyById func(keyid []byte) []
 func (mdb *plasmaSlice) recoverCodebook(codebookPath string) error {
 	// Construct codebook path
 	newFilePath := filepath.Join(mdb.storageDir, codebookPath)
+	removeStaleCodebookFiles(newFilePath)
 	_, err := iowrap.Os_Stat(newFilePath)
 	if os.IsNotExist(err) {
 		logging.Warnf("plasmaSlice::recoverCodebook error observed while recovering from codebookPath: %v, err: %v", newFilePath, err)
