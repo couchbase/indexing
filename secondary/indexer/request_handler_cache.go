@@ -291,7 +291,7 @@ func (rhc *requestHandlerCache) writeTempFile(method, temp string, content []byt
 			return fmt.Errorf("WriteEncryptedFile %v: %w", temp, err)
 		}
 	} else {
-		if err = common.WriteFileWithSync(temp, content, cacheFileMode); err != nil {
+		if err = writeTempFileWithSync(temp, content, cacheFileMode); err != nil {
 			return fmt.Errorf("WriteFileWithSync %v: %w", temp, err)
 		}
 	}
@@ -584,6 +584,9 @@ func (rhc *requestHandlerCache) populateMetaMemCacheFromDisk() {
 				if rhc.metaEncCtx == nil {
 					rhc.metaEncCtx = encCtx
 				}
+			} else if rhc.encCallbacks.setInUseKeys != nil {
+				// Plaintext until the file is rewritten.
+				rhc.encCallbacks.setInUseKeys(LogdataKDT, "")
 			}
 
 			localMeta := new(manager.LocalIndexMetadata)
@@ -634,6 +637,9 @@ func (rhc *requestHandlerCache) populateStatsMemCacheFromDisk() {
 				if rhc.statsEncCtx == nil {
 					rhc.statsEncCtx = encCtx
 				}
+			} else if rhc.encCallbacks.setInUseKeys != nil {
+				// Plaintext until the file is rewritten.
+				rhc.encCallbacks.setInUseKeys(LogdataKDT, "")
 			}
 
 			stats := new(common.Statistics)
