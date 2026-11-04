@@ -48,7 +48,8 @@ func (e *encryptedStatsWriter) Close() error { return e.f.Close() }
 func (e *encryptedStatsWriter) Sync() error  { return e.f.Sync() }
 
 // LogStatsFileHandler implements logstats.FileHandler for encrypted stats logs.
-// Open always returns a plain writer (encryption starts only the first Rotate).
+// Open resumes the active file with its own key, or as plaintext. A missing or
+// empty active file is started encrypted when getKey returns a non-empty key.
 // Rotate returns an encryptedStatsWriter when getKey returns a non-empty key,
 // or a plain *os.File otherwise.
 type LogStatsFileHandler struct {
@@ -128,6 +129,24 @@ func (h *LogStatsFileHandler) openActive(fileName string) (logstats.SyncWriteClo
 		}
 		return &encryptedStatsWriter{f: f, w: w}, int(fi.Size()), nil
 	}
+
+	// No active file, or an empty one: start it encrypted when a key is set,
+	// rather than as plaintext that has to be rotated aside.
+	if fi, statErr := os.Stat(fileName); h.getKey != nil &&
+		(os.IsNotExist(statErr) || (statErr == nil && fi.Size() == 0)) {
+		if newKeyID, key := h.getKey(); len(key) > 0 {
+			f, err := os.OpenFile(fileName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+			if err != nil {
+				return nil, 0, err
+			}
+			w, err := newEncryptedStatsWriter(f, newKeyID, key)
+			if err != nil {
+				return nil, 0, fmt.Errorf("LogStatsFileHandler.Open: %w", err)
+			}
+			return w, 0, nil
+		}
+	}
+
 	f, err := os.OpenFile(fileName, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, 0, err
@@ -170,6 +189,15 @@ func (h *LogStatsFileHandler) rotateLocked(fileName string, numFiles int) (logst
 		return f, 0, nil
 	}
 
+	w, err := newEncryptedStatsWriter(f, keyID, key)
+	if err != nil {
+		return nil, 0, fmt.Errorf("LogStatsFileHandler.Rotate: %w", err)
+	}
+	return w, 0, nil
+}
+
+// newEncryptedStatsWriter writes the cbcrypto header to f. f is closed on error.
+func newEncryptedStatsWriter(f *os.File, keyID string, key []byte) (*encryptedStatsWriter, error) {
 	w, err := cbcrypto.NewCBCWriter(f, cbcrypto.WriterOptions{
 		KeyID:         keyID,
 		Key:           key,
@@ -178,9 +206,9 @@ func (h *LogStatsFileHandler) rotateLocked(fileName string, numFiles int) (logst
 	})
 	if err != nil {
 		f.Close()
-		return nil, 0, fmt.Errorf("LogStatsFileHandler.Rotate: NewCBCWriter: %w", err)
+		return nil, fmt.Errorf("NewCBCWriter: %w", err)
 	}
-	return &encryptedStatsWriter{f: f, w: w}, 0, nil
+	return &encryptedStatsWriter{f: f, w: w}, nil
 }
 
 func (h *LogStatsFileHandler) skipRotate(fileName string) (logstats.SyncWriteCloser, int, error) {
@@ -300,6 +328,11 @@ func GetStatsLogFileKeyID(path string) (string, error) {
 func IsStatsLogActiveFileEncrypted(filePath string) bool {
 	_, err := GetStatsLogFileKeyID(filePath)
 	return err == nil
+}
+
+// StatsLogEncryptionSupported reports whether this build can encrypt stats logs.
+func StatsLogEncryptionSupported() bool {
+	return true
 }
 
 // Each file is written to a .tmp sibling then atomically renamed
