@@ -693,3 +693,21 @@ func GetBucketKDT(bucketUUID string) KeyDataType {
 		BucketUUID: bucketUUID,
 	}
 }
+
+// writeTempFileWithSync is common.WriteFileWithSync with truncation, for temp
+// files that are renamed into place: one left by a crash or a failed cleanup
+// can be longer than data, and its tail would survive the rename.
+func writeTempFileWithSync(path string, data []byte, perm os.FileMode) error {
+	fd, err := iowrap.Os_OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	_, err = iowrap.File_Write(fd, data)
+	if err == nil {
+		err = iowrap.File_Sync(fd)
+	}
+	if err2 := iowrap.File_Close(fd); err == nil {
+		err = err2
+	}
+	return err
+}

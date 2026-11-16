@@ -529,10 +529,21 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	instIdList := streamKeyspaceIdInstList[streamId][keyspaceId]
 
 	if len(instIdList) == 0 {
-		logging.Infof("storageMgr::handleCreateSnapshot Skipping snapshot creation as instIdList "+
+		// Hit on every flush (~10ms) while the list is empty, so Debug.
+		logging.Debugf("storageMgr::handleCreateSnapshot Skipping snapshot creation as instIdList "+
 			"is zero for streamId: %v, keyspaceId: %v", streamId, keyspaceId)
 		if snapType == common.FORCE_COMMIT_MERGE {
 			s.supvCmdch <- &MsgSuccess{} // send response as storage manager is not going to create snapshot
+		} else {
+			// Timekeeper needs STORAGE_SNAP_DONE to close the flush, else the stream
+			// never merges. Same as NO_SNAP; async so this loop doesn't block on supvRespch.
+			s.muSnap.Lock()
+			indexInstMap := s.indexInstMap.Get()
+			indexPartnMap := s.indexPartnMap.Get()
+			s.muSnap.Unlock()
+
+			go s.flushDone(streamId, keyspaceId, indexInstMap, indexPartnMap,
+				instIdList, tsVbuuid, flushWasAborted, hasAllSB)
 		}
 		return
 	}

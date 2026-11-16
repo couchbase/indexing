@@ -1920,6 +1920,7 @@ func (mdb *bhiveSlice) getQuantizedCodeForVectors(vecs [][]float32, codeSize int
 func (mdb *bhiveSlice) recoverCodebook(codebookPath string) error {
 	// Construct codebook path
 	newFilePath := filepath.Join(mdb.storageDir, codebookPath)
+	removeStaleCodebookFiles(newFilePath)
 	_, err := iowrap.Os_Stat(newFilePath)
 	if os.IsNotExist(err) {
 		logging.Warnf("bhiveSlice::recoverCodebook error observed while recovering from codebookPath: %v, err: %v", newFilePath, err)
@@ -2916,6 +2917,10 @@ func (mdb *bhiveSlice) resetStores(initBuild bool) error {
 		return err
 	}
 
+	if mdb.codebook != nil && mdb.codebook.IsTrained() {
+		mdb.mainstore.SetVectorFuncCtx(mdb.createVectorFuncCtx())
+	}
+
 	mdb.startWriters(numWriters)
 	mdb.setCommittedCount()
 
@@ -3570,7 +3575,7 @@ func (mdb *bhiveSlice) SetCodebookEncryptionKey(key []byte, keyId string, cipher
 			logging.Errorf("bhiveSlice:SetCodebookEncryptionKey Error observed while decryptCodebookByChunk from disk for path: %v, err: %v", codebookPath, err)
 			return err
 		}
-		err = common.WriteFileWithSync(tmpEncryptionPath, content, 0755)
+		err = writeTempFileWithSync(tmpEncryptionPath, content, 0755)
 		if err != nil {
 			logging.Errorf("bhiveSlice:SetCodebookEncryptionKey Error observed when writing file to path: %v, err: %v", codebookPath, err)
 			err2 := os.Remove(tmpEncryptionPath)
@@ -3707,7 +3712,7 @@ func (mdb *bhiveSlice) DropCodebookEncryptionKey(dropkeyIds []string, activeEark
 			return err
 		}
 
-		err = common.WriteFileWithSync(tmpEncryptionPath, content, 0755)
+		err = writeTempFileWithSync(tmpEncryptionPath, content, 0755)
 		if err != nil {
 			logging.Errorf("bhiveSlice:DropCodebookEncryptionKey WriteFileWithSync error observed path: %v, err: %v", codebookPath, err)
 			err2 := os.Remove(tmpEncryptionPath)

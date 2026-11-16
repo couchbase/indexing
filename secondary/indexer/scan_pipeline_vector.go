@@ -376,6 +376,11 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	w.cv = value.NewScopeValue(make(map[string]interface{}), nil)
 	w.av = value.NewAnnotatedValue(w.cv)
 	w.exprContext = expression.NewIndexContext()
+	if r.inlineFilterExpr != nil {
+		// Use a hash table for large IN-lists in the inline filter. The table is
+		// kept in this worker's context, as sharing it across workers is slower.
+		r.inlineFilterExpr.EnableInlistHash(w.exprContext)
+	}
 	w.svPool = value.NewStringValuePoolForIndex(len(r.IndexInst.Defn.Include) + 1) // +1 is required for meta().id
 
 	logging.Tracef("%v bufferInitBatchSize: %v", w.logPrefix, bufferInitBatchSize)
@@ -446,6 +451,9 @@ func (w *ScanWorker) Close() {
 	w.svPool = nil
 	w.cv = nil
 	w.av = nil
+	if w.r.inlineFilterExpr != nil && w.exprContext != nil {
+		w.r.inlineFilterExpr.ResetMemory(w.exprContext)
+	}
 	w.exprContext = nil
 }
 

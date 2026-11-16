@@ -3901,6 +3901,10 @@ func (s *statsManager) initEncryptionCtx() {
 	ctx, err := s.createEncryptionContext(earkey)
 	if err != nil {
 		logging.Errorf("StatsManager::initEncryptionCtx key:%v err:%v", keyID, err)
+		// Persisted stats are written in plaintext until UpdateKey.
+		if s.encCallbacks.setInUseKeys != nil {
+			s.encCallbacks.setInUseKeys(LogdataKDT, "")
+		}
 		return
 	}
 
@@ -5913,7 +5917,7 @@ func (fp *FlatFileStatsPersister) PersistStats(statsMap map[string]interface{}) 
 				}
 			}
 		} else {
-			err := common.WriteFileWithSync(fp.newFilePath, content, statsFileMode)
+			err := writeTempFileWithSync(fp.newFilePath, content, statsFileMode)
 			if err != nil {
 				return fmt.Errorf("FlatFileStatsPersister::PersistStats plaintext write: %w", err)
 			}
@@ -6012,9 +6016,13 @@ func (fp *FlatFileStatsPersister) ReadPersistedStats(
 			}
 		}
 	default:
-		logging.Infof("FlatFileStatsPersister::ReadPersistedStats file is plaintext, encCtx=%v",
-			fp.encCtx != nil)
+		logging.Infof("FlatFileStatsPersister::ReadPersistedStats file is plaintext")
 		content, err = iowrap.Ioutil_ReadFile(fp.filePath)
+		if err == nil && encCallbacks != nil &&
+			encCallbacks.setInUseKeys != nil {
+			// The plaintext file stays until it is rewritten.
+			encCallbacks.setInUseKeys(LogdataKDT, "")
+		}
 	}
 
 	if err != nil {
