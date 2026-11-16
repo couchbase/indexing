@@ -2527,6 +2527,10 @@ func (mdb *bhiveSlice) resetStores(initBuild bool) error {
 		return err
 	}
 
+	if mdb.codebook != nil && mdb.codebook.IsTrained() {
+		mdb.mainstore.SetVectorFuncCtx(mdb.createVectorFuncCtx())
+	}
+
 	mdb.startWriters(numWriters)
 	mdb.setCommittedCount()
 
