@@ -19,6 +19,7 @@ const (
 
 var ErrCipherKeyLookup = gocbcrypto.ErrCipherKeyLookup
 var ErrRetryDropKey = plasma.ErrRetryDropKey
+var ErrRetrySetCurrentKey = plasma.ErrRetrySetCurrentKey
 
 func NewEncryptionCtx(keyId string, keyData []byte, cipher string, kdfLabel []byte) (EncryptionCtx, error) {
 	switch cipher {
