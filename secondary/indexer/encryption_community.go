@@ -17,6 +17,7 @@ const (
 
 var ErrCipherKeyLookup = errors.New("cipher key lookup failed")
 var ErrRetryDropKey = errors.New("drop key retry")
+var ErrRetrySetCurrentKey = errors.New("set current key retry")
 
 func NewEncryptionCtx(_ string, _ []byte, _ string, _ []byte) (EncryptionCtx, error) {
 	return nil, nil

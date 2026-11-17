@@ -595,6 +595,8 @@ func (slice *bhiveSlice) setupMainstoreConfig() bhive.Config {
 	logging.Infof("bhiveSlice:setupConfig efNumNeighbors %v efConstruction %v buildQuota %v numCompactor %v topN %v PersistFullVector: %v",
 		cfg.EfNumNeighbors, cfg.EfConstruction, cfg.VanamaBuildQuota, cfg.NumCompactor, slice.topNScan, cfg.PersistFullVector)
 
+	slice.setupEncryptionCallbacks(&cfg)
+
 	return cfg
 }
 
@@ -632,7 +634,24 @@ func (slice *bhiveSlice) setupBackstoreConfig() bhive.Config {
 	// shard transfer
 	loadClientCopyConfig(&cfg.CopyConfig, slice.sysconf, false)
 
+	slice.setupEncryptionCallbacks(&cfg)
+
 	return cfg
+}
+
+// setupEncryptionCallbacks sets the callbacks used by storage to get key data
+// for a keyId. Set for both store open and UpdateConfig, as bhive replaces the
+// config on update and a nil callback disables encryption for it.
+func (slice *bhiveSlice) setupEncryptionCallbacks(cfg *bhive.Config) {
+	// if override is set then leave the get keys as nil
+	if testcode.OverrideShardCompatVersion(0) == 1 {
+		cfg.GetKeyById = nil
+		cfg.GetActiveKeyByPath = nil
+		return
+	}
+
+	cfg.GetKeyById = slice.GetEncryptionKeyByIdCb
+	cfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
 }
 
 func backupCorruptedSlice_Bhive(
@@ -661,20 +680,6 @@ func (slice *bhiveSlice) initStores(isInitialBuild bool, cancelCh chan bool) err
 	if enableShardAffinity && len(slice.shardIds) > 0 && slice.IsRebalRunning() {
 		mCfg.UseShardId = plasma.ShardId(slice.shardIds[0])
 		bCfg.UseShardId = plasma.ShardId(slice.shardIds[1])
-	}
-
-	// callback will be used by storage to get keydata for keyId
-	mCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
-	bCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
-	mCfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
-	bCfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
-
-	// if override is set then reset the get keys to nil
-	if testcode.OverrideShardCompatVersion(0) == 1 {
-		mCfg.GetKeyById = nil
-		bCfg.GetKeyById = nil
-		mCfg.GetActiveKeyByPath = nil
-		bCfg.GetActiveKeyByPath = nil
 	}
 
 	var wg sync.WaitGroup

@@ -4184,7 +4184,7 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 							case errCh <- errget:
 							default:
 							}
-							logging.Errorf("StorageMgr::handleEncryptionDropKey GetKeyIdList for instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), err)
+							logging.Errorf("StorageMgr::handleEncryptionDropKey GetKeyIdList for instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), errget)
 							return
 						}
 						isSliceWithActiveKey := false
@@ -4197,11 +4197,19 @@ func (s *storageMgr) handleEncryptionDropKey(cmd Message) {
 						if !isSliceWithActiveKey {
 							errset := slice.SetCurrentEncryptionKey(earkey.Key, []byte(earkey.Id), earkey.Cipher)
 							if errset != nil {
+								logging.Errorf("StorageMgr::handleEncryptionDropKey SetCurrentEncryptionKey for instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), errset)
+								// Storage can't switch the key now, retry the drop key. The
+								// next attempt sets the active key again before DropKeys.
+								if errors.Is(errset, ErrRetrySetCurrentKey) {
+									errMu.Lock()
+									dropKeyRetryErr = ErrRetryDropKey
+									errMu.Unlock()
+									return
+								}
 								select {
 								case errCh <- errset:
 								default:
 								}
-								logging.Errorf("StorageMgr::handleEncryptionDropKey SetCurrentEncryptionKey for instId:%v partnId:%v err:%v", instId, slice.IndexPartnId(), err)
 								return
 							}
 						}
