@@ -9,6 +9,7 @@
 package vector
 
 import (
+	"math"
 	"math/rand"
 	"testing"
 	"time"
@@ -244,6 +245,42 @@ func TestCodebookTrainWithTrainingPermitHeld(t *testing.T) {
 				t.Fatalf("Train did not return while the caller held every training permit")
 			}
 		})
+	}
+}
+
+// TestCodebookSparseTrainNormalizesInPlace checks that Train normalizes its
+// SparseJL input in place rather than training on a normalized copy, which
+// cost one more sample-sized buffer per running training: the caller's
+// vectors must come back unit-normalized.
+func TestCodebookSparseTrainNormalizesInPlace(t *testing.T) {
+	if !getSparseNormalizationEnabled() {
+		t.Skip("sparse normalization is disabled")
+	}
+	const dim, nlist, nvecs = 64, 16, 10000
+	cb, err := NewCodebookSparse(dim, nlist)
+	if err != nil {
+		t.Fatalf("Unable to create index. Err %v", err)
+	}
+	defer cb.Close()
+
+	rng := rand.New(rand.NewSource(1))
+	vecs := make([]float32, dim*nvecs)
+	for i := range vecs {
+		vecs[i] = rng.Float32() + 0.5
+	}
+
+	if err := cb.Train(vecs); err != nil {
+		t.Fatalf("Unable to train index. Err %v", err)
+	}
+
+	for i := 0; i < nvecs; i++ {
+		var ss float64
+		for _, x := range vecs[i*dim : (i+1)*dim] {
+			ss += float64(x) * float64(x)
+		}
+		if math.Abs(ss-1) > 1e-3 {
+			t.Fatalf("vector %d has squared norm %v after Train, want 1", i, ss)
+		}
 	}
 }
 

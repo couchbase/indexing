@@ -98,6 +98,9 @@ func NewCodebookSparse(dim, nlist int) (c.SparseCodebook, error) {
 // uses spherical k-means when the metric is inner product
 // (see faiss/IndexIVF.cpp). Faiss normalizes centroids but not input
 // vectors, so we normalize them here before training if enabled.
+// vecs is normalized in place, as the dense codebooks do for cosine: the
+// slices pass the SparseJL buffer they projected the sample into, and a copy
+// would be another buffer of the same size.
 // The caller holds the training permit (codebook.AcquireTraining).
 func (cb *codebookSparse) Train(vecs []float32) error {
 
@@ -111,10 +114,7 @@ func (cb *codebookSparse) Train(vecs []float32) error {
 	// Normalize input vectors for spherical k-means if enabled.
 	// Faiss only normalizes centroids, not input vectors.
 	if getSparseNormalizationEnabled() {
-		normalizedVecs := make([]float32, len(vecs))
-		copy(normalizedVecs, vecs)
-		faiss.RenormL2(cb.dim, nvecs, normalizedVecs)
-		trainVecs = normalizedVecs
+		faiss.RenormL2(cb.dim, nvecs, trainVecs)
 	}
 
 	// If number of centroids is equal to the number of input
