@@ -189,6 +189,64 @@ func TestCodebookSparse(t *testing.T) {
 	}
 }
 
+// TestCodebookTrainWithTrainingPermitHeld checks that no codebook's Train takes
+// the training permit itself. The indexer holds it around all of slice.Train,
+// so a Train that took it again would wait forever for the last permit.
+func TestCodebookTrainWithTrainingPermitHeld(t *testing.T) {
+	const dim, nlist, nvecs = 32, 4, 1000
+	codebooks := []struct {
+		name string
+		new  func() (cbpkg.Codebook, error)
+	}{
+		{"IVFPQ", func() (cbpkg.Codebook, error) {
+			return NewCodebookIVFPQ(dim, 4, 4, nlist, cbpkg.METRIC_L2, false, false)
+		}},
+		{"IVFSQ", func() (cbpkg.Codebook, error) {
+			return NewCodebookIVFSQ(dim, nlist, common.SQ_8BIT, cbpkg.METRIC_L2, false)
+		}},
+		{"IVFRaBitQ", func() (cbpkg.Codebook, error) {
+			return NewCodebookIVFRaBitQ(dim, nlist, 1, cbpkg.METRIC_L2, false)
+		}},
+		{"Sparse", func() (cbpkg.Codebook, error) {
+			return NewCodebookSparse(dim, nlist)
+		}},
+	}
+
+	permits := cbpkg.GetTrainingConcurrency()
+	for i := 0; i < permits; i++ {
+		cbpkg.AcquireTraining()
+	}
+	defer func() {
+		for i := 0; i < permits; i++ {
+			cbpkg.ReleaseTraining()
+		}
+	}()
+
+	vecs := convertTo1D(genRandomVecs(dim, nvecs, 1))
+	for _, tc := range codebooks {
+		t.Run(tc.name, func(t *testing.T) {
+			cb, err := tc.new()
+			if err != nil {
+				t.Fatalf("Unable to create index. Err %v", err)
+			}
+			defer cb.Close()
+
+			done := make(chan error, 1)
+			go func() {
+				done <- cb.Train(append([]float32(nil), vecs...))
+			}()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("Unable to train index. Err %v", err)
+				}
+			case <-time.After(time.Minute):
+				t.Fatalf("Train did not return while the caller held every training permit")
+			}
+		})
+	}
+}
+
 // TestCodebookSparseHistogramRoundTrip exercises the histogram persistence
 // added alongside derived τ pruning: train a tiny codebook, attach a
 // histogram, marshal, recover, assert the histogram, derived τ, and retained

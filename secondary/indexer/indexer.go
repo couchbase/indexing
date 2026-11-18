@@ -15134,6 +15134,8 @@ func (idx *indexer) handleTrainingAndCheckForDrop(keyspaceId string,
 	defer ticker.Stop()
 
 	go func() {
+		codebook.AcquireTraining()
+		defer codebook.ReleaseTraining()
 		respCh <- slice.Train(vectors)
 	}()
 

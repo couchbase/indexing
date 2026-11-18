@@ -109,10 +109,8 @@ func (cb *codebookIVFRaBitQ) setQb() error {
 	return nil
 }
 
+// The caller holds the training permit (codebook.AcquireTraining).
 func (cb *codebookIVFRaBitQ) Train(vecs []float32) error {
-	c.AcquireTraining()
-	defer c.ReleaseTraining()
-
 	if cb.index == nil {
 		return c.ErrCodebookClosed
 	}

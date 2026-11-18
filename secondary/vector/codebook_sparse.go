@@ -98,10 +98,8 @@ func NewCodebookSparse(dim, nlist int) (c.SparseCodebook, error) {
 // uses spherical k-means when the metric is inner product
 // (see faiss/IndexIVF.cpp). Faiss normalizes centroids but not input
 // vectors, so we normalize them here before training if enabled.
+// The caller holds the training permit (codebook.AcquireTraining).
 func (cb *codebookSparse) Train(vecs []float32) error {
-
-	c.AcquireTraining()
-	defer c.ReleaseTraining()
 
 	if cb.index == nil {
 		return c.ErrCodebookClosed
