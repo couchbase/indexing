@@ -82,10 +82,8 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric c.MetricType, useCosin
 }
 
 // Train the codebook using input vectors.
+// The caller holds the training permit (codebook.AcquireTraining).
 func (cb *codebookIVFPQ) Train(vecs []float32) error {
-
-	c.AcquireTraining()
-	defer c.ReleaseTraining()
 
 	if cb.index == nil {
 		return c.ErrCodebookClosed

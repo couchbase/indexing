@@ -77,10 +77,8 @@ func NewCodebookIVFSQ(dim, nlist int, sqRange common.ScalarQuantizerRange, metri
 }
 
 // Train the codebook using input vectors.
+// The caller holds the training permit (codebook.AcquireTraining).
 func (cb *codebookIVFSQ) Train(vecs []float32) error {
-
-	c.AcquireTraining()
-	defer c.ReleaseTraining()
 
 	if cb.index == nil {
 		return c.ErrCodebookClosed

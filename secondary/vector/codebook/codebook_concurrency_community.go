@@ -34,6 +34,16 @@ func GetTrainingConcurrency() int {
 	return 0
 }
 
+// AcquireTraining acquires a permit from the training semaphore
+func AcquireTraining() {
+	//no-op
+}
+
+// ReleaseTraining releases a permit back to the training semaphore
+func ReleaseTraining() {
+	//no-op
+}
+
 // SetThrottleDelay sets the delay in microseconds to throttle the concurrency
 func SetThrottleDelay(delayUs int64) {
 	//no-op
