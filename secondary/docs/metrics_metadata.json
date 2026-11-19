@@ -220,7 +220,7 @@
             "collection",
             "index"
         ],
-        "added": "8.1.0",
+        "added": "8.5.0",
         "notes": "Valid only for vector indexes. num_rows_scanned + num_rows_filtered gives the total rows processed by the scan pipeline."
     },
     "index_num_rows_reranked": {
@@ -233,7 +233,7 @@
             "collection",
             "index"
         ],
-        "added": "8.1.0",
+        "added": "8.5.0",
         "notes": "Valid only for vector indexes."
     },
     "index_raw_data_size": {
@@ -502,12 +502,12 @@
     "index_num_scan_reports_gen": {
         "type": "gauge",
         "help": "Number of scan reports generated, on this node",
-        "added": "8.1.0"
+        "added": "8.5.0"
     },
     "index_num_scan_reports_undelivered": {
         "type": "gauge",
         "help": "Number of scan reports generated but not delivered, on this node",
-        "added": "8.1.0",
+        "added": "8.5.0",
         "notes": "Incremented when the scan response, including its report, could not be written back to the client."
     },
     "index_avg_disk_bps": {
@@ -559,7 +559,7 @@
     "index_total_rows_filtered": {
         "type": "counter",
         "help": "Sum of rows skipped by an inline filter pushed down to storage during vector index scans, across all indexes, located on this node",
-        "added": "8.1.0",
+        "added": "8.5.0",
         "notes": "Valid only for vector indexes."
     },
     "index_memory_rss": {
@@ -776,7 +776,7 @@
         "type": "gauge",
         "help": "Sum of codebook memory usage across all vector indexes, located on this node",
         "unit": "bytes",
-        "added": "8.1.0",
+        "added": "8.5.0",
         "notes": "Valid only for vector indexes."
     },
     "index_storage_hvi_memory_used": {
