@@ -167,6 +167,7 @@ type bhiveSlice struct {
 	// snapshot
 	persistorLock     sync.RWMutex
 	isPersistorActive bool
+	persistingOSO     bool // the running persistor's snapshot is DISK_SNAP_OSO
 	stopPersistor     bool
 	persistorQueue    *bhiveSnapshot
 	snapCount         uint64
@@ -2365,6 +2366,29 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 
 	mdb.persistorLock.Lock()
 
+	// This is an interim change to avoid further delays if snapshot is queued.
+	// This should be addressed in a future patch.
+
+	// The flush resumes only after the stores complete the checkpoint for this
+	// snapshot. A snapshot queued behind a running persistor can run only
+	// when that old persistence finishes, which holds the flush for the rest of the
+	// running recovery point, including its wait for bhivePersistenceMutex.
+	// So the snapshot is skipped instead; the next commit persists
+	// the newer data.
+	//
+	// A non-OSO commit behind a running DISK_SNAP_OSO persistor is queued
+	// instead. It is the first recovery point a restart can resume from (e.g.
+	// the build completion snapshot, which timekeeper sends only once), and a
+	// keyspace without new mutations makes no further commit. Skipping it
+	// leaves the OSO recovery point as the latest one, and a restart rolls
+	// the index back to 0 and rebuilds it. This happens once per OSO build.
+	if mdb.isPersistorActive && !(mdb.persistingOSO && !s.info.IsOSOSnap()) {
+		mdb.persistorLock.Unlock()
+		logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v Skipping SnapshotId %v ondisk"+
+			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id)
+		return
+	}
+
 	// waitgroup to notify completion of bhive magma and lss vindex checkpoints
 	var chkpWg sync.WaitGroup
 
@@ -2397,6 +2421,7 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 		if mdb.persistDoneCh == nil {
 			mdb.persistDoneCh = make(chan struct{})
 		}
+		mdb.persistingOSO = s.info.IsOSOSnap()
 		go mdb.persistSnapshot(s)
 	} else {
 		logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v EnQueuing SnapshotId %v ondisk"+
@@ -2523,6 +2548,7 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 		if persistOk {
 			mdb.persistDoneCh = make(chan struct{})
 		}
+		mdb.persistingOSO = queuedS.info.IsOSOSnap()
 		go mdb.persistSnapshot(queuedS)
 		mdb.persistorLock.Unlock()
 		// Close the previous run's channel outside the lock.
