@@ -2419,6 +2419,9 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 
 func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 	if mdb.CheckCmdChStopped() {
+		s.MainSnap.Close() // opened in doPersistSnapshot
+		s.BackSnap.Close()
+
 		mdb.releaseChkp(s)
 
 		mdb.persistorLock.Lock()
