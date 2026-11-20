@@ -2419,7 +2419,7 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 
 func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 	if mdb.CheckCmdChStopped() {
-		close(s.chkpointCh)
+		mdb.releaseChkp(s)
 
 		mdb.persistorLock.Lock()
 		doneCh := mdb.persistDoneCh
@@ -2711,11 +2711,35 @@ func (mdb *bhiveSlice) closeQueuedSnapNoLock() {
 	if deQueuedS != nil {
 		deQueuedS.MainSnap.Close()
 		deQueuedS.BackSnap.Close()
-		close(deQueuedS.chkpointCh)
+		mdb.releaseChkp(deQueuedS)
 		logging.Infof("bhiveSlice Slice Id %v, IndexInstId %v, PartitionId %v DeQueuing SnapshotId %v ondisk"+
 			" snapshot.", mdb.id, mdb.idxInstId, mdb.idxPartnId, deQueuedS.id)
 	}
 	mdb.persistorQueue = nil
+}
+
+// releases the flush waiting in doPersistSnapshot for a snapshot that ends
+// without CreateRecoveryPoint2 (index drop, or a dropped queued snapshot
+// No checkpoint callback has invoked for it, so mark waitgroup done here.
+func (mdb *bhiveSlice) releaseChkp(s *bhiveSnapshot) {
+	// mainIndex
+	chkpPending := 1
+	if mdb.persistFullVector {
+		chkpPending++ // magma
+	}
+
+	// docIndex
+	chkpPending++ // magma
+
+	if s.chkpointCb != nil {
+		for i := 0; i < chkpPending; i++ {
+			s.chkpointCb(nil)
+		}
+	}
+
+	if s.chkpointCh != nil {
+		close(s.chkpointCh)
+	}
 }
 
 // Wait for persistence snapshot to finish.
