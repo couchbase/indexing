@@ -3880,6 +3880,15 @@ func (s *bhiveSnapshot) Info() SnapshotInfo {
 	return s.info
 }
 
+func (s *bhiveSnapshot) String() string {
+
+	str := fmt.Sprintf("Index: %v ", s.idxInstId)
+	str += fmt.Sprintf("PartitionId: %v ", s.idxPartnId)
+	str += fmt.Sprintf("SliceId: %v ", s.slice.Id())
+	str += fmt.Sprintf("TS: %v ", s.ts)
+	return str
+}
+
 func (s *bhiveSnapshot) Close() error {
 
 	count := atomic.AddInt32(&s.refCount, int32(-1))
@@ -4211,6 +4220,15 @@ func (info *bhiveSnapshotInfo) IsOSOSnap() bool {
 
 func (info *bhiveSnapshotInfo) Stats() map[string]interface{} {
 	return info.IndexStats
+}
+
+func (info *bhiveSnapshotInfo) String() string {
+	snapType := common.NO_SNAP
+	if info.Ts != nil {
+		snapType = info.Ts.GetSnapType()
+	}
+	return fmt.Sprintf("SnapshotInfo: count:%v committed:%v snapType:%v docSeqno:%v", info.Count, info.Committed,
+		snapType, info.DocSeqno)
 }
 
 // //////////////////////////////////////////////////////////
