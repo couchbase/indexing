@@ -49,6 +49,8 @@ const (
 	SNAPSHOT_META_VERSION_BHIVE_1 = 1
 )
 
+var bhivePersistenceMutex sync.Mutex
+
 ////////////////////////////////////////////////
 // Type Declaration
 ////////////////////////////////////////////////
@@ -2452,9 +2454,9 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 	go func() {
 		defer wg.Done()
 
-		// use plasmaPersistenceMutex to serialize persistence for co-existence
-		plasmaPersistenceMutex.Lock()
-		defer plasmaPersistenceMutex.Unlock()
+		// use bhivePersistenceMutex to serialize persistence for co-existence
+		bhivePersistenceMutex.Lock()
+		defer bhivePersistenceMutex.Unlock()
 
 		mErr = mdb.mainstore.CreateRecoveryPoint2(s.MainSnap, meta, s.chkpointCb)
 		if mErr != nil {
@@ -2468,9 +2470,9 @@ func (mdb *bhiveSlice) persistSnapshot(s *bhiveSnapshot) {
 	go func() {
 		defer wg.Done()
 
-		// use plasmaPersistenceMutex to serialize persistence for co-existence
-		plasmaPersistenceMutex.Lock()
-		defer plasmaPersistenceMutex.Unlock()
+		// use bhivePersistenceMutex to serialize persistence for co-existence
+		bhivePersistenceMutex.Lock()
+		defer bhivePersistenceMutex.Unlock()
 
 		bErr = mdb.backstore.CreateRecoveryPoint2(s.BackSnap, meta, s.chkpointCb)
 		if bErr != nil {
