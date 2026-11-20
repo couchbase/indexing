@@ -1062,6 +1062,18 @@ func (idx *indexer) initPeriodicProfile() {
 	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
 }
 
+// newHTTPServer returns an http.Server configured with the common indexer.http.*
+// timeouts
+func (idx *indexer) newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadTimeout:       time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
+		WriteTimeout:      time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
+		ReadHeaderTimeout: time.Duration(idx.config["http.readHeaderTimeout"].Int()) * time.Second,
+	}
+}
+
 func (idx *indexer) initHttpServer() error {
 
 	// Setup http server
@@ -1074,13 +1086,7 @@ func (idx *indexer) initHttpServer() error {
 
 	logging.Infof("indexer:: Staring http server : %v", addr)
 
-	srv := &http.Server{
-		ReadTimeout:       time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
-		WriteTimeout:      time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
-		ReadHeaderTimeout: time.Duration(idx.config["http.readHeaderTimeout"].Int()) * time.Second,
-		Addr:              addr,
-		Handler:           muxWithReqLogger(muxWithPanicRecover(httpMux)),
-	}
+	srv := idx.newHTTPServer(addr, muxWithReqLogger(muxWithPanicRecover(httpMux)))
 
 	lsnr, err := security.MakeProtocolAwareTCPListener(addr)
 	if err != nil {
@@ -1125,10 +1131,7 @@ func (idx *indexer) initHttpsServer() error {
 		sslAddr := net.JoinHostPort("", sslPort)
 
 		// allow only strong ssl as this is an internal API and interop is not a concern
-		sslsrv := &http.Server{
-			Addr:    sslAddr,
-			Handler: muxWithReqLogger(muxWithPanicRecover(httpMux)),
-		}
+		sslsrv := idx.newHTTPServer(sslAddr, muxWithReqLogger(muxWithPanicRecover(httpMux)))
 		// clientAuth CRL scope: this endpoint receives external client
 		// requests in addition to node-to-node traffic, matching the scope
 		// ns_server applies on its own HTTPS listener.

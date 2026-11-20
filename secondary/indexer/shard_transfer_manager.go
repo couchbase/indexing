@@ -1759,7 +1759,8 @@ func (stm *ShardTransferManager) initPeerRPCServerNoLock(rebalId string) error {
 	}
 
 	httpSrv := &http.Server{
-		Addr: nodeAddr,
+		ReadHeaderTimeout: time.Duration(stm.config["http.readHeaderTimeout"].Int()) * time.Second,
+		Addr:              nodeAddr,
 	}
 
 	// secure RPC server. it could return err as we enforce TLS even if security is disabled
