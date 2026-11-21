@@ -755,10 +755,14 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		}
 
 		// callback will be used by storage to get keydata for keyId
-		mCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
-		bCfg.GetKeyById = slice.GetEncryptionKeyByIdCb
-		mCfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
-		bCfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
+		// plasma keeps these in its shard config, which outlives this slice, so they
+		// must not hold the slice: a dropped index would stay reachable through them
+		// until its shard is destroyed.
+		kc := plasmaKeyCallbacks{bucketUUID: slice.idxDefn.BucketUUID, cbs: slice.sliceEncryptionCallbacks}
+		mCfg.GetKeyById = kc.GetEncryptionKeyByIdCb
+		bCfg.GetKeyById = kc.GetEncryptionKeyByIdCb
+		mCfg.GetActiveKeyByPath = kc.GetActiveKeyByPathCb
+		bCfg.GetActiveKeyByPath = kc.GetActiveKeyByPathCb
 
 		// When simulating v1-compat mode the index files are at old-format paths;
 		// the path-based key lookup callbacks do not understand those paths, so
@@ -993,7 +997,13 @@ func (s *plasmaSlice) RecordWriteUnits(bytes uint64, writeVariant UnitType) {
 	}
 }
 
-func (s *plasmaSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, string) {
+// plasmaKeyCallbacks holds only what the storage encryption callbacks need.
+type plasmaKeyCallbacks struct {
+	bucketUUID string
+	cbs        SliceEncryptionCallbacks
+}
+
+func (kc plasmaKeyCallbacks) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, string) {
 
 	var rk string
 	var cipher string
@@ -1003,20 +1013,20 @@ func (s *plasmaSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, stri
 	// Methods getActiveKeyIdCipher, getKeyCipherById do EncryptionMgr cache lookup and then cbauth.GetEncryptionKeysBlocking()
 	// Thus key must be available, if key is not available it is treated as hard error in below calls.
 	if len(keyId) == 0 {
-		buuid := s.idxDefn.BucketUUID
-		masterEncryptionKeyBytes, rk, cipher = s.sliceEncryptionCallbacks.getActiveKeyIdCipher(kdtTypeServiceBucket, buuid)
+		buuid := kc.bucketUUID
+		masterEncryptionKeyBytes, rk, cipher = kc.cbs.getActiveKeyIdCipher(kdtTypeServiceBucket, buuid)
 		rkeyId = []byte(rk)
 	} else {
 		// Plasma instance belonging to a bucket can ask for key related to another bucket
 		keyIdStr := string(keyId)
-		masterEncryptionKeyBytes, cipher = s.sliceEncryptionCallbacks.getKeyCipherById(keyIdStr)
+		masterEncryptionKeyBytes, cipher = kc.cbs.getKeyCipherById(keyIdStr)
 		rkeyId = keyId
 	}
 
 	return masterEncryptionKeyBytes, rkeyId, cipher
 }
 
-func (s *plasmaSlice) GetActiveKeyByPathCb(path string) ([]byte, []byte, string) {
+func (kc plasmaKeyCallbacks) GetActiveKeyByPathCb(path string) ([]byte, []byte, string) {
 	bucketUUID := GetBucketUUIDIndexPath2(path)
 
 	logging.Infof("plasmaSlice::GetActiveKeyByPathCb path: %v bucketUUID: %v", path, bucketUUID)
@@ -1025,7 +1035,7 @@ func (s *plasmaSlice) GetActiveKeyByPathCb(path string) ([]byte, []byte, string)
 	if bucketUUID == common.BUCKET_UUID_NIL {
 		return []byte{}, []byte{}, CipherNameNone
 	}
-	masterEncryptionKeyBytes, rk, cipher := s.sliceEncryptionCallbacks.getActiveKeyIdCipher(kdtTypeServiceBucket, bucketUUID)
+	masterEncryptionKeyBytes, rk, cipher := kc.cbs.getActiveKeyIdCipher(kdtTypeServiceBucket, bucketUUID)
 	rkeyId := []byte(rk)
 	return masterEncryptionKeyBytes, rkeyId, cipher
 }
