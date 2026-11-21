@@ -645,6 +645,10 @@ func (slice *bhiveSlice) setupBackstoreConfig() bhive.Config {
 // setupEncryptionCallbacks sets the callbacks used by storage to get key data
 // for a keyId. Set for both store open and UpdateConfig, as bhive replaces the
 // config on update and a nil callback disables encryption for it.
+//
+// bhive keeps the config in its shard, which outlives this slice, so the callbacks
+// must not hold the slice: a dropped index's stores and inverted index would stay
+// reachable through them until its shard is destroyed.
 func (slice *bhiveSlice) setupEncryptionCallbacks(cfg *bhive.Config) {
 	// if override is set then leave the get keys as nil
 	if testcode.OverrideShardCompatVersion(0) == 1 {
@@ -653,8 +657,9 @@ func (slice *bhiveSlice) setupEncryptionCallbacks(cfg *bhive.Config) {
 		return
 	}
 
-	cfg.GetKeyById = slice.GetEncryptionKeyByIdCb
-	cfg.GetActiveKeyByPath = slice.GetActiveKeyByPathCb
+	kc := bhiveKeyCallbacks{bucketUUID: slice.idxDefn.BucketUUID, cbs: slice.sliceEncryptionCallbacks}
+	cfg.GetKeyById = kc.GetEncryptionKeyByIdCb
+	cfg.GetActiveKeyByPath = kc.GetActiveKeyByPathCb
 }
 
 func backupCorruptedSlice_Bhive(
@@ -3401,7 +3406,13 @@ func (mdb *bhiveSlice) Destroy() {
 	}
 }
 
-func (mdb *bhiveSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, string) {
+// bhiveKeyCallbacks holds only what the storage encryption callbacks need.
+type bhiveKeyCallbacks struct {
+	bucketUUID string
+	cbs        SliceEncryptionCallbacks
+}
+
+func (kc bhiveKeyCallbacks) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, string) {
 
 	var rk string
 	var cipher string
@@ -3411,13 +3422,13 @@ func (mdb *bhiveSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, str
 	// Methods getActiveKeyIdCipher, getKeyCipherById do EncryptionMgr cache lookup and then cbauth.GetEncryptionKeysBlocking()
 	// Thus key must be available, if key is not available it is treated as hard error in below calls.
 	if len(keyId) == 0 {
-		buuid := mdb.idxDefn.BucketUUID
-		masterEncryptionKeyBytes, rk, cipher = mdb.sliceEncryptionCallbacks.getActiveKeyIdCipher(kdtTypeServiceBucket, buuid)
+		buuid := kc.bucketUUID
+		masterEncryptionKeyBytes, rk, cipher = kc.cbs.getActiveKeyIdCipher(kdtTypeServiceBucket, buuid)
 		rkeyId = []byte(rk)
 	} else {
 		// Bhive instance belonging to a bucket can ask for key related to another bucket
 		keyIdStr := string(keyId)
-		masterEncryptionKeyBytes, cipher = mdb.sliceEncryptionCallbacks.getKeyCipherById(keyIdStr)
+		masterEncryptionKeyBytes, cipher = kc.cbs.getKeyCipherById(keyIdStr)
 		rkeyId = keyId
 	}
 
@@ -3428,7 +3439,7 @@ func (mdb *bhiveSlice) GetEncryptionKeyByIdCb(keyId []byte) ([]byte, []byte, str
 	return masterEncryptionKeyBytes, rkeyId, cipher
 }
 
-func (mdb *bhiveSlice) GetActiveKeyByPathCb(path string) ([]byte, []byte, string) {
+func (kc bhiveKeyCallbacks) GetActiveKeyByPathCb(path string) ([]byte, []byte, string) {
 	bucketUUID := GetBucketUUIDIndexPath2(path)
 
 	logging.Infof("bhiveSlice::GetActiveKeyByPathCb path: %v bucketUUID: %v", path, bucketUUID)
@@ -3437,7 +3448,7 @@ func (mdb *bhiveSlice) GetActiveKeyByPathCb(path string) ([]byte, []byte, string
 	if bucketUUID == common.BUCKET_UUID_NIL {
 		return nil, nil, ""
 	}
-	masterEncryptionKeyBytes, rk, cipher := mdb.sliceEncryptionCallbacks.getActiveKeyIdCipher(kdtTypeServiceBucket, bucketUUID)
+	masterEncryptionKeyBytes, rk, cipher := kc.cbs.getActiveKeyIdCipher(kdtTypeServiceBucket, bucketUUID)
 	rkeyId := []byte(rk)
 	if cipher == CipherNameNone {
 		return nil, nil, ""
