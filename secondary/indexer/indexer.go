@@ -14989,6 +14989,10 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 			}
 		}
 
+		// Release this instance's sample now instead of when the whole request
+		// finishes: no later instance reads it, and a retry fetches a new one.
+		delete(vectorsByInstId, instId)
+
 		// All partitions of this instance have finished training
 		// Add inst to success map if no error has been observed (or)
 		// the instance is not dropped
@@ -15134,6 +15138,8 @@ func (idx *indexer) handleTrainingAndCheckForDrop(keyspaceId string,
 	defer ticker.Stop()
 
 	go func() {
+		codebook.AcquireTraining()
+		defer codebook.ReleaseTraining()
 		respCh <- slice.Train(vectors)
 	}()
 

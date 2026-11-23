@@ -9,6 +9,7 @@
 package vector
 
 import (
+	"math"
 	"math/rand"
 	"testing"
 	"time"
@@ -186,6 +187,100 @@ func TestCodebookSparse(t *testing.T) {
 				t.Errorf("Error closing codebook %v", err)
 			}
 		})
+	}
+}
+
+// TestCodebookTrainWithTrainingPermitHeld checks that no codebook's Train takes
+// the training permit itself. The indexer holds it around all of slice.Train,
+// so a Train that took it again would wait forever for the last permit.
+func TestCodebookTrainWithTrainingPermitHeld(t *testing.T) {
+	const dim, nlist, nvecs = 32, 4, 1000
+	codebooks := []struct {
+		name string
+		new  func() (cbpkg.Codebook, error)
+	}{
+		{"IVFPQ", func() (cbpkg.Codebook, error) {
+			return NewCodebookIVFPQ(dim, 4, 4, nlist, cbpkg.METRIC_L2, false, false)
+		}},
+		{"IVFSQ", func() (cbpkg.Codebook, error) {
+			return NewCodebookIVFSQ(dim, nlist, common.SQ_8BIT, cbpkg.METRIC_L2, false)
+		}},
+		{"IVFRaBitQ", func() (cbpkg.Codebook, error) {
+			return NewCodebookIVFRaBitQ(dim, nlist, 1, cbpkg.METRIC_L2, false)
+		}},
+		{"Sparse", func() (cbpkg.Codebook, error) {
+			return NewCodebookSparse(dim, nlist)
+		}},
+	}
+
+	permits := cbpkg.GetTrainingConcurrency()
+	for i := 0; i < permits; i++ {
+		cbpkg.AcquireTraining()
+	}
+	defer func() {
+		for i := 0; i < permits; i++ {
+			cbpkg.ReleaseTraining()
+		}
+	}()
+
+	vecs := convertTo1D(genRandomVecs(dim, nvecs, 1))
+	for _, tc := range codebooks {
+		t.Run(tc.name, func(t *testing.T) {
+			cb, err := tc.new()
+			if err != nil {
+				t.Fatalf("Unable to create index. Err %v", err)
+			}
+			defer cb.Close()
+
+			done := make(chan error, 1)
+			go func() {
+				done <- cb.Train(append([]float32(nil), vecs...))
+			}()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("Unable to train index. Err %v", err)
+				}
+			case <-time.After(time.Minute):
+				t.Fatalf("Train did not return while the caller held every training permit")
+			}
+		})
+	}
+}
+
+// TestCodebookSparseTrainNormalizesInPlace checks that Train normalizes its
+// SparseJL input in place rather than training on a normalized copy, which
+// cost one more sample-sized buffer per running training: the caller's
+// vectors must come back unit-normalized.
+func TestCodebookSparseTrainNormalizesInPlace(t *testing.T) {
+	if !getSparseNormalizationEnabled() {
+		t.Skip("sparse normalization is disabled")
+	}
+	const dim, nlist, nvecs = 64, 16, 10000
+	cb, err := NewCodebookSparse(dim, nlist)
+	if err != nil {
+		t.Fatalf("Unable to create index. Err %v", err)
+	}
+	defer cb.Close()
+
+	rng := rand.New(rand.NewSource(1))
+	vecs := make([]float32, dim*nvecs)
+	for i := range vecs {
+		vecs[i] = rng.Float32() + 0.5
+	}
+
+	if err := cb.Train(vecs); err != nil {
+		t.Fatalf("Unable to train index. Err %v", err)
+	}
+
+	for i := 0; i < nvecs; i++ {
+		var ss float64
+		for _, x := range vecs[i*dim : (i+1)*dim] {
+			ss += float64(x) * float64(x)
+		}
+		if math.Abs(ss-1) > 1e-3 {
+			t.Fatalf("vector %d has squared norm %v after Train, want 1", i, ss)
+		}
 	}
 }
 
