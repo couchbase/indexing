@@ -2389,8 +2389,16 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 		return
 	}
 
-	// waitgroup to notify completion of bhive magma and lss vindex checkpoints
-	var chkpWg sync.WaitGroup
+	// checkpoint counters to notify completion of bhive magma and lss vindex checkpoints
+	// mainIndex
+	chkpPending := int32(1)
+	if mdb.persistFullVector {
+		chkpPending++ // magma
+	}
+
+	// docIndex
+	chkpPending++ // magma
+	chkpDone := make(chan struct{})
 
 	s.chkpointCh = make(chan bool)
 	// a)do not resume mutations until checkpoint callback is completed.
@@ -2399,18 +2407,11 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 	// b)lss checkpoint is an memory operation, actual persistence happens lazily
 	// c)magma checkpoint currently persists memtables to disk.
 	s.chkpointCb = func(b *bhive.Bhive) error {
-		chkpWg.Done()
+		if atomic.AddInt32(&chkpPending, -1) == 0 {
+			close(chkpDone)
+		}
 		return nil
 	}
-
-	// mainIndex
-	chkpWg.Add(1) // lss
-	if mdb.persistFullVector {
-		chkpWg.Add(1) // magma
-	}
-
-	// docIndex
-	chkpWg.Add(1) // magma
 
 	s.MainSnap.Open() // close in CreateRecoveryPoint
 	s.BackSnap.Open() // close in CreateRecoveryPoint
@@ -2436,9 +2437,8 @@ func (mdb *bhiveSlice) doPersistSnapshot(s *bhiveSnapshot) {
 	mdb.persistorLock.Unlock()
 
 	select {
+	case <-chkpDone:
 	case <-s.chkpointCh:
-	default:
-		chkpWg.Wait()
 	}
 }
 
@@ -2749,7 +2749,7 @@ func (mdb *bhiveSlice) closeQueuedSnapNoLock() {
 
 // releases the flush waiting in doPersistSnapshot for a snapshot that ends
 // without CreateRecoveryPoint2 (index drop, or a dropped queued snapshot
-// No checkpoint callback has invoked for it, so mark waitgroup done here.
+// No checkpoint callback has invoked for it, so mark done here.
 func (mdb *bhiveSlice) releaseChkp(s *bhiveSnapshot) {
 	// mainIndex
 	chkpPending := 1
